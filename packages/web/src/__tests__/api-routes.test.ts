@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import {
+  SessionNotFoundError,
   SessionNotRestorableError,
   type Session,
   type SessionManager,
   type OrchestratorConfig,
   type PluginRegistry,
   type SCM,
-} from "@composio/ao-core";
+} from "@aoagents/ao-core";
+import * as serialize from "@/lib/serialize";
+import { getSCM } from "@/lib/services";
 
 // ── Mock Data ─────────────────────────────────────────────────────────
 // Provides test sessions covering the key states the dashboard needs.
@@ -58,6 +61,31 @@ const testSessions: Session[] = [
   }),
 ];
 
+const multiProjectSessions: Session[] = [
+  makeSession({
+    id: "app-orchestrator",
+    projectId: "my-app",
+    metadata: { role: "orchestrator" },
+  }),
+  makeSession({
+    id: "backend-3",
+    projectId: "my-app",
+    status: "working",
+    activity: "active",
+  }),
+  makeSession({
+    id: "docs-orchestrator",
+    projectId: "docs-app",
+    metadata: { role: "orchestrator" },
+  }),
+  makeSession({
+    id: "docs-2",
+    projectId: "docs-app",
+    status: "review_pending",
+    activity: "idle",
+  }),
+];
+
 // ── Mock Services ─────────────────────────────────────────────────────
 
 const mockSessionManager: SessionManager = {
@@ -73,20 +101,21 @@ const mockSessionManager: SessionManager = {
   ),
   kill: vi.fn(async (id: string) => {
     if (!testSessions.find((s) => s.id === id)) {
-      throw new Error(`Session ${id} not found`);
+      throw new SessionNotFoundError(id);
     }
   }),
   send: vi.fn(async (id: string) => {
     if (!testSessions.find((s) => s.id === id)) {
-      throw new Error(`Session ${id} not found`);
+      throw new SessionNotFoundError(id);
     }
   }),
   cleanup: vi.fn(async () => ({ killed: [], skipped: [], errors: [] })),
   spawnOrchestrator: vi.fn(),
+  remap: vi.fn(async () => "ses_mock"),
   restore: vi.fn(async (id: string) => {
     const session = testSessions.find((s) => s.id === id);
     if (!session) {
-      throw new Error(`Session ${id} not found`);
+      throw new SessionNotFoundError(id);
     }
     // Simulate SessionNotRestorableError for non-terminal sessions
     if (session.status === "working" && session.activity !== "exited") {
@@ -139,6 +168,14 @@ const mockConfig: OrchestratorConfig = {
       sessionPrefix: "my-app",
       scm: { plugin: "github" },
     },
+    "docs-app": {
+      name: "Docs App",
+      repo: "acme/docs-app",
+      path: "/tmp/docs-app",
+      defaultBranch: "main",
+      sessionPrefix: "docs",
+      scm: { plugin: "github" },
+    },
   },
   notifiers: {},
   notificationRouting: { urgent: [], action: [], warning: [], info: [] },
@@ -151,18 +188,26 @@ vi.mock("@/lib/services", () => ({
     registry: mockRegistry,
     sessionManager: mockSessionManager,
   })),
+  getVerifyIssues: vi.fn(async () => []),
   getSCM: vi.fn(() => mockSCM),
 }));
 
 // ── Import routes after mocking ───────────────────────────────────────
 
 import { GET as sessionsGET } from "@/app/api/sessions/route";
+import { POST as orchestratorsPOST, GET as orchestratorsGET } from "@/app/api/orchestrators/route";
 import { POST as spawnPOST } from "@/app/api/spawn/route";
 import { POST as sendPOST } from "@/app/api/sessions/[id]/send/route";
+import { POST as messagePOST } from "@/app/api/sessions/[id]/message/route";
 import { POST as killPOST } from "@/app/api/sessions/[id]/kill/route";
 import { POST as restorePOST } from "@/app/api/sessions/[id]/restore/route";
+import { POST as remapPOST } from "@/app/api/sessions/[id]/remap/route";
 import { POST as mergePOST } from "@/app/api/prs/[id]/merge/route";
 import { GET as eventsGET } from "@/app/api/events/route";
+import { GET as observabilityGET } from "@/app/api/observability/route";
+import { GET as runtimeTerminalGET } from "@/app/api/runtime/terminal/route";
+import { GET as verifyGET, POST as verifyPOST } from "@/app/api/verify/route";
+import { GET as patchesGET } from "@/app/api/sessions/patches/route";
 
 function makeRequest(url: string, init?: RequestInit): NextRequest {
   return new NextRequest(
@@ -214,6 +259,203 @@ describe("API Routes", () => {
       expect(session).toHaveProperty("activity");
       expect(session).toHaveProperty("createdAt");
     });
+
+    it("skips PR enrichment when metadata enrichment hits timeout", async () => {
+      vi.useFakeTimers();
+
+      const metadataSpy = vi
+        .spyOn(serialize, "enrichSessionsMetadata")
+        .mockImplementation(() => new Promise<void>(() => {}));
+
+      const responsePromise = sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+      await vi.advanceTimersByTimeAsync(3_000);
+      const res = await responsePromise;
+
+      expect(res.status).toBe(200);
+      expect(getSCM).not.toHaveBeenCalled();
+
+      metadataSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it("returns per-project orchestrators and excludes them from worker sessions", async () => {
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        multiProjectSessions,
+      );
+
+      const res = await sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.orchestratorId).toBeNull();
+      expect(data.orchestrators).toEqual([
+        { id: "docs-orchestrator", projectId: "docs-app", projectName: "Docs App" },
+        { id: "app-orchestrator", projectId: "my-app", projectName: "My App" },
+      ]);
+      expect(data.sessions.map((session: { id: string }) => session.id)).toEqual([
+        "backend-3",
+        "docs-2",
+      ]);
+      expect(data.stats.totalSessions).toBe(2);
+    });
+
+    it("supports project-scoped session queries for orchestrator detail views", async () => {
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async (projectId?: string) =>
+          multiProjectSessions.filter((session) => !projectId || session.projectId === projectId),
+      );
+
+      const res = await sessionsGET(
+        makeRequest("http://localhost:3000/api/sessions?project=docs-app"),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.orchestratorId).toBe("docs-orchestrator");
+      expect(data.orchestrators).toEqual([
+        { id: "docs-orchestrator", projectId: "docs-app", projectName: "Docs App" },
+      ]);
+      expect(data.sessions.map((session: { id: string }) => session.id)).toEqual(["docs-2"]);
+      expect(mockSessionManager.list).toHaveBeenCalledWith("docs-app");
+    });
+
+    it("enriches all PRs concurrently, not sequentially", async () => {
+      vi.useFakeTimers();
+
+      const sessionsWithPRs = Array.from({ length: 6 }, (_, i) =>
+        makeSession({
+          id: `worker-${i}`,
+          status: "pr_open",
+          activity: "idle",
+          pr: {
+            number: 100 + i,
+            url: `https://github.com/acme/my-app/pull/${100 + i}`,
+            title: `PR ${i}`,
+            owner: "acme",
+            repo: "my-app",
+            branch: `feat/pr-${i}`,
+            baseBranch: "main",
+            isDraft: false,
+          },
+        }),
+      );
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValue(sessionsWithPRs);
+
+      const metadataSpy = vi
+        .spyOn(serialize, "enrichSessionsMetadata")
+        .mockResolvedValue(undefined);
+
+      const enrichSpy = vi
+        .spyOn(serialize, "enrichSessionPR")
+        .mockImplementation(
+          () => new Promise<void>((resolve) => { setTimeout(resolve, 1_000); }),
+        );
+
+      const responsePromise = sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+
+      // Flush microtasks so the handler reaches the PR enrichment loop
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Sequential would only have 1 call pending; parallel fires all 6 immediately
+      expect(enrichSpy.mock.calls.length).toBe(6);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const res = await responsePromise;
+      expect(res.status).toBe(200);
+
+      metadataSpy.mockRestore();
+      enrichSpy.mockRestore();
+      vi.useRealTimers();
+    });
+  });
+
+  describe("GET /api/runtime/terminal", () => {
+    function withEnv(overrides: Record<string, string | undefined>, fn: () => Promise<void>) {
+      const saved: Record<string, string | undefined> = {};
+      for (const key of Object.keys(overrides)) {
+        saved[key] = process.env[key];
+        if (overrides[key] === undefined) {
+          Reflect.deleteProperty(process.env, key);
+        } else {
+          process.env[key] = overrides[key];
+        }
+      }
+      return fn().finally(() => {
+        for (const key of Object.keys(saved)) {
+          if (saved[key] === undefined) {
+            Reflect.deleteProperty(process.env, key);
+          } else {
+            process.env[key] = saved[key];
+          }
+        }
+      });
+    }
+
+    it("returns runtime direct terminal port from server env", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: "14803", TERMINAL_PORT: "14802" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14803");
+        expect(data.terminalPort).toBe("14802");
+      });
+    });
+
+    it("falls back to default ports when env vars are absent", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: undefined, TERMINAL_PORT: undefined }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("falls back to default ports for non-numeric env values", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: "abc", TERMINAL_PORT: "not-a-port" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("falls back to default ports for out-of-range port values", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: "99999", TERMINAL_PORT: "0" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("returns null proxyWsPath when TERMINAL_WS_PATH is absent", async () => {
+      await withEnv(
+        { TERMINAL_WS_PATH: undefined, NEXT_PUBLIC_TERMINAL_WS_PATH: undefined },
+        async () => {
+          const res = await runtimeTerminalGET();
+          expect(res.status).toBe(200);
+          const data = await res.json();
+          expect(data.proxyWsPath).toBeNull();
+        },
+      );
+    });
+
+    it("rejects proxyWsPath that does not start with /", async () => {
+      await withEnv({ TERMINAL_WS_PATH: "no-leading-slash" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.proxyWsPath).toBeNull();
+      });
+    });
+
+    it("sets Cache-Control: no-store header", async () => {
+      const res = await runtimeTerminalGET();
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+    });
   });
 
   // ── POST /api/spawn ────────────────────────────────────────────────
@@ -231,6 +473,7 @@ describe("API Routes", () => {
       expect(data.session).toBeDefined();
       expect(data.session.projectId).toBe("my-app");
       expect(data.session.status).toBe("spawning");
+      expect(res.headers.get("x-correlation-id")).toBeTruthy();
     });
 
     it("returns 400 when projectId is missing", async () => {
@@ -243,6 +486,20 @@ describe("API Routes", () => {
       expect(res.status).toBe(400);
       const data = await res.json();
       expect(data.error).toMatch(/projectId/);
+    });
+
+    it("returns 404 when projectId does not exist in config", async () => {
+      const req = makeRequest("/api/spawn", {
+        method: "POST",
+        body: JSON.stringify({ projectId: "mono-orchestrator" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await spawnPOST(req);
+
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toBe("Unknown project: mono-orchestrator");
+      expect(mockSessionManager.spawn).not.toHaveBeenCalled();
     });
 
     it("returns 400 with invalid JSON", async () => {
@@ -268,6 +525,140 @@ describe("API Routes", () => {
     });
   });
 
+  describe("POST /api/orchestrators", () => {
+    it("creates a per-project orchestrator with the generated prompt", async () => {
+      (mockSessionManager.spawnOrchestrator as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeSession({
+          id: "my-app-orchestrator",
+          projectId: "my-app",
+          metadata: { role: "orchestrator" },
+        }),
+      );
+
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: JSON.stringify({ projectId: "my-app" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await orchestratorsPOST(req);
+
+      expect(res.status).toBe(201);
+      expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledWith({
+        projectId: "my-app",
+        systemPrompt: expect.stringContaining("# My App Orchestrator"),
+      });
+
+      const data = await res.json();
+      expect(data.orchestrator).toEqual({
+        id: "my-app-orchestrator",
+        projectId: "my-app",
+        projectName: "My App",
+      });
+    });
+
+    it("returns 404 for an unknown project", async () => {
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: JSON.stringify({ projectId: "unknown-app" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await orchestratorsPOST(req);
+
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toMatch(/Unknown project/);
+    });
+
+    it("returns 400 for invalid JSON", async () => {
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: "not json",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const res = await orchestratorsPOST(req);
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/Invalid JSON body/);
+    });
+
+    it("returns 400 when projectId is missing", async () => {
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: JSON.stringify({}),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const res = await orchestratorsPOST(req);
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/projectId/);
+    });
+
+    it("returns 500 when orchestrator spawn fails", async () => {
+      (mockSessionManager.spawnOrchestrator as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error("boom"),
+      );
+
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: JSON.stringify({ projectId: "my-app" }),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const res = await orchestratorsPOST(req);
+      expect(res.status).toBe(500);
+      const data = await res.json();
+      expect(data.error).toBe("boom");
+    });
+  });
+
+  describe("GET /api/orchestrators", () => {
+    it("returns orchestrators for a project", async () => {
+      const orchestrator = makeSession({
+        id: "my-app-orchestrator",
+        projectId: "my-app",
+        metadata: { role: "orchestrator" },
+      });
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce([orchestrator]);
+
+      const res = await orchestratorsGET(
+        makeRequest("http://localhost:3000/api/orchestrators?project=my-app"),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.orchestrators).toHaveLength(1);
+      expect(data.orchestrators[0].id).toBe("my-app-orchestrator");
+      expect(data.projectName).toBe("My App");
+    });
+
+    it("returns 400 when project parameter is missing", async () => {
+      const res = await orchestratorsGET(makeRequest("http://localhost:3000/api/orchestrators"));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/Missing project query parameter/);
+    });
+
+    it("returns 404 for unknown project", async () => {
+      const res = await orchestratorsGET(
+        makeRequest("http://localhost:3000/api/orchestrators?project=unknown-app"),
+      );
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toMatch(/Unknown project/);
+    });
+
+    it("returns 500 when list fails", async () => {
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
+      const res = await orchestratorsGET(
+        makeRequest("http://localhost:3000/api/orchestrators?project=my-app"),
+      );
+      expect(res.status).toBe(500);
+      const data = await res.json();
+      expect(data.error).toBe("boom");
+    });
+  });
+
   // ── POST /api/sessions/:id/send ────────────────────────────────────
 
   describe("POST /api/sessions/:id/send", () => {
@@ -286,7 +677,7 @@ describe("API Routes", () => {
 
     it("returns 404 for unknown session", async () => {
       (mockSessionManager.send as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new Error("Session nonexistent not found"),
+        new SessionNotFoundError("nonexistent"),
       );
       const req = makeRequest("/api/sessions/nonexistent/send", {
         method: "POST",
@@ -332,6 +723,69 @@ describe("API Routes", () => {
     });
   });
 
+  describe("POST /api/sessions/:id/message", () => {
+    it("sends a message to a valid session", async () => {
+      const req = makeRequest("/api/sessions/backend-3/message", {
+        method: "POST",
+        body: JSON.stringify({ message: "Fix the tests" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await messagePOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.success).toBe(true);
+    });
+
+    it("returns 404 for unknown session", async () => {
+      (mockSessionManager.send as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new SessionNotFoundError("nonexistent"),
+      );
+
+      const req = makeRequest("/api/sessions/nonexistent/message", {
+        method: "POST",
+        body: JSON.stringify({ message: "hello" }),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const res = await messagePOST(req, { params: Promise.resolve({ id: "nonexistent" }) });
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 400 when message is missing", async () => {
+      const req = makeRequest("/api/sessions/backend-3/message", {
+        method: "POST",
+        body: JSON.stringify({}),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await messagePOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/message/);
+    });
+
+    it("returns 400 for invalid JSON body", async () => {
+      const req = makeRequest("/api/sessions/backend-3/message", {
+        method: "POST",
+        body: "not json",
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await messagePOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 for control-char-only message", async () => {
+      const req = makeRequest("/api/sessions/backend-3/message", {
+        method: "POST",
+        body: JSON.stringify({ message: "\x00\x01\x02" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await messagePOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/empty/);
+    });
+  });
+
   // ── POST /api/sessions/:id/kill ────────────────────────────────────
 
   describe("POST /api/sessions/:id/kill", () => {
@@ -346,7 +800,7 @@ describe("API Routes", () => {
 
     it("returns 404 for unknown session", async () => {
       (mockSessionManager.kill as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new Error("Session nonexistent not found"),
+        new SessionNotFoundError("nonexistent"),
       );
       const req = makeRequest("/api/sessions/nonexistent/kill", { method: "POST" });
       const res = await killPOST(req, { params: Promise.resolve({ id: "nonexistent" }) });
@@ -378,6 +832,38 @@ describe("API Routes", () => {
       expect(res.status).toBe(409);
       const data = await res.json();
       expect(data.error).toMatch(/not in a terminal state/);
+    });
+  });
+
+  describe("POST /api/sessions/:id/remap", () => {
+    it("remaps a valid session", async () => {
+      const req = makeRequest("/api/sessions/backend-3/remap", { method: "POST" });
+      const res = await remapPOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.ok).toBe(true);
+      expect(data.opencodeSessionId).toBe("ses_mock");
+      expect(mockSessionManager.remap).toHaveBeenCalledWith("backend-3", true);
+    });
+
+    it("returns 404 when session is missing", async () => {
+      (mockSessionManager.remap as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new SessionNotFoundError("missing"),
+      );
+      const req = makeRequest("/api/sessions/missing/remap", { method: "POST" });
+      const res = await remapPOST(req, { params: Promise.resolve({ id: "missing" }) });
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 422 for non-opencode sessions", async () => {
+      (mockSessionManager.remap as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error("Session backend-3 is not using the opencode agent"),
+      );
+      const req = makeRequest("/api/sessions/backend-3/remap", { method: "POST" });
+      const res = await remapPOST(req, { params: Promise.resolve({ id: "backend-3" }) });
+      expect(res.status).toBe(422);
+      const data = await res.json();
+      expect(data.error).toMatch(/not using the opencode agent/);
     });
   });
 
@@ -437,13 +923,15 @@ describe("API Routes", () => {
 
   describe("GET /api/events", () => {
     it("returns SSE content type", async () => {
-      const res = await eventsGET();
+      const req = makeRequest("/api/events", { method: "GET" });
+      const res = await eventsGET(req);
       expect(res.headers.get("Content-Type")).toBe("text/event-stream");
       expect(res.headers.get("Cache-Control")).toBe("no-cache");
     });
 
     it("streams initial snapshot event", async () => {
-      const res = await eventsGET();
+      const req = makeRequest("/api/events", { method: "GET" });
+      const res = await eventsGET(req);
       const reader = res.body!.getReader();
       const { value } = await reader.read();
       reader.cancel();
@@ -452,10 +940,88 @@ describe("API Routes", () => {
       const jsonStr = text.replace("data: ", "").trim();
       const event = JSON.parse(jsonStr);
       expect(event.type).toBe("snapshot");
+      expect(event.correlationId).toBeTruthy();
       expect(Array.isArray(event.sessions)).toBe(true);
       expect(event.sessions.length).toBeGreaterThan(0);
       expect(event.sessions[0]).toHaveProperty("id");
       expect(event.sessions[0]).toHaveProperty("attentionLevel");
+    });
+  });
+
+  describe("GET /api/observability", () => {
+    it("returns observability summary with correlation header", async () => {
+      const req = makeRequest("/api/observability", { method: "GET" });
+      const res = await observabilityGET(req);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-correlation-id")).toBeTruthy();
+      const data = await res.json();
+      expect(data).toHaveProperty("generatedAt");
+      expect(data).toHaveProperty("overallStatus");
+      expect(data).toHaveProperty("projects");
+    });
+  });
+
+  describe("GET /api/verify", () => {
+    it("returns verify issues", async () => {
+      const res = await verifyGET();
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(Array.isArray(data.issues)).toBe(true);
+    });
+  });
+
+  describe("POST /api/verify", () => {
+    it("returns 400 for invalid JSON body", async () => {
+      const req = makeRequest("/api/verify", {
+        method: "POST",
+        body: "not json",
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await verifyPOST(req);
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/Invalid JSON body/);
+    });
+  });
+  // ── GET /api/sessions/patches ──────────────────────────────────────────
+
+  describe("GET /api/sessions/patches", () => {
+    it("returns patches array with lightweight fields", async () => {
+      const res = await patchesGET(makeRequest("http://localhost:3000/api/sessions/patches"));
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(Array.isArray(data.sessions)).toBe(true);
+      expect(data.sessions.length).toBe(testSessions.length);
+    });
+
+    it("each patch contains id, status, activity, attentionLevel, lastActivityAt", async () => {
+      const res = await patchesGET(makeRequest("http://localhost:3000/api/sessions/patches"));
+      const data = await res.json();
+      for (const patch of data.sessions) {
+        expect(patch).toHaveProperty("id");
+        expect(patch).toHaveProperty("status");
+        expect(patch).toHaveProperty("activity");
+        expect(patch).toHaveProperty("attentionLevel");
+        expect(patch).toHaveProperty("lastActivityAt");
+      }
+    });
+
+    it("filters by project query param", async () => {
+      const res = await patchesGET(
+        makeRequest("http://localhost:3000/api/sessions/patches?project=my-app"),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(Array.isArray(data.sessions)).toBe(true);
+    });
+
+    it("returns 500 when getServices throws", async () => {
+      const { getServices } = await import("@/lib/services");
+      vi.mocked(getServices).mockRejectedValueOnce(new Error("db down"));
+      const res = await patchesGET(makeRequest("http://localhost:3000/api/sessions/patches"));
+      expect(res.status).toBe(500);
+      const data = await res.json();
+      expect(data.error).toBe("db down");
     });
   });
 });

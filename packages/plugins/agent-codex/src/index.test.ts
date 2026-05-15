@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Session, RuntimeHandle, AgentLaunchConfig } from "@composio/ao-core";
+import type { Session, RuntimeHandle, AgentLaunchConfig, AgentSpecificConfig } from "@aoagents/ao-core";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — available inside vi.mock factories
@@ -16,6 +16,7 @@ const {
   mockOpen,
   mockCreateReadStream,
   mockHomedir,
+  mockReadLastJsonlEntry,
 } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockWriteFile: vi.fn().mockResolvedValue(undefined),
@@ -28,6 +29,7 @@ const {
   mockOpen: vi.fn(),
   mockCreateReadStream: vi.fn(),
   mockHomedir: vi.fn(() => "/mock/home"),
+  mockReadLastJsonlEntry: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => {
@@ -60,6 +62,14 @@ vi.mock("node:fs", () => ({
 vi.mock("node:os", () => ({
   homedir: mockHomedir,
 }));
+
+vi.mock("@aoagents/ao-core", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    readLastJsonlEntry: mockReadLastJsonlEntry,
+  };
+});
 
 import { Readable } from "node:stream";
 import { create, manifest, default as defaultExport, resolveCodexBinary, _resetSessionFileCache } from "./index.js";
@@ -187,7 +197,8 @@ describe("plugin manifest & exports", () => {
       name: "codex",
       slot: "agent",
       description: "Agent plugin: OpenAI Codex CLI",
-      version: "0.1.0",
+      version: "0.1.1",
+      displayName: "OpenAI Codex",
     });
   });
 
@@ -210,27 +221,30 @@ describe("getLaunchCommand", () => {
   const agent = create();
 
   it("generates base command", () => {
-    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'codex'");
+    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'codex' -c check_for_update_on_startup=false");
   });
 
-  it("includes --dangerously-bypass-approvals-and-sandbox when permissions=skip", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "skip" }));
+  it("includes bypass flag when permissions=permissionless", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "permissionless" }));
     expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(cmd).not.toContain("--ask-for-approval");
     expect(cmd).not.toContain("--full-auto");
   });
 
-  it("includes --ask-for-approval never when permissions=auto-edit", () => {
-    // Cast needed: "auto-edit" not yet in AgentLaunchConfig type union
+  it("treats legacy permissions=skip as permissionless", () => {
     const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ permissions: "auto-edit" as AgentLaunchConfig["permissions"] }),
+      makeLaunchConfig({ permissions: "skip" as unknown as AgentLaunchConfig["permissions"] }),
     );
+    expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("includes --ask-for-approval never when permissions=auto-edit", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "auto-edit" }));
     expect(cmd).toContain("--ask-for-approval never");
   });
 
   it("includes --ask-for-approval untrusted when permissions=suggest", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ permissions: "suggest" as AgentLaunchConfig["permissions"] }),
-    );
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "suggest" }));
     expect(cmd).toContain("--ask-for-approval untrusted");
   });
 
@@ -253,9 +267,9 @@ describe("getLaunchCommand", () => {
 
   it("combines all options", () => {
     const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ permissions: "skip", model: "o3", prompt: "Go" }),
+      makeLaunchConfig({ permissions: "permissionless", model: "o3", prompt: "Go" }),
     );
-    expect(cmd).toBe("'codex' --dangerously-bypass-approvals-and-sandbox --model 'o3' -c model_reasoning_effort=high -- 'Go'");
+    expect(cmd).toBe("'codex' -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox --model 'o3' -c model_reasoning_effort=high -- 'Go'");
   });
 
   it("escapes single quotes in prompt (POSIX shell escaping)", () => {
@@ -294,8 +308,13 @@ describe("getLaunchCommand", () => {
     expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(cmd).not.toContain("--ask-for-approval");
     expect(cmd).not.toContain("--model");
-    expect(cmd).not.toContain("-c");
+    expect(cmd).toContain("-c check_for_update_on_startup=false");
     expect(cmd).not.toContain("model_reasoning_effort");
+  });
+
+  it("always includes -c check_for_update_on_startup=false", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model: "gpt-4o", prompt: "Fix it" }));
+    expect(cmd).toContain("-c check_for_update_on_startup=false");
   });
 
   // -- Reasoning effort tests --
@@ -374,12 +393,46 @@ describe("getEnvironment", () => {
     expect(env["PATH"]?.startsWith("/mock/home/.ao/bin:")).toBe(true);
   });
 
+  it("puts /usr/local/bin before linuxbrew paths", () => {
+    const originalPath = process.env["PATH"];
+    process.env["PATH"] = "/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin";
+    try {
+      const env = agent.getEnvironment(makeLaunchConfig());
+      expect(env["PATH"]).toBe(
+        "/mock/home/.ao/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin",
+      );
+    } finally {
+      process.env["PATH"] = originalPath;
+    }
+  });
+ 
+  it("sets CODEX_DISABLE_UPDATE_CHECK=1 to suppress interactive update prompts", () => {
+    const env = agent.getEnvironment(makeLaunchConfig());
+    expect(env["CODEX_DISABLE_UPDATE_CHECK"]).toBe("1");
+  });
+
+  it("sets GH_PATH to preferred wrapper target", () => {
+    const env = agent.getEnvironment(makeLaunchConfig());
+    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+  });
+
+  it("deduplicates ao and /usr/local/bin entries", () => {
+    const originalPath = process.env["PATH"];
+    process.env["PATH"] = "/mock/home/.ao/bin:/usr/local/bin:/usr/bin:/usr/local/bin";
+    try {
+      const env = agent.getEnvironment(makeLaunchConfig());
+      expect(env["PATH"]).toBe("/mock/home/.ao/bin:/usr/local/bin:/usr/bin");
+    } finally {
+      process.env["PATH"] = originalPath;
+    }
+  });
+
   it("falls back to /usr/bin:/bin when process.env.PATH is undefined", () => {
     const originalPath = process.env["PATH"];
     delete process.env["PATH"];
     try {
       const env = agent.getEnvironment(makeLaunchConfig());
-      expect(env["PATH"]).toContain("/usr/bin:/bin");
+      expect(env["PATH"]).toBe("/mock/home/.ao/bin:/usr/local/bin:/usr/bin:/bin");
     } finally {
       process.env["PATH"] = originalPath;
     }
@@ -606,8 +659,12 @@ describe("getActivityState", () => {
     const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
     mockReaddir.mockResolvedValue(["sess.jsonl"]);
     setupMockOpen(content);
-    // mtime = now (just modified)
     mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    // Mock readLastJsonlEntry to return a recent entry
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "tool_call",
+      modifiedAt: new Date(),
+    });
 
     const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
     const result = await agent.getActivityState(session);
@@ -620,14 +677,66 @@ describe("getActivityState", () => {
     const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
     mockReaddir.mockResolvedValue(["sess.jsonl"]);
     setupMockOpen(content);
-    // mtime = 10 minutes ago (past the 5-minute threshold)
     const staleTime = Date.now() - 600_000;
     mockStat.mockResolvedValue({ mtimeMs: staleTime, mtime: new Date(staleTime) });
+    // Mock readLastJsonlEntry to return a stale entry
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "assistant_message",
+      modifiedAt: new Date(staleTime),
+    });
 
     const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
     const result = await agent.getActivityState(session);
     expect(result?.state).toBe("idle");
     expect(result?.timestamp).toBeInstanceOf(Date);
+  });
+
+  it("returns waiting_input for approval_request entry type", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "approval_request",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("waiting_input");
+  });
+
+  it("returns blocked for error entry type", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "error",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("blocked");
+  });
+
+  it("returns ready for assistant_message entry type", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "assistant_message",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("ready");
   });
 
   it("returns exited when process handle has dead PID", async () => {
@@ -962,10 +1071,11 @@ describe("getRestoreCommand", () => {
 
     expect(cmd).not.toBeNull();
     expect(cmd).toContain("'codex' resume");
+    expect(cmd).toContain("-c check_for_update_on_startup=false");
     expect(cmd).toContain("thread-abc-123");
   });
 
-  it("includes --dangerously-bypass-approvals-and-sandbox from project config", async () => {
+  it("includes bypass flag when project config permissions=permissionless", async () => {
     const content = jsonl(
       { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
       { threadId: "thread-1" },
@@ -978,7 +1088,27 @@ describe("getRestoreCommand", () => {
 
     const session = makeSession({ workspacePath: "/workspace/test" });
     const cmd = await agent.getRestoreCommand!(session, makeProjectConfig({
-      agentConfig: { permissions: "skip" },
+      agentConfig: { permissions: "permissionless" },
+    }));
+
+    expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(cmd).not.toContain("--ask-for-approval");
+  });
+
+  it("treats legacy project config permissions=skip as permissionless", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const session = makeSession({ workspacePath: "/workspace/test" });
+    const cmd = await agent.getRestoreCommand!(session, makeProjectConfig({
+      agentConfig: { permissions: "skip" as unknown as AgentSpecificConfig["permissions"] },
     }));
 
     expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
@@ -1213,13 +1343,13 @@ describe("postLaunchSetup", () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT"));
 
     // Before postLaunchSetup, binary is "codex"
-    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'codex'");
+    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'codex' -c check_for_update_on_startup=false");
 
     // After postLaunchSetup resolves the binary
     await agent.postLaunchSetup!(makeSession({ workspacePath: "/workspace/test" }));
 
     // Now getLaunchCommand should use the resolved binary
-    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'/opt/bin/codex'");
+    expect(agent.getLaunchCommand(makeLaunchConfig())).toBe("'/opt/bin/codex' -c check_for_update_on_startup=false");
   });
 });
 
@@ -1330,7 +1460,7 @@ describe("setupWorkspaceHooks", () => {
     // Second call for AGENTS.md — file doesn't exist
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.1.0");
+        return Promise.resolve("0.2.0");
       }
       // AGENTS.md read attempt
       return Promise.reject(new Error("ENOENT"));
@@ -1341,19 +1471,13 @@ describe("setupWorkspaceHooks", () => {
       sessionId: "sess-1",
     });
 
-    // Should still write the metadata helper (always written)
-    const helperWriteCall = mockWriteFile.mock.calls.find(
+    // Should NOT write any wrappers when version matches (helper, gh, git all skipped)
+    const wrapperWrites = mockWriteFile.mock.calls.filter(
       (call: [string, string, object]) =>
-        typeof call[0] === "string" && call[0].includes("ao-metadata-helper.sh.tmp."),
+        typeof call[0] === "string" &&
+        (call[0].includes("ao-metadata-helper.sh.tmp.") || call[0].includes("/gh.tmp.") || call[0].includes("/git.tmp.")),
     );
-    expect(helperWriteCall).toBeDefined();
-
-    // But should NOT write gh/git wrappers (version matches)
-    const ghWriteCall = mockWriteFile.mock.calls.find(
-      (call: [string, string, object]) =>
-        typeof call[0] === "string" && call[0].includes("/gh.tmp."),
-    );
-    expect(ghWriteCall).toBeUndefined();
+    expect(wrapperWrites).toHaveLength(0);
   });
 
   it("writes version marker after installing wrappers", async () => {
@@ -1370,7 +1494,7 @@ describe("setupWorkspaceHooks", () => {
         typeof call[0] === "string" && call[0].includes(".ao-version.tmp."),
     );
     expect(versionWriteCall).toBeDefined();
-    expect(versionWriteCall![1]).toBe("0.1.0");
+    expect(versionWriteCall![1]).toBe("0.2.0");
 
     const versionRenameCall = mockRename.mock.calls.find(
       (call: string[]) => typeof call[1] === "string" && call[1].endsWith(".ao-version"),
@@ -1378,15 +1502,11 @@ describe("setupWorkspaceHooks", () => {
     expect(versionRenameCall).toBeDefined();
   });
 
-  it("appends ao section to AGENTS.md when not present", async () => {
+  it("writes ao session context to .ao/AGENTS.md", async () => {
     // Version marker matches (skip wrapper install)
-    // AGENTS.md exists without ao section
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.1.0");
-      }
-      if (typeof path === "string" && path.endsWith("AGENTS.md")) {
-        return Promise.resolve("# Existing Content\n\nSome stuff here.\n");
+        return Promise.resolve("0.2.0");
       }
       return Promise.reject(new Error("ENOENT"));
     });
@@ -1397,29 +1517,7 @@ describe("setupWorkspaceHooks", () => {
     });
 
     const agentsMdCall = mockWriteFile.mock.calls.find(
-      (call: string[]) => typeof call[0] === "string" && call[0].endsWith("AGENTS.md"),
-    );
-    expect(agentsMdCall).toBeDefined();
-    expect(agentsMdCall![1]).toContain("Agent Orchestrator (ao) Session");
-    expect(agentsMdCall![1]).toContain("# Existing Content");
-  });
-
-  it("creates AGENTS.md if it does not exist", async () => {
-    // Version marker matches, AGENTS.md doesn't exist
-    mockReadFile.mockImplementation((path: string) => {
-      if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.1.0");
-      }
-      return Promise.reject(new Error("ENOENT"));
-    });
-
-    await agent.setupWorkspaceHooks!("/workspace/test", {
-      dataDir: "/data",
-      sessionId: "sess-1",
-    });
-
-    const agentsMdCall = mockWriteFile.mock.calls.find(
-      (call: string[]) => typeof call[0] === "string" && call[0].endsWith("AGENTS.md"),
+      (call: string[]) => typeof call[0] === "string" && call[0].includes(".ao/AGENTS.md"),
     );
     expect(agentsMdCall).toBeDefined();
     expect(agentsMdCall![1]).toContain("Agent Orchestrator (ao) Session");
@@ -1452,13 +1550,10 @@ describe("setupWorkspaceHooks", () => {
     }
   });
 
-  it("does not duplicate ao section in AGENTS.md if already present", async () => {
+  it("writes .ao/AGENTS.md without modifying repo-tracked AGENTS.md", async () => {
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.1.0");
-      }
-      if (typeof path === "string" && path.endsWith("AGENTS.md")) {
-        return Promise.resolve("# Existing\n\n## Agent Orchestrator (ao) Session\n\nAlready here.\n");
+        return Promise.resolve("0.2.0");
       }
       return Promise.reject(new Error("ENOENT"));
     });
@@ -1468,11 +1563,12 @@ describe("setupWorkspaceHooks", () => {
       sessionId: "sess-1",
     });
 
-    const agentsMdCall = mockWriteFile.mock.calls.find(
+    // Should write to .ao/AGENTS.md, NOT to workspace root AGENTS.md
+    const allWrites = mockWriteFile.mock.calls.filter(
       (call: string[]) => typeof call[0] === "string" && call[0].endsWith("AGENTS.md"),
     );
-    // Should NOT write AGENTS.md since the section already exists
-    expect(agentsMdCall).toBeUndefined();
+    expect(allWrites).toHaveLength(1);
+    expect(allWrites[0]![0]).toContain(".ao/AGENTS.md");
   });
 });
 
@@ -1564,6 +1660,18 @@ describe("shell wrapper content", () => {
     it("uses exec for non-PR commands (transparent passthrough)", async () => {
       const content = await getWrapperContent("gh");
       expect(content).toContain('exec "$real_gh"');
+    });
+
+    it("prefers GH_PATH when provided and executable", async () => {
+      const content = await getWrapperContent("gh");
+      expect(content).toContain("GH_PATH");
+      expect(content).toContain('-x "$GH_PATH"');
+      expect(content).toContain('real_gh="$GH_PATH"');
+    });
+
+    it("guards against recursive GH_PATH pointing to ao wrapper dir", async () => {
+      const content = await getWrapperContent("gh");
+      expect(content).toContain('if [[ "$gh_dir" != "$ao_bin_dir" ]]');
     });
 
     it("extracts PR URL from gh pr create output", async () => {

@@ -1,6 +1,15 @@
 import {
   shellEscape,
+  normalizeAgentPermissionMode,
+  buildAgentPath,
+  setupPathWrapperWorkspace,
+  readLastActivityEntry,
+  checkActivityLogState,
+  getActivityFallbackState,
+  recordTerminalActivity,
+  PREFERRED_GH_PATH,
   DEFAULT_READY_THRESHOLD_MS,
+  DEFAULT_ACTIVE_WINDOW_MS,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -9,10 +18,11 @@ import {
   type PluginModule,
   type RuntimeHandle,
   type Session,
-} from "@composio/ao-core";
-import { execFile } from "node:child_process";
+  type WorkspaceHooksConfig,
+} from "@aoagents/ao-core";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { stat, access } from "node:fs/promises";
+import { stat, access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { constants } from "node:fs";
 
@@ -53,6 +63,35 @@ async function getChatHistoryMtime(workspacePath: string): Promise<Date | null> 
 }
 
 // =============================================================================
+// Session Info Helpers
+// =============================================================================
+
+/**
+ * Extract a summary from Aider's chat history file.
+ * Reads the first user message (lines starting with "#### " in the markdown format)
+ * and truncates to 120 characters.
+ */
+async function extractAiderSummary(workspacePath: string): Promise<string | null> {
+  try {
+    const chatFile = join(workspacePath, ".aider.chat.history.md");
+    const content = await readFile(chatFile, "utf-8");
+
+    // Aider chat history uses "#### " prefix for user messages
+    for (const line of content.split("\n")) {
+      if (line.startsWith("#### ")) {
+        const msg = line.slice(5).trim();
+        if (msg.length > 0) {
+          return msg.length > 120 ? msg.substring(0, 120) + "..." : msg;
+        }
+      }
+    }
+  } catch {
+    // File doesn't exist or read error
+  }
+  return null;
+}
+
+// =============================================================================
 // Plugin Manifest
 // =============================================================================
 
@@ -61,6 +100,7 @@ export const manifest = {
   slot: "agent" as const,
   description: "Agent plugin: Aider",
   version: "0.1.0",
+  displayName: "Aider",
 };
 
 // =============================================================================
@@ -75,7 +115,8 @@ function createAiderAgent(): Agent {
     getLaunchCommand(config: AgentLaunchConfig): string {
       const parts: string[] = ["aider"];
 
-      if (config.permissions === "skip") {
+      const permissionMode = normalizeAgentPermissionMode(config.permissions);
+      if (permissionMode === "permissionless" || permissionMode === "auto-edit") {
         parts.push("--yes");
       }
 
@@ -103,12 +144,33 @@ function createAiderAgent(): Agent {
       if (config.issueId) {
         env["AO_ISSUE_ID"] = config.issueId;
       }
+
+      // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
+      env["PATH"] = buildAgentPath(process.env["PATH"]);
+      env["GH_PATH"] = PREFERRED_GH_PATH;
+
       return env;
     },
 
     detectActivity(terminalOutput: string): ActivityState {
       if (!terminalOutput.trim()) return "idle";
-      // Aider doesn't have rich terminal output patterns yet
+
+      const lines = terminalOutput.trim().split("\n");
+      const lastLine = lines[lines.length - 1]?.trim() ?? "";
+
+      // Aider's input prompt — agent is idle, waiting for user command
+      if (/^[>$#]\s*$/.test(lastLine)) return "idle";
+      // Aider-specific prompt patterns
+      if (/^aider>\s*$/.test(lastLine)) return "idle";
+
+      // Check the last few lines for permission/confirmation prompts
+      const tail = lines.slice(-5).join("\n");
+      if (/\(Y\)es.*\(N\)o/i.test(tail)) return "waiting_input";
+      if (/Allow creation of/i.test(tail)) return "waiting_input";
+      if (/Add .+ to the chat\?/i.test(tail)) return "waiting_input";
+      if (/\[Yes\].*\[No\]/i.test(tail)) return "waiting_input";
+      if (/proceed\?/i.test(tail)) return "waiting_input";
+
       return "active";
     },
 
@@ -127,23 +189,39 @@ function createAiderAgent(): Agent {
       // Process is running - check for activity signals
       if (!session.workspacePath) return null;
 
-      // Check for recent git commits (Aider auto-commits changes)
+      // 1. Check AO activity JSONL first (written by recordActivity from terminal output).
+      //    This is the only source of waiting_input/blocked states for Aider.
+      const activityResult = await readLastActivityEntry(session.workspacePath);
+      const activityState = checkActivityLogState(activityResult);
+      if (activityState) return activityState;
+
+      // 2. Fallback: check for recent git commits (Aider auto-commits changes)
       const hasCommits = await hasRecentCommits(session.workspacePath);
       if (hasCommits) return { state: "active" };
 
-      // Check chat history file modification time
+      // 3. Fallback: check chat history file modification time
       const chatMtime = await getChatHistoryMtime(session.workspacePath);
-      if (!chatMtime) {
-        // No chat history — cannot determine activity
-        return null;
+      if (chatMtime) {
+        const ageMs = Date.now() - chatMtime.getTime();
+        const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
+        if (ageMs <= activeWindowMs) return { state: "active", timestamp: chatMtime };
+        if (ageMs <= threshold) return { state: "ready", timestamp: chatMtime };
+        return { state: "idle", timestamp: chatMtime };
       }
 
-      // Classify by age: <30s active, <threshold ready, >threshold idle
-      const ageMs = Date.now() - chatMtime.getTime();
-      const activeWindowMs = Math.min(30_000, threshold);
-      if (ageMs < activeWindowMs) return { state: "active", timestamp: chatMtime };
-      if (ageMs < threshold) return { state: "ready", timestamp: chatMtime };
-      return { state: "idle", timestamp: chatMtime };
+      // 4. Fallback: use JSONL entry with age-based decay when chat history is unavailable.
+      const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
+      const fallback = getActivityFallbackState(activityResult, activeWindowMs, threshold);
+      if (fallback) return fallback;
+
+      return null;
+    },
+
+    async recordActivity(session: Session, terminalOutput: string): Promise<void> {
+      if (!session.workspacePath) return;
+      await recordTerminalActivity(session.workspacePath, terminalOutput, (output) =>
+        this.detectActivity(output),
+      );
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
@@ -197,9 +275,32 @@ function createAiderAgent(): Agent {
       }
     },
 
-    async getSessionInfo(_session: Session): Promise<AgentSessionInfo | null> {
-      // Aider doesn't have JSONL session files for introspection yet
+    async getSessionInfo(session: Session): Promise<AgentSessionInfo | null> {
+      if (!session.workspacePath) return null;
+
+      const summary = await extractAiderSummary(session.workspacePath);
+      if (!summary) return null;
+
+      return {
+        summary,
+        summaryIsFallback: true,
+        agentSessionId: null,
+        // Aider doesn't expose token/cost data
+      };
+    },
+
+    // Aider doesn't support session resume — return null so caller falls back to getLaunchCommand
+    async getRestoreCommand(): Promise<string | null> {
       return null;
+    },
+
+    async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
+      await setupPathWrapperWorkspace(workspacePath);
+    },
+
+    async postLaunchSetup(session: Session): Promise<void> {
+      if (!session.workspacePath) return;
+      await setupPathWrapperWorkspace(session.workspacePath);
     },
   };
 }
@@ -212,4 +313,13 @@ export function create(): Agent {
   return createAiderAgent();
 }
 
-export default { manifest, create } satisfies PluginModule<Agent>;
+export function detect(): boolean {
+  try {
+    execFileSync("aider", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export default { manifest, create, detect } satisfies PluginModule<Agent>;

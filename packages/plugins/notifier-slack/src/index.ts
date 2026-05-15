@@ -1,5 +1,6 @@
 import {
   validateUrl,
+  pluginLog,
   type PluginModule,
   type Notifier,
   type OrchestratorEvent,
@@ -7,7 +8,7 @@ import {
   type NotifyContext,
   type EventPriority,
   CI_STATUS,
-} from "@composio/ao-core";
+} from "@aoagents/ao-core";
 
 export const manifest = {
   name: "slack",
@@ -136,7 +137,7 @@ export function create(config?: Record<string, unknown>): Notifier {
   const username = (config?.username as string) ?? "Agent Orchestrator";
 
   if (!webhookUrl) {
-    console.warn("[notifier-slack] No webhookUrl configured — notifications will be no-ops");
+    pluginLog("warn", "[notifier-slack] No webhookUrl configured — notifications will be no-ops");
   } else {
     validateUrl(webhookUrl, "notifier-slack");
   }

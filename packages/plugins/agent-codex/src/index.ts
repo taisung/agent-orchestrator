@@ -1,6 +1,16 @@
 import {
   DEFAULT_READY_THRESHOLD_MS,
+  DEFAULT_ACTIVE_WINDOW_MS,
   shellEscape,
+  readLastJsonlEntry,
+  normalizeAgentPermissionMode,
+  buildAgentPath,
+  setupPathWrapperWorkspace,
+  readLastActivityEntry,
+  checkActivityLogState,
+  getActivityFallbackState,
+  recordTerminalActivity,
+  PREFERRED_GH_PATH,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -12,20 +22,16 @@ import {
   type RuntimeHandle,
   type Session,
   type WorkspaceHooksConfig,
-} from "@composio/ao-core";
-import { execFile } from "node:child_process";
+} from "@aoagents/ao-core";
+import { execFile, execFileSync } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { writeFile, mkdir, readFile, readdir, rename, stat, lstat, open } from "node:fs/promises";
+import { readdir, stat, lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { randomBytes } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
-
-/** Shared bin directory for ao shell wrappers (prepended to PATH) */
-const AO_BIN_DIR = join(homedir(), ".ao", "bin");
 
 // =============================================================================
 // Plugin Manifest
@@ -35,245 +41,13 @@ export const manifest = {
   name: "codex",
   slot: "agent" as const,
   description: "Agent plugin: OpenAI Codex CLI",
-  version: "0.1.0",
+  version: "0.1.1",
+  displayName: "OpenAI Codex",
 };
 
 // =============================================================================
-// Shell Wrappers (automatic metadata updates — like Claude Code's PostToolUse)
+// Workspace Setup (delegates to shared PATH-wrapper hooks from @aoagents/ao-core)
 // =============================================================================
-
-/**
- * Helper script sourced by both gh and git wrappers.
- * Provides update_ao_metadata() for writing key=value to the session file.
- */
-/* eslint-disable no-useless-escape -- \$ escapes are intentional: bash scripts in JS template literals */
-const AO_METADATA_HELPER = `#!/usr/bin/env bash
-# ao-metadata-helper — shared by gh/git wrappers
-# Provides: update_ao_metadata <key> <value>
-
-update_ao_metadata() {
-  local key="\$1" value="\$2"
-  local ao_dir="\${AO_DATA_DIR:-}"
-  local ao_session="\${AO_SESSION:-}"
-
-  [[ -z "\$ao_dir" || -z "\$ao_session" ]] && return 0
-
-  # Validate: session name must not contain path separators or traversal
-  case "\$ao_session" in
-    */* | *..*) return 0 ;;
-  esac
-
-  # Validate: ao_dir must be an absolute path under known ao directories or /tmp
-  case "\$ao_dir" in
-    "\$HOME"/.ao/* | "\$HOME"/.agent-orchestrator/* | /tmp/*) ;;
-    *) return 0 ;;
-  esac
-
-  local metadata_file="\$ao_dir/\$ao_session"
-
-  # Resolve and verify the file is still within ao_dir
-  local real_dir real_ao_dir
-  real_ao_dir="\$(cd "\$ao_dir" 2>/dev/null && pwd -P)" || return 0
-  real_dir="\$(cd "\$(dirname "\$metadata_file")" 2>/dev/null && pwd -P)" || return 0
-  [[ "\$real_dir" == "\$real_ao_dir"* ]] || return 0
-
-  [[ -f "\$metadata_file" ]] || return 0
-
-  local temp_file="\${metadata_file}.tmp.\$\$"
-
-  # Strip newlines from value to prevent metadata line injection
-  local clean_value="\$(printf '%s' "\$value" | tr -d '\\n')"
-
-  # Escape sed metacharacters in value (& expands to matched text, | breaks delimiter)
-  local escaped_value="\$(printf '%s' "\$clean_value" | sed 's/[&|\\\\]/\\\\&/g')"
-
-  if grep -q "^\${key}=" "\$metadata_file" 2>/dev/null; then
-    sed "s|^\${key}=.*|\${key}=\${escaped_value}|" "\$metadata_file" > "\$temp_file"
-  else
-    cp "\$metadata_file" "\$temp_file"
-    printf '%s=%s\\n' "\$key" "\$clean_value" >> "\$temp_file"
-  fi
-
-  mv "\$temp_file" "\$metadata_file"
-}
-`;
-
-/**
- * gh wrapper — intercepts `gh pr create` and `gh pr merge` to auto-update
- * session metadata. All other commands pass through transparently.
- */
-const GH_WRAPPER = `#!/usr/bin/env bash
-# ao gh wrapper — auto-updates session metadata on PR operations
-
-# Find real gh by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
-real_gh="\$(PATH="\$clean_path" command -v gh 2>/dev/null)"
-
-if [[ -z "\$real_gh" ]]; then
-  echo "ao-wrapper: gh not found in PATH" >&2
-  exit 127
-fi
-
-# Source the metadata helper
-source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
-
-# Only capture output for commands we need to parse (pr/create, pr/merge).
-# All other commands pass through transparently without stream merging.
-case "\$1/\$2" in
-  pr/create|pr/merge)
-    tmpout="\$(mktemp)"
-    trap 'rm -f "\$tmpout"' EXIT
-
-    "\$real_gh" "\$@" 2>&1 | tee "\$tmpout"
-    exit_code=\${PIPESTATUS[0]}
-
-    if [[ \$exit_code -eq 0 ]]; then
-      output="\$(cat "\$tmpout")"
-      case "\$1/\$2" in
-        pr/create)
-          pr_url="\$(echo "\$output" | grep -Eo 'https://github\\.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)"
-          if [[ -n "\$pr_url" ]]; then
-            update_ao_metadata pr "\$pr_url"
-            update_ao_metadata status pr_open
-          fi
-          ;;
-        pr/merge)
-          update_ao_metadata status merged
-          ;;
-      esac
-    fi
-
-    exit \$exit_code
-    ;;
-  *)
-    exec "\$real_gh" "\$@"
-    ;;
-esac
-`;
-
-/**
- * git wrapper — intercepts branch creation commands to auto-update metadata.
- * All other commands pass through transparently.
- */
-const GIT_WRAPPER = `#!/usr/bin/env bash
-# ao git wrapper — auto-updates session metadata on branch operations
-
-# Find real git by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
-real_git="\$(PATH="\$clean_path" command -v git 2>/dev/null)"
-
-if [[ -z "\$real_git" ]]; then
-  echo "ao-wrapper: git not found in PATH" >&2
-  exit 127
-fi
-
-# Source the metadata helper
-source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
-
-# Run real git
-"\$real_git" "\$@"
-exit_code=\$?
-
-# Only update metadata on success
-if [[ \$exit_code -eq 0 ]]; then
-  case "\$1/\$2" in
-    checkout/-b)
-      update_ao_metadata branch "\$3"
-      ;;
-    switch/-c)
-      update_ao_metadata branch "\$3"
-      ;;
-  esac
-fi
-
-exit \$exit_code
-`;
-
-// =============================================================================
-// Workspace Setup
-// =============================================================================
-
-/**
- * Section appended to AGENTS.md as a secondary signal. The PATH-based wrappers
- * handle metadata updates automatically, but AGENTS.md reinforces the intent
- * and helps if the wrappers are bypassed.
- */
-const AO_AGENTS_MD_SECTION = `
-## Agent Orchestrator (ao) Session
-
-You are running inside an Agent Orchestrator managed workspace.
-Session metadata is updated automatically via shell wrappers.
-
-If automatic updates fail, you can manually update metadata:
-\`\`\`bash
-~/.ao/bin/ao-metadata-helper.sh  # sourced automatically
-# Then call: update_ao_metadata <key> <value>
-\`\`\`
-`;
-/* eslint-enable no-useless-escape */
-
-/**
- * Atomically write a file by writing to a temp file in the same directory,
- * then renaming. This prevents concurrent sessions from reading partially
- * written wrapper scripts.
- */
-async function atomicWriteFile(filePath: string, content: string, mode: number): Promise<void> {
-  const suffix = randomBytes(6).toString("hex");
-  const tmpPath = `${filePath}.tmp.${suffix}`;
-  await writeFile(tmpPath, content, { encoding: "utf-8", mode });
-  await rename(tmpPath, filePath);
-}
-
-async function setupCodexWorkspace(workspacePath: string): Promise<void> {
-  // 1. Write shared wrappers to ~/.ao/bin/
-  await mkdir(AO_BIN_DIR, { recursive: true });
-
-  await atomicWriteFile(
-    join(AO_BIN_DIR, "ao-metadata-helper.sh"),
-    AO_METADATA_HELPER,
-    0o755,
-  );
-
-  // Only write wrappers if they don't exist or are outdated (check marker)
-  const markerPath = join(AO_BIN_DIR, ".ao-version");
-  const currentVersion = "0.1.0";
-  let needsUpdate = true;
-  try {
-    const existing = await readFile(markerPath, "utf-8");
-    if (existing.trim() === currentVersion) needsUpdate = false;
-  } catch {
-    // File doesn't exist — needs update
-  }
-
-  if (needsUpdate) {
-    // Write wrappers atomically, then write the version marker last.
-    // If we crash between wrapper writes and marker write, the next
-    // invocation will redo the writes (safe: wrappers are idempotent).
-    await atomicWriteFile(join(AO_BIN_DIR, "gh"), GH_WRAPPER, 0o755);
-    await atomicWriteFile(join(AO_BIN_DIR, "git"), GIT_WRAPPER, 0o755);
-    await atomicWriteFile(markerPath, currentVersion, 0o644);
-  }
-
-  // 2. Append ao section to AGENTS.md (create if missing, skip if already present)
-  const agentsMdPath = join(workspacePath, "AGENTS.md");
-  let existing = "";
-  try {
-    existing = await readFile(agentsMdPath, "utf-8");
-  } catch {
-    // File doesn't exist yet
-  }
-
-  if (!existing.includes("Agent Orchestrator (ao) Session")) {
-    const content = existing
-      ? existing.trimEnd() + "\n" + AO_AGENTS_MD_SECTION
-      : AO_AGENTS_MD_SECTION.trimStart();
-    await writeFile(agentsMdPath, content, "utf-8");
-  }
-}
 
 // =============================================================================
 // Codex Session JSONL Parsing (for getSessionInfo)
@@ -516,11 +290,12 @@ export async function resolveCodexBinary(): Promise<string> {
 
 /** Append approval-policy flags to a command parts array */
 function appendApprovalFlags(parts: string[], permissions: string | undefined): void {
-  if (permissions === "skip") {
+  const mode = normalizeAgentPermissionMode(permissions);
+  if (mode === "permissionless") {
     parts.push("--dangerously-bypass-approvals-and-sandbox");
-  } else if (permissions === "auto-edit") {
+  } else if (mode === "auto-edit") {
     parts.push("--ask-for-approval", "never");
-  } else if (permissions === "suggest") {
+  } else if (mode === "suggest") {
     parts.push("--ask-for-approval", "untrusted");
   }
 }
@@ -536,6 +311,11 @@ function appendModelFlags(parts: string[], model: string | undefined): void {
   if (/^o[34]/i.test(model)) {
     parts.push("-c", "model_reasoning_effort=high");
   }
+}
+
+/** Disable Codex startup update checks/prompts in non-interactive sessions */
+function appendNoUpdateCheckFlag(parts: string[]): void {
+  parts.push("-c", "check_for_update_on_startup=false");
 }
 
 /** TTL for session file path cache (ms). Prevents redundant filesystem scans
@@ -570,8 +350,9 @@ function createCodexAgent(): Agent {
     getLaunchCommand(config: AgentLaunchConfig): string {
       const binary = resolvedBinary ?? "codex";
       const parts: string[] = [shellEscape(binary)];
+      appendNoUpdateCheckFlag(parts);
 
-      appendApprovalFlags(parts, config.permissions as string | undefined);
+      appendApprovalFlags(parts, config.permissions);
       appendModelFlags(parts, config.model);
 
       if (config.systemPromptFile) {
@@ -602,7 +383,10 @@ function createCodexAgent(): Agent {
       // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
       // The wrappers strip this directory from PATH before calling the real
       // binary, so there's no infinite recursion.
-      env["PATH"] = `${AO_BIN_DIR}:${process.env["PATH"] ?? "/usr/bin:/bin"}`;
+      env["PATH"] = buildAgentPath(process.env["PATH"]);
+      env["GH_PATH"] = PREFERRED_GH_PATH;
+      // Disable Codex's version check/update prompt for non-interactive AO sessions.
+      env["CODEX_DISABLE_UPDATE_CHECK"] = "1";
 
       return env;
     },
@@ -635,29 +419,83 @@ function createCodexAgent(): Agent {
       const running = await this.isProcessRunning(session.runtimeHandle);
       if (!running) return { state: "exited", timestamp: exitedAt };
 
-      // Use session file mtime as a proxy for activity. Codex continuously
-      // appends to its rollout JSONL file while working, so a recently
-      // modified file means the agent is active.
       if (!session.workspacePath) return null;
 
+      // 1. Try Codex's native JSONL first — it has richer 6-state detection
+      //    (approval_request, error, tool_call, etc.) that terminal parsing can't match.
       const sessionFile = await findCodexSessionFileCached(session.workspacePath);
-      if (!sessionFile) return null;
+      if (sessionFile) {
+        const entry = await readLastJsonlEntry(sessionFile);
+        if (entry) {
+          const ageMs = Date.now() - entry.modifiedAt.getTime();
+          const timestamp = entry.modifiedAt;
 
-      try {
-        const s = await stat(sessionFile);
-        const timestamp = s.mtime;
-        const ageMs = Date.now() - s.mtimeMs;
+          // Map Codex JSONL entry types to activity states.
+          // Confirmed types: session_meta, event_msg. Others are best-effort.
+          const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
+          switch (entry.lastType) {
+            case "user_input":
+            case "tool_call":
+            case "exec_command":
+              if (ageMs <= activeWindowMs) return { state: "active", timestamp };
+              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
 
-        if (ageMs <= threshold) {
-          // File was recently modified — agent is actively working
-          return { state: "active", timestamp };
+            case "assistant_message":
+            case "session_meta":
+            case "event_msg":
+              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
+
+            case "approval_request":
+              return { state: "waiting_input", timestamp };
+
+            case "error":
+              return { state: "blocked", timestamp };
+
+            default:
+              if (ageMs <= activeWindowMs) return { state: "active", timestamp };
+              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
+          }
         }
 
-        // File is stale — agent finished or is idle
-        return { state: "idle", timestamp };
-      } catch {
-        return null;
+        // Session file exists but no parseable entry — fall through to AO JSONL
+        // checks below instead of returning early, so waiting_input/blocked
+        // from terminal parsing can still be detected.
       }
+
+      // 2. Fallback: check AO activity JSONL (terminal-derived) for waiting_input/blocked
+      //    that the native JSONL may not have captured.
+      const activityResult = await readLastActivityEntry(session.workspacePath);
+      const activityState = checkActivityLogState(activityResult);
+      if (activityState) return activityState;
+
+      // 3. Fallback: use JSONL entry with age-based decay when native session file
+      //    is missing or unparseable.
+      const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
+      const fallback = getActivityFallbackState(activityResult, activeWindowMs, threshold);
+      if (fallback) return fallback;
+
+      // 4. Last resort: native session file exists but nothing else — use its mtime
+      if (sessionFile) {
+        try {
+          const s = await stat(sessionFile);
+          const ageMs = Date.now() - s.mtimeMs;
+          const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
+          if (ageMs <= activeWindowMs) return { state: "active", timestamp: s.mtime };
+          if (ageMs <= threshold) return { state: "ready", timestamp: s.mtime };
+          return { state: "idle", timestamp: s.mtime };
+        } catch {
+          // stat failed — no signal available
+        }
+      }
+
+      return null;
+    },
+
+    async recordActivity(session: Session, terminalOutput: string): Promise<void> {
+      if (!session.workspacePath) return;
+      await recordTerminalActivity(session.workspacePath, terminalOutput, (output) =>
+        this.detectActivity(output),
+      );
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
@@ -759,8 +597,9 @@ function createCodexAgent(): Agent {
       // Flags are placed before the positional threadId for CLI parser compatibility.
       const binary = resolvedBinary ?? "codex";
       const parts: string[] = [shellEscape(binary), "resume"];
+      appendNoUpdateCheckFlag(parts);
 
-      appendApprovalFlags(parts, project.agentConfig?.permissions as string | undefined);
+      appendApprovalFlags(parts, project.agentConfig?.permissions);
       const effectiveModel = (project.agentConfig?.model ?? data.model) as string | undefined;
       appendModelFlags(parts, effectiveModel ?? undefined);
 
@@ -771,7 +610,7 @@ function createCodexAgent(): Agent {
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
-      await setupCodexWorkspace(workspacePath);
+      await setupPathWrapperWorkspace(workspacePath);
     },
 
     async postLaunchSetup(session: Session): Promise<void> {
@@ -788,7 +627,7 @@ function createCodexAgent(): Agent {
         }
       }
       if (!session.workspacePath) return;
-      await setupCodexWorkspace(session.workspacePath);
+      await setupPathWrapperWorkspace(session.workspacePath);
     },
   };
 }
@@ -816,4 +655,13 @@ export type {
   ApprovalDecision,
 } from "./app-server-client.js";
 
-export default { manifest, create } satisfies PluginModule<Agent>;
+export function detect(): boolean {
+  try {
+    execFileSync("codex", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export default { manifest, create, detect } satisfies PluginModule<Agent>;

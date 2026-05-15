@@ -1,13 +1,15 @@
 /**
- * Web directory locator — finds the @composio/ao-web package.
+ * Web directory locator — finds the @aoagents/ao-web package.
  * Shared utility to avoid duplication between dashboard.ts and start.ts.
  */
 
-import { createServer } from "node:net";
+import { spawn } from "node:child_process";
+import { Socket } from "node:net";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
+import { formatCommandError } from "./cli-errors.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,20 +19,86 @@ const require = createRequire(import.meta.url);
 const DEFAULT_TERMINAL_PORT = 14800;
 
 /**
- * Check if a TCP port is available by attempting to bind to it.
- * Returns true if the port is free, false if in use.
+ * Check if a TCP port is available by attempting to connect to it.
+ * A successful connect means something is already listening (port in use).
+ * ECONNREFUSED means nothing is listening (port free).
+ *
+ * Connect-based detection is more reliable than bind-based because it works
+ * regardless of whether the occupying process is bound to 127.0.0.1, ::1,
+ * 0.0.0.0, or :: (IPv6 wildcard).
  */
 export function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const server = createServer();
-    server.once("error", () => {
-      resolve(false);
-    });
-    server.once("listening", () => {
-      server.close(() => resolve(true));
-    });
-    server.listen(port, "127.0.0.1");
+    const s = new Socket();
+    s.setTimeout(300);
+    s.once("connect", () => { s.destroy(); resolve(false); }); // something listening → in use
+    s.once("error", () => { s.destroy(); resolve(true); });    // ECONNREFUSED → free
+    s.once("timeout", () => { s.destroy(); resolve(true); });  // no response → free
+    s.connect(port, "127.0.0.1");
   });
+}
+
+/** How many consecutive ports to scan before giving up. */
+export const MAX_PORT_SCAN = 100;
+
+/**
+ * Find the first available port starting from `start`, scanning upward.
+ * Returns `null` if no free port is found within `maxScan` attempts.
+ * Shared between `ao init` and `ao start <url>`.
+ */
+export async function findFreePort(start: number, maxScan = MAX_PORT_SCAN): Promise<number | null> {
+  for (let port = start; port < start + maxScan; port++) {
+    if (await isPortAvailable(port)) return port;
+  }
+  return null;
+}
+
+/**
+ * Open a URL in the user's browser without throwing back into the caller.
+ */
+export function openUrl(url: string): void {
+  const [cmd, args]: [string, string[]] =
+    process.platform === "win32"
+      ? ["cmd.exe", ["/c", "start", "", url]]
+      : [process.platform === "linux" ? "xdg-open" : "open", [url]];
+  const browser = spawn(cmd, args, { stdio: "ignore" });
+  browser.on("error", (err) => {
+    console.warn(
+      formatCommandError(err, {
+        cmd,
+        args,
+        action: `open ${url} in a browser`,
+        installHints:
+          process.platform === "linux"
+            ? ["Install xdg-utils so `xdg-open` is available on PATH."]
+            : process.platform === "win32"
+              ? []
+              : [],
+      }).message,
+    );
+  });
+}
+
+/**
+ * Poll until a port is accepting connections, then open a URL in the browser.
+ * Respects an AbortSignal so the caller can cancel if the dashboard process
+ * exits early. Gives up silently after timeoutMs (default 30s).
+ */
+export async function waitForPortAndOpen(
+  port: number,
+  url: string,
+  signal: AbortSignal,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const start = Date.now();
+  while (!signal.aborted && Date.now() - start < timeoutMs) {
+    const free = await isPortAvailable(port);
+    if (!free) {
+      openUrl(url);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
 }
 
 /**
@@ -109,14 +177,14 @@ export async function buildDashboardEnv(
 }
 
 /**
- * Locate the @composio/ao-web package directory.
+ * Locate the @aoagents/ao-web package directory.
  * Uses createRequire for ESM-compatible require.resolve, with fallback
  * to sibling package paths that work from both src/ and dist/.
  */
 export function findWebDir(): string {
   // Try to resolve from node_modules first (installed as workspace dep)
   try {
-    const pkgJson = require.resolve("@composio/ao-web/package.json");
+    const pkgJson = require.resolve("@aoagents/ao-web/package.json");
     return resolve(pkgJson, "..");
   } catch {
     // Fallback: sibling package in monorepo (works both from src/ and dist/)
@@ -131,6 +199,10 @@ export function findWebDir(): string {
         return candidate;
       }
     }
-    return candidates[0];
+    throw new Error(
+      "Could not find @aoagents/ao-web package.\n" +
+      "  If installed via npm:    npm install -g @aoagents/ao\n" +
+      "  If cloned from source:   pnpm install && pnpm build",
+    );
   }
 }

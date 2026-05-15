@@ -15,12 +15,66 @@ import { resolve, join, basename } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import type { OrchestratorConfig } from "./types.js";
+import { ConfigNotFoundError, type ExternalPluginEntryRef, type OrchestratorConfig } from "./types.js";
 import { generateSessionPrefix } from "./paths.js";
+
+function inferScmPlugin(project: {
+  repo: string;
+  scm?: Record<string, unknown>;
+  tracker?: Record<string, unknown>;
+}): "github" | "gitlab" {
+  const scmPlugin = project.scm?.["plugin"];
+  if (scmPlugin === "gitlab") {
+    return "gitlab";
+  }
+
+  const scmHost = project.scm?.["host"];
+  if (typeof scmHost === "string" && scmHost.toLowerCase().includes("gitlab")) {
+    return "gitlab";
+  }
+
+  const trackerPlugin = project.tracker?.["plugin"];
+  if (trackerPlugin === "gitlab") {
+    return "gitlab";
+  }
+
+  const trackerHost = project.tracker?.["host"];
+  if (typeof trackerHost === "string" && trackerHost.toLowerCase().includes("gitlab")) {
+    return "gitlab";
+  }
+
+  return "github";
+}
 
 // =============================================================================
 // ZOD SCHEMAS
 // =============================================================================
+
+/**
+ * Common validation for plugin config fields (tracker, scm, notifier).
+ * Must have either plugin (for built-ins) or package/path (for external plugins).
+ * Cannot have both package and path.
+ */
+function validatePluginConfigFields(
+  value: { plugin?: string; package?: string; path?: string },
+  ctx: z.RefinementCtx,
+  configType: string,
+): void {
+  // Must have either plugin or package/path
+  if (!value.plugin && !value.package && !value.path) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${configType} config requires either 'plugin' (for built-ins) or 'package'/'path' (for external plugins)`,
+    });
+  }
+  // Cannot have both package and path
+  if (value.package && value.path) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${configType} config cannot have both 'package' and 'path' - use one or the other`,
+    });
+  }
+}
 
 const ReactionConfigSchema = z.object({
   auto: z.boolean().default(true),
@@ -35,28 +89,93 @@ const ReactionConfigSchema = z.object({
 
 const TrackerConfigSchema = z
   .object({
-    plugin: z.string(),
+    plugin: z.string().optional(),
+    package: z.string().optional(),
+    path: z.string().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "Tracker"));
 
 const SCMConfigSchema = z
   .object({
-    plugin: z.string(),
+    plugin: z.string().optional(),
+    package: z.string().optional(),
+    path: z.string().optional(),
+    webhook: z
+      .object({
+        enabled: z.boolean().default(true),
+        path: z.string().optional(),
+        secretEnvVar: z.string().optional(),
+        signatureHeader: z.string().optional(),
+        eventHeader: z.string().optional(),
+        deliveryHeader: z.string().optional(),
+        maxBodyBytes: z.number().int().positive().optional(),
+      })
+      .optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "SCM"));
 
 const NotifierConfigSchema = z
   .object({
-    plugin: z.string(),
+    plugin: z.string().optional(),
+    package: z.string().optional(),
+    path: z.string().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "Notifier"));
+
+const AgentPermissionSchema = z
+  .enum(["permissionless", "default", "auto-edit", "suggest", "skip"])
+  .default("permissionless")
+  .transform((value) => (value === "skip" ? "permissionless" : value));
 
 const AgentSpecificConfigSchema = z
   .object({
-    permissions: z.enum(["skip", "default"]).default("skip"),
+    permissions: AgentPermissionSchema,
     model: z.string().optional(),
+    orchestratorModel: z.string().optional(),
+    opencodeSessionId: z.string().optional(),
   })
   .passthrough();
+
+const RoleAgentSpecificConfigSchema = z
+  .object({
+    permissions: z
+      .union([z.enum(["permissionless", "default", "auto-edit", "suggest"]), z.literal("skip")])
+      .optional(),
+    model: z.string().optional(),
+    orchestratorModel: z.string().optional(),
+    opencodeSessionId: z.string().optional(),
+  })
+  .passthrough();
+
+const RoleAgentDefaultsSchema = z
+  .object({
+    agent: z.string().optional(),
+  })
+  .optional();
+
+const RoleAgentConfigSchema = z
+  .object({
+    agent: z.string().optional(),
+    agentConfig: RoleAgentSpecificConfigSchema.optional(),
+  })
+  .optional();
+
+const DecomposerConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    maxDepth: z.number().min(1).max(5).default(3),
+    model: z.string().default("claude-sonnet-4-20250514"),
+    requireApproval: z.boolean().default(true),
+  })
+  .default({
+    enabled: false,
+    maxDepth: 3,
+    model: "claude-sonnet-4-20250514",
+    requireApproval: true,
+  });
 
 const ProjectConfigSchema = z.object({
   name: z.string().optional(),
@@ -75,18 +194,55 @@ const ProjectConfigSchema = z.object({
   symlinks: z.array(z.string()).optional(),
   postCreate: z.array(z.string()).optional(),
   agentConfig: AgentSpecificConfigSchema.default({}),
+  orchestrator: RoleAgentConfigSchema,
+  worker: RoleAgentConfigSchema,
   reactions: z.record(ReactionConfigSchema.partial()).optional(),
   agentRules: z.string().optional(),
   agentRulesFile: z.string().optional(),
   orchestratorRules: z.string().optional(),
+  orchestratorWorkspaceMode: z.enum(["isolated", "project"]).optional(),
+  orchestratorSessionStrategy: z
+    .enum(["reuse", "delete", "ignore", "delete-new", "ignore-new", "kill-previous"])
+    .optional(),
+  opencodeIssueSessionStrategy: z.enum(["reuse", "delete", "ignore"]).optional(),
+  decomposer: DecomposerConfigSchema.optional(),
 });
 
 const DefaultPluginsSchema = z.object({
   runtime: z.string().default("tmux"),
   agent: z.string().default("claude-code"),
   workspace: z.string().default("worktree"),
-  notifiers: z.array(z.string()).default(["composio", "desktop"]),
+  notifiers: z.array(z.string()).default([]),
+  orchestrator: RoleAgentDefaultsSchema,
+  worker: RoleAgentDefaultsSchema,
 });
+
+const InstalledPluginConfigSchema = z
+  .object({
+    name: z.string(),
+    source: z.enum(["registry", "npm", "local"]),
+    package: z.string().optional(),
+    version: z.string().optional(),
+    path: z.string().optional(),
+    enabled: z.boolean().default(true),
+  })
+  .superRefine((value, ctx) => {
+    if (value.source === "local" && !value.path) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["path"],
+        message: "Local plugins require a path",
+      });
+    }
+
+    if ((value.source === "registry" || value.source === "npm") && !value.package) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["package"],
+        message: "Registry and npm plugins require a package name",
+      });
+    }
+  });
 
 const OrchestratorConfigSchema = z.object({
   port: z.number().default(3000),
@@ -94,14 +250,13 @@ const OrchestratorConfigSchema = z.object({
   directTerminalPort: z.number().optional(),
   readyThresholdMs: z.number().nonnegative().default(300_000),
   defaults: DefaultPluginsSchema.default({}),
-  projects: z.record(ProjectConfigSchema),
+  plugins: z.array(InstalledPluginConfigSchema).default([]),
+  projects: z.record(
+    z.string().regex(/^[a-zA-Z0-9_-]+$/, "Project ID must match [a-zA-Z0-9_-]+ (no dots, slashes, or special characters)"),
+    ProjectConfigSchema,
+  ),
   notifiers: z.record(NotifierConfigSchema).default({}),
-  notificationRouting: z.record(z.array(z.string())).default({
-    urgent: ["desktop", "composio"],
-    action: ["desktop", "composio"],
-    warning: ["composio"],
-    info: ["composio"],
-  }),
+  notificationRouting: z.record(z.array(z.string())).default({}),
   reactions: z.record(ReactionConfigSchema).default({}),
 });
 
@@ -123,7 +278,188 @@ function expandPaths(config: OrchestratorConfig): OrchestratorConfig {
     project.path = expandHome(project.path);
   }
 
+  for (const plugin of config.plugins ?? []) {
+    if (plugin.path) {
+      plugin.path = expandHome(plugin.path);
+    }
+  }
+
   return config;
+}
+
+/**
+ * Generate a temporary plugin name from a package or path specifier.
+ * This name is used until the actual manifest.name is discovered during plugin loading.
+ * Format: extract the plugin name from the package/path, removing common prefixes.
+ * e.g., "@acme/ao-plugin-tracker-jira" -> "jira"
+ * e.g., "@acme/ao-plugin-tracker-jira-cloud" -> "jira-cloud"
+ * e.g., "./plugins/my-tracker" -> "my-tracker"
+ * e.g., "my-tracker" (local path without slashes) -> "my-tracker"
+ */
+function generateTempPluginName(pkg?: string, path?: string): string {
+  if (pkg) {
+    // Extract package name without scope: "@acme/ao-plugin-tracker-jira" -> "ao-plugin-tracker-jira"
+    const slashParts = pkg.split("/");
+    const packageName = slashParts[slashParts.length - 1] ?? pkg;
+
+    // Extract plugin name after ao-plugin-{slot}- prefix, preserving multi-word names like "jira-cloud"
+    const prefixMatch = packageName.match(/^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/);
+    if (prefixMatch?.[1]) {
+      return prefixMatch[1];
+    }
+
+    // Non-standard package name (doesn't follow ao-plugin convention): use the full package name
+    // to avoid collisions. "plugin" from "custom-tracker-plugin" would collide with other packages
+    // that also end in "-plugin". The temp name is replaced with manifest.name after loading anyway.
+    return packageName;
+  }
+
+  // Handle local paths: use the basename
+  // ./plugins/my-tracker -> my-tracker
+  // my-tracker -> my-tracker (no slashes is still a valid path)
+  if (path) {
+    const segments = path.split("/").filter((s) => s && s !== "." && s !== "..");
+    return segments[segments.length - 1] ?? path;
+  }
+
+  return "unknown";
+}
+
+/**
+ * Helper to process a single external plugin config entry.
+ * Expands home paths, generates temp plugin name if needed, and returns the entry ref.
+ */
+function processExternalPluginConfig(
+  pluginConfig: { plugin?: string; package?: string; path?: string },
+  source: string,
+  location: ExternalPluginEntryRef["location"],
+  slot: ExternalPluginEntryRef["slot"],
+): ExternalPluginEntryRef | null {
+  if (!pluginConfig.package && !pluginConfig.path) return null;
+
+  // Expand home paths (~/...) for consistency with config.plugins
+  if (pluginConfig.path) {
+    pluginConfig.path = expandHome(pluginConfig.path);
+  }
+
+  // Track if user explicitly specified plugin name (for validation)
+  const userSpecifiedPlugin = pluginConfig.plugin;
+
+  // If plugin name not specified, generate a temporary one from package/path
+  if (!pluginConfig.plugin) {
+    pluginConfig.plugin = generateTempPluginName(pluginConfig.package, pluginConfig.path);
+  }
+
+  return {
+    source,
+    location,
+    slot,
+    package: pluginConfig.package,
+    path: pluginConfig.path,
+    expectedPluginName: userSpecifiedPlugin,
+  };
+}
+
+/**
+ * Collect external plugin configs from tracker, scm, and notifier inline configs.
+ * These will be auto-added to config.plugins for loading.
+ *
+ * Also sets a temporary plugin name on configs that only have package/path,
+ * so that resolvePlugins() can look up the plugin by name.
+ *
+ * IMPORTANT: Only sets expectedPluginName when user explicitly specified `plugin`.
+ * When plugin is auto-generated, expectedPluginName is left undefined so that
+ * any manifest.name is accepted and the config is updated with it.
+ */
+export function collectExternalPluginConfigs(config: OrchestratorConfig): ExternalPluginEntryRef[] {
+  const entries: ExternalPluginEntryRef[] = [];
+
+  // Collect from project tracker and scm configs
+  for (const [projectId, project] of Object.entries(config.projects)) {
+    if (project.tracker) {
+      const entry = processExternalPluginConfig(
+        project.tracker,
+        `projects.${projectId}.tracker`,
+        { kind: "project", projectId, configType: "tracker" },
+        "tracker",
+      );
+      if (entry) entries.push(entry);
+    }
+
+    if (project.scm) {
+      const entry = processExternalPluginConfig(
+        project.scm,
+        `projects.${projectId}.scm`,
+        { kind: "project", projectId, configType: "scm" },
+        "scm",
+      );
+      if (entry) entries.push(entry);
+    }
+  }
+
+  // Collect from global notifier configs
+  for (const [notifierId, notifierConfig] of Object.entries(config.notifiers ?? {})) {
+    if (notifierConfig) {
+      const entry = processExternalPluginConfig(
+        notifierConfig,
+        `notifiers.${notifierId}`,
+        { kind: "notifier", notifierId },
+        "notifier",
+      );
+      if (entry) entries.push(entry);
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Generate InstalledPluginConfig entries from external plugin entries.
+ * Merges with existing plugins, avoiding duplicates by package/path.
+ */
+function mergeExternalPlugins(
+  existingPlugins: OrchestratorConfig["plugins"],
+  externalEntries: ExternalPluginEntryRef[],
+): OrchestratorConfig["plugins"] {
+  const plugins = [...(existingPlugins ?? [])];
+  const seen = new Set<string>();
+
+  // Track existing plugins by package/path
+  for (const plugin of plugins) {
+    if (plugin.package) seen.add(`package:${plugin.package}`);
+    if (plugin.path) seen.add(`path:${plugin.path}`);
+  }
+
+  // Add external entries that aren't already present, or enable if disabled
+  for (const entry of externalEntries) {
+    const key = entry.package ? `package:${entry.package}` : `path:${entry.path}`;
+    if (seen.has(key)) {
+      // If the existing plugin is disabled but there's an inline reference, enable it
+      const existingPlugin = plugins.find(
+        (p) =>
+          (entry.package && p.package === entry.package) ||
+          (entry.path && p.path === entry.path),
+      );
+      if (existingPlugin && existingPlugin.enabled === false) {
+        existingPlugin.enabled = true;
+      }
+      continue;
+    }
+    seen.add(key);
+
+    // Generate a temporary name - will be replaced with manifest.name during loading
+    const tempName = entry.expectedPluginName ?? generateTempPluginName(entry.package, entry.path);
+
+    plugins.push({
+      name: tempName,
+      source: entry.package ? "npm" : "local",
+      package: entry.package,
+      path: entry.path,
+      enabled: true,
+    });
+  }
+
+  return plugins;
 }
 
 /** Apply defaults to project configs */
@@ -140,14 +476,16 @@ function applyProjectDefaults(config: OrchestratorConfig): OrchestratorConfig {
       project.sessionPrefix = generateSessionPrefix(projectId);
     }
 
+    const inferredPlugin = inferScmPlugin(project);
+
     // Infer SCM from repo if not set
     if (!project.scm && project.repo.includes("/")) {
-      project.scm = { plugin: "github" };
+      project.scm = { plugin: inferredPlugin };
     }
 
     // Infer tracker from repo if not set (default to github issues)
     if (!project.tracker) {
-      project.tracker = { plugin: "github" };
+      project.tracker = { plugin: inferredPlugin };
     }
   }
 
@@ -246,6 +584,14 @@ function applyDefaultReactions(config: OrchestratorConfig): OrchestratorConfig {
       action: "notify",
       priority: "action",
       message: "PR is ready to merge",
+    },
+    "agent-idle": {
+      auto: true,
+      action: "send-to-agent",
+      message:
+        "You appear to be idle. If your task is not complete, continue working — write the code, commit, push, and create a PR. If you are blocked, explain what is blocking you.",
+      retries: 2,
+      escalateAfter: "15m",
     },
     "agent-stuck": {
       auto: true,
@@ -364,7 +710,7 @@ export function loadConfig(configPath?: string): OrchestratorConfig {
   const path = configPath ?? findConfigFile();
 
   if (!path) {
-    throw new Error("No agent-orchestrator.yaml found. Run `ao init` to create one.");
+    throw new ConfigNotFoundError();
   }
 
   const raw = readFileSync(path, "utf-8");
@@ -385,7 +731,7 @@ export function loadConfigWithPath(configPath?: string): {
   const path = configPath ?? findConfigFile();
 
   if (!path) {
-    throw new Error("No agent-orchestrator.yaml found. Run `ao init` to create one.");
+    throw new ConfigNotFoundError();
   }
 
   const raw = readFileSync(path, "utf-8");
@@ -406,6 +752,15 @@ export function validateConfig(raw: unknown): OrchestratorConfig {
   config = expandPaths(config);
   config = applyProjectDefaults(config);
   config = applyDefaultReactions(config);
+
+  // Collect external plugin configs from inline tracker/scm/notifier configs
+  // and merge them into config.plugins for loading
+  const externalPluginEntries = collectExternalPluginConfigs(config);
+  if (externalPluginEntries.length > 0) {
+    config.plugins = mergeExternalPlugins(config.plugins, externalPluginEntries);
+    // Store entries for manifest validation during plugin loading
+    config._externalPluginEntries = externalPluginEntries;
+  }
 
   // Validate project uniqueness and prefix collisions
   validateProjectUniqueness(config);

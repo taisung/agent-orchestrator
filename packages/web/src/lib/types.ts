@@ -2,7 +2,7 @@
  * Dashboard-specific types for the web UI.
  *
  * Core types (SessionStatus, ActivityState, CIStatus, ReviewDecision, etc.)
- * are re-exported from @composio/ao-core. Dashboard-specific types
+ * are re-exported from @aoagents/ao-core. Dashboard-specific types
  * extend/flatten the core types for client-side rendering (e.g. DashboardPR
  * flattens core PRInfo + MergeReadiness + CICheck[] + ReviewComment[]).
  */
@@ -15,7 +15,7 @@ export type {
   ReviewDecision,
   MergeReadiness,
   PRState,
-} from "@composio/ao-core/types";
+} from "@aoagents/ao-core/types";
 
 import {
   ACTIVITY_STATE,
@@ -30,10 +30,10 @@ import {
   type SessionStatus,
   type ActivityState,
   type ReviewDecision,
-} from "@composio/ao-core/types";
+} from "@aoagents/ao-core/types";
 
 // Re-export for use in client components
-export { TERMINAL_STATUSES, TERMINAL_ACTIVITIES, NON_RESTORABLE_STATUSES };
+export { CI_STATUS, TERMINAL_STATUSES, TERMINAL_ACTIVITIES, NON_RESTORABLE_STATUSES };
 
 /**
  * Attention zone priority level, ordered by human action urgency:
@@ -96,6 +96,9 @@ export interface DashboardPR {
   mergeability: DashboardMergeability;
   unresolvedThreads: number;
   unresolvedComments: DashboardUnresolvedComment[];
+  /** Whether this PR has been enriched with live SCM data (or cache hit).
+   *  `false` means only basic data from the session metadata is available. */
+  enriched?: boolean;
 }
 
 /**
@@ -127,9 +130,17 @@ export interface DashboardStats {
   needsReview: number;
 }
 
+export interface DashboardOrchestratorLink {
+  id: string;
+  projectId: string;
+  projectName: string;
+}
+
 /** SSE snapshot event from /api/events */
 export interface SSESnapshotEvent {
   type: "snapshot";
+  correlationId?: string;
+  emittedAt?: string;
   sessions: Array<{
     id: string;
     status: SessionStatus;
@@ -158,6 +169,26 @@ export function isPRRateLimited(pr: DashboardPR): boolean {
   return pr.mergeability.blockers.includes("API rate limited or unavailable");
 }
 
+/** Returns true when a PR has not yet been enriched with live SCM data.
+ *  Only returns true for explicit `false` — undefined (legacy data) is treated as enriched. */
+export function isPRUnenriched(pr: DashboardPR): boolean {
+  return pr.enriched === false;
+}
+
+/**
+ * Returns true when a PR is open and all merge criteria are met.
+ * Does NOT return true for merged or closed PRs — those are already done.
+ */
+export function isPRMergeReady(pr: DashboardPR): boolean {
+  return (
+    pr.state === "open" &&
+    pr.mergeability.mergeable &&
+    pr.mergeability.ciPassing &&
+    pr.mergeability.approved &&
+    pr.mergeability.noConflicts
+  );
+}
+
 /** Determines which attention zone a session belongs to */
 export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   // ── Done: terminal states ─────────────────────────────────────────
@@ -182,21 +213,23 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   if (session.status === "mergeable" || session.status === "approved") {
     return "merge";
   }
-  if (session.pr?.mergeability.mergeable) {
+  if (session.pr && !isPRUnenriched(session.pr) && session.pr.mergeability.mergeable) {
     return "merge";
   }
 
   // ── Respond: agent is waiting for human input ─────────────────────
+  // Check status-based error conditions first — these are authoritative
+  // and should not be masked by a stale activity value.
   if (
-    session.activity === ACTIVITY_STATE.WAITING_INPUT ||
-    session.activity === ACTIVITY_STATE.BLOCKED
+    session.status === SESSION_STATUS.ERRORED ||
+    session.status === SESSION_STATUS.NEEDS_INPUT ||
+    session.status === SESSION_STATUS.STUCK
   ) {
     return "respond";
   }
   if (
-    session.status === SESSION_STATUS.NEEDS_INPUT ||
-    session.status === SESSION_STATUS.STUCK ||
-    session.status === SESSION_STATUS.ERRORED
+    session.activity === ACTIVITY_STATE.WAITING_INPUT ||
+    session.activity === ACTIVITY_STATE.BLOCKED
   ) {
     return "respond";
   }
@@ -209,7 +242,7 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   if (session.status === "ci_failed" || session.status === "changes_requested") {
     return "review";
   }
-  if (session.pr && !isPRRateLimited(session.pr)) {
+  if (session.pr && !isPRRateLimited(session.pr) && !isPRUnenriched(session.pr)) {
     const pr = session.pr;
     if (pr.ciStatus === CI_STATUS.FAILING) return "review";
     if (pr.reviewDecision === "changes_requested") return "review";
@@ -220,7 +253,7 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   if (session.status === "review_pending") {
     return "pending";
   }
-  if (session.pr && !isPRRateLimited(session.pr)) {
+  if (session.pr && !isPRRateLimited(session.pr) && !isPRUnenriched(session.pr)) {
     const pr = session.pr;
     if (!pr.isDraft && pr.unresolvedThreads > 0) return "pending";
     if (!pr.isDraft && (pr.reviewDecision === "pending" || pr.reviewDecision === "none")) {

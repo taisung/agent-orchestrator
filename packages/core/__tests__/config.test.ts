@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, findConfigFile } from "../src/config.js";
+import { ConfigNotFoundError } from "../src/types.js";
 
 describe("Config Loading", () => {
   let testDir: string;
@@ -17,6 +18,9 @@ describe("Config Loading", () => {
     // Save original state
     originalCwd = process.cwd();
     originalEnv = { ...process.env };
+
+    // Clear AO_CONFIG_PATH to ensure test isolation
+    delete process.env.AO_CONFIG_PATH;
 
     // Change to test directory
     process.chdir(testDir);
@@ -110,7 +114,7 @@ projects:
     });
 
     it("should throw error if config not found", () => {
-      expect(() => loadConfig()).toThrow("No agent-orchestrator.yaml found");
+      expect(() => loadConfig()).toThrow(ConfigNotFoundError);
     });
   });
 

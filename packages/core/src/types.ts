@@ -1,3 +1,5 @@
+import type { ObservabilityLevel } from "./observability.js";
+
 /**
  * Agent Orchestrator — Core Type Definitions
  *
@@ -38,6 +40,7 @@ export type SessionStatus =
   | "stuck"
   | "errored"
   | "killed"
+  | "idle"
   | "done"
   | "terminated";
 
@@ -67,8 +70,23 @@ export interface ActivityDetection {
   timestamp?: Date;
 }
 
+/** A single entry in the AO activity JSONL log, written by agent plugins. */
+export interface ActivityLogEntry {
+  /** ISO 8601 timestamp */
+  ts: string;
+  /** Activity state derived from terminal output or agent-native data */
+  state: ActivityState;
+  /** What triggered this state classification */
+  source: "terminal" | "native";
+  /** Raw terminal snippet that caused waiting_input/blocked (for debugging) */
+  trigger?: string;
+}
+
 /** Default threshold (ms) before a "ready" session becomes "idle". */
 export const DEFAULT_READY_THRESHOLD_MS = 300_000; // 5 minutes
+
+/** Default window (ms) for "active" state — activity newer than this is "active", older is "ready". */
+export const DEFAULT_ACTIVE_WINDOW_MS = 30_000; // 30 seconds
 
 /** Session status constants */
 export const SESSION_STATUS = {
@@ -85,6 +103,7 @@ export const SESSION_STATUS = {
   NEEDS_INPUT: "needs_input" as const,
   STUCK: "stuck" as const,
   ERRORED: "errored" as const,
+  IDLE: "idle" as const,
   KILLED: "killed" as const,
   DONE: "done" as const,
   TERMINATED: "terminated" as const,
@@ -170,6 +189,39 @@ export interface Session {
   metadata: Record<string, string>;
 }
 
+export function isOrchestratorSession(
+  session: { id: SessionId; metadata?: Record<string, string> },
+  sessionPrefix?: string,
+  allSessionPrefixes?: string[],
+): boolean {
+  if (session.metadata?.["role"] === "orchestrator" || session.id.endsWith("-orchestrator")) {
+    return true;
+  }
+  if (!sessionPrefix) {
+    return false;
+  }
+  const escaped = sessionPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`^${escaped}-orchestrator-\\d+$`).test(session.id)) {
+    return false;
+  }
+  // Guard against cross-project false positives: if the session ID is a plain
+  // numbered worker for any other known prefix (e.g. prefix "app-orchestrator"
+  // matches "app-orchestrator-1" as a worker), it is not an orchestrator.
+  if (allSessionPrefixes) {
+    for (const prefix of allSessionPrefixes) {
+      if (prefix === sessionPrefix) continue;
+      if (
+        new RegExp(
+          `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+$`,
+        ).test(session.id)
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 /** Config for creating a new session */
 export interface SessionSpawnConfig {
   projectId: string;
@@ -178,6 +230,12 @@ export interface SessionSpawnConfig {
   prompt?: string;
   /** Override the agent plugin for this session (e.g. "codex", "claude-code") */
   agent?: string;
+  /** Override the OpenCode subagent for this session (e.g. "sisyphus", "oracle") */
+  subagent?: string;
+  /** Decomposition context — ancestor task chain (passed to prompt builder) */
+  lineage?: string[];
+  /** Decomposition context — sibling task descriptions (passed to prompt builder) */
+  siblings?: string[];
 }
 
 /** Config for creating an orchestrator session */
@@ -322,6 +380,19 @@ export interface Agent {
    * run git/gh commands. Without this, PRs created by agents never show up.
    */
   setupWorkspaceHooks?(workspacePath: string, config: WorkspaceHooksConfig): Promise<void>;
+
+  /**
+   * Optional: Record an activity observation to the session's JSONL activity log.
+   * Called by the lifecycle manager during each poll cycle with captured terminal output.
+   *
+   * Plugins classify the terminal output (via detectActivity) and append a JSONL entry
+   * to `{session.workspacePath}/.ao/activity.jsonl`. The next `getActivityState()` call
+   * reads from this file to detect states like `waiting_input` and `blocked`.
+   *
+   * Agents with native JSONL (Claude Code, Codex) should NOT implement this — their
+   * `getActivityState` already reads richer data from the agent's own session files.
+   */
+  recordActivity?(session: Session, terminalOutput: string): Promise<void>;
 }
 
 export interface AgentLaunchConfig {
@@ -329,7 +400,7 @@ export interface AgentLaunchConfig {
   projectConfig: ProjectConfig;
   issueId?: string;
   prompt?: string;
-  permissions?: "skip" | "default";
+  permissions?: AgentPermissionInput;
   model?: string;
   /**
    * System prompt to pass to the agent for orchestrator context.
@@ -352,6 +423,12 @@ export interface AgentLaunchConfig {
    * - Codex/Aider: similar shell substitution
    */
   systemPromptFile?: string;
+  /**
+   * Specialized OpenCode subagent to use (e.g., sisyphus, oracle, librarian).
+   * Requires oh-my-opencode to be installed.
+   * Use --subagent flag to select the subagent.
+   */
+  subagent?: string;
 }
 
 export interface WorkspaceHooksConfig {
@@ -480,6 +557,7 @@ export interface IssueFilters {
 export interface IssueUpdate {
   state?: "open" | "in_progress" | "closed";
   labels?: string[];
+  removeLabels?: string[];
   assignee?: string;
   comment?: string;
 }
@@ -503,10 +581,29 @@ export interface CreateIssueInput {
 export interface SCM {
   readonly name: string;
 
+  verifyWebhook?(
+    request: SCMWebhookRequest,
+    project: ProjectConfig,
+  ): Promise<SCMWebhookVerificationResult>;
+
+  parseWebhook?(
+    request: SCMWebhookRequest,
+    project: ProjectConfig,
+  ): Promise<SCMWebhookEvent | null>;
+
   // --- PR Lifecycle ---
 
   /** Detect if a session has an open PR (by branch name) */
   detectPR(session: Session, project: ProjectConfig): Promise<PRInfo | null>;
+
+  /** Resolve a PR reference (number or URL) into canonical PR metadata. */
+  resolvePR?(reference: string, project: ProjectConfig): Promise<PRInfo>;
+
+  /** Assign a PR to the currently authenticated user, if supported. */
+  assignPRToCurrentUser?(pr: PRInfo): Promise<void>;
+
+  /** Check out the PR branch into a workspace. Returns true if branch changed. */
+  checkoutPR?(pr: PRInfo, workspacePath: string): Promise<boolean>;
 
   /** Get current PR state */
   getPRState(pr: PRInfo): Promise<PRState>;
@@ -551,6 +648,21 @@ export interface SCM {
 
   /** Check if PR is ready to merge */
   getMergeability(pr: PRInfo): Promise<MergeReadiness>;
+
+  /**
+   * Batch fetch PR data for multiple PRs in a single GraphQL query.
+   * Used by the orchestrator to poll all active sessions efficiently.
+   *
+   * This is an optimization method that, when implemented, can dramatically
+   * reduce API calls by fetching data for multiple PRs in one request
+   * instead of calling getPRState/getCISummary/getReviewDecision separately
+   * for each PR.
+   *
+   * @param prs - Array of PR information to fetch data for
+   * @param observer - Optional observer for batch operation metrics
+   * @returns Map keyed by "${owner}/${repo}#${number}" containing enrichment data
+   */
+  enrichSessionsPRBatch?(prs: PRInfo[], observer?: BatchObserver): Promise<Map<string, PREnrichmentData>>;
 }
 
 // --- PR Types ---
@@ -576,6 +688,42 @@ export const PR_STATE = {
 } satisfies Record<string, PRState>;
 
 export type MergeMethod = "merge" | "squash" | "rebase";
+
+export interface SCMWebhookRequest {
+  method: string;
+  headers: Record<string, string | string[] | undefined>;
+  body: string;
+  rawBody?: Uint8Array;
+  path?: string;
+  query?: Record<string, string | string[] | undefined>;
+}
+
+export interface SCMWebhookVerificationResult {
+  ok: boolean;
+  reason?: string;
+  deliveryId?: string;
+  eventType?: string;
+}
+
+export type SCMWebhookEventKind = "pull_request" | "ci" | "review" | "comment" | "push" | "unknown";
+
+export interface SCMWebhookEvent {
+  provider: string;
+  kind: SCMWebhookEventKind;
+  action: string;
+  rawEventType: string;
+  deliveryId?: string;
+  projectId?: string;
+  repository?: {
+    owner: string;
+    name: string;
+  };
+  prNumber?: number;
+  branch?: string;
+  sha?: string;
+  timestamp?: Date;
+  data: Record<string, unknown>;
+}
 
 // --- CI Types ---
 
@@ -639,6 +787,61 @@ export interface MergeReadiness {
   approved: boolean;
   noConflicts: boolean;
   blockers: string[];
+}
+
+/**
+ * Batch enrichment data returned by SCM plugins.
+ * Contains all the information the orchestrator needs for status detection.
+ */
+export interface PREnrichmentData {
+  /** Current PR state */
+  state: PRState;
+  /** Overall CI status */
+  ciStatus: CIStatus;
+  /** Review decision */
+  reviewDecision: ReviewDecision;
+  /** Whether the PR is mergeable based on CI, reviews, and merge state */
+  mergeable: boolean;
+  /** PR title */
+  title?: string;
+  /** Number of additions */
+  additions?: number;
+  /** Number of deletions */
+  deletions?: number;
+  /** Whether PR is a draft */
+  isDraft?: boolean;
+  /** Whether PR has merge conflicts */
+  hasConflicts?: boolean;
+  /** Whether PR is behind base branch */
+  isBehind?: boolean;
+  /** List of blockers preventing merge */
+  blockers?: string[];
+  /** Individual CI check results (populated from batch enrichment when available) */
+  ciChecks?: CICheck[];
+}
+
+/**
+ * Observer for GraphQL batch PR enrichment operations.
+ * Used by SCM plugins to report batch success/failure to the observability system.
+ */
+export interface BatchObserver {
+  /** Record a successful batch enrichment */
+  recordSuccess(data: {
+    batchIndex: number;
+    totalBatches: number;
+    prCount: number;
+    durationMs: number;
+  }): void;
+  /** Record a failed batch enrichment */
+  recordFailure(data: {
+    batchIndex: number;
+    totalBatches: number;
+    prCount: number;
+    error: string;
+    durationMs: number;
+  }): void;
+  /** Log a message at a specific level */
+  log(level: ObservabilityLevel, message: string): void;
 }
 
 // =============================================================================
@@ -712,6 +915,7 @@ export type EventType =
   | "session.working"
   | "session.exited"
   | "session.killed"
+  | "session.idle"
   | "session.stuck"
   | "session.needs_input"
   | "session.errored"
@@ -823,6 +1027,9 @@ export interface OrchestratorConfig {
   /** Default plugin selections */
   defaults: DefaultPlugins;
 
+  /** Installer-managed external plugin descriptors */
+  plugins?: InstalledPluginConfig[];
+
   /** Project configurations */
   projects: Record<string, ProjectConfig>;
 
@@ -834,6 +1041,43 @@ export interface OrchestratorConfig {
 
   /** Default reaction configs */
   reactions: Record<string, ReactionConfig>;
+
+  /**
+   * Internal: External plugin entries collected from inline tracker/scm/notifier configs.
+   * Used by plugin-registry for manifest validation. Set automatically during config validation.
+   */
+  _externalPluginEntries?: ExternalPluginEntryRef[];
+}
+
+/**
+ * Structured location of an external plugin config.
+ * Used to update config with manifest.name after loading (avoids parsing dotted strings).
+ */
+export type ExternalPluginLocation =
+  | { kind: "project"; projectId: string; configType: "tracker" | "scm" }
+  | { kind: "notifier"; notifierId: string };
+
+/**
+ * Reference to an external plugin config (from inline tracker/scm/notifier configs).
+ * Used for manifest.name validation during plugin loading.
+ */
+export interface ExternalPluginEntryRef {
+  /** Where this config came from (for error messages) */
+  source: string;
+  /** Structured location for updating config (avoids parsing source string) */
+  location: ExternalPluginLocation;
+  /** The slot this plugin fills */
+  slot: "tracker" | "scm" | "notifier";
+  /** npm package name (if specified) */
+  package?: string;
+  /** Local path (if specified) */
+  path?: string;
+  /**
+   * Expected plugin name (manifest.name).
+   * Only set when user explicitly specified `plugin` field.
+   * When undefined, any manifest.name is accepted and config is updated with it.
+   */
+  expectedPluginName?: string;
 }
 
 export interface DefaultPlugins {
@@ -841,6 +1085,39 @@ export interface DefaultPlugins {
   agent: string;
   workspace: string;
   notifiers: string[];
+  orchestrator?: {
+    agent?: string;
+  };
+  worker?: {
+    agent?: string;
+  };
+}
+
+export type InstalledPluginSource = "registry" | "npm" | "local";
+
+export interface InstalledPluginConfig {
+  /** Stable logical plugin name used in config and CLI UX */
+  name: string;
+
+  /** Where the plugin should be resolved from */
+  source: InstalledPluginSource;
+
+  /** Package name for registry/npm-managed plugins */
+  package?: string;
+
+  /** Requested version/range for installer-managed plugins */
+  version?: string;
+
+  /** Filesystem path for local plugins */
+  path?: string;
+
+  /** Installer-managed enable flag (defaults to true) */
+  enabled?: boolean;
+}
+
+export interface RoleAgentConfig {
+  agent?: string;
+  agentConfig?: AgentSpecificConfig;
 }
 
 export interface ProjectConfig {
@@ -883,6 +1160,10 @@ export interface ProjectConfig {
   /** Agent-specific configuration */
   agentConfig?: AgentSpecificConfig;
 
+  orchestrator?: RoleAgentConfig;
+
+  worker?: RoleAgentConfig;
+
   /** Per-project reaction overrides */
   reactions?: Record<string, Partial<ReactionConfig>>;
 
@@ -894,28 +1175,152 @@ export interface ProjectConfig {
 
   /** Rules for the orchestrator agent (stored, reserved for future use) */
   orchestratorRules?: string;
+
+  /**
+   * Where orchestrator sessions run:
+   * - isolated: dedicated workspace plugin instance (default)
+   * - project: run directly in project.path using a single legacy orchestrator session
+   */
+  orchestratorWorkspaceMode?: "isolated" | "project";
+
+  orchestratorSessionStrategy?:
+    | "reuse"
+    | "delete"
+    | "ignore"
+    | "delete-new"
+    | "ignore-new"
+    | "kill-previous";
+
+  opencodeIssueSessionStrategy?: "reuse" | "delete" | "ignore";
+
+  /** Task decomposition configuration */
+  decomposer?: {
+    /** Enable auto-decomposition for backlog issues (default: false) */
+    enabled: boolean;
+    /** Max recursion depth (default: 3) */
+    maxDepth: number;
+    /** Model to use for decomposition (default: claude-sonnet-4-20250514) */
+    model: string;
+    /** Require human approval before executing decomposed plans (default: true) */
+    requireApproval: boolean;
+  };
 }
 
 export interface TrackerConfig {
-  plugin: string;
+  /**
+   * Plugin name (manifest.name). Required when using built-in plugins.
+   * Optional when `package` or `path` is specified (will be inferred from manifest).
+   * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input, inferred from repo (github/gitlab), or auto-generated from
+   * package/path via generateTempPluginName(). The optional typing exists for raw config
+   * input before validation. Downstream code can safely assume non-null after validation.
+   */
+  plugin?: string;
+  /** npm package name for external plugins (e.g. "@acme/ao-plugin-tracker-jira") */
+  package?: string;
+  /** Local filesystem path for external plugins (relative to config file or absolute) */
+  path?: string;
   /** Plugin-specific config (e.g. teamId for Linear) */
   [key: string]: unknown;
 }
 
 export interface SCMConfig {
-  plugin: string;
+  /**
+   * Plugin name (manifest.name). Required when using built-in plugins.
+   * Optional when `package` or `path` is specified (will be inferred from manifest).
+   * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input, inferred from repo (github/gitlab), or auto-generated from
+   * package/path via generateTempPluginName(). The optional typing exists for raw config
+   * input before validation. Downstream code can safely assume non-null after validation.
+   */
+  plugin?: string;
+  /** npm package name for external plugins (e.g. "@acme/ao-plugin-scm-bitbucket") */
+  package?: string;
+  /** Local filesystem path for external plugins (relative to config file or absolute) */
+  path?: string;
+  webhook?: SCMWebhookConfig;
   [key: string]: unknown;
 }
 
+export interface SCMWebhookConfig {
+  enabled?: boolean;
+  path?: string;
+  secretEnvVar?: string;
+  signatureHeader?: string;
+  eventHeader?: string;
+  deliveryHeader?: string;
+  maxBodyBytes?: number;
+}
+
 export interface NotifierConfig {
-  plugin: string;
+  /**
+   * Plugin name (manifest.name). Required when using built-in plugins.
+   * Optional when `package` or `path` is specified (will be inferred from manifest).
+   * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input or auto-generated from package/path via generateTempPluginName().
+   * The optional typing exists for raw config input before validation.
+   * Downstream code can safely assume non-null after validation.
+   */
+  plugin?: string;
+  /** npm package name for external plugins (e.g. "@acme/ao-plugin-notifier-teams") */
+  package?: string;
+  /** Local filesystem path for external plugins (relative to config file or absolute) */
+  path?: string;
   [key: string]: unknown;
 }
 
 export interface AgentSpecificConfig {
-  permissions?: "skip" | "default";
+  permissions?: AgentPermissionMode;
   model?: string;
+  orchestratorModel?: string;
   [key: string]: unknown;
+}
+
+export interface OpenCodeAgentConfig extends AgentSpecificConfig {
+  opencodeSessionId?: string;
+}
+
+/**
+ * Canonical cross-agent permission policy mode.
+ *
+ * Semantics:
+ * - permissionless: run without interactive permission prompts (most permissive mode).
+ * - default: use the agent's normal/default permission model.
+ * - auto-edit: automatically approve edit actions where the agent supports granular approval policies.
+ * - suggest: conservative mode that asks for approval on higher-risk/untrusted actions where supported.
+ *
+ * Note: Not every agent exposes all granular policies; plugins map these modes to
+ * their closest supported behavior.
+ */
+export type AgentPermissionMode = "permissionless" | "default" | "auto-edit" | "suggest";
+
+/** Backward-compatible legacy alias accepted in config parsing. */
+export type LegacyAgentPermissionMode = "skip";
+
+/** Raw permission input (supports legacy aliases). */
+export type AgentPermissionInput = AgentPermissionMode | LegacyAgentPermissionMode;
+
+/** Normalize legacy aliases to canonical permission modes. */
+export function normalizeAgentPermissionMode(
+  mode: string | undefined,
+): AgentPermissionMode | undefined {
+  if (!mode) return undefined;
+  if (
+    mode !== "permissionless" &&
+    mode !== "default" &&
+    mode !== "auto-edit" &&
+    mode !== "suggest"
+  ) {
+    if (mode === "skip") return "permissionless";
+    return undefined;
+  }
+  return mode;
 }
 
 // =============================================================================
@@ -945,12 +1350,18 @@ export interface PluginManifest {
 
   /** Version */
   version: string;
+
+  /** Human-readable display name (e.g. "Claude Code") */
+  displayName?: string;
 }
 
 /** What a plugin module must export */
 export interface PluginModule<T = unknown> {
   manifest: PluginManifest;
   create(config?: Record<string, unknown>): T;
+
+  /** Optional: detect whether this plugin's runtime/binary is available on the system. */
+  detect?(): boolean;
 }
 
 // =============================================================================
@@ -972,6 +1383,7 @@ export interface SessionMetadata {
   tmuxName?: string; // Globally unique tmux session name (includes hash)
   issue?: string;
   pr?: string;
+  prAutoDetect?: "on" | "off";
   summary?: string;
   project?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
@@ -982,6 +1394,8 @@ export interface SessionMetadata {
   dashboardPort?: number;
   terminalWsPort?: number;
   directTerminalWsPort?: number;
+  opencodeSessionId?: string;
+  pinnedSummary?: string; // First quality summary, pinned for display stability
 }
 
 // =============================================================================
@@ -995,9 +1409,39 @@ export interface SessionManager {
   restore(sessionId: SessionId): Promise<Session>;
   list(projectId?: string): Promise<Session[]>;
   get(sessionId: SessionId): Promise<Session | null>;
-  kill(sessionId: SessionId): Promise<void>;
-  cleanup(projectId?: string, options?: { dryRun?: boolean }): Promise<CleanupResult>;
+  kill(sessionId: SessionId, options?: { purgeOpenCode?: boolean }): Promise<void>;
+  cleanup(
+    projectId?: string,
+    options?: { dryRun?: boolean; purgeOpenCode?: boolean },
+  ): Promise<CleanupResult>;
   send(sessionId: SessionId, message: string): Promise<void>;
+  claimPR(sessionId: SessionId, prRef: string, options?: ClaimPROptions): Promise<ClaimPRResult>;
+}
+
+/** OpenCode-specific session manager with remap capability */
+export interface OpenCodeSessionManager extends SessionManager {
+  /** Remap session to OpenCode session ID, returns the mapped OpenCode session ID */
+  remap(sessionId: SessionId, force?: boolean): Promise<string>;
+}
+
+export interface ClaimPROptions {
+  assignOnGithub?: boolean;
+  takeover?: boolean;
+}
+
+export interface ClaimPRResult {
+  sessionId: SessionId;
+  projectId: string;
+  pr: PRInfo;
+  branchChanged: boolean;
+  githubAssigned: boolean;
+  githubAssignmentError?: string;
+  takenOverFrom: SessionId[];
+}
+
+/** Type guard to check if a SessionManager supports OpenCode-specific remap operation */
+export function isOpenCodeSessionManager(sm: SessionManager): sm is OpenCodeSessionManager {
+  return typeof (sm as OpenCodeSessionManager).remap === "function";
 }
 
 export interface CleanupResult {
@@ -1094,5 +1538,21 @@ export class WorkspaceMissingError extends Error {
   ) {
     super(`Workspace missing at ${path}${detail ? `: ${detail}` : ""}`);
     this.name = "WorkspaceMissingError";
+  }
+}
+
+/** Thrown when a session lookup fails (session does not exist). */
+export class SessionNotFoundError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`Session not found: ${sessionId}`);
+    this.name = "SessionNotFoundError";
+  }
+}
+
+/** Thrown when no agent-orchestrator.yaml config file can be found. */
+export class ConfigNotFoundError extends Error {
+  constructor(message?: string) {
+    super(message ?? "No agent-orchestrator.yaml found. Run `ao start` to create one.");
+    this.name = "ConfigNotFoundError";
   }
 }

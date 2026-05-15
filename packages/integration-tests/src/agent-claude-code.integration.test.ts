@@ -19,9 +19,13 @@ import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { readLastJsonlEntry, type ActivityDetection, type AgentSessionInfo } from "@composio/ao-core";
+import {
+  readLastJsonlEntry,
+  type ActivityDetection,
+  type AgentSessionInfo,
+} from "@aoagents/ao-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import claudeCodePlugin, { toClaudeProjectPath } from "@composio/ao-plugin-agent-claude-code";
+import claudeCodePlugin, { toClaudeProjectPath } from "@aoagents/ao-plugin-agent-claude-code";
 import {
   isTmuxAvailable,
   killSessionsByPrefix,
@@ -89,9 +93,7 @@ async function findRealClaudeProject(): Promise<{
       continue;
     }
 
-    const jsonlFiles = files.filter(
-      (f) => f.endsWith(".jsonl") && !f.startsWith("agent-"),
-    );
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl") && !f.startsWith("agent-"));
     if (jsonlFiles.length === 0) continue;
 
     // Try to reconstruct the workspace path from the encoded dir name
@@ -137,6 +139,7 @@ describe.skipIf(!realProject)("path encoding & JSONL reading (real Claude data)"
         "user",
         "assistant",
         "system",
+        "last-prompt",
         "tool_use",
         "progress",
         "permission_request",
@@ -163,7 +166,8 @@ describe.skipIf(!realProject)("path encoding & JSONL reading (real Claude data)"
 
     // Process is "not running" so should get "exited" — but the important thing
     // is it didn't return null (which would mean the path didn't resolve)
-    expect(state).toBe("exited");
+    expect(state).not.toBeNull();
+    expect(state?.state ?? state).toBe("exited");
   });
 });
 

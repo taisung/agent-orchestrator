@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
-import type { RuntimeHandle } from "@composio/ao-core";
+import type { RuntimeHandle } from "@aoagents/ao-core";
 
 // Mock node:child_process with custom promisify support
 vi.mock("node:child_process", () => {
@@ -27,6 +27,7 @@ vi.mock("node:fs", () => ({
 const mockExecFileCustom = (childProcess.execFile as any)[
   Symbol.for("nodejs.util.promisify.custom")
 ] as ReturnType<typeof vi.fn>;
+const expectedTmuxOptions = { timeout: 5_000 };
 
 /** Queue a successful tmux command with the given stdout. */
 function mockTmuxSuccess(stdout = "") {
@@ -98,14 +99,11 @@ describe("runtime.create()", () => {
     expect(handle.data.workspacePath).toBe("/tmp/workspace");
 
     // First call: new-session
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", [
-      "new-session",
-      "-d",
-      "-s",
-      "test-session",
-      "-c",
-      "/tmp/workspace",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["new-session", "-d", "-s", "test-session", "-c", "/tmp/workspace"],
+      expectedTmuxOptions,
+    );
   });
 
   it("includes -e KEY=VALUE flags for environment variables", async () => {
@@ -143,13 +141,53 @@ describe("runtime.create()", () => {
     });
 
     // Second call: send-keys with the launch command
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", [
-      "send-keys",
-      "-t",
-      "launch-test",
-      "claude --session abc",
-      "Enter",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["send-keys", "-t", "launch-test", "claude --session abc", "Enter"],
+      expectedTmuxOptions,
+    );
+  });
+
+  it("uses a temp launch script for long launch commands", async () => {
+    const runtime = create();
+    const longCommand = "x".repeat(250);
+
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+
+    await runtime.create({
+      sessionId: "launch-long",
+      workspacePath: "/tmp/ws",
+      launchCommand: longCommand,
+      environment: {},
+    });
+
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("ao-launch-test-uuid-1234.sh"),
+      expect.stringContaining(longCommand),
+      { encoding: "utf-8", mode: 0o700 },
+    );
+
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      [
+        "send-keys",
+        "-t",
+        "launch-long",
+        "-l",
+        expect.stringContaining("bash "),
+      ],
+      expectedTmuxOptions,
+    );
+
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      3,
+      "tmux",
+      ["send-keys", "-t", "launch-long", "Enter"],
+      expectedTmuxOptions,
+    );
   });
 
   it("cleans up session if send-keys fails", async () => {
@@ -172,7 +210,11 @@ describe("runtime.create()", () => {
     ).rejects.toThrow('Failed to send launch command to session "fail-session"');
 
     // Verify kill-session was called for cleanup
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", ["kill-session", "-t", "fail-session"]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["kill-session", "-t", "fail-session"],
+      expectedTmuxOptions,
+    );
   });
 
   it("rejects invalid session IDs with special characters", async () => {
@@ -244,7 +286,11 @@ describe("runtime.destroy()", () => {
 
     await runtime.destroy(handle);
 
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", ["kill-session", "-t", "destroy-test"]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["kill-session", "-t", "destroy-test"],
+      expectedTmuxOptions,
+    );
   });
 
   it("does not throw if session is already gone", async () => {
@@ -273,29 +319,28 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenCalledTimes(3);
 
     // Call 0: Clear partial input
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(1, "tmux", [
-      "send-keys",
-      "-t",
-      "msg-short",
-      "C-u",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      1,
+      "tmux",
+      ["send-keys", "-t", "msg-short", "C-u"],
+      expectedTmuxOptions,
+    );
 
     // Call 1: Literal text
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(2, "tmux", [
-      "send-keys",
-      "-t",
-      "msg-short",
-      "-l",
-      "hello world",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      ["send-keys", "-t", "msg-short", "-l", "hello world"],
+      expectedTmuxOptions,
+    );
 
     // Call 2: Enter
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(3, "tmux", [
-      "send-keys",
-      "-t",
-      "msg-short",
-      "Enter",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      3,
+      "tmux",
+      ["send-keys", "-t", "msg-short", "Enter"],
+      expectedTmuxOptions,
+    );
   });
 
   it("uses load-buffer + paste-buffer for long text (> 200 chars)", async () => {
@@ -315,30 +360,33 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenCalledTimes(5);
 
     // Call 0: clear
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(1, "tmux", [
-      "send-keys",
-      "-t",
-      "msg-long",
-      "C-u",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      1,
+      "tmux",
+      ["send-keys", "-t", "msg-long", "C-u"],
+      expectedTmuxOptions,
+    );
 
     // Call 1: load-buffer with named buffer
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(2, "tmux", [
-      "load-buffer",
-      "-b",
-      "ao-test-uuid-1234",
-      expect.stringContaining("ao-send-test-uuid-1234.txt"),
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      [
+        "load-buffer",
+        "-b",
+        "ao-test-uuid-1234",
+        expect.stringContaining("ao-send-test-uuid-1234.txt"),
+      ],
+      expectedTmuxOptions,
+    );
 
     // Call 2: paste-buffer
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(3, "tmux", [
-      "paste-buffer",
-      "-b",
-      "ao-test-uuid-1234",
-      "-t",
-      "msg-long",
-      "-d",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      3,
+      "tmux",
+      ["paste-buffer", "-b", "ao-test-uuid-1234", "-t", "msg-long", "-d"],
+      expectedTmuxOptions,
+    );
 
     // Verify writeFileSync was called with the message
     expect(fs.writeFileSync).toHaveBeenCalledWith(
@@ -366,12 +414,17 @@ describe("runtime.sendMessage()", () => {
     await runtime.sendMessage(handle, "line1\nline2\nline3");
 
     // Should use buffer path, not send-keys -l
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(2, "tmux", [
-      "load-buffer",
-      "-b",
-      "ao-test-uuid-1234",
-      expect.stringContaining("ao-send-test-uuid-1234.txt"),
-    ]);
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      [
+        "load-buffer",
+        "-b",
+        "ao-test-uuid-1234",
+        expect.stringContaining("ao-send-test-uuid-1234.txt"),
+      ],
+      expectedTmuxOptions,
+    );
 
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining("ao-send-test-uuid-1234.txt"),
@@ -401,11 +454,11 @@ describe("runtime.sendMessage()", () => {
     );
 
     // delete-buffer should be called in finally block
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", [
-      "delete-buffer",
-      "-b",
-      "ao-test-uuid-1234",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["delete-buffer", "-b", "ao-test-uuid-1234"],
+      expectedTmuxOptions,
+    );
   });
 });
 
@@ -419,14 +472,11 @@ describe("runtime.getOutput()", () => {
     const output = await runtime.getOutput(handle);
 
     expect(output).toBe("some output\nfrom tmux");
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", [
-      "capture-pane",
-      "-t",
-      "output-test",
-      "-p",
-      "-S",
-      "-50",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["capture-pane", "-t", "output-test", "-p", "-S", "-50"],
+      expectedTmuxOptions,
+    );
   });
 
   it("passes custom line count", async () => {
@@ -437,14 +487,11 @@ describe("runtime.getOutput()", () => {
 
     await runtime.getOutput(handle, 100);
 
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", [
-      "capture-pane",
-      "-t",
-      "output-custom",
-      "-p",
-      "-S",
-      "-100",
-    ]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["capture-pane", "-t", "output-custom", "-p", "-S", "-100"],
+      expectedTmuxOptions,
+    );
   });
 
   it("returns empty string on error", async () => {
@@ -469,7 +516,11 @@ describe("runtime.isAlive()", () => {
     const alive = await runtime.isAlive(handle);
 
     expect(alive).toBe(true);
-    expect(mockExecFileCustom).toHaveBeenCalledWith("tmux", ["has-session", "-t", "alive-test"]);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["has-session", "-t", "alive-test"],
+      expectedTmuxOptions,
+    );
   });
 
   it("returns false when has-session fails", async () => {

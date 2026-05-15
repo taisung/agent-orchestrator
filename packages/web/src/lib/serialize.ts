@@ -1,3 +1,5 @@
+import "server-only";
+
 /**
  * Core Session → DashboardSession serialization.
  *
@@ -5,17 +7,23 @@
  * (string dates, flattened DashboardPR) suitable for JSON serialization.
  */
 
+import {
+  isOrchestratorSession,
+  type Session,
+  type Agent,
+  type SCM,
+  type PRInfo,
+  type Tracker,
+  type ProjectConfig,
+  type OrchestratorConfig,
+  type PluginRegistry,
+} from "@aoagents/ao-core";
 import type {
-  Session,
-  Agent,
-  SCM,
-  PRInfo,
-  Tracker,
-  ProjectConfig,
-  OrchestratorConfig,
-  PluginRegistry,
-} from "@composio/ao-core";
-import type { DashboardSession, DashboardPR, DashboardStats } from "./types.js";
+  DashboardSession,
+  DashboardPR,
+  DashboardStats,
+  DashboardOrchestratorLink,
+} from "./types.js";
 import { TTLCache, prCache, prCacheKey, type PREnrichmentData } from "./cache";
 
 /** Cache for issue titles (5 min TTL — issue titles rarely change) */
@@ -55,14 +63,35 @@ export function sessionToDashboard(session: Session): DashboardSession {
     issueLabel: null, // Will be enriched by enrichSessionIssue()
     issueTitle: null, // Will be enriched by enrichSessionIssueTitle()
     summary,
-    summaryIsFallback: agentSummary
-      ? (session.agentInfo?.summaryIsFallback ?? false)
-      : false,
+    summaryIsFallback: agentSummary ? (session.agentInfo?.summaryIsFallback ?? false) : false,
     createdAt: session.createdAt.toISOString(),
     lastActivityAt: session.lastActivityAt.toISOString(),
     pr: session.pr ? basicPRToDashboard(session.pr) : null,
     metadata: session.metadata,
   };
+}
+
+export function listDashboardOrchestrators(
+  sessions: Session[],
+  projects: Record<string, ProjectConfig>,
+): DashboardOrchestratorLink[] {
+  const allSessionPrefixes = Object.entries(projects).map(
+    ([projectId, p]) => p.sessionPrefix ?? projectId,
+  );
+  return sessions
+    .filter((session) =>
+      isOrchestratorSession(
+        session,
+        projects[session.projectId]?.sessionPrefix ?? session.projectId,
+        allSessionPrefixes,
+      ),
+    )
+    .map((session) => ({
+      id: session.id,
+      projectId: session.projectId,
+      projectName: projects[session.projectId]?.name ?? session.projectId,
+    }))
+    .sort((a, b) => a.projectName.localeCompare(b.projectName) || a.id.localeCompare(b.id));
 }
 
 /**
@@ -91,10 +120,11 @@ function basicPRToDashboard(pr: PRInfo): DashboardPR {
       ciPassing: false, // Conservative default
       approved: false,
       noConflicts: true, // Optimistic default (conflicts are rare)
-      blockers: ["Data not loaded"], // Explicit blocker
+      blockers: [],
     },
     unresolvedThreads: 0,
     unresolvedComments: [],
+    enriched: false,
   };
 }
 
@@ -125,6 +155,7 @@ export async function enrichSessionPR(
     dashboard.pr.mergeability = cached.mergeability;
     dashboard.pr.unresolvedThreads = cached.unresolvedThreads;
     dashboard.pr.unresolvedComments = cached.unresolvedComments;
+    dashboard.pr.enriched = true;
     return true;
   }
 
@@ -206,6 +237,9 @@ export async function enrichSessionPR(
       body: c.body,
     }));
   }
+
+  // Mark as enriched — we attempted SCM API calls and applied whatever succeeded
+  dashboard.pr.enriched = true;
 
   // Add rate-limit warning blocker if most requests failed
   // (but we still applied any successful results above)
@@ -331,28 +365,45 @@ export async function enrichSessionIssueTitle(
 }
 
 /**
- * Enrich dashboard sessions with metadata (issue labels, agent summaries, issue titles).
- * Orchestrates sync + async enrichment in parallel. Does NOT enrich PR data — callers
- * handle that separately since strategies differ (e.g. terminal-session cache optimization).
+ * Fast-path metadata enrichment: issue labels (sync) + agent summaries (local I/O).
+ * Does NOT call tracker API for issue titles — use enrichSessionsMetadata() for full enrichment.
  */
-export async function enrichSessionsMetadata(
+export async function enrichSessionsMetadataFast(
   coreSessions: Session[],
   dashboardSessions: DashboardSession[],
   config: OrchestratorConfig,
   registry: PluginRegistry,
 ): Promise<void> {
-  // Resolve projects once per session (avoids repeated Object.entries lookups)
+  const { summaryPromises } = prepareSessionMetadataEnrichment(
+    coreSessions,
+    dashboardSessions,
+    config,
+    registry,
+  );
+
+  await Promise.allSettled(summaryPromises);
+}
+
+function prepareSessionMetadataEnrichment(
+  coreSessions: Session[],
+  dashboardSessions: DashboardSession[],
+  config: OrchestratorConfig,
+  registry: PluginRegistry,
+): {
+  projects: Array<ProjectConfig | undefined>;
+  summaryPromises: Promise<void>[];
+} {
   const projects = coreSessions.map((core) => resolveProject(core, config.projects));
 
-  // Enrich issue labels (synchronous — must run before async title enrichment)
+  // Issue labels (synchronous string parsing, no API calls)
   projects.forEach((project, i) => {
-    if (!dashboardSessions[i].issueUrl || !project?.tracker) return;
+    if (!dashboardSessions[i].issueUrl || !project?.tracker?.plugin) return;
     const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
     if (!tracker) return;
     enrichSessionIssue(dashboardSessions[i], tracker, project);
   });
 
-  // Enrich agent summaries (reads agent's JSONL — local I/O, not an API call)
+  // Agent summaries (local disk I/O — reads agent JSONL)
   const summaryPromises = coreSessions.map((core, i) => {
     if (dashboardSessions[i].summary) return Promise.resolve();
     const agentName = projects[i]?.agent ?? config.defaults.agent;
@@ -362,12 +413,32 @@ export async function enrichSessionsMetadata(
     return enrichSessionAgentSummary(dashboardSessions[i], core, agent);
   });
 
-  // Enrich issue titles (fetches from tracker API, cached with TTL)
+  return { projects, summaryPromises };
+}
+
+/**
+ * Full metadata enrichment: issue labels, agent summaries, AND issue titles (tracker API).
+ * Used by /api/sessions for complete data. For SSR fast path, use enrichSessionsMetadataFast().
+ */
+export async function enrichSessionsMetadata(
+  coreSessions: Session[],
+  dashboardSessions: DashboardSession[],
+  config: OrchestratorConfig,
+  registry: PluginRegistry,
+): Promise<void> {
+  const { projects, summaryPromises } = prepareSessionMetadataEnrichment(
+    coreSessions,
+    dashboardSessions,
+    config,
+    registry,
+  );
+
+  // Issue-title fetches depend on labels being set, but can run in parallel with summary I/O.
   const issueTitlePromises = projects.map((project, i) => {
     if (!dashboardSessions[i].issueUrl || !dashboardSessions[i].issueLabel) {
       return Promise.resolve();
     }
-    if (!project?.tracker) return Promise.resolve();
+    if (!project?.tracker?.plugin) return Promise.resolve();
     const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
     if (!tracker) return Promise.resolve();
     return enrichSessionIssueTitle(dashboardSessions[i], tracker, project);
@@ -380,7 +451,7 @@ export async function enrichSessionsMetadata(
 export function computeStats(sessions: DashboardSession[]): DashboardStats {
   return {
     totalSessions: sessions.length,
-    workingSessions: sessions.filter((s) => s.activity === "active").length,
+    workingSessions: sessions.filter((s) => s.activity !== null && s.activity !== "exited").length,
     openPRs: sessions.filter((s) => s.pr?.state === "open").length,
     needsReview: sessions.filter((s) => s.pr && !s.pr.isDraft && s.pr.reviewDecision === "pending")
       .length,

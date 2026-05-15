@@ -2,12 +2,13 @@ import { execFile } from "node:child_process";
 import { platform } from "node:os";
 import {
   escapeAppleScript,
+  pluginLog,
   type PluginModule,
   type Notifier,
   type OrchestratorEvent,
   type NotifyAction,
   type EventPriority,
-} from "@composio/ao-core";
+} from "@aoagents/ao-core";
 
 export const manifest = {
   name: "desktop",
@@ -17,7 +18,7 @@ export const manifest = {
 };
 
 // Re-export for backwards compatibility
-export { escapeAppleScript } from "@composio/ao-core";
+export { escapeAppleScript } from "@aoagents/ao-core";
 
 /**
  * Map event priority to notification urgency:
@@ -81,7 +82,7 @@ function sendNotification(
         else resolve();
       });
     } else {
-      console.warn(`[notifier-desktop] Desktop notifications not supported on ${os}`);
+      pluginLog("warn", `[notifier-desktop] Desktop notifications not supported on ${os}`);
       resolve();
     }
   });

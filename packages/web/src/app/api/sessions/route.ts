@@ -1,5 +1,4 @@
-import { ACTIVITY_STATE } from "@composio/ao-core";
-import { NextResponse } from "next/server";
+import { ACTIVITY_STATE, isOrchestratorSession } from "@aoagents/ao-core";
 import { getServices, getSCM } from "@/lib/services";
 import {
   sessionToDashboard,
@@ -7,58 +6,149 @@ import {
   enrichSessionPR,
   enrichSessionsMetadata,
   computeStats,
+  listDashboardOrchestrators,
 } from "@/lib/serialize";
+import { getCorrelationId, jsonWithCorrelation, recordApiObservation } from "@/lib/observability";
+import { filterProjectSessions } from "@/lib/project-utils";
+import { settlesWithin } from "@/lib/async-utils";
 
-/** GET /api/sessions — List all sessions with full state
- * Query params:
- * - active=true: Only return non-exited sessions
- */
+const METADATA_ENRICH_TIMEOUT_MS = 3_000;
+const PR_ENRICH_TIMEOUT_MS = 4_000;
+const PER_PR_ENRICH_TIMEOUT_MS = 1_500;
+
 export async function GET(request: Request) {
+  const correlationId = getCorrelationId(request);
+  const startedAt = Date.now();
   try {
     const { searchParams } = new URL(request.url);
+    const projectFilter = searchParams.get("project");
     const activeOnly = searchParams.get("active") === "true";
+    const orchestratorOnly = searchParams.get("orchestratorOnly") === "true";
 
     const { config, registry, sessionManager } = await getServices();
-    const coreSessions = await sessionManager.list();
+    const requestedProjectId =
+      projectFilter && projectFilter !== "all" && config.projects[projectFilter]
+        ? projectFilter
+        : undefined;
+    const coreSessions = await sessionManager.list(requestedProjectId);
+    const visibleSessions = filterProjectSessions(coreSessions, projectFilter, config.projects);
+    const orchestrators = listDashboardOrchestrators(visibleSessions, config.projects);
+    const orchestratorId = orchestrators.length === 1 ? (orchestrators[0]?.id ?? null) : null;
 
-    // Filter out orchestrator sessions — they get their own button, not a card
-    let workerSessions = coreSessions.filter((s) => !s.id.endsWith("-orchestrator"));
+    if (orchestratorOnly) {
+      recordApiObservation({
+        config,
+        method: "GET",
+        path: "/api/sessions",
+        correlationId,
+        startedAt,
+        outcome: "success",
+        statusCode: 200,
+        data: { orchestratorOnly: true, orchestratorCount: orchestrators.length },
+      });
+
+      return jsonWithCorrelation(
+        {
+          orchestratorId,
+          orchestrators,
+          sessions: [],
+        },
+        { status: 200 },
+        correlationId,
+      );
+    }
+
+    const allSessionPrefixes = Object.entries(config.projects).map(
+      ([projectId, p]) => p.sessionPrefix ?? projectId,
+    );
+    let workerSessions = visibleSessions.filter(
+      (session) =>
+        !isOrchestratorSession(
+          session,
+          config.projects[session.projectId]?.sessionPrefix ?? session.projectId,
+          allSessionPrefixes,
+        ),
+    );
 
     // Convert to dashboard format
     let dashboardSessions = workerSessions.map(sessionToDashboard);
 
-    // Filter to active sessions only if requested (keep workerSessions in sync)
     if (activeOnly) {
       const activeIndices = dashboardSessions
-        .map((s, i) => (s.activity !== ACTIVITY_STATE.EXITED ? i : -1))
-        .filter((i) => i !== -1);
-      workerSessions = activeIndices.map((i) => workerSessions[i]);
-      dashboardSessions = activeIndices.map((i) => dashboardSessions[i]);
+        .map((session, index) => (session.activity !== ACTIVITY_STATE.EXITED ? index : -1))
+        .filter((index) => index !== -1);
+      workerSessions = activeIndices.map((index) => workerSessions[index]);
+      dashboardSessions = activeIndices.map((index) => dashboardSessions[index]);
     }
 
-    // Enrich metadata (issue labels, agent summaries, issue titles) — cap at 3s
-    const metaTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
-    await Promise.race([enrichSessionsMetadata(workerSessions, dashboardSessions, config, registry), metaTimeout]);
+    const metadataSettled = await settlesWithin(
+      enrichSessionsMetadata(workerSessions, dashboardSessions, config, registry),
+      METADATA_ENRICH_TIMEOUT_MS,
+    );
 
-    // Enrich sessions that have PRs with live SCM data (CI, reviews, mergeability)
-    const enrichPromises = workerSessions.map((core, i) => {
-      if (!core.pr) return Promise.resolve();
-      const project = resolveProject(core, config.projects);
-      const scm = getSCM(registry, project);
-      if (!scm) return Promise.resolve();
-      return enrichSessionPR(dashboardSessions[i], scm, core.pr);
-    });
-    const enrichTimeout = new Promise<void>((resolve) => setTimeout(resolve, 4_000));
-    await Promise.race([Promise.allSettled(enrichPromises), enrichTimeout]);
+    if (metadataSettled) {
+      const prEnrichPromises: Promise<boolean>[] = [];
 
-    return NextResponse.json({
-      sessions: dashboardSessions,
-      stats: computeStats(dashboardSessions),
+      for (let i = 0; i < workerSessions.length; i++) {
+        const core = workerSessions[i];
+        if (!core?.pr) continue;
+
+        const project = resolveProject(core, config.projects);
+        const scm = getSCM(registry, project);
+        if (!scm) continue;
+
+        prEnrichPromises.push(
+          settlesWithin(
+            enrichSessionPR(dashboardSessions[i], scm, core.pr),
+            PER_PR_ENRICH_TIMEOUT_MS,
+          ),
+        );
+      }
+
+      if (prEnrichPromises.length > 0) {
+        await settlesWithin(Promise.allSettled(prEnrichPromises), PR_ENRICH_TIMEOUT_MS);
+      }
+    }
+
+    recordApiObservation({
+      config,
+      method: "GET",
+      path: "/api/sessions",
+      correlationId,
+      startedAt,
+      outcome: "success",
+      statusCode: 200,
+      data: { sessionCount: dashboardSessions.length, activeOnly },
     });
+
+    return jsonWithCorrelation(
+      {
+        sessions: dashboardSessions,
+        stats: computeStats(dashboardSessions),
+        orchestratorId,
+        orchestrators,
+      },
+      { status: 200 },
+      correlationId,
+    );
   } catch (err) {
-    return NextResponse.json(
+    const { config } = await getServices().catch(() => ({ config: undefined }));
+    if (config) {
+      recordApiObservation({
+        config,
+        method: "GET",
+        path: "/api/sessions",
+        correlationId,
+        startedAt,
+        outcome: "failure",
+        statusCode: 500,
+        reason: err instanceof Error ? err.message : "Failed to list sessions",
+      });
+    }
+    return jsonWithCorrelation(
       { error: err instanceof Error ? err.message : "Failed to list sessions" },
       { status: 500 },
+      correlationId,
     );
   }
 }

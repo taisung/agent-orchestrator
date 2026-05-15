@@ -2,10 +2,11 @@ import { execFile } from "node:child_process";
 import { platform } from "node:os";
 import {
   escapeAppleScript,
+  pluginLog,
   type PluginModule,
   type Terminal,
   type Session,
-} from "@composio/ao-core";
+} from "@aoagents/ao-core";
 
 export const manifest = {
   name: "iterm2",
@@ -15,7 +16,7 @@ export const manifest = {
 };
 
 // Re-export for backwards compatibility
-export { escapeAppleScript } from "@composio/ao-core";
+export { escapeAppleScript } from "@aoagents/ao-core";
 
 /**
  * Run an AppleScript snippet and return stdout.
@@ -135,8 +136,7 @@ export function create(): Terminal {
 
     async openSession(session: Session): Promise<void> {
       if (!isMacOS()) {
-        // eslint-disable-next-line no-console
-        console.warn("[terminal-iterm2] iTerm2 is only available on macOS");
+        pluginLog("warn", "[terminal-iterm2] iTerm2 is only available on macOS");
         return;
       }
       const sessionName = getSessionName(session);
