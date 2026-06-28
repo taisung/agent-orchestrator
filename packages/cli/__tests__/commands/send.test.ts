@@ -300,7 +300,7 @@ describe("send command", () => {
       };
     }
 
-    it("routes AO sessions through SessionManager.send", async () => {
+    it("delivers tmux AO sessions directly after resolving metadata", async () => {
       mockConfigRef.current = makeConfig();
       mockSessionManager.get.mockResolvedValue({
         id: "app-1",
@@ -319,24 +319,30 @@ describe("send command", () => {
       });
       mockSessionManager.send.mockResolvedValue(undefined);
       mockTmux.mockImplementation(async (...args: string[]) => {
-        if (args[0] === "capture-pane") return "❯ ";
+        if (args[0] === "has-session") return "";
+        if (args[0] === "capture-pane") return "Working\nesc to interrupt";
         return "";
       });
-      mockDetectActivity.mockReturnValue("idle");
+      mockDetectActivity
+        .mockReturnValueOnce("idle")
+        .mockReturnValueOnce("active");
 
       await program.parseAsync(["node", "test", "send", "app-1", "hello", "opencode"]);
 
-      expect(mockSessionManager.send).toHaveBeenCalledWith("app-1", "hello opencode");
-      expect(mockExec).not.toHaveBeenCalledWith(
-        "tmux",
-        expect.arrayContaining(["send-keys", "-l", "hello opencode"]),
-      );
+      expect(mockSessionManager.send).not.toHaveBeenCalled();
+      expect(mockExec).toHaveBeenCalledWith("tmux", [
+        "send-keys",
+        "-t",
+        "tmux-target-1",
+        "-l",
+        "hello opencode",
+      ]);
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Message sent and processing"),
       );
     });
 
-    it("skips tmux busy detection when lifecycle send handles delivery", async () => {
+    it("waits for tmux AO sessions before direct delivery", async () => {
       mockConfigRef.current = makeConfig();
       mockSessionManager.get.mockResolvedValue({
         id: "app-1",
@@ -355,25 +361,28 @@ describe("send command", () => {
       });
       mockSessionManager.send.mockResolvedValue(undefined);
       mockTmux.mockImplementation(async (...args: string[]) => {
+        if (args[0] === "has-session") return "";
         if (args[0] === "capture-pane") return "some output";
         return "";
       });
-      mockDetectActivity.mockReturnValueOnce("active").mockReturnValueOnce("idle");
+      mockDetectActivity
+        .mockReturnValueOnce("active")
+        .mockReturnValueOnce("idle")
+        .mockReturnValueOnce("active");
 
       await program.parseAsync(["node", "test", "send", "app-1", "fix", "mapping"]);
 
-      expect(mockSessionManager.send).toHaveBeenCalledWith("app-1", "fix mapping");
-      expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect(mockSessionManager.send).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Waiting for app-1 to become idle"),
       );
-      expect(mockTmux).not.toHaveBeenCalledWith(
-        "capture-pane",
+      expect(mockExec).toHaveBeenCalledWith("tmux", [
+        "send-keys",
         "-t",
         "tmux-target-1",
-        "-p",
-        "-S",
-        expect.any(String),
-      );
+        "-l",
+        "fix mapping",
+      ]);
     });
 
     it("skips tmux checks for non-tmux AO sessions and still uses lifecycle send", async () => {
@@ -401,7 +410,7 @@ describe("send command", () => {
       expect(mockTmux).not.toHaveBeenCalledWith("has-session", "-t", expect.any(String));
     });
 
-    it("passes file contents through SessionManager.send for AO sessions", async () => {
+    it("passes file contents through direct tmux delivery for tmux AO sessions", async () => {
       mockConfigRef.current = makeConfig();
       mockSessionManager.get.mockResolvedValue({
         id: "app-1",
@@ -420,10 +429,13 @@ describe("send command", () => {
       });
       mockSessionManager.send.mockResolvedValue(undefined);
       mockTmux.mockImplementation(async (...args: string[]) => {
-        if (args[0] === "capture-pane") return "❯ ";
+        if (args[0] === "has-session") return "";
+        if (args[0] === "capture-pane") return "Working\nesc to interrupt";
         return "";
       });
-      mockDetectActivity.mockReturnValue("idle");
+      mockDetectActivity
+        .mockReturnValueOnce("idle")
+        .mockReturnValueOnce("active");
 
       const filePath = join(tmpdir(), `ao-send-message-${Date.now()}.txt`);
       writeFileSync(filePath, "from file");
@@ -434,7 +446,14 @@ describe("send command", () => {
         rmSync(filePath, { force: true });
       }
 
-      expect(mockSessionManager.send).toHaveBeenCalledWith("app-1", "from file");
+      expect(mockSessionManager.send).not.toHaveBeenCalled();
+      expect(mockExec).toHaveBeenCalledWith("tmux", [
+        "send-keys",
+        "-t",
+        "tmux-target-1",
+        "-l",
+        "from file",
+      ]);
     });
   });
 });

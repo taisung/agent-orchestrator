@@ -63,6 +63,21 @@ function hasQueuedMessage(terminalOutput: string): boolean {
   return terminalOutput.includes("Press up to edit queued messages");
 }
 
+function hasUnsubmittedCodexInput(terminalOutput: string): boolean {
+  const lines = terminalOutput.trimEnd().split("\n");
+  const tail = lines.slice(-8).join("\n");
+
+  // Codex's UI can accept a paste but miss the trailing Enter while the screen is
+  // redrawing. In that case the input box shows either the literal message or a
+  // "[Pasted Content ...]" placeholder next to the Codex prompt, and the footer
+  // says "tab to queue message". This is not "delivered" yet; one extra Enter is
+  // the safe recovery.
+  return (
+    /tab to queue message/i.test(tail) &&
+    /(?:^|\n)\s*[›❯]\s+(?:\[Pasted Content\b|\S)/.test(tail)
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -142,9 +157,11 @@ export function registerSend(program: Command): void {
 
         const canUseTmux = runtimeName === "tmux";
 
-        if (!existingSession) {
+        let tmuxSessionAlive = true;
+        if (canUseTmux) {
           const exists = await tmux("has-session", "-t", tmuxTarget);
-          if (exists === null) {
+          tmuxSessionAlive = exists !== null;
+          if (!tmuxSessionAlive && !existingSession) {
             console.error(chalk.red(`Session '${session}' does not exist`));
             process.exit(1);
           }
@@ -158,15 +175,30 @@ export function registerSend(program: Command): void {
         }
 
         const delegatesToSessionManager = Boolean(existingSession && sessionManager);
-        if (opts.wait !== false && canUseTmux && !delegatesToSessionManager) {
+        if (opts.wait !== false && canUseTmux) {
           const start = Date.now();
           let warned = false;
-          while (isActive(agent, await captureOutput(5))) {
+          while (true) {
+            const output = await captureOutput(20);
+            const state = agent.detectActivity(output);
+            const active = state === "active";
+            const waitingInput = state === "waiting_input";
+            if (!active && !waitingInput) {
+              break;
+            }
             if (!warned) {
               console.log(chalk.dim(`Waiting for ${session} to become idle...`));
               warned = true;
             }
             if (Date.now() - start > timeoutMs) {
+              if (waitingInput) {
+                console.error(
+                  chalk.red(
+                    `Timeout waiting for ${session}: session is waiting for interactive input; not sending.`,
+                  ),
+                );
+                process.exit(1);
+              }
               console.log(chalk.yellow("Timeout waiting for idle. Sending anyway."));
               break;
             }
@@ -183,7 +215,13 @@ export function registerSend(program: Command): void {
           process.exit(1);
         }
 
-        if (existingSession && sessionManager) {
+        // For tmux-backed sessions, deliver directly here instead of delegating
+        // to sessionManager.send().  The lifecycle route can restore dead
+        // sessions, but it historically skipped this command's idle wait and
+        // treated any screen change as confirmation.  That race lets worker
+        // reports land in Codex's input box until a human presses Return.
+        // Keep lifecycle delegation only for non-tmux runtimes.
+        if ((!canUseTmux || !tmuxSessionAlive) && existingSession && sessionManager) {
           await sessionManager.send(session, message);
           console.log(chalk.green("Message sent and processing"));
           return;
@@ -202,6 +240,11 @@ export function registerSend(program: Command): void {
           if (hasQueuedMessage(output)) {
             console.log(chalk.green("Message queued (session finishing previous task)"));
             return;
+          }
+          if (hasUnsubmittedCodexInput(output)) {
+            await tmux("send-keys", "-t", tmuxTarget, "Enter");
+            await sleep(1000);
+            continue;
           }
           if (attempt < 3) {
             await tmux("send-keys", "-t", tmuxTarget, "Enter");

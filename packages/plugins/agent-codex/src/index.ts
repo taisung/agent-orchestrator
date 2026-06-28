@@ -397,13 +397,30 @@ function createCodexAgent(): Agent {
       const lines = terminalOutput.trim().split("\n");
       const lastLine = lines[lines.length - 1]?.trim() ?? "";
 
-      // If Codex is showing its input prompt, it's idle
-      if (/^[>$#]\s*$/.test(lastLine)) return "idle";
-
       // Check last few lines for approval prompts
-      const tail = lines.slice(-5).join("\n");
+      const tail = lines.slice(-8).join("\n");
       if (/approval required/i.test(tail)) return "waiting_input";
       if (/\(y\)es.*\(n\)o/i.test(tail)) return "waiting_input";
+
+      // If Codex is showing a bare input prompt on the final line, it's idle.
+      // This must override historical "Working..." text left in scrollback.
+      if (/^[>$#›❯]\s*$/.test(lastLine)) return "idle";
+
+      // Codex can also show a prompt while it is still working so the user can
+      // queue the next message.  Prefer explicit active indicators over the
+      // modern footer-style prompt detection below; otherwise ao send can race
+      // a live response and leave the pasted report in the input box.
+      if (/\b(Working|Thinking|Running|Osmosing)\b/i.test(tail)) return "active";
+      if (/esc to interrupt/i.test(tail)) return "active";
+
+      // Modern Codex uses a Unicode prompt ("›"/"❯") plus a
+      // "tab to queue message" footer rather than a bare ">" line.
+      if (
+        /tab to queue message/i.test(tail) &&
+        lines.slice(-8).some((line) => /^\s*[›❯]\s*/.test(line))
+      ) {
+        return "idle";
+      }
 
       // Default to active — specific patterns (esc to interrupt, spinner
       // symbols) all map to "active" so no need to check them individually.
