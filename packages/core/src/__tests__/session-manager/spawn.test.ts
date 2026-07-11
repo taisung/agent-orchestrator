@@ -628,6 +628,79 @@ describe("spawn", () => {
     });
   });
 
+  describe("model override", () => {
+    it("uses overridden model when spawnConfig.model is provided", async () => {
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await sm.spawn({ projectId: "my-app", model: "gpt-5.6-terra" });
+
+      expect(mockAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "gpt-5.6-terra" }),
+      );
+    });
+
+    it("emits no model when neither override nor config specify one", async () => {
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await sm.spawn({ projectId: "my-app" });
+
+      expect(mockAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ model: undefined }),
+      );
+    });
+
+    it("uses configured worker model when no spawn override is provided", async () => {
+      const configWithWorkerModel: OrchestratorConfig = {
+        ...config,
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            worker: {
+              agentConfig: { model: "sonnet" },
+            },
+          },
+        },
+      };
+
+      const sm = createSessionManager({ config: configWithWorkerModel, registry: mockRegistry });
+      await sm.spawn({ projectId: "my-app" });
+
+      expect(mockAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "sonnet" }),
+      );
+    });
+
+    it("prefers spawn model override over configured model — backwards compatible with no override", async () => {
+      const configWithWorkerModel: OrchestratorConfig = {
+        ...config,
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            worker: {
+              agentConfig: { model: "sonnet" },
+            },
+          },
+        },
+      };
+
+      const sm = createSessionManager({ config: configWithWorkerModel, registry: mockRegistry });
+
+      // Explicit override wins over config.
+      await sm.spawn({ projectId: "my-app", model: "gpt-5.6-terra" });
+      expect(mockAgent.getLaunchCommand).toHaveBeenLastCalledWith(
+        expect.objectContaining({ model: "gpt-5.6-terra" }),
+      );
+
+      // Absent --model, behavior is unchanged: falls back to config.
+      await sm.spawn({ projectId: "my-app" });
+      expect(mockAgent.getLaunchCommand).toHaveBeenLastCalledWith(
+        expect.objectContaining({ model: "sonnet" }),
+      );
+    });
+  });
+
   it("forwards configured subagent to spawn launch when no override is provided", async () => {
     const configWithSubagent: OrchestratorConfig = {
       ...config,

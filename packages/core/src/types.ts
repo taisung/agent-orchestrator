@@ -230,6 +230,8 @@ export interface SessionSpawnConfig {
   prompt?: string;
   /** Override the agent plugin for this session (e.g. "codex", "claude-code") */
   agent?: string;
+  /** Override the agent model for this session (e.g. "sonnet", "gpt-5.6-terra") */
+  model?: string;
   /** Override the OpenCode subagent for this session (e.g. "sisyphus", "oracle") */
   subagent?: string;
   /** Decomposition context — ancestor task chain (passed to prompt builder) */
