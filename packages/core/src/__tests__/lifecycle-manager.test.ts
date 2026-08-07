@@ -153,6 +153,40 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("killed");
   });
 
+  // The poll loop must drive a session with the runtime it was created under.
+  // Resolving from project config instead reports live sessions killed the
+  // moment the configured runtime changes. See development/0003 §4.1.
+  it("polls with the runtime named on the session handle, not the configured one", async () => {
+    const configuredRuntime = { ...plugins.runtime, isAlive: vi.fn().mockResolvedValue(false) };
+    const handleRuntime = {
+      ...plugins.runtime,
+      isAlive: vi.fn().mockResolvedValue(true),
+      getOutput: vi.fn().mockResolvedValue(""),
+    };
+    const registry: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string, name: string) => {
+        if (slot === "runtime") return name === "herdr" ? handleRuntime : configuredRuntime;
+        if (slot === "agent") return plugins.agent;
+        return null;
+      }),
+    };
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "working",
+        runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
+      }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    expect(handleRuntime.isAlive).toHaveBeenCalled();
+    expect(configuredRuntime.isAlive).not.toHaveBeenCalled();
+    expect(lm.getStates().get("app-1")).not.toBe("killed");
+  });
+
   it("detects killed state when getActivityState returns exited", async () => {
     vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "exited" });
 
@@ -830,9 +864,9 @@ describe("reactions", () => {
 
     const mockSCM = createMockSCM({
       getCISummary: vi.fn().mockResolvedValue("failing"),
-      getCIChecks: vi.fn().mockResolvedValue([
-        { name: "lint", status: "failed", conclusion: "FAILURE" },
-      ]),
+      getCIChecks: vi
+        .fn()
+        .mockResolvedValue([{ name: "lint", status: "failed", conclusion: "FAILURE" }]),
     });
     const registry = createMockRegistry({
       runtime: plugins.runtime,
@@ -878,9 +912,9 @@ describe("reactions", () => {
       },
     };
 
-    const getCIChecksMock = vi.fn().mockResolvedValue([
-      { name: "lint", status: "failed", conclusion: "FAILURE" },
-    ]);
+    const getCIChecksMock = vi
+      .fn()
+      .mockResolvedValue([{ name: "lint", status: "failed", conclusion: "FAILURE" }]);
     const mockSCM = createMockSCM({
       getCISummary: vi.fn().mockResolvedValue("failing"),
       getCIChecks: getCIChecksMock,
@@ -932,9 +966,9 @@ describe("reactions", () => {
 
     const mockSCM = createMockSCM({
       getCISummary: vi.fn().mockResolvedValue("failing"),
-      getCIChecks: vi.fn().mockResolvedValue([
-        { name: "lint", status: "failed", conclusion: "FAILURE" },
-      ]),
+      getCIChecks: vi
+        .fn()
+        .mockResolvedValue([{ name: "lint", status: "failed", conclusion: "FAILURE" }]),
     });
     const registry = createMockRegistry({
       runtime: plugins.runtime,
@@ -972,9 +1006,9 @@ describe("reactions", () => {
     };
 
     const getCISummaryMock = vi.fn().mockResolvedValue("failing");
-    const getCIChecksMock = vi.fn().mockResolvedValue([
-      { name: "lint", status: "failed", conclusion: "FAILURE" },
-    ]);
+    const getCIChecksMock = vi
+      .fn()
+      .mockResolvedValue([{ name: "lint", status: "failed", conclusion: "FAILURE" }]);
     const mockSCM = createMockSCM({
       getCISummary: getCISummaryMock,
       getCIChecks: getCIChecksMock,
@@ -1032,9 +1066,9 @@ describe("reactions", () => {
 
     const mockSCM = createMockSCM({
       getCISummary: vi.fn().mockResolvedValue("failing"),
-      getCIChecks: vi.fn().mockResolvedValue([
-        { name: "lint", status: "failed", conclusion: "FAILURE" },
-      ]),
+      getCIChecks: vi
+        .fn()
+        .mockResolvedValue([{ name: "lint", status: "failed", conclusion: "FAILURE" }]),
     });
 
     const registry: PluginRegistry = {
@@ -1554,13 +1588,13 @@ describe("pollAll terminal status accounting", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     // all-complete should NOT have fired — "working" is still active
-    const allCompleteNotifications = vi.mocked(notifier.notify).mock.calls.filter(
-      (call: unknown[]) => {
+    const allCompleteNotifications = vi
+      .mocked(notifier.notify)
+      .mock.calls.filter((call: unknown[]) => {
         const event = call[0] as Record<string, unknown> | undefined;
         const data = event?.data as Record<string, unknown> | undefined;
         return event?.type === "reaction.triggered" && data?.reactionKey === "all-complete";
-      },
-    );
+      });
     expect(allCompleteNotifications).toHaveLength(0);
 
     lm.stop();
@@ -1704,7 +1738,12 @@ describe("rate limiting optimizations", () => {
               mergeable: false,
               hasConflicts: false,
               ciChecks: [
-                { name: "lint", status: "failed" as const, conclusion: "FAILURE", url: "https://example.com/lint" },
+                {
+                  name: "lint",
+                  status: "failed" as const,
+                  conclusion: "FAILURE",
+                  url: "https://example.com/lint",
+                },
                 { name: "test", status: "passed" as const, conclusion: "SUCCESS" },
               ],
             },

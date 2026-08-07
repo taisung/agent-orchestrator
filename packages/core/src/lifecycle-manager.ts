@@ -32,7 +32,7 @@ import {
   type Notifier,
   type Session,
   type EventPriority,
-  type ProjectConfig as _ProjectConfig,
+  type ProjectConfig,
   type PREnrichmentData,
   type CICheck,
 } from "./types.js";
@@ -229,9 +229,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     prEnrichmentCache.clear();
 
     // Collect all unique PRs
-    const prs = sessions
-      .map((s) => s.pr)
-      .filter((pr): pr is NonNullable<typeof pr> => pr !== null);
+    const prs = sessions.map((s) => s.pr).filter((pr): pr is NonNullable<typeof pr> => pr !== null);
 
     // Deduplicate by stable identity key. Uses prIdentityKey rather than a raw
     // `owner/repo#number` template so PRs whose URL doesn't decompose into
@@ -267,57 +265,54 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
       const batchStartTime = Date.now();
       try {
-        const enrichmentData = await scm.enrichSessionsPRBatch(
-          pluginPRs,
-          {
-            recordSuccess(_data) {
-              const batchDuration = Date.now() - batchStartTime;
-              observer?.recordOperation({
-                metric: "graphql_batch",
-                operation: "batch_enrichment",
-                correlationId: createCorrelationId("graphql-batch"),
-                outcome: "success",
-                projectId: scopedProjectId,
-                durationMs: batchDuration,
-                data: {
-                  plugin: pluginKey,
-                  prCount: pluginPRs.length,
-                  prKeys: pluginPRs.map((pr) => `${pr.owner}/${pr.repo}#${pr.number}`),
-                },
-                level: "info",
-              });
-            },
-            recordFailure(data) {
-              const batchDuration = Date.now() - batchStartTime;
-              observer?.recordOperation({
-                metric: "graphql_batch",
-                operation: "batch_enrichment",
-                correlationId: createCorrelationId("graphql-batch"),
-                outcome: "failure",
-                reason: data.error,
-                level: "warn",
-                data: {
-                  plugin: pluginKey,
-                  prCount: pluginPRs.length,
-                  error: data.error,
-                  durationMs: batchDuration,
-                },
-              });
-            },
-            log(level, message) {
-              // Log to stderr for observability
-              process.stderr.write(
-                JSON.stringify({
-                  source: "ao-graphql-batch",
-                  level,
-                  message,
-                  plugin: pluginKey,
-                  timestamp: new Date().toISOString(),
-                }) + "\n"
-              );
-            },
+        const enrichmentData = await scm.enrichSessionsPRBatch(pluginPRs, {
+          recordSuccess(_data) {
+            const batchDuration = Date.now() - batchStartTime;
+            observer?.recordOperation({
+              metric: "graphql_batch",
+              operation: "batch_enrichment",
+              correlationId: createCorrelationId("graphql-batch"),
+              outcome: "success",
+              projectId: scopedProjectId,
+              durationMs: batchDuration,
+              data: {
+                plugin: pluginKey,
+                prCount: pluginPRs.length,
+                prKeys: pluginPRs.map((pr) => `${pr.owner}/${pr.repo}#${pr.number}`),
+              },
+              level: "info",
+            });
           },
-        );
+          recordFailure(data) {
+            const batchDuration = Date.now() - batchStartTime;
+            observer?.recordOperation({
+              metric: "graphql_batch",
+              operation: "batch_enrichment",
+              correlationId: createCorrelationId("graphql-batch"),
+              outcome: "failure",
+              reason: data.error,
+              level: "warn",
+              data: {
+                plugin: pluginKey,
+                prCount: pluginPRs.length,
+                error: data.error,
+                durationMs: batchDuration,
+              },
+            });
+          },
+          log(level, message) {
+            // Log to stderr for observability
+            process.stderr.write(
+              JSON.stringify({
+                source: "ao-graphql-batch",
+                level,
+                message,
+                plugin: pluginKey,
+                timestamp: new Date().toISOString(),
+              }) + "\n",
+            );
+          },
+        });
 
         // Merge into cache
         for (const [key, data] of enrichmentData) {
@@ -352,6 +347,20 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   }
 
   /** Determine current status for a session by polling plugins. */
+  /**
+   * Resolve the runtime for a session from its HANDLE, falling back to project
+   * config only when the session has none.
+   *
+   * A session must be driven by the runtime it was created under. Resolving from
+   * config instead means that after the project's configured runtime changes, the
+   * poll loop probes live sessions with a plugin that knows nothing about them —
+   * reporting them killed and reading empty terminal output.
+   */
+  function runtimeForSession(session: Session, project: ProjectConfig): Runtime | null {
+    const name = session.runtimeHandle?.runtimeName ?? project.runtime ?? config.defaults.runtime;
+    return registry.get<Runtime>("runtime", name);
+  }
+
   async function determineStatus(session: Session): Promise<SessionStatus> {
     const project = config.projects[session.projectId];
     if (!project) return session.status;
@@ -375,7 +384,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     // 1. Check if runtime is alive
     if (session.runtimeHandle) {
-      const runtime = registry.get<Runtime>("runtime", project.runtime ?? config.defaults.runtime);
+      const runtime = runtimeForSession(session, project);
       if (runtime) {
         const alive = await runtime.isAlive(session.runtimeHandle).catch(() => true);
         if (!alive) return "killed";
@@ -389,10 +398,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // BEFORE calling getActivityState so the JSONL has fresh data to read.
         if (agent.recordActivity && session.workspacePath) {
           try {
-            const runtime = registry.get<Runtime>(
-              "runtime",
-              project.runtime ?? config.defaults.runtime,
-            );
+            const runtime = runtimeForSession(session, project);
             const terminalOutput = runtime
               ? await runtime.getOutput(session.runtimeHandle, 10)
               : "";
@@ -421,10 +427,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // proceed to PR checks below
         } else {
           // getActivityState returned null — fall back to terminal output parsing
-          const runtime = registry.get<Runtime>(
-            "runtime",
-            project.runtime ?? config.defaults.runtime,
-          );
+          const runtime = runtimeForSession(session, project);
           const terminalOutput = runtime ? await runtime.getOutput(session.runtimeHandle, 10) : "";
           if (terminalOutput) {
             const activity = agent.detectActivity(terminalOutput);
@@ -490,8 +493,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (cachedData.ciStatus === CI_STATUS.FAILING) return "ci_failed";
 
           // Check reviews
-          if (cachedData.reviewDecision === "changes_requested")
-            return "changes_requested";
+          if (cachedData.reviewDecision === "changes_requested") return "changes_requested";
           if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
             // Check merge readiness — treat "none" (no reviewers required)
             // as "approved" so CI-green PRs reach "mergeable" status
@@ -711,10 +713,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return reactionConfig ? (reactionConfig as ReactionConfig) : null;
   }
 
-  function updateSessionMetadata(
-    session: Session,
-    updates: Partial<Record<string, string>>,
-  ): void {
+  function updateSessionMetadata(session: Session, updates: Partial<Record<string, string>>): void {
     const project = config.projects[session.projectId];
     if (!project) return;
 
@@ -869,12 +868,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     // --- Automated (bot) review comments ---
     if (automatedComments !== null) {
-      const automatedFingerprint = makeFingerprint(
-        automatedComments.map((comment) => comment.id),
-      );
+      const automatedFingerprint = makeFingerprint(automatedComments.map((comment) => comment.id));
       const lastAutomatedFingerprint = session.metadata["lastAutomatedReviewFingerprint"] ?? "";
-      const lastAutomatedDispatchHash =
-        session.metadata["lastAutomatedReviewDispatchHash"] ?? "";
+      const lastAutomatedDispatchHash = session.metadata["lastAutomatedReviewDispatchHash"] ?? "";
 
       if (automatedFingerprint !== lastAutomatedFingerprint) {
         clearReactionTracker(session.id, automatedReactionKey);
@@ -919,19 +915,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
    * Includes check names, statuses, and links for debugging.
    */
   function formatCIFailureMessage(failedChecks: CICheck[]): string {
-    const lines = [
-      "CI checks are failing on your PR. Here are the failed checks:",
-      "",
-    ];
+    const lines = ["CI checks are failing on your PR. Here are the failed checks:", ""];
     for (const check of failedChecks) {
       const status = check.conclusion ?? check.status;
       const link = check.url ? ` — ${check.url}` : "";
       lines.push(`- **${check.name}**: ${status}${link}`);
     }
-    lines.push(
-      "",
-      "Investigate the failures, fix the issues, and push again.",
-    );
+    lines.push("", "Investigate the failures, fix the issues, and push again.");
     return lines.join("\n");
   }
 
@@ -1022,10 +1012,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // If transition already sent a ci-failed reaction with the static message,
     // skip this cycle but do NOT record dispatch hash — the next poll will send
     // the detailed CI failure info with check names and URLs.
-    if (
-      transitionReaction?.key === ciReactionKey &&
-      transitionReaction.result?.success
-    ) {
+    if (transitionReaction?.key === ciReactionKey && transitionReaction.result?.success) {
       return;
     }
 
