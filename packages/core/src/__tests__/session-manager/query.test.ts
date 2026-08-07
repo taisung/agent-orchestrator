@@ -171,6 +171,103 @@ describe("list", () => {
     expect(sessions[0].activity).toBe("exited");
   });
 
+  // A terminal status must not force activity to "exited" on its own — agents
+  // routinely keep working in tmux after their PR is merged, and reporting them
+  // as exited hides live workers from the dashboard and stuck-detection.
+  describe("terminal-status sessions derive activity from the runtime probe", () => {
+    function registryWith(runtime: Runtime, agent: Agent): PluginRegistry {
+      return {
+        ...mockRegistry,
+        get: vi.fn().mockImplementation((slot: string) => {
+          if (slot === "runtime") return runtime;
+          if (slot === "agent") return agent;
+          if (slot === "workspace") return mockWorkspace;
+          return null;
+        }),
+      };
+    }
+
+    function writeTerminalSession(status: string) {
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: "/tmp",
+        branch: "a",
+        status,
+        project: "my-app",
+        runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+      });
+    }
+
+    it("reports the live activity state of a merged session whose agent is alive", async () => {
+      const aliveRuntime: Runtime = { ...mockRuntime, isAlive: vi.fn().mockResolvedValue(true) };
+      const busyAgent: Agent = {
+        ...mockAgent,
+        getActivityState: vi.fn().mockResolvedValue({ state: "active" }),
+      };
+
+      writeTerminalSession("merged");
+      const sm = createSessionManager({ config, registry: registryWith(aliveRuntime, busyAgent) });
+      const sessions = await sm.list("my-app");
+
+      expect(busyAgent.getActivityState).toHaveBeenCalled();
+      expect(sessions[0].activity).toBe("active");
+      expect(sessions[0].status).toBe("merged");
+    });
+
+    it("surfaces waiting_input on a merged session still at a prompt", async () => {
+      const aliveRuntime: Runtime = { ...mockRuntime, isAlive: vi.fn().mockResolvedValue(true) };
+      const blockedAgent: Agent = {
+        ...mockAgent,
+        getActivityState: vi.fn().mockResolvedValue({ state: "waiting_input" }),
+      };
+
+      writeTerminalSession("merged");
+      const sm = createSessionManager({
+        config,
+        registry: registryWith(aliveRuntime, blockedAgent),
+      });
+      const sessions = await sm.list("my-app");
+
+      expect(sessions[0].activity).toBe("waiting_input");
+    });
+
+    it("reports exited when the process is confirmed dead", async () => {
+      const deadRuntime: Runtime = { ...mockRuntime, isAlive: vi.fn().mockResolvedValue(false) };
+      const agentSpy: Agent = {
+        ...mockAgent,
+        getActivityState: vi.fn().mockResolvedValue({ state: "active" }),
+      };
+
+      writeTerminalSession("merged");
+      const sm = createSessionManager({ config, registry: registryWith(deadRuntime, agentSpy) });
+      const sessions = await sm.list("my-app");
+
+      expect(sessions[0].activity).toBe("exited");
+      expect(agentSpy.getActivityState).not.toHaveBeenCalled();
+    });
+
+    it("preserves the terminal status instead of overwriting it with killed", async () => {
+      const deadRuntime: Runtime = { ...mockRuntime, isAlive: vi.fn().mockResolvedValue(false) };
+
+      writeTerminalSession("merged");
+      const sm = createSessionManager({ config, registry: registryWith(deadRuntime, mockAgent) });
+      const sessions = await sm.list("my-app");
+
+      expect(sessions[0].status).toBe("merged");
+      expect(sessions[0].activity).toBe("exited");
+    });
+
+    it("still marks a dead non-terminal session as killed", async () => {
+      const deadRuntime: Runtime = { ...mockRuntime, isAlive: vi.fn().mockResolvedValue(false) };
+
+      writeTerminalSession("working");
+      const sm = createSessionManager({ config, registry: registryWith(deadRuntime, mockAgent) });
+      const sessions = await sm.list("my-app");
+
+      expect(sessions[0].status).toBe("killed");
+      expect(sessions[0].activity).toBe("exited");
+    });
+  });
+
   it("detects activity using agent-native mechanism", async () => {
     const agentWithState: Agent = {
       ...mockAgent,

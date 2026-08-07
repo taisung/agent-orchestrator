@@ -881,21 +881,23 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     plugins: ReturnType<typeof resolvePlugins>,
     handleFromMetadata: boolean,
   ): Promise<void> {
-    // Skip all subprocess/IO work for sessions already known to be terminal.
-    if (TERMINAL_SESSION_STATUSES.has(session.status)) {
-      session.activity = "exited";
-      return;
-    }
-
-    // Check runtime liveness — but only if the handle came from metadata.
-    // Fabricated handles (constructed as fallback for external sessions) should
-    // NOT override status to "killed" — we don't know if the session ever had
-    // a tmux session, and we'd clobber meaningful statuses like "pr_open".
+    // Check runtime liveness first — regardless of session status. A terminal
+    // status must not force activity to "exited" while the agent is still alive:
+    // an agent commonly keeps working in tmux after its PR is merged.
+    //
+    // Liveness is only trusted when the handle came from metadata. Fabricated
+    // handles (constructed as fallback for external sessions) should NOT override
+    // status to "killed" — we don't know if the session ever had a tmux session,
+    // and we'd clobber meaningful statuses like "pr_open".
     if (handleFromMetadata && session.runtimeHandle && plugins.runtime) {
       try {
         const alive = await plugins.runtime.isAlive(session.runtimeHandle);
         if (!alive) {
-          session.status = "killed";
+          // Process confirmed dead. Only claim "killed" if the session wasn't
+          // already in a terminal state — otherwise keep merged/done/cleanup.
+          if (!TERMINAL_SESSION_STATUSES.has(session.status)) {
+            session.status = "killed";
+          }
           session.activity = "exited";
           return;
         }
@@ -904,7 +906,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    // Detect activity independently of runtime handle.
+    // Detect activity independently of runtime handle and session status.
     // Activity detection reads JSONL files on disk — it only needs workspacePath,
     // not a runtime handle. Gating on runtimeHandle caused sessions created by
     // external scripts (which don't store runtimeHandle) to always show "unknown".
