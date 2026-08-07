@@ -268,6 +268,51 @@ describe("list", () => {
     });
   });
 
+  // The runtime a session was created under is recorded on its handle. Resolving
+  // the runtime from project config instead would route a live session to a
+  // plugin that knows nothing about it the moment the default changes.
+  it("probes liveness with the runtime named on the handle, not the configured one", async () => {
+    const configuredRuntime: Runtime = {
+      ...mockRuntime,
+      name: "tmux",
+      isAlive: vi.fn().mockResolvedValue(false),
+    };
+    const handleRuntime: Runtime = {
+      ...mockRuntime,
+      name: "herdr",
+      isAlive: vi.fn().mockResolvedValue(true),
+    };
+    const busyAgent: Agent = {
+      ...mockAgent,
+      getActivityState: vi.fn().mockResolvedValue({ state: "active" }),
+    };
+    const registry: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string, name: string) => {
+        if (slot === "runtime") return name === "herdr" ? handleRuntime : configuredRuntime;
+        if (slot === "agent") return busyAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: "a",
+      status: "working",
+      project: "my-app",
+      runtimeHandle: JSON.stringify({ id: "w8:p1", runtimeName: "herdr", data: {} }),
+    });
+
+    const sm = createSessionManager({ config, registry });
+    const sessions = await sm.list("my-app");
+
+    expect(handleRuntime.isAlive).toHaveBeenCalled();
+    expect(configuredRuntime.isAlive).not.toHaveBeenCalled();
+    expect(sessions[0].status).toBe("working");
+    expect(sessions[0].activity).toBe("active");
+  });
+
   it("detects activity using agent-native mechanism", async () => {
     const agentWithState: Agent = {
       ...mockAgent,

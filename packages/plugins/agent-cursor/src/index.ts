@@ -10,6 +10,8 @@ import {
   PREFERRED_GH_PATH,
   DEFAULT_READY_THRESHOLD_MS,
   DEFAULT_ACTIVE_WINDOW_MS,
+  HERDR_RUNTIME_NAME,
+  isHerdrProcessRunning,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -323,6 +325,12 @@ function createCursorAgent(): Agent {
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
       try {
+        // herdr owns the PTY and reports a pane's foreground processes directly,
+        // so neither the tmux TTY scan nor the process-runtime PID applies.
+        if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+          return await isHerdrProcessRunning(handle.id, /(?:^|\/)\.?agent\b(?:\s|$)/);
+        }
+
         if (handle.runtimeName === "tmux" && handle.id) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",

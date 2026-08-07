@@ -493,3 +493,72 @@ describe("getActivityState with activity JSONL", () => {
     expect(result?.state).toBe("active");
   });
 });
+
+// ---------------------------------------------------------------------------
+// herdr runtime — isProcessRunning
+//
+// herdr owns the PTY and reports a pane's foreground processes directly. Before
+// this branch existed a herdr handle matched neither the tmux nor the process
+// runtime and fell through to the PID lookup, so every herdr session reported
+// exited. See development/0003 §4.1.
+// ---------------------------------------------------------------------------
+describe("isProcessRunning — herdr runtime", () => {
+  const herdrHandle = {
+    id: "w8:p1",
+    runtimeName: "herdr",
+    data: { workspaceId: "w8", terminalId: "term_abc" },
+  } as any;
+
+  function paneProcesses(processes: unknown[]) {
+    return {
+      stdout: JSON.stringify({
+        id: "cli:pane:process_info",
+        result: { process_info: { foreground_processes: processes }, type: "pane_process_info" },
+      }),
+      stderr: "",
+    };
+  }
+
+  beforeEach(() => {
+    mockExecFileAsync.mockReset();
+  });
+
+  it("is true when aider runs in the pane", async () => {
+    mockExecFileAsync.mockResolvedValueOnce(
+      paneProcesses([{ cmdline: "aider --model sonnet", name: "aider", pid: 42 }]),
+    );
+
+    const agent = create();
+    expect(await agent.isProcessRunning(herdrHandle)).toBe(true);
+  });
+
+  it("queries herdr for the pane instead of scanning tmux", async () => {
+    mockExecFileAsync.mockResolvedValueOnce(
+      paneProcesses([{ cmdline: "aider --model sonnet", name: "aider", pid: 42 }]),
+    );
+
+    const agent = create();
+    await agent.isProcessRunning(herdrHandle);
+
+    const [bin, args] = mockExecFileAsync.mock.calls[0];
+    expect(bin).toBe("herdr");
+    expect(args).toEqual(["pane", "process-info", "--pane", "w8:p1"]);
+    expect(mockExecFileAsync.mock.calls.every((c: any[]) => c[0] !== "tmux")).toBe(true);
+  });
+
+  it("is false when only an unrelated process runs in the pane", async () => {
+    mockExecFileAsync.mockResolvedValueOnce(
+      paneProcesses([{ cmdline: "bash", name: "bash", pid: 7 }]),
+    );
+
+    const agent = create();
+    expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
+  });
+
+  it("is false when herdr is unavailable", async () => {
+    mockExecFileAsync.mockRejectedValueOnce(new Error("ENOENT"));
+
+    const agent = create();
+    expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
+  });
+});

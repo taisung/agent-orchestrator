@@ -113,7 +113,10 @@ export async function cleanupSession(
 
   try {
     const project = config.projects[projectId];
-    const runtimeName = project.runtime ?? config.defaults.runtime;
+    // Prefer the runtime recorded on the handle — destroying a session with the
+    // wrong runtime plugin silently leaves it running.
+    const runtimeName =
+      assessment.runtimeHandle?.runtimeName || project.runtime || config.defaults.runtime;
     const workspaceName = project.workspace ?? config.defaults.workspace;
     const runtime = registry.get<Runtime>("runtime", runtimeName);
     const workspace = registry.get<Workspace>("workspace", workspaceName);

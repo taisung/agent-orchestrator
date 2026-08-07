@@ -29,7 +29,6 @@ export async function validateSession(
 ): Promise<RecoveryAssessment> {
   const { sessionId, projectId, project, rawMetadata } = scanned;
 
-  const runtimeName = project.runtime ?? config.defaults.runtime;
   const agentName = resolveAgentSelection({
     role: resolveSessionRole(
       sessionId,
@@ -43,13 +42,18 @@ export async function validateSession(
   }).agentName;
   const workspaceName = project.workspace ?? config.defaults.workspace;
 
-  const runtime = registry.get<Runtime>("runtime", runtimeName);
-  const agent = registry.get<Agent>("agent", agentName);
-  const workspace = registry.get<Workspace>("workspace", workspaceName);
-
   const workspacePath = rawMetadata["worktree"] || null;
   const runtimeHandleStr = rawMetadata["runtimeHandle"];
   const runtimeHandle = runtimeHandleStr ? safeJsonParse<RuntimeHandle>(runtimeHandleStr) : null;
+
+  // Prefer the runtime the session was actually created under. Recovery runs
+  // against sessions that may predate a change to the project's configured
+  // runtime, and probing them with the wrong plugin reports them all dead.
+  const runtimeName = runtimeHandle?.runtimeName || project.runtime || config.defaults.runtime;
+
+  const runtime = registry.get<Runtime>("runtime", runtimeName);
+  const agent = registry.get<Agent>("agent", agentName);
+  const workspace = registry.get<Workspace>("workspace", workspaceName);
   const metadataStatus = validateStatus(rawMetadata["status"]);
   const recoveryConfig: RecoveryConfig = {
     ...DEFAULT_RECOVERY_CONFIG,

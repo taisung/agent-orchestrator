@@ -49,6 +49,10 @@ export {
   getPaneTTY as getTmuxPaneTTY,
 } from "./tmux.js";
 
+// herdr — command wrappers
+export { HERDR_RUNTIME_NAME, getHerdrPaneProcesses, isHerdrProcessRunning } from "./herdr.js";
+export type { HerdrPaneProcess } from "./herdr.js";
+
 // Session manager — session CRUD
 export { createSessionManager } from "./session-manager.js";
 export type { SessionManagerDeps } from "./session-manager.js";

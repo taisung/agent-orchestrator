@@ -4,6 +4,8 @@ import {
   normalizeAgentPermissionMode,
   DEFAULT_READY_THRESHOLD_MS,
   DEFAULT_ACTIVE_WINDOW_MS,
+  HERDR_RUNTIME_NAME,
+  getHerdrPaneProcesses,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -455,11 +457,29 @@ async function getCachedProcessList(): Promise<string> {
 }
 
 /**
+ * Match "claude" as a word boundary — prevents false positives on names like
+ * "claude-code" or paths that merely contain the substring.
+ */
+const CLAUDE_PROCESS_RE = /(?:^|\/)claude(?:\s|$)/;
+
+/**
  * Check if a process named "claude" is running in the given runtime handle's context.
- * Uses ps to find processes by TTY (for tmux) or by PID.
+ * Uses herdr's pane process list, ps by TTY (for tmux), or a stored PID.
  */
 async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> {
   try {
+    // herdr owns the PTY and reports a pane's foreground processes directly, so
+    // neither the tmux TTY scan nor the process-runtime PID applies. Without this
+    // a herdr handle falls through to the PID branch, finds none, and reports the
+    // session exited.
+    if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+      const processes = await getHerdrPaneProcesses(handle.id);
+      const match = processes.find(
+        (proc) => CLAUDE_PROCESS_RE.test(proc.cmdline) || CLAUDE_PROCESS_RE.test(proc.name),
+      );
+      return match ? (match.pid || null) : null;
+    }
+
     // For tmux runtime, get the pane TTY and find claude on it
     if (handle.runtimeName === "tmux" && handle.id) {
       const { stdout: ttyOut } = await execFileAsync(
@@ -479,14 +499,11 @@ async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> 
       if (!psOut) return null;
 
       const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-      // Match "claude" as a word boundary — prevents false positives on
-      // names like "claude-code" or paths that merely contain the substring.
-      const processRe = /(?:^|\/)claude(?:\s|$)/;
       for (const line of psOut.split("\n")) {
         const cols = line.trimStart().split(/\s+/);
         if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
         const args = cols.slice(2).join(" ");
-        if (processRe.test(args)) {
+        if (CLAUDE_PROCESS_RE.test(args)) {
           return parseInt(cols[0] ?? "0", 10);
         }
       }

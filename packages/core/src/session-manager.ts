@@ -881,6 +881,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     plugins: ReturnType<typeof resolvePlugins>,
     handleFromMetadata: boolean,
   ): Promise<void> {
+    // Resolve the runtime from the HANDLE, not from config. A session created
+    // under one runtime must keep being probed by that runtime even after the
+    // project's configured runtime changes, otherwise flipping the default
+    // routes live sessions to a plugin that knows nothing about them.
+    const handleRuntimeName = session.runtimeHandle?.runtimeName;
+    const runtime =
+      handleRuntimeName && handleRuntimeName !== plugins.runtime?.name
+        ? (registry.get<Runtime>("runtime", handleRuntimeName) ?? plugins.runtime)
+        : plugins.runtime;
+
     // Check runtime liveness first — regardless of session status. A terminal
     // status must not force activity to "exited" while the agent is still alive:
     // an agent commonly keeps working in tmux after its PR is merged.
@@ -889,9 +899,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // handles (constructed as fallback for external sessions) should NOT override
     // status to "killed" — we don't know if the session ever had a tmux session,
     // and we'd clobber meaningful statuses like "pr_open".
-    if (handleFromMetadata && session.runtimeHandle && plugins.runtime) {
+    if (handleFromMetadata && session.runtimeHandle && runtime) {
       try {
-        const alive = await plugins.runtime.isAlive(session.runtimeHandle);
+        const alive = await runtime.isAlive(session.runtimeHandle);
         if (!alive) {
           // Process confirmed dead. Only claim "killed" if the session wasn't
           // already in a terminal state — otherwise keep merged/done/cleanup.

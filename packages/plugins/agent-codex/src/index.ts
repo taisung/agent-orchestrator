@@ -10,6 +10,8 @@ import {
   checkActivityLogState,
   getActivityFallbackState,
   recordTerminalActivity,
+  HERDR_RUNTIME_NAME,
+  isHerdrProcessRunning,
   PREFERRED_GH_PATH,
   type Agent,
   type AgentSessionInfo,
@@ -538,6 +540,12 @@ function createCodexAgent(): Agent {
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
       try {
+        // herdr owns the PTY and reports a pane's foreground processes directly,
+        // so neither the tmux TTY scan nor the process-runtime PID applies.
+        if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+          return await isHerdrProcessRunning(handle.id, /(?:^|\/)codex(?:\s|$)/);
+        }
+
         if (handle.runtimeName === "tmux" && handle.id) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",
