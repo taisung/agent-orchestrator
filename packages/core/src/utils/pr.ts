@@ -29,3 +29,23 @@ export function parsePrFromUrl(prUrl: string): ParsedPrUrl | null {
 
   return null;
 }
+
+/**
+ * Stable identity key for a PR, safe to use for deduplication.
+ *
+ * Falls back to the URL whenever owner/repo/number are not all known. Keying on
+ * `owner/repo#number` alone collides for any provider `parsePrFromUrl` cannot
+ * fully decompose — e.g. two GitLab MRs numbered 12 in different projects both
+ * parse to `owner: ""`, `repo: ""`, and would otherwise share the key `/#12`.
+ */
+export function prIdentityKey(pr: Pick<PRInfo, "owner" | "repo" | "number" | "url">): string {
+  const parsed = parsePrFromUrl(pr.url);
+  const owner = pr.owner || parsed?.owner || "";
+  const repo = pr.repo || parsed?.repo || "";
+  const number = pr.number || parsed?.number || 0;
+
+  if (owner && repo && number > 0) {
+    return `${owner}/${repo}#${number}`;
+  }
+  return `url:${pr.url}`;
+}

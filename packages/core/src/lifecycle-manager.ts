@@ -37,6 +37,7 @@ import {
   type CICheck,
 } from "./types.js";
 import { updateMetadata } from "./metadata.js";
+import { prIdentityKey } from "./utils/pr.js";
 import { getSessionsDir } from "./paths.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
@@ -232,10 +233,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       .map((s) => s.pr)
       .filter((pr): pr is NonNullable<typeof pr> => pr !== null);
 
-    // Deduplicate by key
-    const uniquePRs = Array.from(
-      new Map(prs.map((pr) => [`${pr.owner}/${pr.repo}#${pr.number}`, pr])).values(),
-    );
+    // Deduplicate by stable identity key. Uses prIdentityKey rather than a raw
+    // `owner/repo#number` template so PRs whose URL doesn't decompose into
+    // owner/repo (e.g. GitLab MRs) fall back to the URL instead of colliding.
+    const uniquePRs = Array.from(new Map(prs.map((pr) => [prIdentityKey(pr), pr])).values());
 
     if (uniquePRs.length === 0) return;
 
