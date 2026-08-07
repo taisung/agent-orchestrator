@@ -36,12 +36,20 @@ import type { SessionId, SessionMetadata } from "./types.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
 import { parseKeyValueContent } from "./key-value.js";
 
-/** Serialize a record back to key=value format. */
+/**
+ * Serialize a record back to key=value format.
+ *
+ * Newlines in values are collapsed to spaces. The format is line-delimited and
+ * `parseKeyValueContent` treats every line as a fresh `key=value` pair, so an
+ * unescaped newline in agent-supplied text (`summary`, `pinnedSummary`) would
+ * inject arbitrary metadata keys — e.g. a summary containing "\nstatus=merged"
+ * would rewrite the session's status on the next read.
+ */
 function serializeMetadata(data: Record<string, string>): string {
   return (
     Object.entries(data)
       .filter(([, v]) => v !== undefined && v !== "")
-      .map(([k, v]) => `${k}=${v}`)
+      .map(([k, v]) => `${k}=${v.replace(/[\r\n]/g, " ")}`)
       .join("\n") + "\n"
   );
 }

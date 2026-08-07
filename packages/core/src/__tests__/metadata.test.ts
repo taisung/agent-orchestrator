@@ -474,3 +474,70 @@ describe("listMetadata", () => {
     // no cleanup needed since dir was never created
   });
 });
+
+describe("metadata value injection hardening", () => {
+  // The metadata file is line-delimited key=value. `summary` and `pinnedSummary`
+  // carry free text produced by the agent, so an unescaped newline lets that text
+  // forge additional metadata keys on the next read.
+  it("does not let a newline in summary forge another key", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp/wt",
+      branch: "feat/x",
+      status: "working",
+      summary: "did the thing\nstatus=merged",
+    });
+
+    const meta = readMetadata(dataDir, "app-1");
+    expect(meta?.status).toBe("working");
+    expect(meta?.summary).toBe("did the thing status=merged");
+  });
+
+  it("neutralizes carriage returns as well as newlines", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp/wt",
+      branch: "feat/x",
+      status: "working",
+      pinnedSummary: "line one\r\nworktree=/etc/passwd",
+    });
+
+    const meta = readMetadata(dataDir, "app-1");
+    expect(meta?.worktree).toBe("/tmp/wt");
+    expect(meta?.pinnedSummary).toBe("line one  worktree=/etc/passwd");
+  });
+
+  it("keeps the file to exactly one line per written key", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp/wt",
+      branch: "feat/x",
+      status: "working",
+      summary: "a\nb\nc\nd",
+    });
+
+    const raw = readFileSync(join(dataDir, "app-1"), "utf-8");
+    const lines = raw.split("\n").filter((l) => l.trim() !== "");
+    expect(lines).toHaveLength(4);
+  });
+
+  it("still preserves '=' inside values", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp/wt",
+      branch: "feat/x",
+      status: "working",
+      summary: "ran FOO=bar baz",
+    });
+
+    expect(readMetadata(dataDir, "app-1")?.summary).toBe("ran FOO=bar baz");
+  });
+
+  it("applies the same hardening on updateMetadata", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp/wt",
+      branch: "feat/x",
+      status: "working",
+    });
+    updateMetadata(dataDir, "app-1", { summary: "oops\nstatus=killed" });
+
+    const meta = readMetadata(dataDir, "app-1");
+    expect(meta?.status).toBe("working");
+  });
+});
