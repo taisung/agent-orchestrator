@@ -309,6 +309,33 @@ Group A's sends took ~14.8 s each — that is the first attempt being discarded,
 files appeared at 18–21 s. Group B failed with `agent not found`, which is itself informative: at zero delay herdr
 had not yet attached an agent to those panes, and the raw path has no gate to wait for one.
 
+### 9.4 Re-run at 9 workers — the concurrency from 0001
+
+Repeated at **9 concurrent workers** (6 gated, 3 raw control), the count at which 0001's delivery problems actually
+surfaced in production. Same zero-delay condition, with a background sampler recording each pane's status stream.
+
+| Group | Method | Delivered |
+|---|---|---|
+| A | plugin `sendMessage` (send-and-verify) | **6/6** |
+| B | raw `herdr agent prompt` (control) | **0/3** |
+
+The status streams make the mechanism explicit, and **all six gated workers produced the identical shape**:
+
+```
+A: unknown@0.1s → idle@1.7s → working@15.4s → done@20s      DELIVERED
+B: unknown@0.1s → idle@1.7s                                 NOT DELIVERED
+```
+
+`idle` at **1.7 s**; `working` only at **15.4 s** — after the first attempt timed out and the second was sent. So at
+9 workers **the first prompt is swallowed 6 out of 6 times**: at this concurrency the failure is not intermittent,
+it is total, and every delivery came from the retry. Control panes never leave `idle` at all, and their sends fail
+instantly with `agent not found`.
+
+This also bounds the cost: sends are uniformly 14.7–14.8 s, which is `deliveryTimeoutMs` (12 s) plus polling. The
+agent actually becomes promptable somewhere between 1.7 s and 14.5 s; the current settings do not measure where, they
+just wait out the whole window. A shorter `deliveryTimeoutMs` with more attempts would likely converge faster, but
+the crossover has not been measured — see 0004 §8.
+
 **Conclusion.** A fixed delay would have "worked" here and silently failed at a different agent, model, or machine
 speed. Verification is the load-bearing part; the gate only decides when to try. This is 0001 §3's finding
 generalised — *the send path must confirm, never assert* — and it holds on herdr exactly as it held on tmux.

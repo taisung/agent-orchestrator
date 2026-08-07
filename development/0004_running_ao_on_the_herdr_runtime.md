@@ -4,7 +4,8 @@
 **Context**: operator guide for the `runtime-herdr` plugin built in response to
 [0003](0003_herdr_assessment_and_the_runtime_plugin_option.md). Supersedes 0003 §7 as the practical
 instructions.
-**Status**: usable. Verified against herdr 0.8.0 on Linux, including a 6-worker concurrent campaign (0003 §9).
+**Status**: usable. Verified against herdr 0.8.0 on Linux, including 6- and 9-worker concurrent campaigns
+(0003 §9). 9 workers is the concurrency at which 0001's delivery failures surfaced in production.
 
 Everything marked **verified** below was executed against a live herdr server; everything else is read from
 source and labelled as such.
@@ -131,9 +132,11 @@ against a 15 s timeout.
 4. Still nothing → fall back to raw `pane send-text` + Enter.
 5. Still nothing → **throw**. A verified non-delivery is reported as a failure, never as success.
 
-Re-measured under the same zero-delay 6-worker condition: **3/3 delivered** through `sendMessage`, **0/3** through
-raw `herdr agent prompt`. Expect a first send to cost ~15 s on a cold agent — that is one discarded attempt being
-detected and retried, and it is the price of not losing the message.
+Re-measured under the same zero-delay condition: **3/3** at 6 workers and **6/6 at 9 workers** through
+`sendMessage`, against **0/3** both times through raw `herdr agent prompt`. Expect a first send to cost ~15 s on a
+cold agent — that is one discarded attempt being detected and retried, and it is the price of not losing the
+message. At 9 workers the first attempt was swallowed in **every single case** (0003 §9.4), so that cost is the
+norm at fleet scale, not an edge case.
 
 It deliberately does **not** pass `herdr agent prompt --wait`, because `--wait` does not track turns: if the
 agent is already working, an unrelated turn's completion can satisfy it.
@@ -206,9 +209,10 @@ once.
 - `ao status`'s last-activity column is blank for herdr sessions (§4.2).
 - `terminal-iterm2` / `terminal-web` remain tmux-only (§4.3).
 - §5's send path costs ~15 s on a cold agent, because the first attempt is expected to be swallowed and is only
-  detected by timing out. If herdr ever exposes a true "agent can accept input" signal, that wait collapses.
-- The campaign ran 6 workers; 0001's failures surfaced at 9. Nothing observed suggests a concurrency ceiling
-  (0003 §9.2 rules concurrency out as the cause), but it has not been measured above 6.
+  detected by timing out. Measured at 9 workers, the agent becomes promptable somewhere between 1.7 s and 14.5 s,
+  but the current `deliveryTimeoutMs` (12 s) waits out the whole window rather than finding that point. A shorter
+  timeout with more attempts would likely converge faster; the crossover is unmeasured. If herdr ever exposes a
+  true "agent can accept input" signal, the wait collapses entirely.
 - `agent-orchestrator.yaml.example` does not mention `herdr`.
 - herdr is young; `worktree create` has open correctness bugs upstream
   ([issue #729](https://github.com/ogulcancelik/herdr/issues/729)). AO does not use `herdr worktree` — the
