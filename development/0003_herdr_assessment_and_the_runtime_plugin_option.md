@@ -96,25 +96,63 @@ parsing each agent's JSONL — which would retire the entire class of bug fixed 
 `approval_request` branch was unreachable dead code. That is a larger change (the `Agent` slot is per-agent) and
 should not be attempted in the same step.
 
+### 4.1 Correction — the runtime slot is not as clean a seam as §4 implies
+
+An earlier revision of this document claimed a `runtime-herdr` plugin would be ~300 LOC and that runtimes could be
+swapped freely by config. **Both claims were checked against the code and are too optimistic.** The plugin *design*
+supports swapping; the *implementation* carries tmux assumptions above and beside the runtime slot.
+
+What genuinely works:
+
+- Runtime is config-selected per project — `project.runtime ?? config.defaults.runtime` (`session-manager.ts:745`).
+- `RuntimeHandle` carries `runtimeName`, and three paths correctly prefer it over config: destroy
+  (`session-manager.ts:1725`), restore (`:1964`), and `ao send` (`cli/commands/send.ts:36`). Sessions created under
+  tmux keep dispatching to tmux after the default is flipped.
+
+What does not:
+
+| Coupling | Location | Effect |
+|---|---|---|
+| **Agent plugins branch on the runtime name.** `findClaudeProcess` uses a tmux `list-panes` TTY lookup when `handle.runtimeName === "tmux"`, else a PID from `handle.data` | `agent-claude-code/src/index.ts:463` | A herdr handle matches neither branch → no `pid` → returns `null` → `isProcessRunning` false → **every session reports exited**. Needs a herdr branch in **all 6 agent plugins** |
+| `enrichSessionWithRuntimeState` takes `plugins` from `resolvePlugins(project)` — config-resolved, not handle-resolved | `session-manager.ts:879` | After a config flip, liveness for tmux-created sessions is routed to the herdr plugin |
+| Recovery resolves runtime from config, ignoring the handle | `recovery/validator.ts:32`, `recovery/actions.ts:116` | Same mis-routing during recovery |
+| Hardcoded `handle.runtimeName === "tmux"` foreground-command branches; non-tmux falls back to `agentPlugin.processName` | `session-manager.ts:2026, 2073` | Degraded, not equivalent, behavior |
+| Fabricated handles hardcode `runtimeName: "tmux"` | `cli/commands/status.ts:487`, `cli/commands/send.ts:51` | Wrong dispatch for non-tmux sessions |
+| `tmux.ts` lives in **core**, not in `runtime-tmux`; tmux appears in **20 files** outside the plugin | `core/src/tmux.ts` et al. | The abstraction leaks |
+
+**Revised scope**: one runtime plugin + six agent-plugin patches + ~4 core dispatch fixes ≈ **700–1000 LOC**.
+
+**Revised claim about switching**: *per-project* selection (project A on tmux, project B on herdr) is close to
+working and is the realistic target. *Live switching* of the default while tmux sessions are running would break
+enrichment and recovery for those sessions until they drain. Reversibility is real but coarse — drain the fleet,
+flip config — not a hot swap.
+
+This does not sink option 1, but it roughly triples its cost and means the work touches the `Agent` slot, which §4
+said to avoid in the first step. Sequencing that honestly: the agent-side `isProcessRunning` branch is not optional
+follow-on work, it is a prerequisite.
+
 ---
 
 ## 5. How this changes the migration calculus
 
 0002 framed the decision as fork-versus-rewrite. There are three options:
 
-1. **Stay on the fork, swap the runtime.** ~300 LOC. Fixes §1/§3/§4/§5. Keeps patch-level control, stays
-   TypeScript, no relicense, no Go. Adds a fast-moving external dependency.
+1. **Stay on the fork, swap the runtime.** ~700–1000 LOC per §4.1 (runtime plugin + 6 agent plugins + core dispatch
+   fixes). Fixes §1/§3/§4/§5. Keeps patch-level control, stays TypeScript, no relicense, no Go. Adds a fast-moving
+   external dependency.
 2. **Migrate to the upstream Go rewrite** (0002 §5–6). Same defects fixed, plus 24 harnesses and active
    maintenance — but patch-level control drops and `--model` on spawn is missing.
 3. **Stay as-is.** Every future fix is ours alone; the upstream TypeScript lineage ended at `5897b4e8d`.
 
-Option 1 did not exist in 0002's analysis and is now the cheapest path to the pain we have actually measured. It
-also **de-risks option 2**: if a Herdr runtime resolves §1/§3/§4/§5, the urgency behind migrating drops sharply and
-the rewrite can be evaluated on its merits rather than under operational pressure.
+Option 1 did not exist in 0002's analysis and is still the cheapest path to the pain we have actually measured — but
+at ~3× the cost §4 originally claimed, the gap to option 2 is narrower than it first appeared. It also
+**de-risks option 2**: if a Herdr runtime resolves §1/§3/§4/§5, the urgency behind migrating drops sharply and the
+rewrite can be evaluated on its merits rather than under operational pressure.
 
 Options 1 and 2 are not mutually exclusive in the long run, but they compete for the same effort now. Option 1
-should be tried first because it is smaller, reversible (the runtime is a plugin slot — swap back by config), and
-does not commit us to anyone else's roadmap.
+should still be tried first because it is smaller, coarsely reversible (drain the fleet, flip config — see §4.1),
+and does not commit us to anyone else's roadmap. The honest counter-argument is that ~1000 LOC of runtime plumbing
+we then maintain alone is a real fraction of what migrating would cost outright.
 
 ---
 
@@ -135,7 +173,22 @@ does not commit us to anyone else's roadmap.
 
 ## 7. Recommended next step
 
-Prototype `packages/plugins/runtime-herdr` using `runtime-tmux` as the template, and run one 2–3 worker batch
-against it. That single run tests the §3 and §4 claims — the two that cost us a wrong user-facing conclusion during
-the 9-worker run — at a cost of roughly a day. If `agent prompt --wait` and `pane read --source recent-unwrapped`
-behave as documented, option 1 is settled and the migration question in 0002 can be deferred on our own schedule.
+Do **not** start with the plugin. Per §4.1 the full path is ~700–1000 LOC across three packages, which is too much
+to commit before the premise is tested.
+
+Start with a **throwaway spike against Herdr's CLI directly** — no plugin, no AO involvement. Create a worktree,
+start a Codex agent, prompt it, and read back output:
+
+```
+herdr worktree create --branch spike/herdr-eval
+herdr agent start eval --kind codex --pane <id>
+herdr agent prompt --wait ...          # does it block until state changes? (0001 §3)
+herdr pane read --source recent-unwrapped   # does it see a claude-code TUI? (0001 §4)
+```
+
+Those two commands are the entire basis for option 1. Both are claims read from documentation, not observed
+behavior. Half a day settles them.
+
+Only if both hold does the plugin work make sense, and it should then be sequenced: agent-side `isProcessRunning`
+first (it is the prerequisite, not follow-on work), then the runtime plugin, then the core dispatch fixes in §4.1 —
+targeting *per-project* selection, not live switching.
