@@ -739,6 +739,92 @@ describe("getActivityState", () => {
     expect(result?.state).toBe("ready");
   });
 
+  // Real Codex wraps the semantic type in payload.type on event_msg records.
+  // Before payloadType was honored these all matched the generic `event_msg`
+  // case and decayed to ready/idle, so waiting_input/blocked never surfaced.
+  describe("payload-wrapped event_msg records", () => {
+    function mockPayloadEntry(payloadType: string, modifiedAt = new Date()) {
+      mockTmuxWithProcess("codex");
+      mockReaddir.mockResolvedValue(["sess.jsonl"]);
+      setupMockOpen('{"type":"session_meta","cwd":"/workspace/test"}\n');
+      mockStat.mockResolvedValue({ mtimeMs: modifiedAt.getTime(), mtime: modifiedAt });
+      mockReadLastJsonlEntry.mockResolvedValue({
+        lastType: "event_msg",
+        payloadType,
+        modifiedAt,
+      });
+      return makeSession({
+        runtimeHandle: makeTmuxHandle(),
+        workspacePath: "/workspace/test",
+      });
+    }
+
+    it.each([
+      ["approval_request", "waiting_input"],
+      ["exec_approval_request", "waiting_input"],
+      ["apply_patch_approval_request", "waiting_input"],
+      ["error", "blocked"],
+      ["stream_error", "blocked"],
+    ])("classifies payload.type=%s as %s", async (payloadType, expected) => {
+      const session = mockPayloadEntry(payloadType);
+      const result = await agent.getActivityState(session);
+      expect(result?.state).toBe(expected);
+    });
+
+    it.each(["task_started", "agent_reasoning", "exec_command_begin", "exec_command_end"])(
+      "classifies fresh payload.type=%s as active",
+      async (payloadType) => {
+        const session = mockPayloadEntry(payloadType);
+        const result = await agent.getActivityState(session);
+        expect(result?.state).toBe("active");
+      },
+    );
+
+    it.each(["task_complete", "turn_aborted", "agent_message", "token_count"])(
+      "classifies fresh payload.type=%s as ready",
+      async (payloadType) => {
+        const session = mockPayloadEntry(payloadType);
+        const result = await agent.getActivityState(session);
+        expect(result?.state).toBe("ready");
+      },
+    );
+
+    it("still decays a stale approval-free payload to idle", async () => {
+      const stale = new Date(Date.now() - 600_000);
+      const session = mockPayloadEntry("task_complete", stale);
+      const result = await agent.getActivityState(session);
+      expect(result?.state).toBe("idle");
+    });
+
+    it("surfaces waiting_input even when the approval entry is stale", async () => {
+      // An approval prompt does not stop being a prompt because it is old —
+      // this is exactly the stuck-worker case the dashboard must report.
+      const stale = new Date(Date.now() - 600_000);
+      const session = mockPayloadEntry("approval_request", stale);
+      const result = await agent.getActivityState(session);
+      expect(result?.state).toBe("waiting_input");
+    });
+
+    it("falls back to the envelope type when payloadType is absent", async () => {
+      mockTmuxWithProcess("codex");
+      mockReaddir.mockResolvedValue(["sess.jsonl"]);
+      setupMockOpen('{"type":"session_meta","cwd":"/workspace/test"}\n');
+      mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+      mockReadLastJsonlEntry.mockResolvedValue({
+        lastType: "tool_call",
+        payloadType: null,
+        modifiedAt: new Date(),
+      });
+
+      const session = makeSession({
+        runtimeHandle: makeTmuxHandle(),
+        workspacePath: "/workspace/test",
+      });
+      const result = await agent.getActivityState(session);
+      expect(result?.state).toBe("active");
+    });
+  });
+
   it("returns exited when process handle has dead PID", async () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("ESRCH");

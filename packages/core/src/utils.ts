@@ -109,12 +109,18 @@ async function readLastLine(filePath: string): Promise<string | null> {
  * Read the last entry from a JSONL file.
  * Reads backwards from end of file — pure Node.js, no external binaries.
  *
+ * Some agents wrap the semantic event type one level down, e.g. Codex emits
+ * `{"type":"event_msg","payload":{"type":"approval_request",...}}`. `payloadType`
+ * exposes that inner type so callers can classify on it instead of the generic
+ * envelope type.
+ *
  * @param filePath - Path to the JSONL file
- * @returns Object containing the last entry's type and file mtime, or null if empty/invalid
+ * @returns Object containing the last entry's type, payload type, and file mtime,
+ *          or null if empty/invalid
  */
 export async function readLastJsonlEntry(
   filePath: string,
-): Promise<{ lastType: string | null; modifiedAt: Date } | null> {
+): Promise<{ lastType: string | null; payloadType: string | null; modifiedAt: Date } | null> {
   try {
     const [line, fileStat] = await Promise.all([readLastLine(filePath), stat(filePath)]);
 
@@ -124,10 +130,17 @@ export async function readLastJsonlEntry(
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       const obj = parsed as Record<string, unknown>;
       const lastType = typeof obj.type === "string" ? obj.type : null;
-      return { lastType, modifiedAt: fileStat.mtime };
+
+      let payloadType: string | null = null;
+      if (typeof obj.payload === "object" && obj.payload !== null && !Array.isArray(obj.payload)) {
+        const payload = obj.payload as Record<string, unknown>;
+        if (typeof payload.type === "string") payloadType = payload.type;
+      }
+
+      return { lastType, payloadType, modifiedAt: fileStat.mtime };
     }
 
-    return { lastType: null, modifiedAt: fileStat.mtime };
+    return { lastType: null, payloadType: null, modifiedAt: fileStat.mtime };
   } catch {
     return null;
   }

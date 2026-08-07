@@ -447,26 +447,47 @@ function createCodexAgent(): Agent {
           const ageMs = Date.now() - entry.modifiedAt.getTime();
           const timestamp = entry.modifiedAt;
 
+          // Real Codex wraps the semantic type in `payload.type` on event_msg
+          // records (e.g. `{"type":"event_msg","payload":{"type":"error",...}}`).
+          // Prefer payloadType when present — otherwise the switch matches the
+          // generic `event_msg` envelope and decays to ready/idle, leaving the
+          // approval/error branches unreachable.
+          const effectiveType = entry.payloadType ?? entry.lastType;
+
           // Map Codex JSONL entry types to activity states.
           // Confirmed types: session_meta, event_msg. Others are best-effort.
           const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
-          switch (entry.lastType) {
-            case "user_input":
-            case "tool_call":
-            case "exec_command":
-              if (ageMs <= activeWindowMs) return { state: "active", timestamp };
-              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
-
-            case "assistant_message":
-            case "session_meta":
-            case "event_msg":
-              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
-
+          switch (effectiveType) {
             case "approval_request":
+            case "exec_approval_request":
+            case "apply_patch_approval_request":
               return { state: "waiting_input", timestamp };
 
             case "error":
+            case "stream_error":
               return { state: "blocked", timestamp };
+
+            case "task_started":
+            case "agent_reasoning":
+            case "response_item":
+            case "turn_context":
+            case "user_input":
+            case "tool_call":
+            case "exec_command":
+            case "exec_command_begin":
+            case "exec_command_end":
+              if (ageMs <= activeWindowMs) return { state: "active", timestamp };
+              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
+
+            case "task_complete":
+            case "turn_aborted":
+            case "agent_message":
+            case "assistant_message":
+            case "session_meta":
+            case "event_msg":
+            case "compacted":
+            case "token_count":
+              return { state: ageMs > threshold ? "idle" : "ready", timestamp };
 
             default:
               if (ageMs <= activeWindowMs) return { state: "active", timestamp };
