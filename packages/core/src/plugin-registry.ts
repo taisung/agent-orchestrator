@@ -39,6 +39,7 @@ const BUILTIN_PLUGINS: Array<{ slot: PluginSlot; name: string; pkg: string }> = 
   // Runtimes
   { slot: "runtime", name: "tmux", pkg: "@aoagents/ao-plugin-runtime-tmux" },
   { slot: "runtime", name: "process", pkg: "@aoagents/ao-plugin-runtime-process" },
+  { slot: "runtime", name: "herdr", pkg: "@aoagents/ao-plugin-runtime-herdr" },
   // Agents
   { slot: "agent", name: "claude-code", pkg: "@aoagents/ao-plugin-agent-claude-code" },
   { slot: "agent", name: "codex", pkg: "@aoagents/ao-plugin-agent-codex" },
