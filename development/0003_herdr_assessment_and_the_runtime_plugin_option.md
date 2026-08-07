@@ -164,31 +164,93 @@ we then maintain alone is a real fraction of what migrating would cost outright.
 - Herdr is young and moving fast. `worktree create` has open correctness bugs
   ([issue #729](https://github.com/ogulcancelik/herdr/issues/729): fails when the branch already exists locally).
   Taking it as our runtime means depending on a fast-moving project at a layer where failure is total.
-- **Nothing here was run.** This is from the site, the CLI reference, the repo, and the LICENSE file. The `Runtime`
-  mapping in §4 is a reading of both interfaces, not a working plugin. Star count and agent lists are as published
-  and will drift.
+- §1–§5 are from the site, the CLI reference, the repo, and the LICENSE file. **§8 is measured** — the spike was
+  run against herdr 0.8.0 on 2026-08-07. The `Runtime` mapping in §4 remains a reading of both interfaces, not a
+  working plugin. Star count and agent lists are as published and will drift.
 - Windows support is beta; irrelevant to us today but relevant if the fleet ever moves.
 
 ---
 
-## 7. Recommended next step
+## 7. Sequencing
 
-Do **not** start with the plugin. Per §4.1 the full path is ~700–1000 LOC across three packages, which is too much
-to commit before the premise is tested.
+Do **not** start with the plugin. Per §4.1 the full path is ~700–1000 LOC across three packages.
 
-Start with a **throwaway spike against Herdr's CLI directly** — no plugin, no AO involvement. Create a worktree,
-start a Codex agent, prompt it, and read back output:
+The premise was tested first with a throwaway CLI spike — results in §8. Given those results, the plugin work is
+justified and should be sequenced: agent-side `isProcessRunning` first (it is the prerequisite, not follow-on work),
+then the runtime plugin, then the core dispatch fixes in §4.1 — targeting *per-project* selection, not live
+switching.
 
-```
-herdr worktree create --branch spike/herdr-eval
-herdr agent start eval --kind codex --pane <id>
-herdr agent prompt --wait ...          # does it block until state changes? (0001 §3)
-herdr pane read --source recent-unwrapped   # does it see a claude-code TUI? (0001 §4)
-```
+---
 
-Those two commands are the entire basis for option 1. Both are claims read from documentation, not observed
-behavior. Half a day settles them.
+## 8. Spike results (measured, herdr 0.8.0, 2026-08-07)
 
-Only if both hold does the plugin work make sense, and it should then be sequenced: agent-side `isProcessRunning`
-first (it is the prerequisite, not follow-on work), then the runtime plugin, then the core dispatch fixes in §4.1 —
-targeting *per-project* selection, not live switching.
+Throwaway git repo in a scratch dir; `herdr worktree create` → `agent start --kind claude` → prompt → read. The
+agent was **claude-code**, deliberately: it is the alt-screen TUI case that defeated `tmux capture-pane` in
+[0001](0001_orchestration_findings_spawn_delivery_and_model_selection.md) §4.
+
+### 8.1 0001 §4 — terminal readback: **SOLVED, decisively**
+
+Prompted the agent to emit `SPIKE-1` … `SPIKE-120`, one per line. Viewport was 62 rows, so most of the output
+scrolled off. Reading back the same pane through each source:
+
+| `--source` | matches | earliest reachable |
+|---|---|---|
+| `visible` | 54 | `SPIKE-67` |
+| `recent` | **122** | **`SPIKE-1`** |
+| `recent-unwrapped` | **122** | **`SPIKE-1`** |
+
+`SPIKE-1, 2, 3, 60, 119, 120` were all individually retrievable. (122 vs 120 = the echoed prompt text also contains
+two matches.)
+
+`visible` is the tmux-equivalent view and reproduces exactly the 0001 §4 failure: a window onto the current screen
+only. `recent`/`recent-unwrapped` return the **full history of an alt-screen TUI agent**. This kills the defect that
+produced "a confident, wrong, user-facing conclusion that the briefs were never delivered" — a grep over agent
+history now returns real results instead of always 0.
+
+### 8.2 0001 §3 — delivery verification: **mostly solved, with a real race**
+
+Two runs, opposite outcomes:
+
+| Scenario | `--wait` returned | Actual state |
+|---|---|---|
+| Prompt issued **immediately after `agent start`** | `done` in **0.6 s** | **Prompt never delivered.** Agent still at splash screen, input box empty, **0 tokens** |
+| Prompt issued to a **settled idle** agent | `done` in **4.2 s** | Correct — all 40 requested output lines already present at return |
+
+On a settled agent this is genuine completion verification and is strictly better than `ao send`, which 0001 §3
+found "wrong in BOTH directions." The output is fully materialized by the time `--wait` returns.
+
+**But the first row is the same false-success class we already suffer from**, and worse — the prompt was dropped
+*entirely*, not merely unverified. The cause is documented in `agent prompt --help`: `--wait` "does not track
+turns", and after a non-working start it matches any observed state change within 5000 ms — here it matched the
+agent's own startup transition (`state_change_seq` 1 → 3) rather than the prompt's turn.
+
+**Mitigation for the plugin**: never prompt straight after `agent start`. Gate on `herdr agent wait <target>
+--until idle` first, and treat `--wait` as necessary-but-not-sufficient — pair it with a durable sentinel exactly as
+0001 §3 concluded. This is a bug we must design around, not one Herdr removes for us.
+
+### 8.3 0001 §5 and §1 — structurally solved
+
+`worktree create` and `agent start` are separate calls: the worktree existed on disk, on an explicitly named branch
+(`--branch spike/eval`), and was writable **before** any agent process launched. The brief-before-first-turn
+protocol composes naturally, and branch naming has no coupling to any title or display name.
+
+### 8.4 Operational notes for a plugin implementer
+
+- A herdr server was **already running** (v0.8.0, protocol 19, socket at `~/.config/herdr/herdr.sock`). The plugin
+  must attach to an existing server, not assume ownership of one.
+- **Every command returns structured JSON** with stable ids (`workspace_id`, `pane_id`, `terminal_id`,
+  `agent_status`, `state_change_seq`). This maps cleanly onto `RuntimeHandle.data` and is far better to parse than
+  tmux's text output.
+- `agent start` took **3.0 s** to reach `interactive_ready`, and correctly reported `agent: claude`.
+- `agent explain` gives the detection rule and its evidence string (e.g. `rule: live_prompt_box (priority=950)`,
+  with the matched text). That is a genuinely useful debugging surface AO has no equivalent of.
+- State vocabulary is `idle | working | blocked | done | unknown` — note **`done` is a fifth state** AO's
+  `ActivityState` does not have, and it is distinct from `idle`. A mapping decision is required, not a rename.
+- CLI wart: `worktree remove` takes `--workspace`, not `--path`, despite `create` accepting `--path`. Fell back to
+  `git worktree remove`.
+
+### 8.5 Verdict
+
+Two of the four 0001 defects are eliminated outright (§4, §1), one is structurally enabled (§5), and one is
+**improved but not solved** (§3 — the post-start race is real and reproducible). That is enough to justify the
+plugin work in §7, provided the §8.2 mitigation is designed in from the start rather than discovered in production.
