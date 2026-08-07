@@ -48,9 +48,14 @@ export const manifest = {
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
-/** How long to wait for herdr to detect and settle an agent before prompting it. */
+/** How long to wait for herdr to detect an agent in the pane before prompting it. */
 const DEFAULT_SETTLE_TIMEOUT_MS = 15_000;
 const SETTLE_POLL_INTERVAL_MS = 500;
+/** How long to wait for evidence that a prompt was actually consumed. */
+const DEFAULT_DELIVERY_TIMEOUT_MS = 12_000;
+const DELIVERY_POLL_INTERVAL_MS = 400;
+/** How many times to re-send a prompt that produced no evidence of delivery. */
+const DEFAULT_SEND_ATTEMPTS = 3;
 
 /** States in which herdr considers an agent able to accept a prompt. */
 const SETTLED_STATES = new Set(["idle", "done", "blocked"]);
@@ -63,8 +68,12 @@ export interface HerdrRuntimeConfig {
   binPath?: string;
   /** Timeout for individual herdr CLI calls. */
   commandTimeoutMs?: number;
-  /** How long `sendMessage` waits for the agent to settle before prompting. */
+  /** How long `sendMessage` waits for an agent to appear before prompting. */
   settleTimeoutMs?: number;
+  /** How long to wait for evidence a prompt was consumed before re-sending. */
+  deliveryTimeoutMs?: number;
+  /** How many send attempts before falling back to raw terminal input. */
+  sendAttempts?: number;
 }
 
 interface HerdrPane {
@@ -157,6 +166,14 @@ export function create(config?: Record<string, unknown>): Runtime {
     typeof raw.settleTimeoutMs === "number" && raw.settleTimeoutMs >= 0
       ? raw.settleTimeoutMs
       : DEFAULT_SETTLE_TIMEOUT_MS;
+  const deliveryTimeoutMs =
+    typeof raw.deliveryTimeoutMs === "number" && raw.deliveryTimeoutMs >= 0
+      ? raw.deliveryTimeoutMs
+      : DEFAULT_DELIVERY_TIMEOUT_MS;
+  const sendAttempts =
+    typeof raw.sendAttempts === "number" && raw.sendAttempts > 0
+      ? raw.sendAttempts
+      : DEFAULT_SEND_ATTEMPTS;
 
   /** Run a herdr CLI command and return its parsed `result` object. */
   async function herdr(...args: string[]): Promise<Record<string, unknown>> {
@@ -184,21 +201,53 @@ export function create(config?: Record<string, unknown>): Runtime {
   }
 
   /**
-   * Block until herdr has detected an agent in the pane AND that agent is in a state
-   * that can accept input. Returns false on timeout.
+   * Block until herdr reports an agent in the pane, in a state that accepts input.
+   * Returns the observed state, or null on timeout.
    *
-   * This exists because of 0003 §8.2: prompting a freshly launched agent is silently
-   * dropped — the text never reaches it and no error is raised.
+   * NOTE: this is necessary but NOT sufficient for delivery. herdr reports
+   * `idle` as soon as it recognises the agent's prompt box, which happens
+   * seconds before the agent can actually consume input — measured at ~1.5s
+   * after launch for claude, where a prompt is accepted by herdr and silently
+   * discarded. Delivery must be verified separately; see `promptWasConsumed`.
    */
-  async function waitForSettledAgent(paneId: string, timeoutMs: number): Promise<boolean> {
+  async function waitForSettledAgent(paneId: string, timeoutMs: number): Promise<string | null> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const pane = await getPane(paneId);
       if (pane?.agent && pane.agent_status && SETTLED_STATES.has(pane.agent_status)) {
+        return pane.agent_status;
+      }
+      if (Date.now() >= deadline) return null;
+      await sleep(SETTLE_POLL_INTERVAL_MS);
+    }
+  }
+
+  /**
+   * Watch for evidence that a prompt was actually consumed.
+   *
+   * A consumed prompt drives the agent into `working` (and on to `done`). A
+   * discarded one leaves it sitting in the state it was already in — measured:
+   * a dropped prompt left claude at `idle` with 0 tokens for 12s straight,
+   * while a delivered one reached `working` within ~1.5s.
+   *
+   * Starting from `idle`, any departure from `idle` is evidence. Starting from
+   * a state a previous turn left behind (`done`/`blocked`), only `working`
+   * distinguishes a new turn from the old one.
+   */
+  async function promptWasConsumed(
+    paneId: string,
+    stateBeforeSend: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const status = (await getPane(paneId))?.agent_status;
+      if (status === "working") return true;
+      if (stateBeforeSend === "idle" && status && status !== "idle" && status !== "unknown") {
         return true;
       }
       if (Date.now() >= deadline) return false;
-      await sleep(SETTLE_POLL_INTERVAL_MS);
+      await sleep(DELIVERY_POLL_INTERVAL_MS);
     }
   }
 
@@ -283,25 +332,48 @@ export function create(config?: Record<string, unknown>): Runtime {
       }
     },
 
+    /**
+     * Deliver a message, verifying it was actually consumed and re-sending if not.
+     *
+     * A six-worker campaign showed that waiting for a settled agent is not enough:
+     * herdr accepts `agent prompt` and returns success while the agent is still
+     * starting, and the text is discarded with no error anywhere. Send-and-verify
+     * is the only thing that closes it, which is the same conclusion 0001 §3 drew
+     * about `ao send` — trust a durable signal, never a success string.
+     *
+     * `--wait` is deliberately not used: it does not track turns, so an unrelated
+     * turn's completion can satisfy it.
+     */
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
-      // Gate on a settled agent first. Prompting too early is silently dropped
-      // (0003 §8.2) — the message vanishes with no error raised anywhere.
-      const settled = await waitForSettledAgent(handle.id, settleTimeoutMs);
+      const settledState = await waitForSettledAgent(handle.id, settleTimeoutMs);
 
-      if (settled) {
-        // Deliberately not passing --wait: this mirrors tmux sendMessage's
-        // fire-and-forget contract, and --wait does not track turns, so it can
-        // match an unrelated state change. Callers needing confirmation must use
-        // a durable signal (0001 §3).
-        await herdr("agent", "prompt", handle.id, message);
-        return;
+      if (settledState) {
+        for (let attempt = 1; attempt <= sendAttempts; attempt++) {
+          const before = (await getPane(handle.id))?.agent_status ?? settledState;
+          await herdr("agent", "prompt", handle.id, message);
+          if (await promptWasConsumed(handle.id, before, deliveryTimeoutMs)) return;
+          // No evidence it landed. The agent is almost certainly still warming
+          // up, so let it settle again before retrying rather than hammering.
+          await waitForSettledAgent(handle.id, settleTimeoutMs);
+        }
       }
 
-      // No agent detected in time — fall back to raw terminal input so a
-      // non-agent or not-yet-classified pane still receives the text.
+      // Either no agent was ever detected, or every prompt attempt was discarded.
+      // Fall back to raw terminal input, which reaches a pane that herdr has not
+      // classified as an agent at all.
       await herdr("pane", "send-text", handle.id, message);
       await sleep(300);
       await herdr("pane", "send-keys", handle.id, "Enter");
+
+      // Report failure rather than returning a false success: an undelivered
+      // instruction that reads as delivered is exactly the failure mode that cost
+      // a worker its brief in 0001 §5.
+      if (settledState && !(await promptWasConsumed(handle.id, "idle", deliveryTimeoutMs))) {
+        throw new Error(
+          `herdr agent in pane "${handle.id}" did not consume the message after ` +
+            `${sendAttempts} attempts and a raw terminal fallback`,
+        );
+      }
     },
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {

@@ -4,7 +4,7 @@
 **Context**: operator guide for the `runtime-herdr` plugin built in response to
 [0003](0003_herdr_assessment_and_the_runtime_plugin_option.md). Supersedes 0003 §7 as the practical
 instructions.
-**Status**: usable. Verified against herdr 0.8.0 on Linux. Not yet run under a real multi-worker campaign.
+**Status**: usable. Verified against herdr 0.8.0 on Linux, including a 6-worker concurrent campaign (0003 §9).
 
 Everything marked **verified** below was executed against a live herdr server; everything else is read from
 source and labelled as such.
@@ -53,6 +53,8 @@ Optional plugin settings, passed through the plugin config block:
 | `binPath` | `herdr` | Path to the herdr binary if not on `PATH` |
 | `commandTimeoutMs` | `10000` | Per-CLI-call timeout |
 | `settleTimeoutMs` | `15000` | How long `sendMessage` waits for the agent to settle before prompting (see §5) |
+| `deliveryTimeoutMs` | `12000` | How long to wait for evidence a prompt was consumed before re-sending (§5) |
+| `sendAttempts` | `3` | Prompt attempts before falling back to raw terminal input (§5) |
 
 Note `agent-orchestrator.yaml.example` still documents `runtime: tmux # tmux | process` and should gain
 `herdr`.
@@ -112,15 +114,35 @@ all (0003 §4.1). They are tmux-only. Use §4.1 instead.
 
 ## 5. The one behaviour to design around
 
-**A prompt sent to a freshly launched agent is silently dropped** — no error anywhere (0003 §8.2). The plugin
-mitigates this: `sendMessage` polls `pane get` until an agent is both *detected* and in a settled state
-(`idle`, `done` or `blocked`) before prompting, up to `settleTimeoutMs`. If no agent is ever detected it
-falls back to raw `pane send-text` + Enter.
+**A prompt sent to a freshly launched agent is silently dropped** — no error anywhere (0003 §8.2).
+
+The first mitigation was a settle gate: wait until herdr reports the agent `idle`, then prompt. **The 6-worker
+campaign showed that does not work** (0003 §9). herdr reports `idle` as soon as it recognises the agent's prompt
+box — roughly 2 s after launch, while claude is still on its splash screen with 0 tokens — so the gate opens
+immediately and prompts go into the void. Measured: **0/6 delivered**, with `sendMessage` returning "ok" in 1.6 s
+against a 15 s timeout.
+
+`sendMessage` therefore **sends and verifies**:
+
+1. Wait for a settled agent (`idle`, `done`, `blocked`) — up to `settleTimeoutMs`. This only decides *when to try*.
+2. Send the prompt, then poll `pane get` for evidence it was consumed: the agent departing its pre-send state
+   toward `working`, within `deliveryTimeoutMs`.
+3. No evidence → let it settle again and re-send, up to `sendAttempts`.
+4. Still nothing → fall back to raw `pane send-text` + Enter.
+5. Still nothing → **throw**. A verified non-delivery is reported as a failure, never as success.
+
+Re-measured under the same zero-delay 6-worker condition: **3/3 delivered** through `sendMessage`, **0/3** through
+raw `herdr agent prompt`. Expect a first send to cost ~15 s on a cold agent — that is one discarded attempt being
+detected and retried, and it is the price of not losing the message.
 
 It deliberately does **not** pass `herdr agent prompt --wait`, because `--wait` does not track turns: if the
 agent is already working, an unrelated turn's completion can satisfy it.
 
-Consequently **`ao send`'s "Message sent and processing" is still not evidence of delivery** — that is
+A fixed delay would also have passed this campaign, and would silently fail at a different agent, model, or machine
+speed. The verification is the load-bearing part.
+
+Note this makes `ao send` *fail loudly* on herdr rather than lie. It does **not** make success proof that the agent
+understood or acted on the message — that is
 [0001](0001_orchestration_findings_spawn_delivery_and_model_selection.md) §3 and it is unchanged. Keep the
 durable-sentinel protocol (`<worktree>/.agent_report.md`).
 
@@ -183,8 +205,10 @@ once.
 
 - `ao status`'s last-activity column is blank for herdr sessions (§4.2).
 - `terminal-iterm2` / `terminal-web` remain tmux-only (§4.3).
-- The §5 settle gate is unit-tested and exercised in a single-agent smoke test, but **has not been run under
-  a multi-worker campaign**, which is where 0001's delivery problems actually surfaced.
+- §5's send path costs ~15 s on a cold agent, because the first attempt is expected to be swallowed and is only
+  detected by timing out. If herdr ever exposes a true "agent can accept input" signal, that wait collapses.
+- The campaign ran 6 workers; 0001's failures surfaced at 9. Nothing observed suggests a concurrency ceiling
+  (0003 §9.2 rules concurrency out as the cause), but it has not been measured above 6.
 - `agent-orchestrator.yaml.example` does not mention `herdr`.
 - herdr is young; `worktree create` has open correctness bugs upstream
   ([issue #729](https://github.com/ogulcancelik/herdr/issues/729)). AO does not use `herdr worktree` — the

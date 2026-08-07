@@ -228,6 +228,11 @@ agent's own startup transition (`state_change_seq` 1 → 3) rather than the prom
 --until idle` first, and treat `--wait` as necessary-but-not-sufficient — pair it with a durable sentinel exactly as
 0001 §3 concluded. This is a bug we must design around, not one Herdr removes for us.
 
+> **Correction (§9).** "Gate on idle first" turned out to be **insufficient**, not merely incomplete. herdr reports
+> `idle` as soon as it recognises the agent's prompt box — seconds before the agent can consume input — so a
+> wait-until-idle gate returns immediately and prompts straight into the void. Measured under a multi-worker
+> campaign in §9. The shipped plugin sends *and verifies*, and retries.
+
 ### 8.3 0001 §5 and §1 — structurally solved
 
 `worktree create` and `agent start` are separate calls: the worktree existed on disk, on an explicitly named branch
@@ -254,3 +259,56 @@ protocol composes naturally, and branch naming has no coupling to any title or d
 Two of the four 0001 defects are eliminated outright (§4, §1), one is structurally enabled (§5), and one is
 **improved but not solved** (§3 — the post-start race is real and reproducible). That is enough to justify the
 plugin work in §7, provided the §8.2 mitigation is designed in from the start rather than discovered in production.
+
+---
+
+## 9. Multi-worker campaign (measured, herdr 0.8.0, 2026-08-07)
+
+The §8 spike was single-agent. 0001's delivery failures surfaced at nine concurrent workers, so the settle gate was
+re-tested under load: **6 workers launched concurrently and prompted with zero delay** — the exact condition that
+lost 100% of prompts in §8.2. Delivery was measured by a durable sentinel file the agent had to write, never by a
+status string (0001 §3).
+
+### 9.1 The settle gate did not work
+
+First run: **0/6 delivered.** The gated group returned "ok" in **1.6 s** against a 15 s settle timeout — the tell.
+`pane get` reported `agent_status: idle` about 2 s after launch while the pane still displayed claude's splash
+screen (`❯ Try "write a test for <filepath>"`, **0 tokens**). `idle` was in `SETTLED_STATES`, so the gate opened
+immediately and every prompt went into the void.
+
+**herdr's `idle` means "a prompt box is on screen", not "this agent can accept input".** A gate built on it is a
+gate that is always open.
+
+### 9.2 Isolating the variable
+
+| Experiment | Result |
+|---|---|
+| 1 worker, prompted at 2 s / 6 s / 10 s / 15 s | all 4 landed |
+| 6 workers concurrent, fixed 15 s delay before prompting | **6/6 landed** |
+| Prompt at 1.5 s | statuses `[idle ×8]`, **0 tokens**, not landed |
+| Prompt at 15 s | statuses `[working, working, working, done ×5]`, **44 310 tokens**, landed |
+
+Concurrency is **not** the cause — a fixed delay fixes it at six workers. The variable is time-since-launch, and the
+discriminator is visible in the status stream: a consumed prompt drives the agent to `working` within ~1.5 s; a
+swallowed one leaves it sitting at `idle` indefinitely.
+
+### 9.3 The fix: send and verify, don't gate and hope
+
+`sendMessage` now sends, then **polls for evidence of consumption** (departure from the pre-send state toward
+`working`), retries up to `sendAttempts` (3), falls back to raw `pane send-text` + Enter, and **throws** on verified
+non-delivery instead of returning false success.
+
+Re-run, same zero-delay condition:
+
+| Group | Method | Delivered |
+|---|---|---|
+| A | plugin `sendMessage` (send-and-verify) | **3/3** |
+| B | raw `herdr agent prompt` (control) | **0/3** |
+
+Group A's sends took ~14.8 s each — that is the first attempt being discarded, detected, and re-sent; the sentinel
+files appeared at 18–21 s. Group B failed with `agent not found`, which is itself informative: at zero delay herdr
+had not yet attached an agent to those panes, and the raw path has no gate to wait for one.
+
+**Conclusion.** A fixed delay would have "worked" here and silently failed at a different agent, model, or machine
+speed. Verification is the load-bearing part; the gate only decides when to try. This is 0001 §3's finding
+generalised — *the send path must confirm, never assert* — and it holds on herdr exactly as it held on tmux.

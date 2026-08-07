@@ -187,58 +187,118 @@ describe("destroy()", () => {
 });
 
 describe("sendMessage()", () => {
+  /** A `pane get` answer with the agent in a given state. */
+  const at = (agent_status: string, agent: string | null = "claude") =>
+    ok({ pane: { pane_id: "w7:p1", agent, agent_status } });
+
+  /** Every `agent prompt` invocation, in order. */
+  function promptCalls(): string[][] {
+    return mockExecFile.mock.calls
+      .map((c) => c[1] as string[])
+      .filter((a) => a?.[0] === "agent" && a?.[1] === "prompt");
+  }
+
   // Regression guard for 0003 §8.2: prompting before the agent settles is
   // silently dropped — the text never arrives and no error is raised.
   it("waits for a settled agent before prompting", async () => {
     mockExecFile
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: null, agent_status: "unknown" } }),
-      )
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "working" } }),
-      )
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "idle" } }),
-      )
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(at("unknown", null))
+      .mockResolvedValueOnce(at("working"))
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // agent prompt
+      .mockResolvedValue(at("working")); // consumed
 
     await create().sendMessage(HANDLE, "do the thing");
 
     expect(argsOf(0)).toEqual(["pane", "get", "w7:p1"]);
-    expect(argsOf(3)).toEqual(["agent", "prompt", "w7:p1", "do the thing"]);
+    expect(promptCalls()).toEqual([["agent", "prompt", "w7:p1", "do the thing"]]);
   });
 
   it("does not prompt while the agent is still working", async () => {
     mockExecFile
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "working" } }),
-      )
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "done" } }),
-      )
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(at("working"))
+      .mockResolvedValueOnce(at("done")) // settled
+      .mockResolvedValueOnce(at("done")) // pre-send state
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValue(at("working"));
 
     await create({ settleTimeoutMs: 5_000 }).sendMessage(HANDLE, "hi");
 
-    expect(argsOf(2)).toEqual(["agent", "prompt", "w7:p1", "hi"]);
+    // Nothing was sent until the agent left `working`.
+    expect(argsOf(3)).toEqual(["agent", "prompt", "w7:p1", "hi"]);
+    expect(promptCalls()).toHaveLength(1);
   });
 
   it("treats blocked as settled — a prompt is how you answer a blocked agent", async () => {
     mockExecFile
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "blocked" } }),
-      )
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(at("blocked")) // settled
+      .mockResolvedValueOnce(at("blocked")) // pre-send state
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValue(at("working"));
 
     await create().sendMessage(HANDLE, "yes");
 
-    expect(argsOf(1)).toEqual(["agent", "prompt", "w7:p1", "yes"]);
+    expect(argsOf(2)).toEqual(["agent", "prompt", "w7:p1", "yes"]);
+  });
+
+  // The multi-worker campaign finding (0004 §5): herdr reports `idle` the moment
+  // it recognises the agent's prompt box, seconds before the agent can actually
+  // consume input. The first prompt is swallowed with no error anywhere, so the
+  // settle gate alone is not enough — delivery has to be verified and re-sent.
+  it("re-sends when the first prompt is silently swallowed", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // prompt #1
+      .mockResolvedValueOnce(at("idle")) // still idle — swallowed
+      .mockResolvedValueOnce(at("idle")) // re-settle
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // prompt #2
+      .mockResolvedValue(at("working")); // consumed
+
+    await create({ deliveryTimeoutMs: 0 }).sendMessage(HANDLE, "retry me");
+
+    expect(promptCalls()).toEqual([
+      ["agent", "prompt", "w7:p1", "retry me"],
+      ["agent", "prompt", "w7:p1", "retry me"],
+    ]);
+  });
+
+  it("throws rather than reporting success when nothing ever consumes the message", async () => {
+    mockExecFile.mockResolvedValue(at("idle"));
+
+    await expect(
+      create({ deliveryTimeoutMs: 0, sendAttempts: 2 }).sendMessage(HANDLE, "into the void"),
+    ).rejects.toThrow(/did not consume the message/);
+
+    expect(promptCalls()).toHaveLength(2);
+    expect(mockExecFile.mock.calls.map((c) => c[1])).toContainEqual([
+      "pane",
+      "send-text",
+      "w7:p1",
+      "into the void",
+    ]);
+  });
+
+  it("accepts the raw terminal fallback when it visibly lands", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // prompt
+      .mockResolvedValueOnce(at("idle")) // swallowed
+      .mockResolvedValueOnce(at("idle")) // re-settle
+      .mockResolvedValueOnce(ok({})) // send-text
+      .mockResolvedValueOnce(ok({})) // send-keys Enter
+      .mockResolvedValue(at("working")); // the fallback landed
+
+    await expect(
+      create({ deliveryTimeoutMs: 0, sendAttempts: 1 }).sendMessage(HANDLE, "plain"),
+    ).resolves.toBeUndefined();
   });
 
   it("falls back to raw terminal input when no agent is ever detected", async () => {
-    mockExecFile.mockResolvedValue(
-      ok({ pane: { pane_id: "w7:p1", agent: null, agent_status: "unknown" } }),
-    );
+    mockExecFile.mockResolvedValue(at("unknown", null));
 
     await create({ settleTimeoutMs: 0 }).sendMessage(HANDLE, "plain text");
 
@@ -249,10 +309,10 @@ describe("sendMessage()", () => {
 
   it("never passes --wait, which does not track turns", async () => {
     mockExecFile
-      .mockResolvedValueOnce(
-        ok({ pane: { pane_id: "w7:p1", agent: "claude", agent_status: "idle" } }),
-      )
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(at("idle"))
+      .mockResolvedValueOnce(at("idle"))
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValue(at("working"));
 
     await create().sendMessage(HANDLE, "hi");
 
