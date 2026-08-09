@@ -218,7 +218,7 @@ check_launcher() {
 
 check_tmux() {
   if ! command -v tmux >/dev/null 2>&1; then
-    warn "tmux is not installed. Fix: install tmux for the default runtime"
+    warn "tmux is not installed. Fix: install tmux, or ignore this if your config uses another runtime (see Runtime health below)"
     return
   fi
   if tmux -V >/dev/null 2>&1 && tmux start-server >/dev/null 2>&1; then

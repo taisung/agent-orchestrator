@@ -8,6 +8,8 @@ const {
   mockCreatePluginRegistry,
   mockDetectOpenClawInstallation,
   mockValidateToken,
+  mockCheckTmux,
+  mockCheckHerdr,
   mockRegistry,
 } = vi.hoisted(() => ({
   mockRunRepoScript: vi.fn(),
@@ -16,6 +18,8 @@ const {
   mockCreatePluginRegistry: vi.fn(),
   mockDetectOpenClawInstallation: vi.fn(),
   mockValidateToken: vi.fn(),
+  mockCheckTmux: vi.fn(),
+  mockCheckHerdr: vi.fn(),
   mockRegistry: {
     loadFromConfig: vi.fn(),
     list: vi.fn(),
@@ -27,7 +31,15 @@ vi.mock("../../src/lib/script-runner.js", () => ({
   runRepoScript: (...args: unknown[]) => mockRunRepoScript(...args),
 }));
 
+vi.mock("../../src/lib/preflight.js", () => ({
+  preflight: {
+    checkTmux: (...args: unknown[]) => mockCheckTmux(...args),
+    checkHerdr: (...args: unknown[]) => mockCheckHerdr(...args),
+  },
+}));
+
 vi.mock("@aoagents/ao-core", () => ({
+  HERDR_RUNTIME_NAME: "herdr",
   createPluginRegistry: (...args: unknown[]) => mockCreatePluginRegistry(...args),
   findConfigFile: (...args: unknown[]) => mockFindConfigFile(...args),
   getObservabilityBaseDir: () => "/tmp/.agent-orchestrator/observability",
@@ -120,6 +132,11 @@ describe("doctor command", () => {
 
     mockCreatePluginRegistry.mockReset();
     mockCreatePluginRegistry.mockReturnValue(mockRegistry);
+
+    mockCheckTmux.mockReset();
+    mockCheckTmux.mockResolvedValue(undefined);
+    mockCheckHerdr.mockReset();
+    mockCheckHerdr.mockResolvedValue(undefined);
 
     mockRegistry.loadFromConfig.mockReset();
     mockRegistry.loadFromConfig.mockResolvedValue(undefined);
@@ -218,6 +235,107 @@ describe("doctor command", () => {
 
     const output = consoleLogSpy.mock.calls.map((call) => call[0]).join("\n");
     expect(output).toContain('projects.my-app.scm.plugin references scm plugin "gitlab"');
+  });
+
+  describe("runtime health", () => {
+    /**
+     * Config referencing the given runtimes, with every plugin resolving — so
+     * these tests exercise runtime health rather than plugin resolution, which
+     * would otherwise fail first and exit before the health section runs.
+     */
+    function withRuntimes(defaultRuntime: string, projectRuntime?: string) {
+      const config = makeConfig();
+      config.defaults.runtime = defaultRuntime;
+      if (projectRuntime) config.projects["my-app"].runtime = projectRuntime;
+      mockFindConfigFile.mockReturnValue(config.configPath);
+      mockLoadConfig.mockReturnValue(config);
+
+      const runtimes = [...new Set([defaultRuntime, projectRuntime].filter(Boolean))] as string[];
+      mockRegistry.list.mockImplementation((slot: string) => {
+        switch (slot) {
+          case "runtime":
+            return runtimes.map((name) => manifest("runtime", name));
+          case "agent":
+            return [manifest("agent", "claude-code"), manifest("agent", "codex")];
+          case "workspace":
+            return [manifest("workspace", "worktree")];
+          case "tracker":
+            return [manifest("tracker", "github")];
+          case "scm":
+            return [manifest("scm", "github")];
+          case "notifier":
+            return [manifest("notifier", "slack")];
+          default:
+            return [];
+        }
+      });
+      return config;
+    }
+
+    const output = () => consoleLogSpy.mock.calls.map((call) => call[0]).join("\n");
+
+    it("probes herdr when the config references it", async () => {
+      withRuntimes("herdr", "herdr");
+
+      await program.parseAsync(["node", "test", "doctor"]);
+
+      expect(mockCheckHerdr).toHaveBeenCalledTimes(1);
+      expect(output()).toContain("herdr runtime is available");
+    });
+
+    // The whole point: the plugin resolving says nothing about the server.
+    it("fails with the fix when the herdr server is unreachable", async () => {
+      withRuntimes("herdr");
+      mockCheckHerdr.mockRejectedValue(
+        new Error("herdr is installed but no server is running. Start one with: herdr server"),
+      );
+
+      await expect(program.parseAsync(["node", "test", "doctor"])).rejects.toThrow(
+        "process.exit(1)",
+      );
+
+      expect(output()).toContain("herdr runtime is configured in defaults.runtime");
+      expect(output()).toContain("no server is running");
+    });
+
+    it("names every config site that asked for a broken runtime", async () => {
+      withRuntimes("herdr", "herdr");
+      mockCheckHerdr.mockRejectedValue(new Error("boom"));
+
+      await expect(program.parseAsync(["node", "test", "doctor"])).rejects.toThrow(
+        "process.exit(1)",
+      );
+
+      expect(output()).toContain("defaults.runtime, projects.my-app.runtime");
+    });
+
+    it("does not probe herdr for a tmux-only config", async () => {
+      withRuntimes("tmux", "tmux");
+
+      await program.parseAsync(["node", "test", "doctor"]);
+
+      expect(mockCheckHerdr).not.toHaveBeenCalled();
+      expect(mockCheckTmux).toHaveBeenCalledTimes(1);
+    });
+
+    it("probes both when projects disagree with the default", async () => {
+      withRuntimes("tmux", "herdr");
+
+      await program.parseAsync(["node", "test", "doctor"]);
+
+      expect(mockCheckTmux).toHaveBeenCalledTimes(1);
+      expect(mockCheckHerdr).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes runtimes that drive no external service", async () => {
+      withRuntimes("process", "process");
+
+      await program.parseAsync(["node", "test", "doctor"]);
+
+      expect(mockCheckTmux).not.toHaveBeenCalled();
+      expect(mockCheckHerdr).not.toHaveBeenCalled();
+      expect(output()).toContain("process runtime needs no external service");
+    });
   });
 
   it("resolves notifier aliases when sending test notifications", async () => {

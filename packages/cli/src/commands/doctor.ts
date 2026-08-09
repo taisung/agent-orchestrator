@@ -8,12 +8,14 @@ import {
   getObservabilityBaseDir,
   loadConfig,
   resolveNotifierTarget,
+  HERDR_RUNTIME_NAME,
   type Notifier,
   type OrchestratorConfig,
   type PluginRegistry,
   type PluginSlot,
 } from "@aoagents/ao-core";
 import { runRepoScript } from "../lib/script-runner.js";
+import { preflight } from "../lib/preflight.js";
 import { detectOpenClawInstallation, validateToken } from "../lib/openclaw-probe.js";
 import { importPluginModuleFromSource } from "../lib/plugin-store.js";
 
@@ -177,6 +179,73 @@ async function checkPluginResolution(
   }
 
   return registry;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime health checks
+// ---------------------------------------------------------------------------
+
+/**
+ * External-service probes per runtime, reusing `ao spawn`'s preflight so
+ * doctor's verdict cannot drift from what spawn will actually enforce.
+ *
+ * Runtimes absent from this map (e.g. `process`) drive no external service and
+ * are healthy as long as the plugin resolved.
+ */
+const RUNTIME_HEALTH_CHECKS: Record<string, () => Promise<void>> = {
+  tmux: () => preflight.checkTmux(),
+  [HERDR_RUNTIME_NAME]: () => preflight.checkHerdr(),
+};
+
+/**
+ * Check that every runtime the config references is actually usable.
+ *
+ * Plugin resolution only proves the plugin loaded — it says nothing about the
+ * process it drives. herdr makes the gap obvious: the plugin resolves fine on
+ * a machine with no herdr server, and every spawn then fails opaquely. Scoped
+ * to referenced runtimes so a tmux-only install is never nagged about herdr,
+ * and vice versa.
+ */
+async function checkRuntimeHealth(
+  config: OrchestratorConfig,
+  fail: (msg: string) => void,
+): Promise<void> {
+  console.log("");
+  console.log("Runtime health:");
+
+  // One entry per runtime, remembering every config site that asked for it, so
+  // a failure names the line the user has to edit.
+  const referenced = new Map<string, string[]>();
+  const note = (runtime: string | undefined, source: string): void => {
+    if (!runtime) return;
+    referenced.set(runtime, [...(referenced.get(runtime) ?? []), source]);
+  };
+
+  note(config.defaults?.runtime, "defaults.runtime");
+  for (const [projectId, project] of Object.entries(config.projects ?? {})) {
+    note(project.runtime, `projects.${projectId}.runtime`);
+  }
+
+  if (referenced.size === 0) {
+    warn("No runtime is configured. Fix: set defaults.runtime in agent-orchestrator.yaml");
+    return;
+  }
+
+  for (const [runtime, sources] of referenced) {
+    const where = sources.join(", ");
+    const check = RUNTIME_HEALTH_CHECKS[runtime];
+    if (!check) {
+      pass(`${runtime} runtime needs no external service (${where})`);
+      continue;
+    }
+    try {
+      await check();
+      pass(`${runtime} runtime is available (${where})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      fail(`${runtime} runtime is configured in ${where} but is not usable. Fix: ${message}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +481,7 @@ export function registerDoctor(program: Command): void {
         try {
           config = loadConfig(configPath);
           registry = await checkPluginResolution(config, fail);
+          await checkRuntimeHealth(config, fail);
           await checkNotifierConnectivity(config, fail);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
