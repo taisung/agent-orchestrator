@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import {
   isRepoUrl,
   parseRepoUrl,
@@ -396,6 +397,42 @@ describe("configToYaml", () => {
     const yaml = configToYaml(config);
     expect(yaml).toContain("port: 3000");
     expect(yaml).toContain("name: App");
+  });
+
+  it("annotates defaults.runtime with the available runtimes, including herdr", () => {
+    const yaml = configToYaml({ defaults: { runtime: "tmux" } });
+    expect(yaml).toContain("runtime: tmux #");
+    expect(yaml).toContain("herdr");
+    expect(yaml).toContain("herdr server");
+  });
+
+  it("annotates the other plugin-slot defaults too", () => {
+    const yaml = configToYaml({
+      defaults: { runtime: "tmux", agent: "claude-code", workspace: "worktree" },
+    });
+    expect(yaml).toContain("agent: claude-code #");
+    expect(yaml).toContain("workspace: worktree #");
+  });
+
+  // configToYaml takes an arbitrary record; a missing annotated key is not an error.
+  it("skips annotations for keys the config does not have", () => {
+    const yaml = configToYaml({ port: 3000 });
+    expect(yaml).toContain("port: 3000");
+    expect(yaml).not.toContain("#");
+  });
+
+  it("still round-trips through the YAML parser with comments attached", () => {
+    const config = generateConfigFromUrl({
+      parsed: parseRepoUrl("https://github.com/acme/app")!,
+      repoPath: "/tmp/app",
+      port: 4100,
+    });
+    const parsed = parseYaml(configToYaml(config)) as {
+      port: number;
+      defaults: { runtime: string };
+    };
+    expect(parsed.defaults.runtime).toBe("tmux");
+    expect(parsed.port).toBe(4100);
   });
 });
 

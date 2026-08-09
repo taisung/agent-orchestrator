@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { stringify as yamlStringify } from "yaml";
+import { Document, isScalar } from "yaml";
 import { generateSessionPrefix } from "./paths.js";
 
 // =============================================================================
@@ -251,11 +251,31 @@ export function generateConfigFromUrl(options: GenerateConfigOptions): Record<st
   };
 }
 
+/** Inline annotations for generated config keys, by dotted path. */
+const CONFIG_KEY_COMMENTS: Record<string, string> = {
+  // herdr is a valid runtime but is not the default: it needs a running server,
+  // so generating `runtime: herdr` would produce a config that fails preflight
+  // on a machine that has never run herdr. Name it here instead, so the choice
+  // is discoverable without being imposed.
+  "defaults.runtime": " tmux | process | herdr (herdr needs a running server: herdr server)",
+  "defaults.agent": " claude-code | codex | aider | opencode",
+  "defaults.workspace": " worktree | clone",
+};
+
 /**
  * Serialize a config object to YAML string.
+ *
+ * Annotates known keys with their alternatives. `yamlStringify` on a plain
+ * object cannot carry comments, so this goes through the Document API; keys
+ * absent from `config` are simply skipped.
  */
 export function configToYaml(config: Record<string, unknown>): string {
-  return yamlStringify(config, { indent: 2 });
+  const doc = new Document(config);
+  for (const [path, comment] of Object.entries(CONFIG_KEY_COMMENTS)) {
+    const node = doc.getIn(path.split("."), true);
+    if (isScalar(node)) node.comment = comment;
+  }
+  return doc.toString({ indent: 2 });
 }
 
 /**
