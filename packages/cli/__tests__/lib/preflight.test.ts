@@ -148,6 +148,31 @@ describe("preflight.checkTmux", () => {
   });
 });
 
+describe("preflight.checkHerdr", () => {
+  it("passes when a herdr server is running", async () => {
+    mockExec.mockResolvedValue({ stdout: "status: running\nversion: 0.8.0", stderr: "" });
+    await expect(preflight.checkHerdr()).resolves.toBeUndefined();
+    expect(mockExec).toHaveBeenCalledWith("herdr", ["status", "server"]);
+  });
+
+  it("throws install instructions when the herdr binary is missing", async () => {
+    mockExec.mockRejectedValue(new Error("ENOENT"));
+    const err = await preflight.checkHerdr().catch((e: Error) => e);
+    expect(err.message).toContain("herdr is not installed");
+    expect(err.message).toContain("herdr.dev");
+  });
+
+  // Having the binary is not enough: herdr is a client to a long-running
+  // server, and without one every runtime call fails opaquely.
+  it("distinguishes an installed binary with no running server", async () => {
+    mockExec.mockResolvedValue({ stdout: "status: not running", stderr: "" });
+    const err = await preflight.checkHerdr().catch((e: Error) => e);
+    expect(err.message).toContain("no server is running");
+    expect(err.message).toContain("herdr server");
+    expect(err.message).not.toContain("not installed");
+  });
+});
+
 describe("preflight.checkGhAuth", () => {
   it("passes when gh is installed and authenticated", async () => {
     mockExec.mockResolvedValue({ stdout: "ok", stderr: "" });

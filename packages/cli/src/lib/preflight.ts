@@ -98,6 +98,32 @@ async function checkTmux(): Promise<void> {
 }
 
 /**
+ * Check that a herdr server is reachable.
+ *
+ * Unlike tmux, having the binary is not enough — herdr is a client to a
+ * long-running server, and every runtime call fails opaquely without one.
+ * Distinguishes "not installed" from "installed but no server" because the
+ * fixes are completely different.
+ */
+async function checkHerdr(): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("herdr", ["status", "server"]));
+  } catch {
+    throw new Error(
+      "herdr is not installed. Install it from https://herdr.dev, then start a server with: herdr server",
+    );
+  }
+
+  if (!/status:\s*running/.test(stdout)) {
+    throw new Error(
+      "herdr is installed but no server is running. Start one with: herdr server " +
+        "(or launch `herdr` for an interactive session).",
+    );
+  }
+}
+
+/**
  * Check that the GitHub CLI is installed and authenticated.
  * Distinguishes between "not installed" and "not authenticated"
  * so the user gets the right troubleshooting guidance.
@@ -120,5 +146,6 @@ export const preflight = {
   checkPort,
   checkBuilt,
   checkTmux,
+  checkHerdr,
   checkGhAuth,
 };

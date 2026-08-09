@@ -20,7 +20,7 @@ readyThresholdMs: 300000      # Ms before "ready" becomes "idle" (default: 5 min
 # These apply to all projects unless overridden per-project.
 
 defaults:
-  runtime: tmux               # tmux | process
+  runtime: tmux               # tmux | process | herdr (herdr needs a running server: herdr server)
   agent: claude-code          # claude-code | aider | codex | cursor | opencode
   workspace: worktree         # worktree | clone
   notifiers:

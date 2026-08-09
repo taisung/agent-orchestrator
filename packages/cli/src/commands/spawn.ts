@@ -9,6 +9,7 @@ import {
   getSiblings,
   formatPlanTree,
   TERMINAL_STATUSES,
+  HERDR_RUNTIME_NAME,
   type OrchestratorConfig,
   type DecomposerConfig,
   DEFAULT_DECOMPOSER_CONFIG,
@@ -74,6 +75,8 @@ async function runSpawnPreflight(
   const runtime = project?.runtime ?? config.defaults.runtime;
   if (runtime === "tmux") {
     await preflight.checkTmux();
+  } else if (runtime === HERDR_RUNTIME_NAME) {
+    await preflight.checkHerdr();
   }
   const needsGitHubAuth =
     project?.tracker?.plugin === "github" ||
