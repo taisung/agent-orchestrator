@@ -40,16 +40,12 @@ export default defineConfig({
         replacement: resolve(__dirname, "../plugins/agent-codex/src/index.ts"),
       },
       {
-        find: "@aoagents/ao-plugin-agent-aider",
-        replacement: resolve(__dirname, "../plugins/agent-aider/src/index.ts"),
-      },
-      {
         find: "@aoagents/ao-plugin-agent-opencode",
         replacement: resolve(__dirname, "../plugins/agent-opencode/src/index.ts"),
       },
       {
-        find: "@aoagents/ao-plugin-agent-cursor",
-        replacement: resolve(__dirname, "../plugins/agent-cursor/src/index.ts"),
+        find: "@aoagents/ao-plugin-agent-gemini",
+        replacement: resolve(__dirname, "../plugins/agent-gemini/src/index.ts"),
       },
       {
         find: "@aoagents/ao-plugin-scm-github",

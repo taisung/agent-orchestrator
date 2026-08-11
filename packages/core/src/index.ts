@@ -165,6 +165,7 @@ export {
   generateProjectId,
   generateInstanceId,
   generateSessionPrefix,
+  getStateRoot,
   getProjectBaseDir,
   getSessionsDir,
   getWorktreesDir,

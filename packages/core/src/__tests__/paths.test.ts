@@ -20,6 +20,7 @@ import {
   generateProjectId,
   generateInstanceId,
   generateSessionPrefix,
+  getStateRoot,
   getProjectBaseDir,
   getSessionsDir,
   getWorktreesDir,
@@ -320,6 +321,35 @@ describe("Home Directory Expansion", () => {
   it("handles ~ without slash", () => {
     const result = expandHome("~no-slash");
     expect(result).toBe("~no-slash"); // Should not expand
+  });
+});
+
+describe("State Root Isolation", () => {
+  it("uses a per-process temporary root under tests", () => {
+    const previous = process.env["AO_STATE_ROOT"];
+    delete process.env["AO_STATE_ROOT"];
+
+    try {
+      expect(getStateRoot()).toBe(
+        join(tmpdir(), `ao-test-state-${process.pid}`, ".agent-orchestrator"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previous;
+    }
+  });
+
+  it("honors an explicit state-root override", () => {
+    const previous = process.env["AO_STATE_ROOT"];
+    const override = join(tmpdir(), `ao-explicit-state-${process.pid}`);
+    process.env["AO_STATE_ROOT"] = override;
+
+    try {
+      expect(getStateRoot()).toBe(override);
+    } finally {
+      if (previous === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previous;
+    }
   });
 });
 

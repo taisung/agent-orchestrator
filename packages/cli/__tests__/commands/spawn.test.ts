@@ -286,7 +286,7 @@ describe("spawn command", () => {
     });
   });
 
-  it("shows dashboard URL instead of raw tmux attach", async () => {
+  it("shows the native attach command", async () => {
     const fakeSession: Session = {
       id: "app-7",
       projectId: "my-app",
@@ -308,9 +308,7 @@ describe("spawn command", () => {
     await program.parseAsync(["node", "test", "spawn"]);
 
     const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(output).toContain("http://localhost:3000/sessions/app-7");
-    expect(output).not.toContain("tmux attach");
-    expect(output).not.toContain("8474d6f29887-app-7");
+    expect(output).toContain("ao session attach app-7");
   });
 
   it("passes --agent flag to sessionManager.spawn()", async () => {
@@ -385,9 +383,7 @@ describe("spawn command", () => {
   it("reports error when spawn fails", async () => {
     mockSessionManager.spawn.mockRejectedValue(new Error("worktree creation failed"));
 
-    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
   });
 
   it("claims a PR for the spawned session when --claim-pr is provided", async () => {
@@ -440,7 +436,7 @@ describe("spawn command", () => {
     const succeedMsg = String(mockSpinner.succeed.mock.calls[0]?.[0] ?? "");
     expect(succeedMsg).toContain("https://github.com/org/repo/pull/123");
     const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(output).toContain("http://localhost:3000/sessions/app-1");
+    expect(output).toContain("ao session attach app-1");
   });
 
   it("passes GitHub assignment flag through to claimPR", async () => {
@@ -479,14 +475,7 @@ describe("spawn command", () => {
       takenOverFrom: ["app-9"],
     });
 
-    await program.parseAsync([
-      "node",
-      "test",
-      "spawn",
-      "--claim-pr",
-      "123",
-      "--assign-on-github",
-    ]);
+    await program.parseAsync(["node", "test", "spawn", "--claim-pr", "123", "--assign-on-github"]);
 
     expect(mockSessionManager.claimPR).toHaveBeenCalledWith("app-1", "123", {
       assignOnGithub: true,
@@ -545,9 +534,7 @@ describe("spawn pre-flight checks", () => {
   it("fails with clear error when tmux is not installed (default runtime)", async () => {
     mockExec.mockRejectedValue(new Error("ENOENT"));
 
-    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
 
     const errors = vi
       .mocked(console.error)
@@ -604,9 +591,7 @@ describe("spawn pre-flight checks", () => {
       .mockResolvedValueOnce({ stdout: "gh version 2.40", stderr: "" }) // gh --version
       .mockRejectedValueOnce(new Error("not logged in")); // gh auth status
 
-    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
 
     const errors = vi
       .mocked(console.error)
@@ -747,9 +732,7 @@ describe("spawn pre-flight checks", () => {
       .mockResolvedValueOnce({ stdout: "tmux 3.3a", stderr: "" }) // tmux -V
       .mockRejectedValueOnce(new Error("ENOENT")); // gh --version fails
 
-    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
 
     const errors = vi
       .mocked(console.error)

@@ -13,7 +13,7 @@ Thanks for your interest in contributing. This guide covers how to report bugs, 
 
 ## Reporting Bugs
 
-Open an issue at [github.com/ComposioHQ/agent-orchestrator/issues](https://github.com/ComposioHQ/agent-orchestrator/issues).
+Open an issue at [github.com/taisung/agent-orchestrator/issues](https://github.com/taisung/agent-orchestrator/issues).
 
 Include:
 
@@ -30,13 +30,13 @@ Include:
 **Prerequisites**: Node.js 20+, pnpm 9.15+, Git 2.25+, tmux, gh CLI
 
 ```bash
-git clone https://github.com/ComposioHQ/agent-orchestrator.git
+git clone https://github.com/taisung/agent-orchestrator.git
 cd agent-orchestrator
 pnpm install
 pnpm build
 ```
 
-Build order matters — `@aoagents/ao-core` must be built before the CLI, web, or plugins can run. `pnpm build` at the root handles this automatically.
+Build order matters — `@aoagents/ao-core` must be built before the CLI or plugins can run. `pnpm build` at the root handles this automatically.
 
 ### Running tests
 
@@ -47,25 +47,21 @@ pnpm --filter @aoagents/ao-core test -- --watch   # watch mode
 pnpm test:integration                             # integration tests
 ```
 
-### Running the dashboard locally
-
-```bash
-cp agent-orchestrator.yaml.example agent-orchestrator.yaml
-# edit agent-orchestrator.yaml for your setup
-pnpm --filter @aoagents/ao-web dev
-```
-
 ### Refreshing a local AO install
 
-If your local `ao` launcher or built packages seem stale, refresh the install from a clean `main` checkout:
+This personal distribution has no `ao update` command. If the local launcher or built packages seem stale, refresh
+them from a clean `main` checkout:
 
 ```bash
 git switch main
 git status --short --branch   # confirm the install repo is clean
-ao update
+git pull --ff-only
+pnpm install
+pnpm build
+pnpm typecheck
+pnpm test
+(cd packages/ao && npm link)
 ```
-
-`ao update` fast-forwards the local install repo, reinstalls dependencies, clean-rebuilds `@aoagents/ao-core`, `@aoagents/ao-cli`, and `@aoagents/ao-web`, refreshes the global launcher with `npm link`, and finishes with CLI smoke tests. Use `ao update --skip-smoke` when you only need the rebuild step, or `ao update --smoke-only` when validating an existing install.
 
 ---
 
@@ -85,7 +81,7 @@ All plugin interfaces are in [`packages/core/src/types.ts`](packages/core/src/ty
 | `tracker`   | `Tracker`   | Jira, Asana, or custom issue systems |
 | `scm`       | `SCM`       | GitLab, Bitbucket support            |
 | `notifier`  | `Notifier`  | Email, Discord, custom webhooks      |
-| `terminal`  | `Terminal`  | Different terminal UI integrations   |
+| `terminal`  | `Terminal`  | Compatibility interface; no built-in |
 
 ### 2. Create the package
 
@@ -98,7 +94,7 @@ cd packages/plugins/runtime-myplugin
 
 ```json
 {
-  "name": "@aoagents/ao-runtime-myplugin",
+  "name": "@aoagents/ao-plugin-runtime-myplugin",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -155,7 +151,7 @@ export default { manifest, create } satisfies PluginModule<Runtime>;
 Add it to the CLI's dependencies in `packages/cli/package.json`:
 
 ```json
-"@aoagents/ao-runtime-myplugin": "workspace:*"
+"@aoagents/ao-plugin-runtime-myplugin": "workspace:*"
 ```
 
 Then register it in `packages/core/src/plugin-registry.ts` inside `loadBuiltins()`.
@@ -178,26 +174,15 @@ describe("myplugin runtime", () => {
 ### 6. Build and test
 
 ```bash
-pnpm --filter @aoagents/ao-runtime-myplugin build
-pnpm --filter @aoagents/ao-runtime-myplugin test
+pnpm --filter @aoagents/ao-plugin-runtime-myplugin build
+pnpm --filter @aoagents/ao-plugin-runtime-myplugin test
 ```
 
-### Publishing to the Marketplace Registry
+### External plugins
 
-To list your plugin in the AO marketplace so others can install it with `ao plugin install`, submit a PR that adds an entry to `packages/cli/src/assets/plugin-registry.json`.
-
-Each entry requires:
-
-- **`id`** — short kebab-case name (e.g. `tracker-jira`)
-- **`package`** — npm package name
-- **`slot`** — one of: `runtime`, `agent`, `workspace`, `tracker`, `scm`, `notifier`, `terminal`
-- **`description`** — one-line summary
-- **`source`** — always `"registry"`
-- **`latestVersion`** — semver string
-
-Optionally include `setupAction` if post-install configuration is needed (e.g. `"openclaw-setup"`).
-
-Your plugin package must satisfy the contract in [`docs/PLUGIN_SPEC.md`](docs/PLUGIN_SPEC.md) — export a `PluginModule` with a valid manifest and `create()` function. The package must be published to npm before your registry PR is merged so `ao plugin install` can fetch it.
+This personal distribution does not ship a marketplace or plugin installer. An external plugin must satisfy the
+contract in [`docs/PLUGIN_SPEC.md`](docs/PLUGIN_SPEC.md), be installed independently, and be referenced from config
+as an npm package or built local entrypoint.
 
 ---
 

@@ -4,7 +4,6 @@ import type { OrchestratorConfig } from "../types.js";
 
 const config: OrchestratorConfig = {
   configPath: "/tmp/agent-orchestrator.yaml",
-  port: 3000,
   defaults: {
     runtime: "tmux",
     agent: "claude-code",
@@ -32,15 +31,17 @@ const config: OrchestratorConfig = {
 };
 
 describe("generateOrchestratorPrompt", () => {
-  it("requires read-only investigation from the orchestrator session", () => {
+  it("keeps source implementation out of the orchestrator session", () => {
     const prompt = generateOrchestratorPrompt({
       config,
       projectId: "my-app",
       project: config.projects["my-app"]!,
     });
 
-    expect(prompt).toContain("Investigations from the orchestrator session are **read-only**");
-    expect(prompt).toContain("do not edit repository files or implement fixes");
+    expect(prompt).toContain(
+      "**Any source code change, including config and build-system files.**",
+    );
+    expect(prompt).toContain("The orchestrator never modifies the codebase directly");
   });
 
   it("mandates ao send and bans raw tmux access", () => {
@@ -51,7 +52,7 @@ describe("generateOrchestratorPrompt", () => {
     });
 
     expect(prompt).toContain("Always use `ao send`");
-    expect(prompt).toContain("never use raw `tmux send-keys`");
+    expect(prompt).toContain("— never raw `tmux send-keys`");
     expect(prompt).toContain("ao send --no-wait");
   });
 
@@ -62,7 +63,7 @@ describe("generateOrchestratorPrompt", () => {
       project: config.projects["my-app"]!,
     });
 
-    expect(prompt).toContain("must be delegated to a **worker session**");
+    expect(prompt).toContain("### Must be delegated to a worker");
     expect(prompt).toContain("Never claim a PR into `app-orchestrator`");
     expect(prompt).toContain("Delegate implementation, test execution, or PR claiming");
   });

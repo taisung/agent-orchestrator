@@ -141,14 +141,19 @@ describe("notifier-desktop integration", () => {
 
     it("win32 -> no execFile call, warns", async () => {
       mockPlatform.mockReturnValue("win32");
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.stubEnv("AO_LOG_LEVEL", "warn");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      const notifier = desktopPlugin.create();
-      await notifier.notify(makeEvent());
+      try {
+        const notifier = desktopPlugin.create();
+        await notifier.notify(makeEvent());
 
-      expect(mockExecFile).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("win32"));
-      warnSpy.mockRestore();
+        expect(mockExecFile).not.toHaveBeenCalled();
+        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("win32"));
+      } finally {
+        stderrSpy.mockRestore();
+        vi.unstubAllEnvs();
+      }
     });
   });
 

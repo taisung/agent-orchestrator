@@ -33,11 +33,10 @@ import {
 // Create a mock function that returns a promise matching the execFile signature
 type ExecFileResult = { stdout: string; stderr: string };
 
-const mockExecFileImpl = vi.fn<(
-  file: string,
-  args: string[],
-  options?: Record<string, unknown>,
-) => Promise<ExecFileResult>>();
+const mockExecFileImpl =
+  vi.fn<
+    (file: string, args: string[], options?: Record<string, unknown>) => Promise<ExecFileResult>
+  >();
 
 // Setup mock before each test
 beforeEach(() => {
@@ -61,7 +60,9 @@ describe("GraphQL Batch Query Generation", () => {
 
     const { query, variables } = generateBatchQuery(prs);
 
-    expect(query).toContain("query BatchPRs($pr0Owner: String!, $pr0Name: String!, $pr0Number: Int!)");
+    expect(query).toContain(
+      "query BatchPRs($pr0Owner: String!, $pr0Name: String!, $pr0Number: Int!)",
+    );
     expect(query).toContain("pr0: repository(owner: $pr0Owner, name: $pr0Name)");
     expect(query).toContain("pullRequest(number: $pr0Number)");
     expect(variables).toEqual({
@@ -280,25 +281,29 @@ describe("CI State Parsing", () => {
   it("should parse individual contexts for detailed state", () => {
     // After optimization, we no longer fetch individual contexts.
     // The top-level state provides the same semantic information.
-    expect(parseCIState({
-      state: "PENDING",
-      contexts: {
-        nodes: [
-          { state: "SUCCESS", conclusion: "SUCCESS" },
-          { state: "PENDING", conclusion: null },
-        ],
-      },
-    })).toBe("pending");
+    expect(
+      parseCIState({
+        state: "PENDING",
+        contexts: {
+          nodes: [
+            { state: "SUCCESS", conclusion: "SUCCESS" },
+            { state: "PENDING", conclusion: null },
+          ],
+        },
+      }),
+    ).toBe("pending");
 
-    expect(parseCIState({
-      state: "FAILURE",
-      contexts: {
-        nodes: [
-          { state: "FAILURE", conclusion: "FAILURE" },
-          { state: "SUCCESS", conclusion: "SUCCESS" },
-        ],
-      },
-    })).toBe("failing");
+    expect(
+      parseCIState({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            { state: "FAILURE", conclusion: "FAILURE" },
+            { state: "SUCCESS", conclusion: "SUCCESS" },
+          ],
+        },
+      }),
+    ).toBe("failing");
   });
 
   it("should return none for unknown state", () => {
@@ -873,7 +878,7 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
 
       // Mock gh CLI response for PR list check (304 Not Modified)
       mockExecFileImpl.mockResolvedValueOnce({
-        stdout: 'HTTP/2 304',
+        stdout: "HTTP/2 304",
         stderr: "",
       });
 
@@ -899,14 +904,19 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       ];
 
       // Mock gh CLI error
-      const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.stubEnv("AO_LOG_LEVEL", "warn");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       mockExecFileImpl.mockRejectedValueOnce(new Error("gh CLI failed"));
 
-      const result = await shouldRefreshPREnrichment(prs);
+      try {
+        const result = await shouldRefreshPREnrichment(prs);
 
-      expect(result.shouldRefresh).toBe(true); // Fail-safe: assume changed on error
-      expect(consoleWarnSpy).toHaveBeenCalled();
-      consoleWarnSpy.mockRestore();
+        expect(result.shouldRefresh).toBe(true); // Fail-safe: assume changed on error
+        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("PR list check failed"));
+      } finally {
+        stderrSpy.mockRestore();
+        vi.unstubAllEnvs();
+      }
     });
   });
 
@@ -931,7 +941,7 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Mock: Guard 1 returns 304 (no change), Guard 2 returns 200 (CI changed)
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304', // Guard 1: no change
+          stdout: "HTTP/2 304", // Guard 1: no change
           stderr: "",
         })
         .mockResolvedValueOnce({
@@ -966,11 +976,11 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Mock both guards return 304 (no change)
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         })
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         });
 
@@ -1000,11 +1010,11 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Mock both guards return 304 (no change)
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         })
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         });
 
@@ -1033,7 +1043,7 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
 
       // Mock Guard 1 (PR list check)
       mockExecFileImpl.mockResolvedValueOnce({
-        stdout: 'HTTP/2 304',
+        stdout: "HTTP/2 304",
         stderr: "",
       });
 
@@ -1079,11 +1089,11 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Both repos changed - Guard 1 calls
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 200',
+          stdout: "HTTP/2 200",
           stderr: "",
         })
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 200',
+          stdout: "HTTP/2 200",
           stderr: "",
         });
 
@@ -1131,11 +1141,11 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Second call - should use cached ETag in If-None-Match headers (Guard 1 + Guard 2)
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         })
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         });
 
@@ -1148,11 +1158,11 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Second poll - should use cached ETag in If-None-Match headers (Guard 1 + Guard 2)
       mockExecFileImpl
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         })
         .mockResolvedValueOnce({
-          stdout: 'HTTP/2 304',
+          stdout: "HTTP/2 304",
           stderr: "",
         });
 
@@ -1165,8 +1175,8 @@ describe("shouldRefreshPREnrichment - ETag Guard Strategy", () => {
       // Second poll has 2 calls: Guard 1 (index 1) and Guard 2 (index 2)
       const secondPollCalls = allCalls.slice(1, 3);
       // Mock call format: [file, args, options], so check call[1] for args
-      const callsWithHeader = secondPollCalls.filter((call) =>
-        Array.isArray(call) && call[1] && call[1].includes("-H")
+      const callsWithHeader = secondPollCalls.filter(
+        (call) => Array.isArray(call) && call[1] && call[1].includes("-H"),
       );
       expect(callsWithHeader).toHaveLength(2); // Both Guard 1 and Guard 2
     });
@@ -1259,7 +1269,12 @@ describe("extractPREnrichment ciChecks", () => {
                 contexts: {
                   nodes: [
                     { name: "queued-check", status: "QUEUED", conclusion: null, detailsUrl: null },
-                    { name: "waiting-check", status: "WAITING", conclusion: null, detailsUrl: null },
+                    {
+                      name: "waiting-check",
+                      status: "WAITING",
+                      conclusion: null,
+                      detailsUrl: null,
+                    },
                   ],
                 },
               },
@@ -1571,7 +1586,12 @@ describe("extractPREnrichment ciChecks", () => {
                 state: "FAILURE",
                 contexts: {
                   nodes: [
-                    { name: "check-1", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null },
+                    {
+                      name: "check-1",
+                      status: "COMPLETED",
+                      conclusion: "FAILURE",
+                      detailsUrl: null,
+                    },
                     // ... 19 more checks truncated
                   ],
                   pageInfo: { hasNextPage: true }, // list was truncated!
@@ -1607,7 +1627,12 @@ describe("extractPREnrichment ciChecks", () => {
                 state: "FAILURE",
                 contexts: {
                   nodes: [
-                    { name: "lint", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://ci.example.com/lint" },
+                    {
+                      name: "lint",
+                      status: "COMPLETED",
+                      conclusion: "FAILURE",
+                      detailsUrl: "https://ci.example.com/lint",
+                    },
                   ],
                   pageInfo: { hasNextPage: false }, // complete list
                 },

@@ -127,10 +127,6 @@ echo "Installing dependencies..."
 pnpm install
 
 echo ""
-echo "Cleaning stale build artifacts..."
-rm -rf packages/web/.next
-
-echo ""
 echo "Building all packages..."
 pnpm build
 
@@ -173,7 +169,7 @@ echo ""
 echo "  Navigate to your project directory and start:"
 echo ""
 echo "    cd ~/your-project"
-echo "    ao start            # auto-detects, creates config, launches dashboard"
+echo "    ao start            # auto-detects, creates config, starts AO"
 echo ""
 echo "  Want to add more projects later?"
 echo ""

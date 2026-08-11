@@ -3,31 +3,24 @@
 
 # Runtime data directories are auto-derived from this config location under:
 #   ~/.agent-orchestrator/{hash}-{projectId}/
+# Set AO_STATE_ROOT to isolate all AO state under another absolute root.
 # You usually do not need to configure paths manually.
-
-# Web dashboard port
-port: 3000
-
-# Terminal server ports (defaults: 14800/14801 — chosen to avoid conflicts with dev tools)
-# Override when running multiple dashboards to avoid EADDRINUSE
-# terminalPort: 14800
-# directTerminalPort: 14801
 
 # Default plugins (these are the defaults — you can omit this section)
 defaults:
-  runtime: tmux           # tmux | process | herdr (herdr needs a running server: herdr server)
-  agent: claude-code      # claude-code | codex | aider | opencode
+  runtime: tmux # tmux | herdr (herdr needs a running server: herdr server)
+  agent: claude-code # claude-code | codex | gemini | opencode
   # orchestrator:
   #   agent: claude-code
   # worker:
   #   agent: codex
-  workspace: worktree     # worktree | clone
-  notifiers: [desktop]    # desktop | slack | discord | webhook | composio | openclaw
+  workspace: worktree
+  notifiers: [desktop]
 
-# Installer-managed external plugins (optional)
+# Explicit external plugins (advanced; AO does not install/update them)
 # plugins:
 #   - name: owasp-auditor
-#     source: registry     # registry | npm | local
+#     source: npm          # npm | local
 #     package: "@ao-plugins/owasp-auditor"
 #     version: "^0.1.0"
 #     enabled: true
@@ -46,10 +39,9 @@ projects:
     defaultBranch: main
     sessionPrefix: app
 
-    # Issue tracker (defaults to github issues)
+    # Retained issue tracker (defaults to GitHub issues)
     # tracker:
-    #   plugin: linear
-    #   teamId: "your-team-id"
+    #   plugin: github
 
     # SCM webhook acceleration (optional)
     # scm:
@@ -104,27 +96,17 @@ projects:
     #   approved-and-green:
     #     auto: true         # enable auto-merge for this project
 
-# Notification channels
+# Retained notification channel
 # notifiers:
-#   slack:
-#     plugin: slack
-#     webhook: ${SLACK_WEBHOOK_URL}
-#     channel: "#agent-updates"
-#
-#   openclaw:
-#     plugin: openclaw
-#     url: http://127.0.0.1:18789/hooks/agent  # Use https:// for remote (non-localhost) deployments
-#     token: ${OPENCLAW_HOOKS_TOKEN}
-#     retries: 3
-#     retryDelayMs: 1000
-#     wakeMode: now
+#   desktop:
+#     plugin: desktop
 
 # Notification routing by priority
 # notificationRouting:
-#   urgent: [desktop, slack]   # agent stuck, needs input, errored
-#   action: [desktop, slack]   # PR ready to merge
-#   warning: [slack]           # auto-fix failed
-#   info: [slack]              # summary, all done
+#   urgent: [desktop]          # agent stuck, needs input, errored
+#   action: [desktop]          # PR ready to merge
+#   warning: []                # auto-fix failed
+#   info: []                   # summary, all done
 
 # Reactions — auto-responses to events (these are the defaults)
 # reactions:

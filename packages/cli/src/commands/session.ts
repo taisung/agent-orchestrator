@@ -6,11 +6,11 @@ import {
   loadConfig,
   SessionNotRestorableError,
   WorkspaceMissingError,
+  type Runtime,
 } from "@aoagents/ao-core";
-import { DEFAULT_PORT } from "../lib/constants.js";
-import { git, getTmuxActivity, tmux } from "../lib/shell.js";
+import { git, getTmuxActivity } from "../lib/shell.js";
 import { formatAge } from "../lib/format.js";
-import { getSessionManager } from "../lib/create-session-manager.js";
+import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
 import { isOrchestratorSessionName } from "../lib/session-utils.js";
 
 interface SessionListEntry {
@@ -29,7 +29,7 @@ interface SessionListEntry {
 export function registerSession(program: Command): void {
   const session = program
     .command("session")
-    .description("Session management (ls, kill, cleanup, restore, claim-pr)");
+    .description("Session management (ls, attach, kill, cleanup, restore, claim-pr)");
 
   session
     .command("ls")
@@ -102,7 +102,7 @@ export function registerSession(program: Command): void {
           const activityTs = activities[i];
 
           // Priority: live branch from workspace > metadata branch > empty string
-          const branchStr = (s.workspacePath && liveBranch) ? liveBranch : (s.branch || "");
+          const branchStr = s.workspacePath && liveBranch ? liveBranch : s.branch || "";
           const prUrl = s.metadata["pr"] ?? null;
 
           if (opts.json) {
@@ -150,29 +150,58 @@ export function registerSession(program: Command): void {
 
   session
     .command("attach")
-    .description("Attach to a session's tmux window")
+    .description("Attach to a session through its persisted runtime")
     .argument("<session>", "Session name to attach")
     .action(async (sessionName: string) => {
       const config = loadConfig();
       const sm = await getSessionManager(config);
       const sessionInfo = await sm.get(sessionName);
-      const tmuxTarget = sessionInfo?.runtimeHandle?.id ?? sessionName;
-
-      const exists = await tmux("has-session", "-t", tmuxTarget);
-      if (exists === null) {
+      const handle = sessionInfo?.runtimeHandle;
+      if (!handle) {
         console.error(chalk.red(`Session '${sessionName}' does not exist`));
         process.exit(1);
       }
 
+      const registry = await getPluginRegistry(config);
+      const runtime = registry.get<Runtime>("runtime", handle.runtimeName);
+      if (!runtime) {
+        console.error(chalk.red(`Runtime '${handle.runtimeName}' is not available`));
+        process.exit(1);
+      }
+
+      if (!(await runtime.isAlive(handle))) {
+        console.error(chalk.red(`Session '${sessionName}' is not running`));
+        process.exit(1);
+      }
+
+      const attachInfo = await runtime.getAttachInfo?.(handle);
+      const target = attachInfo?.target ?? handle.id;
+      let command: string;
+      let args: string[];
+      if (handle.runtimeName === "tmux") {
+        command = "tmux";
+        args = ["attach", "-t", target];
+      } else if (handle.runtimeName === "herdr") {
+        command = "herdr";
+        args = ["agent", "attach", target];
+      } else {
+        console.error(
+          chalk.red(
+            `Runtime '${handle.runtimeName}' does not provide a supported native attach path`,
+          ),
+        );
+        process.exit(1);
+      }
+
       await new Promise<void>((resolve, reject) => {
-        const child = spawn("tmux", ["attach", "-t", tmuxTarget], { stdio: "inherit" });
+        const child = spawn(command, args, { stdio: "inherit" });
         child.once("error", (err) => reject(err));
         child.once("exit", (code) => {
           if (code === 0 || code === null) {
             resolve();
             return;
           }
-          reject(new Error(`tmux attach exited with code ${code}`));
+          reject(new Error(`${command} attach exited with code ${code}`));
         });
       }).catch((err) => {
         console.error(chalk.red(`Failed to attach to session ${sessionName}: ${err}`));
@@ -360,8 +389,7 @@ export function registerSession(program: Command): void {
         if (restored.branch) {
           console.log(chalk.dim(`  Branch:   ${restored.branch}`));
         }
-        const port = config.port ?? DEFAULT_PORT;
-        console.log(chalk.dim(`  View:     http://localhost:${port}/sessions/${sessionName}`));
+        console.log(chalk.dim(`  Attach:   ao session attach ${sessionName}`));
       } catch (err) {
         if (err instanceof SessionNotRestorableError) {
           console.error(chalk.red(`Cannot restore: ${err.reason}`));

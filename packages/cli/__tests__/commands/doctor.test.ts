@@ -6,8 +6,6 @@ const {
   mockFindConfigFile,
   mockLoadConfig,
   mockCreatePluginRegistry,
-  mockDetectOpenClawInstallation,
-  mockValidateToken,
   mockCheckTmux,
   mockCheckHerdr,
   mockRegistry,
@@ -16,8 +14,6 @@ const {
   mockFindConfigFile: vi.fn(),
   mockLoadConfig: vi.fn(),
   mockCreatePluginRegistry: vi.fn(),
-  mockDetectOpenClawInstallation: vi.fn(),
-  mockValidateToken: vi.fn(),
   mockCheckTmux: vi.fn(),
   mockCheckHerdr: vi.fn(),
   mockRegistry: {
@@ -42,20 +38,17 @@ vi.mock("@aoagents/ao-core", () => ({
   HERDR_RUNTIME_NAME: "herdr",
   createPluginRegistry: (...args: unknown[]) => mockCreatePluginRegistry(...args),
   findConfigFile: (...args: unknown[]) => mockFindConfigFile(...args),
-  getObservabilityBaseDir: () => "/tmp/.agent-orchestrator/observability",
   loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
-  resolveNotifierTarget: (config: { notifiers?: Record<string, { plugin?: string }> }, reference: string) => {
+  resolveNotifierTarget: (
+    config: { notifiers?: Record<string, { plugin?: string }> },
+    reference: string,
+  ) => {
     const configured = config.notifiers?.[reference];
     return {
       reference,
       pluginName: configured?.plugin ?? reference,
     };
   },
-}));
-
-vi.mock("../../src/lib/openclaw-probe.js", () => ({
-  detectOpenClawInstallation: (...args: unknown[]) => mockDetectOpenClawInstallation(...args),
-  validateToken: (...args: unknown[]) => mockValidateToken(...args),
 }));
 
 import { registerDoctor } from "../../src/commands/doctor.js";
@@ -144,15 +137,6 @@ describe("doctor command", () => {
     mockRegistry.list.mockReturnValue([]);
     mockRegistry.get.mockReset();
     mockRegistry.get.mockReturnValue(null);
-
-    mockDetectOpenClawInstallation.mockReset();
-    mockDetectOpenClawInstallation.mockResolvedValue({
-      state: "running",
-      gatewayUrl: "http://127.0.0.1:18789",
-      probe: { httpStatus: 200 },
-    });
-    mockValidateToken.mockReset();
-    mockValidateToken.mockResolvedValue({ valid: true });
   });
 
   afterEach(() => {
@@ -203,7 +187,9 @@ describe("doctor command", () => {
     const output = consoleLogSpy.mock.calls.map((call) => call[0]).join("\n");
     expect(output).toContain('defaults.runtime -> runtime plugin "tmux"');
     expect(output).toContain('projects.my-app.scm.plugin -> scm plugin "github"');
-    expect(output).toContain('defaults.notifiers: alerts (plugin: slack) -> notifier plugin "slack"');
+    expect(output).toContain(
+      'defaults.notifiers: alerts (plugin: slack) -> notifier plugin "slack"',
+    );
   });
 
   it("fails when a referenced plugin cannot be loaded", async () => {

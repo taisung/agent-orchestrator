@@ -9,8 +9,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { dirname, basename, join } from "node:path";
-import { homedir } from "node:os";
+import { dirname, basename, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import { realpathSync, existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 
 /**
@@ -78,12 +78,32 @@ export function generateSessionPrefix(projectId: string): string {
 }
 
 /**
+ * Resolve the AO state root.
+ *
+ * Tests are isolated from the operator's real state even when a test aborts
+ * before its fixture cleanup. Production callers can opt into the same
+ * isolation with AO_STATE_ROOT.
+ */
+export function getStateRoot(): string {
+  const override = process.env["AO_STATE_ROOT"]?.trim();
+  if (override) {
+    return resolve(expandHome(override));
+  }
+
+  if (process.env["NODE_ENV"] === "test") {
+    return join(tmpdir(), `ao-test-state-${process.pid}`, ".agent-orchestrator");
+  }
+
+  return expandHome("~/.agent-orchestrator");
+}
+
+/**
  * Get the project base directory for a given config and project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}
  */
 export function getProjectBaseDir(configPath: string, projectPath: string): string {
   const instanceId = generateInstanceId(configPath, projectPath);
-  return join(expandHome("~/.agent-orchestrator"), instanceId);
+  return join(getStateRoot(), instanceId);
 }
 
 /**
@@ -92,7 +112,7 @@ export function getProjectBaseDir(configPath: string, projectPath: string): stri
  */
 export function getObservabilityBaseDir(configPath: string): string {
   const hash = generateConfigHash(configPath);
-  return join(expandHome("~/.agent-orchestrator"), `${hash}-observability`);
+  return join(getStateRoot(), `${hash}-observability`);
 }
 
 /**

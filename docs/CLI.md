@@ -1,17 +1,17 @@
 # AO CLI Reference
 
-The `ao` CLI is the control interface for Agent Orchestrator. Most commands are used by the **orchestrator agent itself** to manage sessions, not by humans directly. Humans typically only need `ao start` and the web dashboard.
+The `ao` CLI is the control interface for this headless personal Agent Orchestrator distribution.
 
 ## Commands humans use
 
 ```bash
-ao start                               # Auto-detect, generate config, start dashboard + orchestrator
-ao start <url>                         # Clone repo, auto-configure, and start
+ao start                               # Auto-detect config and start supervisor/orchestrator
+ao start <github-url>                  # Clone a GitHub repo, auto-configure, and start
 ao start ~/other-repo                  # Add a new project and start
-ao stop                                # Stop everything (dashboard, orchestrator, lifecycle worker)
+ao stop                                # Stop the orchestrator and lifecycle worker
 ao status                              # Overview of all sessions
 ao status --watch                      # Live-updating terminal status view
-ao dashboard                           # Open web dashboard in browser
+ao session attach <session>            # Enter a session through tmux or Herdr
 ```
 
 ## Commands the orchestrator agent uses
@@ -34,10 +34,10 @@ ao session restore <session>           # Revive a crashed agent
 ```bash
 ao doctor                              # Check install, runtime, and stale temp issues
 ao doctor --fix                        # Apply safe fixes automatically
-ao update                              # Update local AO install (source installs only)
 ao config-help                         # Show full config schema reference
 ```
 
 `ao doctor` checks PATH and launcher resolution, required binaries, configured plugin resolution, tmux and GitHub CLI health, config support directories, stale AO temp files, and core build/runtime sanity.
 
-`ao update` fast-forwards the local install on `main`, reinstalls dependencies, clean-rebuilds core packages, refreshes the launcher, and runs smoke tests. Use `ao update --skip-smoke` to stop after rebuild, or `ao update --smoke-only` to rerun just the smoke checks.
+There is no self-update command. Update the checkout with ordinary Git operations, then run `pnpm install`,
+`pnpm build`, and the verification gates before refreshing any global link.

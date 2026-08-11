@@ -1,14 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  readFileSync,
-  utimesSync,
-} from "node:fs";
+import { readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import {
-  writeMetadata,
-  readMetadataRaw,
-} from "../../metadata.js";
+import { writeMetadata, readMetadataRaw } from "../../metadata.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -18,7 +12,12 @@ import type {
   RuntimeHandle,
   Session,
 } from "../../types.js";
-import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "../test-utils.js";
+import {
+  setupTestContext,
+  teardownTestContext,
+  makeHandle,
+  type TestContext,
+} from "../test-utils.js";
 import { installMockOpencode } from "./opencode-helpers.js";
 
 let ctx: TestContext;
@@ -33,7 +32,16 @@ let originalPath: string | undefined;
 
 beforeEach(() => {
   ctx = setupTestContext();
-  ({ tmpDir, sessionsDir, mockRuntime, mockAgent, mockWorkspace, mockRegistry, config, originalPath } = ctx);
+  ({
+    tmpDir,
+    sessionsDir,
+    mockRuntime,
+    mockAgent,
+    mockWorkspace,
+    mockRegistry,
+    config,
+    originalPath,
+  } = ctx);
 });
 
 afterEach(() => {
@@ -173,7 +181,7 @@ describe("list", () => {
 
   // A terminal status must not force activity to "exited" on its own — agents
   // routinely keep working in tmux after their PR is merged, and reporting them
-  // as exited hides live workers from the dashboard and stuck-detection.
+  // as exited hides live workers from status output and stuck-detection.
   describe("terminal-status sessions derive activity from the runtime probe", () => {
     function registryWith(runtime: Runtime, agent: Agent): PluginRegistry {
       return {
@@ -347,7 +355,7 @@ describe("list", () => {
     expect(sessions[0].activity).toBe("active");
   });
 
-  it.each(["claude-code", "codex", "aider", "opencode"])(
+  it.each(["claude-code", "codex", "gemini", "opencode"])(
     "uses tmuxName fallback handle for %s activity detection when runtimeHandle is missing",
     async (agentName: string) => {
       const expectedTmuxName = "hash-app-1";

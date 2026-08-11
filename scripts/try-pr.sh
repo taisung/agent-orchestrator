@@ -2,9 +2,8 @@
 # try-pr.sh — switch the global 'ao' command to a PR worktree for manual testing
 #
 # Usage:
-#   bash scripts/try-pr.sh <session-id>            # CLI/core/plugins only (~15s)
-#   bash scripts/try-pr.sh <session-id> --with-web # also builds + starts dashboard (~60s)
-#   bash scripts/try-pr.sh --restore               # switch back to main
+#   bash scripts/try-pr.sh <session-id> # Build and link a session worktree
+#   bash scripts/try-pr.sh --restore    # Switch back to main
 
 set -e
 
@@ -32,11 +31,7 @@ if [ "$1" = "--restore" ]; then
 fi
 
 # ── parse args ─────────────────────────────────────────────────────────────────
-SESSION="${1:?Usage: bash scripts/try-pr.sh <session-id> [--with-web]}"
-WITH_WEB=false
-if [ "$2" = "--with-web" ]; then
-  WITH_WEB=true
-fi
+SESSION="${1:?Usage: bash scripts/try-pr.sh <session-id>}"
 
 WORKTREES_DIR="${AO_WORKTREES_DIR:-$HOME/.worktrees/ao}"
 WORKTREE="$WORKTREES_DIR/$SESSION"
@@ -60,12 +55,6 @@ pnpm --filter @aoagents/ao-core \
      --filter '@aoagents/ao-plugin-*' \
      build
 
-# ── build web if requested ─────────────────────────────────────────────────────
-if [ "$WITH_WEB" = true ]; then
-  echo -e "\n${BOLD}Building dashboard...${RESET}\n"
-  pnpm --filter @aoagents/ao-web build
-fi
-
 # ── link ao ───────────────────────────────────────────────────────────────────
 # Directly update the pnpm shim to point at the worktree's dist/index.js
 AO_SHIM=$(which ao)
@@ -88,31 +77,4 @@ echo -e "${GREEN}✔ ao now points to: ${BOLD}$SESSION${RESET}${GREEN} ($BRANCH)
 echo ""
 echo -e "  Test your changes, then restore with:"
 echo -e "  ${CYAN}bash scripts/try-pr.sh --restore${RESET}"
-
-# ── start dashboard if --with-web ──────────────────────────────────────────────
-if [ "$WITH_WEB" = true ]; then
-  # Find a free port starting from 3001 (3000 may be used by the main ao start)
-  PORT=3001
-  while lsof -ti ":$PORT" &>/dev/null; do
-    PORT=$((PORT + 1))
-  done
-
-  # Use the real config so the PR dashboard shows actual sessions
-  REAL_CONFIG="$MAIN_REPO/agent-orchestrator.yaml"
-  if [ ! -f "$REAL_CONFIG" ]; then
-    REAL_CONFIG="${AO_CONFIG_PATH:-}"
-  fi
-
-  echo ""
-  echo -e "  ${BOLD}Starting dashboard on port $PORT...${RESET}"
-  echo -e "  ${CYAN}http://localhost:$PORT${RESET}  (Ctrl+C to stop)\n"
-  cd packages/web && AO_CONFIG_PATH="$REAL_CONFIG" PORT=$PORT pnpm dev
-else
-  # Hint if this PR has web changes but --with-web wasn't passed
-  if git -C "$WORKTREE" diff --name-only "origin/main...HEAD" 2>/dev/null | grep -q "packages/web/"; then
-    echo ""
-    echo -e "  ${CYAN}Tip:${RESET} this PR has dashboard changes. Re-run with:"
-    echo -e "  ${CYAN}bash scripts/try-pr.sh $SESSION --with-web${RESET}"
-  fi
-  echo ""
-fi
+echo ""

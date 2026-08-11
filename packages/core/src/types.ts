@@ -210,11 +210,7 @@ export function isOrchestratorSession(
   if (allSessionPrefixes) {
     for (const prefix of allSessionPrefixes) {
       if (prefix === sessionPrefix) continue;
-      if (
-        new RegExp(
-          `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+$`,
-        ).test(session.id)
-      ) {
+      if (new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+$`).test(session.id)) {
         return false;
       }
     }
@@ -322,7 +318,7 @@ export interface AttachInfo {
 export interface Agent {
   readonly name: string;
 
-  /** Process name to look for (e.g. "claude", "codex", "aider") */
+  /** Process name to look for (e.g. "claude", "codex", "gemini") */
   readonly processName: string;
 
   /**
@@ -378,7 +374,7 @@ export interface Agent {
    * - Aider: .aider.conf.yml or similar
    * - OpenCode: its own config
    *
-   * CRITICAL: The dashboard depends on metadata being auto-updated when agents
+   * CRITICAL: lifecycle and status reporting depend on metadata being auto-updated when agents
    * run git/gh commands. Without this, PRs created by agents never show up.
    */
   setupWorkspaceHooks?(workspacePath: string, config: WorkspaceHooksConfig): Promise<void>;
@@ -664,7 +660,10 @@ export interface SCM {
    * @param observer - Optional observer for batch operation metrics
    * @returns Map keyed by "${owner}/${repo}#${number}" containing enrichment data
    */
-  enrichSessionsPRBatch?(prs: PRInfo[], observer?: BatchObserver): Promise<Map<string, PREnrichmentData>>;
+  enrichSessionsPRBatch?(
+    prs: PRInfo[],
+    observer?: BatchObserver,
+  ): Promise<Map<string, PREnrichmentData>>;
 }
 
 // --- PR Types ---
@@ -1014,13 +1013,13 @@ export interface OrchestratorConfig {
    */
   configPath: string;
 
-  /** Web dashboard port (defaults to 3000) */
+  /** @deprecated Legacy dashboard setting; ignored by the headless distribution. */
   port?: number;
 
-  /** Terminal WebSocket server port (defaults to 3001) */
+  /** @deprecated Legacy dashboard setting; ignored by the headless distribution. */
   terminalPort?: number;
 
-  /** Direct terminal WebSocket server port (defaults to 3003) */
+  /** @deprecated Legacy dashboard setting; ignored by the headless distribution. */
   directTerminalPort?: number;
 
   /** Milliseconds before a "ready" session becomes "idle" (default: 300000 = 5 min) */
@@ -1095,7 +1094,7 @@ export interface DefaultPlugins {
   };
 }
 
-export type InstalledPluginSource = "registry" | "npm" | "local";
+export type InstalledPluginSource = "npm" | "local";
 
 export interface InstalledPluginConfig {
   /** Stable logical plugin name used in config and CLI UX */
@@ -1104,16 +1103,16 @@ export interface InstalledPluginConfig {
   /** Where the plugin should be resolved from */
   source: InstalledPluginSource;
 
-  /** Package name for registry/npm-managed plugins */
+  /** Package name for an already installed npm plugin */
   package?: string;
 
-  /** Requested version/range for installer-managed plugins */
+  /** Informational requested version/range; AO does not install it */
   version?: string;
 
   /** Filesystem path for local plugins */
   path?: string;
 
-  /** Installer-managed enable flag (defaults to true) */
+  /** Enable flag (defaults to true) */
   enabled?: boolean;
 }
 

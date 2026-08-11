@@ -15,7 +15,11 @@ import { resolve, join, basename } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { ConfigNotFoundError, type ExternalPluginEntryRef, type OrchestratorConfig } from "./types.js";
+import {
+  ConfigNotFoundError,
+  type ExternalPluginEntryRef,
+  type OrchestratorConfig,
+} from "./types.js";
 import { generateSessionPrefix } from "./paths.js";
 
 function inferScmPlugin(project: {
@@ -220,7 +224,7 @@ const DefaultPluginsSchema = z.object({
 const InstalledPluginConfigSchema = z
   .object({
     name: z.string(),
-    source: z.enum(["registry", "npm", "local"]),
+    source: z.enum(["npm", "local"]),
     package: z.string().optional(),
     version: z.string().optional(),
     path: z.string().optional(),
@@ -235,11 +239,11 @@ const InstalledPluginConfigSchema = z
       });
     }
 
-    if ((value.source === "registry" || value.source === "npm") && !value.package) {
+    if (value.source === "npm" && !value.package) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["package"],
-        message: "Registry and npm plugins require a package name",
+        message: "npm plugins require a package name",
       });
     }
   });
@@ -252,7 +256,12 @@ const OrchestratorConfigSchema = z.object({
   defaults: DefaultPluginsSchema.default({}),
   plugins: z.array(InstalledPluginConfigSchema).default([]),
   projects: z.record(
-    z.string().regex(/^[a-zA-Z0-9_-]+$/, "Project ID must match [a-zA-Z0-9_-]+ (no dots, slashes, or special characters)"),
+    z
+      .string()
+      .regex(
+        /^[a-zA-Z0-9_-]+$/,
+        "Project ID must match [a-zA-Z0-9_-]+ (no dots, slashes, or special characters)",
+      ),
     ProjectConfigSchema,
   ),
   notifiers: z.record(NotifierConfigSchema).default({}),
@@ -303,7 +312,9 @@ function generateTempPluginName(pkg?: string, path?: string): string {
     const packageName = slashParts[slashParts.length - 1] ?? pkg;
 
     // Extract plugin name after ao-plugin-{slot}- prefix, preserving multi-word names like "jira-cloud"
-    const prefixMatch = packageName.match(/^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/);
+    const prefixMatch = packageName.match(
+      /^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/,
+    );
     if (prefixMatch?.[1]) {
       return prefixMatch[1];
     }
@@ -437,8 +448,7 @@ function mergeExternalPlugins(
       // If the existing plugin is disabled but there's an inline reference, enable it
       const existingPlugin = plugins.find(
         (p) =>
-          (entry.package && p.package === entry.package) ||
-          (entry.path && p.path === entry.path),
+          (entry.package && p.package === entry.package) || (entry.path && p.path === entry.path),
       );
       if (existingPlugin && existingPlugin.enabled === false) {
         existingPlugin.enabled = true;

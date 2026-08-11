@@ -7,9 +7,6 @@
   "bin": {
     "ao": "bin/ao.js"
   },
-  "scripts": {
-    "postinstall": "node bin/postinstall.js"
-  },
   "files": [
     "bin"
   ],

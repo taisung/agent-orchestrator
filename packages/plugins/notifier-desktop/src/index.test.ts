@@ -223,12 +223,18 @@ describe("notifier-desktop", () => {
   describe("notify on unsupported platform", () => {
     it("resolves without error on unsupported platform", async () => {
       mockPlatform.mockReturnValue("win32");
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const notifier = create();
-      await expect(notifier.notify(makeEvent())).resolves.toBeUndefined();
-      expect(mockExecFile).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("not supported on win32"));
-      warnSpy.mockRestore();
+      vi.stubEnv("AO_LOG_LEVEL", "warn");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        const notifier = create();
+        await expect(notifier.notify(makeEvent())).resolves.toBeUndefined();
+        expect(mockExecFile).not.toHaveBeenCalled();
+        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("not supported on win32"));
+      } finally {
+        stderrSpy.mockRestore();
+        vi.unstubAllEnvs();
+      }
     });
   });
 

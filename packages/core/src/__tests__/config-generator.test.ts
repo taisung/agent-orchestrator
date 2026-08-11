@@ -95,9 +95,7 @@ describe("parseRepoUrl", () => {
 
   it("throws on invalid URL", () => {
     expect(() => parseRepoUrl("not-a-url")).toThrow("Could not parse repo URL");
-    expect(() => parseRepoUrl("https://github.com/just-owner")).toThrow(
-      "Could not parse repo URL",
-    );
+    expect(() => parseRepoUrl("https://github.com/just-owner")).toThrow("Could not parse repo URL");
   });
 });
 
@@ -251,7 +249,6 @@ describe("generateConfigFromUrl", () => {
     const config = generateConfigFromUrl({ parsed, repoPath: tmpDir });
 
     // Check top-level structure
-    expect(config.port).toBe(3000);
     expect(config.defaults).toEqual({
       runtime: "tmux",
       agent: "claude-code",
@@ -273,36 +270,25 @@ describe("generateConfigFromUrl", () => {
     expect(project.postCreate).toEqual(["pnpm install"]);
   });
 
-  it("generates config for GitLab repo", () => {
+  it("rejects GitLab because its built-in SCM/tracker were retired", () => {
     const parsed = parseRepoUrl("https://gitlab.com/my-org/my-project");
-    const config = generateConfigFromUrl({ parsed, repoPath: tmpDir });
-
-    const projects = config.projects as Record<string, Record<string, unknown>>;
-    const project = projects["my-project"];
-    expect(project.scm).toEqual({ plugin: "gitlab" });
-    expect(project.tracker).toEqual({ plugin: "gitlab" });
+    expect(() => generateConfigFromUrl({ parsed, repoPath: tmpDir })).toThrow(
+      "supports GitHub SCM/tracker only",
+    );
   });
 
-  it("falls back to github for unknown hosts", () => {
+  it("rejects unknown hosts instead of silently selecting GitHub", () => {
     const parsed = parseRepoUrl("https://git.mycompany.com/team/app");
-    const config = generateConfigFromUrl({ parsed, repoPath: tmpDir });
-
-    const projects = config.projects as Record<string, Record<string, unknown>>;
-    const project = projects.app;
-    // Unknown hosts fall back to github (best available plugin)
-    expect(project.scm).toEqual({ plugin: "github" });
-    expect(project.tracker).toEqual({ plugin: "github" });
+    expect(() => generateConfigFromUrl({ parsed, repoPath: tmpDir })).toThrow(
+      "supports GitHub SCM/tracker only",
+    );
   });
 
-  it("sets bitbucket SCM and github tracker for Bitbucket repos", () => {
+  it("rejects Bitbucket instead of generating an unavailable plugin", () => {
     const parsed = parseRepoUrl("https://bitbucket.org/team/app");
-    const config = generateConfigFromUrl({ parsed, repoPath: tmpDir });
-
-    const projects = config.projects as Record<string, Record<string, unknown>>;
-    const project = projects.app;
-    expect(project.scm).toEqual({ plugin: "bitbucket" });
-    // Bitbucket tracker not implemented, falls back to github
-    expect(project.tracker).toEqual({ plugin: "github" });
+    expect(() => generateConfigFromUrl({ parsed, repoPath: tmpDir })).toThrow(
+      "supports GitHub SCM/tracker only",
+    );
   });
 
   it("does not set postCreate for non-JS projects", () => {
@@ -324,12 +310,6 @@ describe("generateConfigFromUrl", () => {
     const projects = config.projects as Record<string, Record<string, unknown>>;
     const project = projects["js-app"];
     expect(project.postCreate).toEqual(["npm install"]);
-  });
-
-  it("respects custom port", () => {
-    const parsed = parseRepoUrl("https://github.com/owner/repo");
-    const config = generateConfigFromUrl({ parsed, repoPath: tmpDir, port: 8080 });
-    expect(config.port).toBe(8080);
   });
 
   it("preserves CamelCase for session prefix generation", () => {
@@ -425,14 +405,11 @@ describe("configToYaml", () => {
     const config = generateConfigFromUrl({
       parsed: parseRepoUrl("https://github.com/acme/app")!,
       repoPath: "/tmp/app",
-      port: 4100,
     });
     const parsed = parseYaml(configToYaml(config)) as {
-      port: number;
       defaults: { runtime: string };
     };
     expect(parsed.defaults.runtime).toBe("tmux");
-    expect(parsed.port).toBe(4100);
   });
 });
 

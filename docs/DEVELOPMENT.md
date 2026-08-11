@@ -4,32 +4,33 @@ Architecture overview, code conventions, and patterns for contributors and AI ag
 
 ## Architecture Overview
 
-Agent Orchestrator is a monorepo with four main packages:
+Agent Orchestrator is a headless monorepo with four package groups:
 
 ```
 packages/
 ├── core/          # Types, services, config — the engine
-├── cli/           # `ao` command (depends on core + all plugins)
-├── web/           # Next.js dashboard (depends on core)
-└── plugins/       # 21 plugin packages across 8 slots
+├── cli/           # `ao` command (depends on core + retained plugins)
+├── ao/            # Thin global CLI wrapper
+├── integration-tests/
+└── plugins/       # 10 retained plugin packages
 ```
 
-**Build order matters**: core must be built before cli, web, or plugins.
+**Build order matters**: core must be built before the CLI or plugins.
 
-### Eight Plugin Slots
+### Plugin slots
 
 Every abstraction is a swappable plugin. All interfaces are defined in [`packages/core/src/types.ts`](../packages/core/src/types.ts).
 
-| Slot      | Interface   | Default       | Alternatives                             |
-| --------- | ----------- | ------------- | ---------------------------------------- |
-| Runtime   | `Runtime`   | `tmux`        | `process`, `docker`, `k8s`, `ssh`, `e2b` |
-| Agent     | `Agent`     | `claude-code` | `codex`, `aider`, `opencode`             |
-| Workspace | `Workspace` | `worktree`    | `clone`                                  |
-| Tracker   | `Tracker`   | `github`      | `linear`                                 |
-| SCM       | `SCM`       | `github`      | —                                        |
-| Notifier  | `Notifier`  | `desktop`     | `slack`, `webhook`, `composio`           |
-| Terminal  | `Terminal`  | `iterm2`      | `web`                                    |
-| Lifecycle | —           | (core)        | Non-pluggable                            |
+| Slot      | Interface   | Default       | Alternatives                  |
+| --------- | ----------- | ------------- | ----------------------------- |
+| Runtime   | `Runtime`   | `tmux`        | `herdr`                       |
+| Agent     | `Agent`     | `claude-code` | `codex`, `gemini`, `opencode` |
+| Workspace | `Workspace` | `worktree`    | —                             |
+| Tracker   | `Tracker`   | `github`      | —                             |
+| SCM       | `SCM`       | `github`      | —                             |
+| Notifier  | `Notifier`  | `desktop`     | —                             |
+| Terminal  | `Terminal`  | none          | compatibility interface only  |
+| Lifecycle | —           | (core)        | Non-pluggable                 |
 
 ### Hash-Based Namespacing
 
@@ -40,6 +41,9 @@ const hash = sha256(path.dirname(configPath)).slice(0, 12); // e.g. "a3b4c5d6e7f
 const instanceId = `${hash}-${projectId}`; // e.g. "a3b4c5d6e7f8-myapp"
 const dataDir = `~/.agent-orchestrator/${instanceId}`;
 ```
+
+`AO_STATE_ROOT` replaces the root when explicit isolation is needed. Under `NODE_ENV=test`, paths automatically
+use a per-process root under `/tmp` so fixtures never pollute live AO evidence.
 
 This means:
 
@@ -79,22 +83,12 @@ Activity states (orthogonal to lifecycle): `active`, `ready`, `idle`, `waiting_i
 **Prerequisites**: Node.js 20+, pnpm 9.15+, Git 2.25+
 
 ```bash
-git clone https://github.com/ComposioHQ/agent-orchestrator.git
+git clone https://github.com/taisung/agent-orchestrator.git
 cd agent-orchestrator
 pnpm install
 pnpm build
 cp agent-orchestrator.yaml.example agent-orchestrator.yaml
 $EDITOR agent-orchestrator.yaml
-```
-
-### Running the dev server
-
-**Always build before starting the web dev server** — it depends on built packages:
-
-```bash
-pnpm build
-cd packages/web && pnpm dev
-# Open http://localhost:3000
 ```
 
 ### Project structure
@@ -104,15 +98,14 @@ agent-orchestrator/
 ├── packages/
 │   ├── core/              # Core types, services, config
 │   ├── cli/               # CLI tool (ao command)
-│   ├── web/               # Next.js dashboard
+│   ├── ao/                # Global CLI wrapper
 │   ├── plugins/           # All plugin packages
-│   │   ├── runtime-*/     # Runtime plugins (tmux, docker, k8s)
-│   │   ├── agent-*/       # Agent adapters (claude-code, codex, aider)
-│   │   ├── workspace-*/   # Workspace providers (worktree, clone)
-│   │   ├── tracker-*/     # Issue trackers (github, linear)
+│   │   ├── runtime-*/     # Runtime plugins (tmux, herdr)
+│   │   ├── agent-*/       # Agent adapters (claude-code, codex, gemini, opencode)
+│   │   ├── workspace-*/   # Worktree workspace provider
+│   │   ├── tracker-*/     # GitHub issue tracker
 │   │   ├── scm-github/    # SCM adapter
 │   │   ├── notifier-*/    # Notification channels
-│   │   └── terminal-*/    # Terminal UIs
 │   └── integration-tests/ # Integration tests
 ├── agent-orchestrator.yaml.example
 └── docs/                  # Documentation
@@ -150,17 +143,21 @@ agent-orchestrator/
 
 ## Keeping the local AO install current
 
-When you are developing Agent Orchestrator from a long-lived local checkout, refresh the local `ao` install before debugging launcher or packaging issues:
+This personal fork does not ship `ao update`. Refresh the checkout and build it with ordinary repository tooling:
 
 ```bash
 git switch main
-git status --short --branch   # `ao update` expects a clean working tree on main
-ao update
+git status --short --branch
+git pull --ff-only
+pnpm install
+pnpm build
+pnpm typecheck
+pnpm test
+(cd packages/ao && npm link)
 ```
 
-`ao update` is intentionally conservative: it fast-forwards the local install checkout from `origin/main`, runs `pnpm install`, clean-rebuilds `@aoagents/ao-core`, `@aoagents/ao-cli`, and `@aoagents/ao-web`, refreshes the global launcher with `npm link`, and ends with CLI smoke tests. Use `ao update --skip-smoke` to stop after the rebuild, or `ao update --smoke-only` to rerun the smoke checks without fetching or rebuilding.
-
-If your branch has drift from `main`, update the install checkout first and then return to your feature worktree. That keeps CLI behavior and generated docs aligned with the version contributors are expected to run.
+Do not run the pull step with a dirty checkout, and do not use this recipe to overwrite an installed feature branch
+that the active fleet still depends on.
 
 ---
 
@@ -257,7 +254,7 @@ export default { manifest, create } satisfies PluginModule<Runtime>;
 
 ```json
 {
-  "name": "@aoagents/ao-runtime-myplugin",
+  "name": "@aoagents/ao-plugin-runtime-myplugin",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -370,11 +367,9 @@ Use mock plugins in tests — don't call real tmux or external services in unit 
 # Inspect raw metadata
 cat ~/.agent-orchestrator/{hash}-{project}/sessions/{session-id}
 
-# Check API state
-curl http://localhost:3000/api/sessions/{session-id}
-
-# Attach to tmux session directly
-tmux attach -t {hash}-{prefix}-{num}
+# Inspect through the CLI and attach using the persisted runtime identity
+ao status
+ao session attach {session-id}
 
 # Enable verbose logging
 AO_LOG_LEVEL=debug ao start
@@ -398,8 +393,8 @@ pnpm build
 # Copy config
 cp ../agent-orchestrator/agent-orchestrator.yaml .
 
-# Start dev server
-cd packages/web && pnpm dev
+# Exercise the built CLI
+node packages/cli/dist/index.js --help
 ```
 
 ---
@@ -431,17 +426,15 @@ regexes = ['''your-pattern-here''']
 ## Environment Variables
 
 ```bash
-# Mux WebSocket server port (web dashboard terminal + session updates)
-DIRECT_TERMINAL_PORT=14801
-
 # User integrations
 GITHUB_TOKEN=ghp_...
-LINEAR_API_KEY=lin_api_...
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# State isolation (tests do this automatically)
+AO_STATE_ROOT=/absolute/private/root
 ```
 
-Store in `.env.local` (gitignored). Never commit real values.
+Store secrets outside tracked files. Never commit real values.
 
 ---
 
@@ -454,7 +447,8 @@ Debuggability: `cat ~/.agent-orchestrator/a3b4-myapp/sessions/ao-1` shows full s
 Simpler local setup (no ngrok), survives orchestrator restarts, works offline. CI/review state is fetched, not pushed.
 
 **Why plugin slots?**
-Swappability: use tmux locally, Docker in CI, Kubernetes in prod — without changing application code. Testability: mock any plugin in unit tests. Extensibility: users add company-specific plugins without forking.
+The retained adapters stay mockable and runtime-independent without shipping a marketplace or every historical
+implementation. Explicit external npm/local descriptors are advanced, manually installed configuration.
 
 **Why hash-based namespacing?**
 Multiple orchestrator checkouts on the same machine don't collide in tmux or on disk. Different checkouts get different hashes; projects within the same config share a hash.

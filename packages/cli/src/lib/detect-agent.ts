@@ -16,9 +16,8 @@ export interface DetectedAgent {
 /** Known agent plugins — package name mapping. */
 const AGENT_PLUGINS: Array<{ name: string; pkg: string }> = [
   { name: "claude-code", pkg: "@aoagents/ao-plugin-agent-claude-code" },
-  { name: "aider", pkg: "@aoagents/ao-plugin-agent-aider" },
   { name: "codex", pkg: "@aoagents/ao-plugin-agent-codex" },
-  { name: "cursor", pkg: "@aoagents/ao-plugin-agent-cursor" },
+  { name: "gemini", pkg: "@aoagents/ao-plugin-agent-gemini" },
   { name: "opencode", pkg: "@aoagents/ao-plugin-agent-opencode" },
 ];
 
@@ -57,7 +56,7 @@ export async function detectAvailableAgents(): Promise<DetectedAgent[]> {
  * - Multiple agents available + non-human → pick first (claude-code if available)
  */
 export async function detectAgentRuntime(preDetected?: DetectedAgent[]): Promise<string> {
-  const available = preDetected ?? await detectAvailableAgents();
+  const available = preDetected ?? (await detectAvailableAgents());
 
   if (available.length === 0) {
     return "claude-code";
@@ -79,6 +78,6 @@ export async function detectAgentRuntime(preDetected?: DetectedAgent[]): Promise
       value: agent.name,
       label: agent.displayName,
       hint: agent.name,
-    }))
+    })),
   );
 }

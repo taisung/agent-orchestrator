@@ -19,7 +19,7 @@ export interface OrchestratorPromptConfig {
  * session management workflows, and project configuration.
  */
 export function generateOrchestratorPrompt(opts: OrchestratorPromptConfig): string {
-  const { config, projectId, project } = opts;
+  const { projectId, project } = opts;
   const sections: string[] = [];
 
   // Header
@@ -68,8 +68,7 @@ The orchestrator owns **coordination and integration**, not implementation. The 
 - **Repository**: ${project.repo}
 - **Default Branch**: ${project.defaultBranch}
 - **Session Prefix**: ${project.sessionPrefix}
-- **Local Path**: ${project.path}
-- **Dashboard Port**: ${config.port ?? 3000}`);
+- **Local Path**: ${project.path}`);
 
   // Quick Start
   sections.push(`## Quick Start
@@ -78,10 +77,10 @@ The orchestrator owns **coordination and integration**, not implementation. The 
 # See all sessions at a glance
 ao status
 
-# Spawn sessions for issues (GitHub: #123, Linear: INT-1234, etc.)
-ao spawn INT-1234
+# Spawn sessions for GitHub issues
+ao spawn 123
 ao spawn --claim-pr 123
-ao batch-spawn INT-1 INT-2 INT-3
+ao batch-spawn 123 124 125
 
 # List sessions
 ao session ls -p ${projectId}
@@ -92,11 +91,9 @@ ao send ${project.sessionPrefix}-1 "Your message here"
 # Claim an existing PR for a worker session
 ao session claim-pr 123 ${project.sessionPrefix}-1
 
-# Kill a session
+# Attach to or kill a session
+ao session attach ${project.sessionPrefix}-1
 ao session kill ${project.sessionPrefix}-1
-
-# Open all sessions in terminal tabs
-ao open ${projectId}
 \`\`\``);
 
   // Available Commands
@@ -113,9 +110,7 @@ ao open ${projectId}
 | \`ao session kill <session>\` | Kill a specific session |
 | \`ao session cleanup [-p project]\` | Kill completed/merged sessions |
 | \`ao send <session> <message>\` | Send a message to a running session |
-| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |
-| \`ao dashboard\` | Start the web dashboard (http://localhost:${config.port ?? 3000}) |
-| \`ao open <project>\` | Open all project sessions in terminal tabs |`);
+| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |`);
 
   // Session Management
   sections.push(`## Session Management
@@ -173,18 +168,6 @@ Remove completed sessions:
 ao session cleanup -p ${projectId}  # Kill sessions where PR is merged or issue is closed
 \`\`\``);
 
-  // Dashboard
-  sections.push(`## Dashboard
-
-The web dashboard runs at **http://localhost:${config.port ?? 3000}**.
-
-Features:
-- Live session cards with activity status
-- PR table with CI checks and review state
-- Attention zones (merge ready, needs response, working, done)
-- One-click actions (send message, kill, merge PR)
-- Real-time updates via Server-Sent Events`);
-
   // Reactions (if configured)
   if (project.reactions && Object.keys(project.reactions).length > 0) {
     const reactionLines: string[] = [];
@@ -213,9 +196,9 @@ ${reactionLines.join("\n")}`);
   sections.push(`## Common Workflows
 
 ### Bulk Issue Processing
-1. Get list of issues from tracker (GitHub/Linear/etc.)
+1. Get the issue list from GitHub
 2. Use \`ao batch-spawn\` to spawn sessions for each issue
-3. Monitor with \`ao status\` or the dashboard
+3. Monitor with \`ao status\`
 4. Agents will fetch, implement, test, PR, and respond to reviews
 5. Use \`ao session cleanup\` when PRs are merged
 
@@ -234,8 +217,8 @@ ${reactionLines.join("\n")}`);
 
 ### Manual Intervention
 When an agent needs human judgment:
-1. You'll get a notification (desktop/slack/webhook)
-2. Check the dashboard or \`ao status\` for details
+1. You'll get a configured notification
+2. Check \`ao status\` for details
 3. Attach to the session if needed: \`ao session attach <session>\`
 4. Send instructions: \`ao send <session> '...'\`
 5. Or handle the human-only action yourself (merge PR, close issue, etc.) while keeping implementation in worker sessions.`);
@@ -251,7 +234,7 @@ When an agent needs human judgment:
 
 4. **Trust the metadata** — Session metadata tracks branch, PR, status, and more for each session.
 
-5. **Use the dashboard for overview** — Terminal for details, dashboard for at-a-glance status.
+5. **Use status for overview** — Use \`ao status\` for the fleet and \`ao session attach\` for details.
 
 6. **Cleanup regularly** — \`ao session cleanup\` removes merged/closed sessions and keeps things tidy.
 

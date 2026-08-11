@@ -64,9 +64,9 @@ describe("getAgent", () => {
   });
 
   it("falls back to config default when project has no agent override", () => {
-    const config = makeConfig("aider", { myapp: {} });
+    const config = makeConfig("gemini", { myapp: {} });
     const agent = getAgent(config, "myapp");
-    expect(agent.name).toBe("aider");
+    expect(agent.name).toBe("gemini");
   });
 
   it("falls back to config default when projectId does not exist", () => {
@@ -85,8 +85,8 @@ describe("getAgentByName", () => {
     expect(getAgentByName("codex").name).toBe("codex");
   });
 
-  it("returns agent for aider", () => {
-    expect(getAgentByName("aider").name).toBe("aider");
+  it("returns agent for gemini", () => {
+    expect(getAgentByName("gemini").name).toBe("gemini");
   });
 
   it("returns agent for opencode", () => {

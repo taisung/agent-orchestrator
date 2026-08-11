@@ -59,20 +59,16 @@ This repository uses [Gitleaks](https://github.com/gitleaks/gitleaks) to prevent
 
 ### Never Commit Secrets
 
-❌ **Bad** — Hardcoded secret:
+❌ **Bad** — Hardcoded credential:
 
 ```yaml
-notifiers:
-  slack:
-    webhook: https://hooks.slack.com/services/T123/B456/abc123
+token: ghp_example_hardcoded_token
 ```
 
 ✅ **Good** — Environment variable:
 
 ```yaml
-notifiers:
-  slack:
-    webhook: ${SLACK_WEBHOOK_URL}
+token: ${GITHUB_TOKEN}
 ```
 
 ### Use Environment Variables
@@ -81,24 +77,18 @@ Store all secrets in environment variables:
 
 ```bash
 # .env.local (ignored by git)
-LINEAR_API_KEY=lin_api_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+ANTHROPIC_API_KEY=your-anthropic-key
+OPENAI_API_KEY=your-openai-key
+GITHUB_TOKEN=your-github-token
 ```
 
-Then reference in config:
-
-```yaml
-notifiers:
-  slack:
-    webhook: ${SLACK_WEBHOOK_URL}
-```
+Pass secrets through the environment to the retained agent and GitHub tooling; do not put resolved values in YAML.
 
 ### Naming Conventions
 
 Use consistent environment variable names:
 
-- `*_API_KEY` — API keys (e.g., `LINEAR_API_KEY`)
+- `*_API_KEY` — API keys (e.g., `ANTHROPIC_API_KEY`)
 - `*_TOKEN` — Authentication tokens (e.g., `GITHUB_TOKEN`)
 - `*_SECRET` — Secret keys (e.g., `JWT_SECRET`)
 - `*_URL` — URLs that may contain credentials (e.g., `DATABASE_URL`)
@@ -171,12 +161,11 @@ When setting up Agent Orchestrator:
 
 Agent Orchestrator may require these secrets:
 
-| Service   | Environment Variable | Where to Get                             |
-| --------- | -------------------- | ---------------------------------------- |
-| GitHub    | `GITHUB_TOKEN`       | https://github.com/settings/tokens       |
-| Linear    | `LINEAR_API_KEY`     | https://linear.app/settings/api          |
-| Slack     | `SLACK_WEBHOOK_URL`  | https://api.slack.com/messaging/webhooks |
-| Anthropic | `ANTHROPIC_API_KEY`  | https://console.anthropic.com/           |
+| Service   | Environment Variable | Where to Get                       |
+| --------- | -------------------- | ---------------------------------- |
+| GitHub    | `GITHUB_TOKEN`       | https://github.com/settings/tokens |
+| Anthropic | `ANTHROPIC_API_KEY`  | https://console.anthropic.com/     |
+| OpenAI    | `OPENAI_API_KEY`     | https://platform.openai.com/       |
 
 ### Setting Environment Variables
 
@@ -185,7 +174,7 @@ Agent Orchestrator may require these secrets:
 ```bash
 # In ~/.zshrc or ~/.bashrc
 export GITHUB_TOKEN="ghp_xxxxx"
-export LINEAR_API_KEY="lin_api_xxxxx"
+export ANTHROPIC_API_KEY="your-key"
 ```
 
 **Or use `.env.local`**:
@@ -193,7 +182,7 @@ export LINEAR_API_KEY="lin_api_xxxxx"
 ```bash
 # In your project directory
 echo 'GITHUB_TOKEN=ghp_xxxxx' >> .env.local
-echo 'LINEAR_API_KEY=lin_api_xxxxx' >> .env.local
+echo 'ANTHROPIC_API_KEY=your-key' >> .env.local
 ```
 
 ### Protecting Your Secrets

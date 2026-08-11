@@ -38,35 +38,20 @@ function makeKey(slot: PluginSlot, name: string): string {
 const BUILTIN_PLUGINS: Array<{ slot: PluginSlot; name: string; pkg: string }> = [
   // Runtimes
   { slot: "runtime", name: "tmux", pkg: "@aoagents/ao-plugin-runtime-tmux" },
-  { slot: "runtime", name: "process", pkg: "@aoagents/ao-plugin-runtime-process" },
   { slot: "runtime", name: "herdr", pkg: "@aoagents/ao-plugin-runtime-herdr" },
   // Agents
   { slot: "agent", name: "claude-code", pkg: "@aoagents/ao-plugin-agent-claude-code" },
   { slot: "agent", name: "codex", pkg: "@aoagents/ao-plugin-agent-codex" },
-  { slot: "agent", name: "aider", pkg: "@aoagents/ao-plugin-agent-aider" },
-  { slot: "agent", name: "cursor", pkg: "@aoagents/ao-plugin-agent-cursor" },
   { slot: "agent", name: "gemini", pkg: "@aoagents/ao-plugin-agent-gemini" },
   { slot: "agent", name: "opencode", pkg: "@aoagents/ao-plugin-agent-opencode" },
   // Workspaces
   { slot: "workspace", name: "worktree", pkg: "@aoagents/ao-plugin-workspace-worktree" },
-  { slot: "workspace", name: "clone", pkg: "@aoagents/ao-plugin-workspace-clone" },
   // Trackers
   { slot: "tracker", name: "github", pkg: "@aoagents/ao-plugin-tracker-github" },
-  { slot: "tracker", name: "linear", pkg: "@aoagents/ao-plugin-tracker-linear" },
-  { slot: "tracker", name: "gitlab", pkg: "@aoagents/ao-plugin-tracker-gitlab" },
   // SCM
   { slot: "scm", name: "github", pkg: "@aoagents/ao-plugin-scm-github" },
-  { slot: "scm", name: "gitlab", pkg: "@aoagents/ao-plugin-scm-gitlab" },
   // Notifiers
-  { slot: "notifier", name: "composio", pkg: "@aoagents/ao-plugin-notifier-composio" },
   { slot: "notifier", name: "desktop", pkg: "@aoagents/ao-plugin-notifier-desktop" },
-  { slot: "notifier", name: "discord", pkg: "@aoagents/ao-plugin-notifier-discord" },
-  { slot: "notifier", name: "openclaw", pkg: "@aoagents/ao-plugin-notifier-openclaw" },
-  { slot: "notifier", name: "slack", pkg: "@aoagents/ao-plugin-notifier-slack" },
-  { slot: "notifier", name: "webhook", pkg: "@aoagents/ao-plugin-notifier-webhook" },
-  // Terminals
-  { slot: "terminal", name: "iterm2", pkg: "@aoagents/ao-plugin-terminal-iterm2" },
-  { slot: "terminal", name: "web", pkg: "@aoagents/ao-plugin-terminal-web" },
 ];
 
 function matchesNotifierPlugin(
@@ -141,11 +126,14 @@ function prepareConfig(
   // it could be a local plugin path (for loading) or a plugin config value.
   // We reject this to avoid silently stripping a config value the user intended to pass.
   // Skip the built-in guard for external loads: when loading via `path`, the manifest.name
-  // may legitimately collide with a built-in (e.g. a forked "slack"), and the path field
+  // may legitimately collide with a built-in (e.g. a forked "desktop"), and the path field
   // here IS the loading path, not a stray user config value.
-  const isBuiltin = !isExternalLoad && BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
+  const isBuiltin =
+    !isExternalLoad && BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
   if ((rawConfig.package || isBuiltin) && "path" in rawConfig) {
-    const loadingMethod = rawConfig.package ? `npm package "${rawConfig.package}"` : `built-in plugin "${name}"`;
+    const loadingMethod = rawConfig.package
+      ? `npm package "${rawConfig.package}"`
+      : `built-in plugin "${name}"`;
     throw new Error(
       `In ${slot} "${sourceId}": "path" field conflicts with reserved plugin loading field. ` +
         `You're loading via ${loadingMethod}, but also have a "path" field which would be stripped. ` +
@@ -375,7 +363,6 @@ function resolvePluginSpecifier(
       const entrypoint = resolveLocalPluginEntrypoint(absolutePath);
       return entrypoint ? pathToFileURL(entrypoint).href : null;
     }
-    case "registry":
     case "npm":
       return plugin.package ?? inferPackageSpecifier(plugin.name);
     default:
@@ -486,7 +473,9 @@ export function createPluginRegistry(): PluginRegistry {
 
         const specifier = resolvePluginSpecifier(plugin, config);
         if (!specifier) {
-          process.stderr.write(`[plugin-registry] Could not resolve specifier for plugin "${plugin.name}" (source: ${plugin.source})\n`);
+          process.stderr.write(
+            `[plugin-registry] Could not resolve specifier for plugin "${plugin.name}" (source: ${plugin.source})\n`,
+          );
           continue;
         }
 
@@ -521,7 +510,9 @@ export function createPluginRegistry(): PluginRegistry {
             this.register(mod);
           }
         } catch (error) {
-          process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
+          process.stderr.write(
+            `[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`,
+          );
         }
       }
     },

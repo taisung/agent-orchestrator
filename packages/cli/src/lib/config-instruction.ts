@@ -10,32 +10,31 @@ export function getConfigInstruction(): string {
 # ── Top-level settings ──────────────────────────────────────────────
 # Runtime data paths are auto-derived from the config location under:
 #   ~/.agent-orchestrator/{hash}-{projectId}/
+# Set AO_STATE_ROOT to isolate all AO state under another absolute root.
 
-port: 3000                    # Dashboard port
-terminalPort: 14800           # Optional terminal WebSocket port override
-directTerminalPort: 14801     # Optional direct terminal WebSocket port override
 readyThresholdMs: 300000      # Ms before "ready" becomes "idle" (default: 5 min)
 
 # ── Default plugins ─────────────────────────────────────────────────
 # These apply to all projects unless overridden per-project.
 
 defaults:
-  runtime: tmux               # tmux | process | herdr (herdr needs a running server: herdr server)
-  agent: claude-code          # claude-code | aider | codex | cursor | opencode
-  workspace: worktree         # worktree | clone
+  runtime: tmux               # tmux | herdr (herdr needs a running server: herdr server)
+  agent: claude-code          # claude-code | codex | gemini | opencode
+  workspace: worktree
   notifiers:
-    - desktop                 # desktop | discord | slack | webhook | composio | openclaw
+    - desktop
   orchestrator:
     agent: claude-code        # Optional override for orchestrator sessions
   worker:
     agent: claude-code        # Optional override for worker sessions
 
-# ── Installer-managed marketplace plugins (optional) ───────────────
-# External plugins are declared here. Built-ins do not need entries.
+# ── Explicit external plugins (advanced) ───────────────────────────
+# AO does not install or update plugins. Entries must already resolve from the
+# AO installation, or point to a built local entrypoint. Built-ins need no entry.
 
 plugins:
   - name: owasp-auditor
-    source: registry          # registry | npm | local
+    source: npm               # npm | local
     package: "@ao-plugins/owasp-auditor"
     version: "^0.1.0"
     enabled: true
@@ -92,14 +91,11 @@ projects:
 
     # ── Issue tracker (optional) ──────────────────────────────────
     tracker:
-      plugin: github          # github | linear | gitlab
-      # Linear-specific:
-      # teamId: TEAM-123
-      # projectId: PROJECT-456
+      plugin: github
 
     # ── SCM configuration (optional, usually auto-detected) ───────
     scm:
-      plugin: github          # github | gitlab
+      plugin: github
 
     # ── Task decomposition (optional) ─────────────────────────────
     decomposer:
@@ -119,17 +115,6 @@ projects:
 notifiers:
   desktop:
     plugin: desktop
-  slack:
-    plugin: slack
-    # Requires SLACK_WEBHOOK_URL env var
-  webhook:
-    plugin: webhook
-    # url: https://example.com/hook
-  openclaw:
-    plugin: openclaw
-    # url: http://127.0.0.1:18789/hooks/agent
-    # token: \${OPENCLAW_HOOKS_TOKEN}
-    # Run 'ao setup openclaw' for guided configuration
 
 # ── Notification routing (optional) ─────────────────────────────────
 # Route notifications by priority level.
@@ -137,22 +122,18 @@ notifiers:
 notificationRouting:
   urgent:
     - desktop
-    - slack
   action:
     - desktop
-  warning:
-    - slack
-  info:
-    - composio
+  warning: []
+  info: []
 
 # ── Available plugins ───────────────────────────────────────────────
 #
-# Agent:     claude-code, aider, codex, cursor, opencode
-# Runtime:   tmux, process
-# Workspace: worktree, clone
-# SCM:       github, gitlab
-# Tracker:   github, linear, gitlab
-# Notifier:  desktop, discord, slack, webhook, composio, openclaw
-# Terminal:  iterm2, web
+# Agent:     claude-code, codex, gemini, opencode
+# Runtime:   tmux, herdr
+# Workspace: worktree
+# SCM:       github
+# Tracker:   github
+# Notifier:  desktop
 `.trim();
 }

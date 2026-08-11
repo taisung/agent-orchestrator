@@ -5,7 +5,7 @@ This document describes runtime observability emitted by Agent Orchestrator.
 ## Goals
 
 - Structured, low-noise telemetry for session lifecycle and operator workflows.
-- Correlated traces across core services, API routes, SSE, and websocket terminal health.
+- Correlated traces across core services, lifecycle workers, and runtime operations.
 - Clear failure reasons and current health surfaces for fast diagnosis.
 
 ## Emission Model
@@ -15,14 +15,11 @@ This document describes runtime observability emitted by Agent Orchestrator.
   - Default level: `warn` (production-safe, avoids high-volume info logs).
 - **Durable snapshots**: process-local JSON snapshots under:
   - `~/.agent-orchestrator/{config-hash}-observability/processes/*.json`
-- **Aggregated view**: merged by project via:
-  - `GET /api/observability`
+- **Inspection**: use structured stderr logs and the durable per-process snapshots for detailed diagnosis.
 
 ## Correlation
 
-- API routes accept `x-correlation-id`; when absent, AO generates one.
-- Responses include `x-correlation-id` for traceability from UI or CLI.
-- SSE snapshots include `correlationId` and `emittedAt`.
+- Core operations generate or propagate a `correlationId` through structured logs, metrics, and health records.
 
 ## Metrics
 
@@ -66,7 +63,7 @@ Recent traces keep operation-level diagnostics:
 
 Health records provide current status and failure context per surface:
 
-- `surface` (for example: `lifecycle.worker`, `sse.events`)
+- `surface` (for example: `lifecycle.worker`, `session.manager`)
 - `status` (`ok`, `warn`, `error`)
 - `updatedAt`
 - `component`
@@ -77,13 +74,13 @@ Health records provide current status and failure context per surface:
 
 ## Operator-Facing Diagnostics
 
-- **Dashboard**: observability banner shows overall status, SSE stream state, last correlation id, and latest failure reason.
-- **API**: `/api/observability` returns merged per-project diagnostics (`overallStatus`, metrics, health, recent traces, session state).
-- **Terminal websocket health**: `/health` endpoints include active sessions and websocket/terminal health counters with last error/disconnect reasons.
+- **CLI**: `ao doctor`, `ao status`, and `ao status --watch` provide the supported operator views.
+- **Logs**: structured stderr records include component, operation, outcome, correlation id, and failure reason.
+- **Snapshots**: per-process JSON files preserve recent metrics, health, and trace records for offline inspection.
 
 ## Rollout Notes
 
 1. Deploy with default `AO_LOG_LEVEL=warn` to avoid noisy logs.
-2. Validate `/api/observability` and dashboard banner in a canary environment.
+2. Validate `ao doctor`, `ao status`, and the process snapshots in a canary environment.
 3. If deeper triage is needed, temporarily raise `AO_LOG_LEVEL=info` (or `debug`), then revert to `warn`.
 4. Monitor `lastFailureReason` and surface-level `reason` fields before enabling broader rollout.

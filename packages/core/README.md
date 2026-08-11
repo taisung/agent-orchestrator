@@ -17,13 +17,13 @@ Every interface the system uses is defined here. If you're working on any part o
 
 **Main interfaces:**
 
-- `Runtime` — where sessions execute (tmux, docker, k8s)
-- `Agent` — AI coding tool adapter (claude-code, codex, aider)
-- `Workspace` — code isolation (worktree, clone)
-- `Tracker` — issue tracking (GitHub Issues, Linear)
-- `SCM` — PR/CI/reviews (GitHub, GitLab)
-- `Notifier` — push notifications (desktop, Slack, webhook)
-- `Terminal` — human interaction UI (iTerm2, web)
+- `Runtime` — where sessions execute (tmux or Herdr in this distribution)
+- `Agent` — AI coding tool adapter (Claude Code, Codex, Gemini, OpenCode)
+- `Workspace` — git worktree isolation
+- `Tracker` — GitHub issue tracking
+- `SCM` — GitHub PR/CI/reviews
+- `Notifier` — desktop notifications
+- `Terminal` — compatibility interface; this distribution has no bundled implementation
 - `Session` — running agent instance (state, metadata, handles)
 - `OrchestratorEvent` — events emitted by lifecycle manager
 - `PluginModule` — what every plugin exports
@@ -88,17 +88,16 @@ Loads plugins and provides access to them:
 - `get<T>(slot, name)` — get plugin by slot + name
 - `list(slot)` — list all plugins for a slot
 - `loadBuiltins(config?)` — load built-in plugins (runtime-tmux, agent-claude-code, etc.)
-- `loadFromConfig(config)` — load built-ins today; external plugin descriptors are the marketplace extension point
+- `loadFromConfig(config)` — load built-ins plus explicitly configured, already installed npm/local plugins
 
 **Built-in plugins** (loaded by default):
 
-- runtime-tmux, runtime-process
-- agent-claude-code, agent-codex, agent-aider, agent-opencode
-- workspace-worktree, workspace-clone
-- tracker-github, tracker-linear, tracker-gitlab
-- scm-github, scm-gitlab
-- notifier-desktop, notifier-discord, notifier-slack, notifier-composio, notifier-openclaw, notifier-webhook
-- terminal-iterm2, terminal-web
+- runtime-tmux, runtime-herdr
+- agent-claude-code, agent-codex, agent-gemini, agent-opencode
+- workspace-worktree
+- tracker-github
+- scm-github
+- notifier-desktop
 
 ### `src/config.ts` — Configuration Loading
 
@@ -106,14 +105,11 @@ Loads and validates `agent-orchestrator.yaml`:
 
 **Main config sections:**
 
-- Runtime data paths are auto-derived from the config location under `~/.agent-orchestrator/{hash}-{projectId}/`
-- `port` — web dashboard port (default 3000, set different values for multiple projects)
-- `terminalPort` — terminal WebSocket port (auto-detected if not set)
-- `directTerminalPort` — direct terminal WebSocket port (auto-detected if not set)
+- Runtime data paths are auto-derived under `~/.agent-orchestrator/{hash}-{projectId}/`; `AO_STATE_ROOT` overrides the root
 - `defaults` — default plugins (runtime, agent, workspace, notifiers)
-- `plugins` — installer-managed external plugin descriptors (registry, npm, or local)
+- `plugins` — advanced descriptors for already installed npm plugins or built local entrypoints
 - `projects` — per-project config (repo, path, branch, symlinks, reactions, agentRules)
-- `notifiers` — notification channel config (Slack webhooks, etc.)
+- `notifiers` — desktop notification configuration
 - `notificationRouting` — which notifiers get which priority events
 - `reactions` — auto-response config (ci-failed, changes-requested, approved-and-green, etc.)
 

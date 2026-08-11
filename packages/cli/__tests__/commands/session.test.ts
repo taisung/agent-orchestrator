@@ -29,6 +29,8 @@ const {
   mockSpawn,
   mockConfigRef,
   mockSessionManager,
+  mockRuntime,
+  mockPluginRegistry,
   sessionsDirRef,
 } = vi.hoisted(() => ({
   mockTmux: vi.fn(),
@@ -48,6 +50,13 @@ const {
     spawnOrchestrator: vi.fn(),
     send: vi.fn(),
     claimPR: vi.fn(),
+  },
+  mockRuntime: {
+    isAlive: vi.fn(),
+    getAttachInfo: vi.fn(),
+  },
+  mockPluginRegistry: {
+    get: vi.fn(),
   },
   sessionsDirRef: { current: "" },
 }));
@@ -98,6 +107,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async (): Promise<SessionManager> => mockSessionManager as SessionManager,
+  getPluginRegistry: async () => mockPluginRegistry,
 }));
 
 /** Parse a key=value metadata file into a Record<string, string>. */
@@ -206,8 +216,17 @@ beforeEach(() => {
   mockSessionManager.spawn.mockReset();
   mockSessionManager.send.mockReset();
   mockSessionManager.claimPR.mockReset();
+  mockRuntime.isAlive.mockReset();
+  mockRuntime.getAttachInfo.mockReset();
+  mockPluginRegistry.get.mockReset();
 
   mockSpawn.mockImplementation(() => makeMockChild(0));
+  mockRuntime.isAlive.mockResolvedValue(true);
+  mockRuntime.getAttachInfo.mockImplementation(async (handle: { id: string }) => ({
+    type: "tmux",
+    target: handle.id,
+  }));
+  mockPluginRegistry.get.mockReturnValue(mockRuntime);
 
   // Default: list reads from sessionsDir
   mockSessionManager.list.mockImplementation(async () => {
@@ -464,19 +483,49 @@ describe("session attach", () => {
       metadata: {},
     } satisfies Session);
 
-    mockTmux.mockResolvedValue("");
-
     await program.parseAsync(["node", "test", "session", "attach", "app-1"]);
 
-    expect(mockTmux).toHaveBeenCalledWith("has-session", "-t", "tmux-target-1");
+    expect(mockPluginRegistry.get).toHaveBeenCalledWith("runtime", "tmux");
+    expect(mockRuntime.isAlive).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "tmux-target-1", runtimeName: "tmux" }),
+    );
     expect(mockSpawn).toHaveBeenCalledWith("tmux", ["attach", "-t", "tmux-target-1"], {
       stdio: "inherit",
     });
   });
 
-  it("fails when tmux session does not exist", async () => {
+  it("attaches to a Herdr agent using the persisted runtime", async () => {
+    mockSessionManager.get.mockResolvedValue({
+      id: "app-2",
+      projectId: "my-app",
+      status: "working",
+      activity: null,
+      branch: null,
+      issueId: null,
+      pr: null,
+      workspacePath: null,
+      runtimeHandle: { id: "herdr-agent-2", runtimeName: "herdr", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    } satisfies Session);
+    mockRuntime.getAttachInfo.mockResolvedValue({
+      type: "process",
+      target: "herdr-agent-2",
+      command: "herdr agent attach herdr-agent-2",
+    });
+
+    await program.parseAsync(["node", "test", "session", "attach", "app-2"]);
+
+    expect(mockPluginRegistry.get).toHaveBeenCalledWith("runtime", "herdr");
+    expect(mockSpawn).toHaveBeenCalledWith("herdr", ["agent", "attach", "herdr-agent-2"], {
+      stdio: "inherit",
+    });
+  });
+
+  it("fails when the session does not exist", async () => {
     mockSessionManager.get.mockResolvedValue(null);
-    mockTmux.mockResolvedValue(null);
 
     await expect(
       program.parseAsync(["node", "test", "session", "attach", "unknown-1"]),

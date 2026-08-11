@@ -2,53 +2,45 @@
 
 ## What is this project?
 
-Agent Orchestrator (AO) is a platform for spawning and managing parallel AI coding agents across distributed systems. It runs multiple agents (Claude Code, Codex, Aider, OpenCode) simultaneously — each in an isolated git worktree with its own PR — and provides a single dashboard to supervise them all. Agents autonomously fix CI failures, address review comments, and manage PRs.
+Agent Orchestrator (AO) is a personal, local-first, headless distribution for running Claude Code, Codex, Gemini, and OpenCode in isolated git worktrees. tmux and Herdr are the retained runtimes; GitHub is the retained tracker/SCM; desktop is the retained notifier. Humans use CLI status and runtime-native attachment; no dashboard or bundled terminal UI is shipped.
 
-**Org:** ComposioHQ
-**Repo:** `github.com/ComposioHQ/agent-orchestrator`
+This fork is maintained independently from the current upstream project. `development/0005_personal_fork_scope_and_trim_plan.md` and `development/0006_phase_minus_1_usage_and_baseline_inventory.md` define the evidence-based product boundary.
 **License:** MIT
 
 ## Monorepo Structure
 
-pnpm workspace (v9.15.4) with ~30 packages:
+pnpm workspace (v9.15.4) with 15 projects: the workspace root plus 14 packages:
 
 ```
 packages/
   core/           # Engine: types, config, session manager, lifecycle, plugin registry
-  cli/            # CLI tool (`ao` command) — depends on all plugins
-  web/            # Next.js 15 dashboard (App Router, React 19, Tailwind v4)
+  cli/            # CLI tool (`ao` command) — depends on retained plugins
   ao/             # Global CLI wrapper (thin shim around cli)
   plugins/
-    agent-claude-code/    agent-aider/    agent-codex/    agent-opencode/
-    runtime-tmux/         runtime-process/
-    workspace-worktree/   workspace-clone/
-    tracker-github/       tracker-linear/   tracker-gitlab/
-    scm-github/           scm-gitlab/
-    notifier-desktop/     notifier-slack/   notifier-webhook/
-    notifier-composio/    notifier-openclaw/
-    terminal-iterm2/      terminal-web/
+    agent-claude-code/    agent-codex/    agent-gemini/    agent-opencode/
+    runtime-tmux/         runtime-herdr/
+    workspace-worktree/
+    tracker-github/
+    scm-github/
+    notifier-desktop/
   integration-tests/      # E2E tests
 ```
 
-**Build order:** core -> plugins -> cli/web (parallel). `pnpm build` at root handles this.
+**Build order:** core -> plugins -> cli. `pnpm build` at root handles this.
 
 ## Tech Stack
 
-| Layer | Stack |
-|-------|-------|
-| Language | TypeScript (strict mode, ES2022, Node16 modules) |
-| Runtime | Node.js 20+ |
-| Package Manager | pnpm 9.15.4 (`workspace:*` protocol) |
-| Web | Next.js 15 (App Router) + React 19 |
-| Styling | Tailwind CSS v4 + CSS custom properties (`@theme` block in `globals.css`) |
-| Terminal UI | xterm.js 5.3.0 + WebSocket to tmux PTYs |
-| Validation | Zod |
-| Testing | Vitest + @testing-library/react |
-| Linting | ESLint 10 (flat config) + Prettier 3.8 |
-| CI/CD | GitHub Actions (lint, typecheck, test, release) |
-| Versioning | Changesets |
-| Git hooks | Husky + gitleaks (secret scanning) |
-| Container | OCI via Containerfile (Podman/Docker) |
+| Layer           | Stack                                            |
+| --------------- | ------------------------------------------------ |
+| Language        | TypeScript (strict mode, ES2022, Node16 modules) |
+| Runtime         | Node.js 20+                                      |
+| Package Manager | pnpm 9.15.4 (`workspace:*` protocol)             |
+| Validation      | Zod                                              |
+| Testing         | Vitest                                           |
+| Linting         | ESLint 10 (flat config) + Prettier 3.8           |
+| CI/CD           | GitHub Actions                                   |
+| Versioning      | Changesets                                       |
+| Git hooks       | Husky + gitleaks (secret scanning)               |
 
 ## Commands
 
@@ -57,17 +49,11 @@ packages/
 pnpm install
 pnpm build
 
-# Development
-pnpm dev                                    # Web dashboard (Next.js + 2 WS servers)
-
 # Type checking
 pnpm typecheck                              # All packages
-pnpm --filter @aoagents/ao-web typecheck    # Web only
 
 # Testing
-pnpm test                                   # All packages (excludes web)
-pnpm --filter @aoagents/ao-web test         # Web tests
-pnpm --filter @aoagents/ao-web test:watch   # Web watch mode
+pnpm test                                   # All packages
 pnpm test:integration                       # Integration tests
 
 # Lint & format
@@ -79,19 +65,19 @@ pnpm format:check
 
 ## Architecture
 
-### Plugin System (8 Slots)
+### Plugin System (7 Slots)
 
 Every abstraction is a pluggable interface defined in `packages/core/src/types.ts`:
 
-| Slot | Default | Purpose |
-|------|---------|---------|
-| Runtime | tmux | Where agents execute |
-| Agent | claude-code | Which AI tool to use |
-| Workspace | worktree | Code isolation (worktree vs clone) |
-| Tracker | github | Issue tracking (GitHub, Linear, GitLab) |
-| SCM | github | PR, CI, reviews |
-| Notifier | desktop | Notification delivery |
-| Terminal | iterm2 | Human attachment UI |
+| Slot      | Default              | Purpose                 |
+| --------- | -------------------- | ----------------------- |
+| Runtime   | tmux                 | Where agents execute    |
+| Agent     | claude-code          | Which AI tool to use    |
+| Workspace | worktree             | Git worktree isolation  |
+| Tracker   | github               | GitHub issue tracking   |
+| SCM       | github               | PR, CI, reviews         |
+| Notifier  | desktop              | Notification delivery   |
+| Terminal  | none                 | Compatibility seam only |
 | Lifecycle | core (non-pluggable) | State machine + polling |
 
 ### Session Lifecycle
@@ -110,8 +96,7 @@ spawning -> working -> pr_open -> ci_failed / review_pending
 agent-orchestrator.yaml -> Config Loader (Zod) -> Plugin Registry
   -> Session Manager -> Lifecycle Manager (polling loop, state machine)
   -> Events -> Notifiers
-  -> Web API Routes (Next.js) -> SSE (5s interval) + WebSocket (terminal)
-  -> Dashboard (React + xterm.js)
+  -> CLI status, messaging, and runtime-native attachment
 ```
 
 ### Storage
@@ -144,11 +129,8 @@ Hash = SHA-256 of config directory (first 12 chars). Prevents collision across m
 
 ### File Organization
 
-- Components in flat `components/` directory (no nesting)
-- Hooks in `hooks/` with `use` prefix
-- Tests in `__tests__/` subdirectories
+- Tests live alongside source or in `__tests__/` directories
 - No barrel files except `core/src/index.ts`
-- Max 400 lines per component file
 
 ### Naming
 
@@ -158,25 +140,13 @@ Hash = SHA-256 of config directory (first 12 chars). Prevents collision across m
 
 ### Imports
 
-- `@/` alias -> `packages/web/src/`
 - `@aoagents/ao-core` for core imports
 - `workspace:*` for cross-package
 
-### Web / Styling
-
-- Tailwind utility classes only — **no inline `style=` attributes**
-- CSS custom properties via `var(--color-*)` from `globals.css` `@theme` block
-- Dark theme must always be preserved
-- **No external UI component libraries** (no Radix, shadcn, etc.)
-- Client components marked `"use client"`; server components for pages
-- State: React hooks only (no Redux/Zustand)
-- Real-time updates: SSE via `useSessionEvents` hook (5s interval, do not change)
-
 ### Testing
 
-- Vitest + @testing-library/react
-- Test files: `{Module}.test.ts` or `{Component}.test.tsx` in `__tests__/`
-- Test files for all new components
+- Vitest
+- Test files: `{Module}.test.ts` in `__tests__/` or next to source
 - Relaxed lint in tests: `any` and `console.log` allowed
 
 ### Commits
@@ -187,24 +157,19 @@ Hash = SHA-256 of config directory (first 12 chars). Prevents collision across m
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `packages/core/src/types.ts` | Central type definitions (all 8 plugin interfaces) |
-| `packages/core/src/session-manager.ts` | Session CRUD operations |
-| `packages/core/src/lifecycle-manager.ts` | State machine + polling loop + reactions |
-| `packages/core/src/config.ts` | YAML config loading with Zod validation |
-| `packages/core/src/plugin-registry.ts` | Plugin discovery and resolution |
-| `packages/core/src/index.ts` | Core public API (stable, do not break) |
-| `packages/web/src/components/Dashboard.tsx` | Main dashboard view |
-| `packages/web/src/components/SessionDetail.tsx` | Session detail view |
-| `packages/web/src/components/DirectTerminal.tsx` | xterm.js terminal with WebSocket |
-| `packages/web/src/components/SessionCard.tsx` | Kanban session card |
-| `packages/web/src/hooks/useSessionEvents.ts` | SSE consumer hook |
-| `packages/web/src/lib/types.ts` | Dashboard types |
-| `packages/web/src/app/globals.css` | Design tokens and base styles |
-| `agent-orchestrator.yaml` | Project-level config (user-created) |
-| `eslint.config.js` | ESLint flat config |
-| `tsconfig.base.json` | Shared TypeScript base config |
+| File                                     | Purpose                                            |
+| ---------------------------------------- | -------------------------------------------------- |
+| `packages/core/src/types.ts`             | Central type definitions (all 7 plugin interfaces) |
+| `packages/core/src/session-manager.ts`   | Session CRUD operations                            |
+| `packages/core/src/lifecycle-manager.ts` | State machine + polling loop + reactions           |
+| `packages/core/src/config.ts`            | YAML config loading with Zod validation            |
+| `packages/core/src/plugin-registry.ts`   | Plugin discovery and resolution                    |
+| `packages/core/src/index.ts`             | Core public API (stable, do not break)             |
+| `packages/cli/src/program.ts`            | CLI command registration                           |
+| `packages/cli/src/commands/start.ts`     | Headless lifecycle/orchestrator startup            |
+| `agent-orchestrator.yaml`                | Project-level config (user-created)                |
+| `eslint.config.js`                       | ESLint flat config                                 |
+| `tsconfig.base.json`                     | Shared TypeScript base config                      |
 
 ## Plugin Standards
 
@@ -276,24 +241,28 @@ export default { manifest, create, detect } satisfies PluginModule<Runtime>;
 
 ```typescript
 import {
-  shellEscape,                  // Safe command argument escaping
-  validateUrl,                  // Webhook URL validation
-  readLastJsonlEntry,           // Efficient JSONL log tail (native agent JSONL)
-  readLastActivityEntry,        // Read last AO activity JSONL entry
-  checkActivityLogState,        // Extract waiting_input/blocked from AO JSONL (with staleness cap)
-  getActivityFallbackState,     // Last-resort fallback: entry state + age-based decay
-  recordTerminalActivity,       // Shared recordActivity impl (classify + dedup + append)
-  classifyTerminalActivity,     // Classify terminal output via detectActivity
-  appendActivityEntry,          // Low-level JSONL append
-  setupPathWrapperWorkspace,    // Install ~/.ao/bin wrappers + .ao/AGENTS.md
-  buildAgentPath,               // Prepend ~/.ao/bin to PATH
+  shellEscape, // Safe command argument escaping
+  validateUrl, // Webhook URL validation
+  readLastJsonlEntry, // Efficient JSONL log tail (native agent JSONL)
+  readLastActivityEntry, // Read last AO activity JSONL entry
+  checkActivityLogState, // Extract waiting_input/blocked from AO JSONL (with staleness cap)
+  getActivityFallbackState, // Last-resort fallback: entry state + age-based decay
+  recordTerminalActivity, // Shared recordActivity impl (classify + dedup + append)
+  classifyTerminalActivity, // Classify terminal output via detectActivity
+  appendActivityEntry, // Low-level JSONL append
+  setupPathWrapperWorkspace, // Install ~/.ao/bin wrappers + .ao/AGENTS.md
+  buildAgentPath, // Prepend ~/.ao/bin to PATH
   normalizeAgentPermissionMode, // Normalize permission mode strings
-  DEFAULT_READY_THRESHOLD_MS,   // 5 min — ready→idle threshold
-  DEFAULT_ACTIVE_WINDOW_MS,     // 30s — active→ready window
-  ACTIVITY_INPUT_STALENESS_MS,  // 5 min — waiting_input/blocked expiry
-  PREFERRED_GH_PATH,            // /usr/local/bin/gh
-  CI_STATUS, ACTIVITY_STATE, SESSION_STATUS,  // Constants
-  type Session, type ProjectConfig, type RuntimeHandle,
+  DEFAULT_READY_THRESHOLD_MS, // 5 min — ready→idle threshold
+  DEFAULT_ACTIVE_WINDOW_MS, // 30s — active→ready window
+  ACTIVITY_INPUT_STALENESS_MS, // 5 min — waiting_input/blocked expiry
+  PREFERRED_GH_PATH, // /usr/local/bin/gh
+  CI_STATUS,
+  ACTIVITY_STATE,
+  SESSION_STATUS, // Constants
+  type Session,
+  type ProjectConfig,
+  type RuntimeHandle,
 } from "@aoagents/ao-core";
 ```
 
@@ -313,54 +282,56 @@ import {
 
 ### Agent Plugin Implementation Standards
 
-All agent plugins (claude-code, codex, aider, opencode, etc.) must implement the full `Agent` interface. The dashboard depends on these methods for PR tracking, cost display, and session resume.
+All retained agent plugins (claude-code, codex, gemini, and opencode) must implement the full `Agent` interface. Lifecycle management, status reporting, PR tracking, and session resume depend on these methods.
 
 **Required methods (all agents):**
 
-| Method | Purpose | Return `null` OK? |
-|--------|---------|-------------------|
-| `getLaunchCommand` | Shell command to start the agent | No |
-| `getEnvironment` | Env vars for agent process (must include `~/.ao/bin` in PATH) | No |
-| `detectActivity` | Terminal output classification (deprecated, but required) | No |
-| `getActivityState` | JSONL/API-based activity detection (min 3 states: active/ready/idle) | Yes (if no data) |
-| `isProcessRunning` | Check process alive via tmux TTY or PID | No |
-| `getSessionInfo` | Extract summary, cost, session ID from agent's data | Yes (if agent has no introspection) |
+| Method             | Purpose                                                              | Return `null` OK?                   |
+| ------------------ | -------------------------------------------------------------------- | ----------------------------------- |
+| `getLaunchCommand` | Shell command to start the agent                                     | No                                  |
+| `getEnvironment`   | Env vars for agent process (must include `~/.ao/bin` in PATH)        | No                                  |
+| `detectActivity`   | Terminal output classification (deprecated, but required)            | No                                  |
+| `getActivityState` | JSONL/API-based activity detection (min 3 states: active/ready/idle) | Yes (if no data)                    |
+| `isProcessRunning` | Check process alive via tmux TTY or PID                              | No                                  |
+| `getSessionInfo`   | Extract summary, cost, session ID from agent's data                  | Yes (if agent has no introspection) |
 
 **Optional methods (implement when the agent supports it):**
 
-| Method | Purpose | When to skip |
-|--------|---------|-------------|
-| `getRestoreCommand` | Resume a previous session | Agent has no resume capability (return `null`) |
-| `setupWorkspaceHooks` | Install metadata-update hooks (PATH wrappers or agent-native) | Never — required for dashboard PR tracking |
-| `postLaunchSetup` | Post-launch config (re-ensure hooks, resolve binary) | Only if no post-launch work needed |
-| `recordActivity` | Write terminal-derived activity to JSONL for `getActivityState` | Agent has native JSONL with full state coverage (Claude Code). Codex implements it as a safety net for when its native JSONL is missing/unparseable. |
+| Method                | Purpose                                                         | When to skip                                                                                                                                         |
+| --------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getRestoreCommand`   | Resume a previous session                                       | Agent has no resume capability (return `null`)                                                                                                       |
+| `setupWorkspaceHooks` | Install metadata-update hooks (PATH wrappers or agent-native)   | Never — required for PR/lifecycle tracking                                                                                                           |
+| `postLaunchSetup`     | Post-launch config (re-ensure hooks, resolve binary)            | Only if no post-launch work needed                                                                                                                   |
+| `recordActivity`      | Write terminal-derived activity to JSONL for `getActivityState` | Agent has native JSONL with full state coverage (Claude Code). Codex implements it as a safety net for when its native JSONL is missing/unparseable. |
 
-**Metadata hooks are critical.** Without `setupWorkspaceHooks`, PRs created by agents won't appear in the dashboard. Two patterns exist:
+**Metadata hooks are critical.** Without `setupWorkspaceHooks`, PRs created by agents are absent from AO status and lifecycle processing. Two patterns exist:
+
 - **Agent-native hooks** (Claude Code): PostToolUse hooks in `.claude/settings.json`
-- **PATH wrappers** (Codex, Aider, OpenCode): `~/.ao/bin/gh` and `~/.ao/bin/git` intercept commands. Call `setupPathWrapperWorkspace(workspacePath)` — it installs wrappers to `~/.ao/bin/` and writes session context to `.ao/AGENTS.md` (gitignored, does not modify tracked files).
+- **PATH wrappers** (Codex, Gemini, OpenCode): `~/.ao/bin/gh` and `~/.ao/bin/git` intercept commands. Call `setupPathWrapperWorkspace(workspacePath)` — it installs wrappers to `~/.ao/bin/` and writes session context to `.ao/AGENTS.md` (gitignored, does not modify tracked files).
 
 **Environment requirements:**
+
 - All agents must set `AO_SESSION_ID` and optionally `AO_ISSUE_ID`
 - All agents using PATH wrappers must prepend `~/.ao/bin` to PATH
 - Use `normalizeAgentPermissionMode` from `@aoagents/ao-core` (not a local duplicate)
 
 **Activity detection architecture:**
 
-`getActivityState` is the most critical method in the agent plugin. The dashboard, lifecycle manager, and stuck-detection all depend on it returning correct states. **Every agent plugin must produce all 6 states over its lifetime:**
+`getActivityState` is the most critical method in the agent plugin. Status reporting, lifecycle management, and stuck-detection all depend on it returning correct states. **Every agent plugin must produce all 6 states over its lifetime:**
 
 ```
 spawning → active ↔ ready → idle → exited
                 ↘ waiting_input / blocked ↗
 ```
 
-| State | Meaning | When |
-|-------|---------|------|
-| `active` | Agent is working right now | Activity within last 30s |
-| `ready` | Agent finished recently, may resume | 30s–5min since last activity |
-| `idle` | Agent has been quiet for a while | >5min since last activity |
-| `waiting_input` | Agent is blocked on user approval | Permission prompt visible |
-| `blocked` | Agent hit an error it can't recover from | Error state detected |
-| `exited` | Process is dead | `isProcessRunning` returns false |
+| State           | Meaning                                  | When                             |
+| --------------- | ---------------------------------------- | -------------------------------- |
+| `active`        | Agent is working right now               | Activity within last 30s         |
+| `ready`         | Agent finished recently, may resume      | 30s–5min since last activity     |
+| `idle`          | Agent has been quiet for a while         | >5min since last activity        |
+| `waiting_input` | Agent is blocked on user approval        | Permission prompt visible        |
+| `blocked`       | Agent hit an error it can't recover from | Error state detected             |
+| `exited`        | Process is dead                          | `isProcessRunning` returns false |
 
 **The `getActivityState` contract — implement exactly this cascade:**
 
@@ -383,25 +354,26 @@ async getActivityState(session, readyThresholdMs?): Promise<ActivityDetection | 
   //    Uses the entry's detected state + entry.ts for age-based decay.
   //    Decay only demotes (active→ready→idle), never promotes.
   //    This is the SAFETY NET when the native signal is unavailable.
-  //    Without this, getActivityState returns null and the dashboard shows
-  //    no activity for the entire session lifetime.
+  //    Without this, getActivityState returns null and status has no activity
+  //    for the entire session lifetime.
 
   // 5. Return null only if there is genuinely no data at all.
 }
 ```
 
-**Step 4 is mandatory.** If you skip the JSONL entry fallback, `getActivityState` will return `null` whenever the native API fails (binary not in PATH, API changed, session not found, timeout). The dashboard will show no activity state and stuck-detection breaks. This was a real bug in the OpenCode plugin — `findOpenCodeSession` returned null due to a session creation issue, and without the fallback, the entire active/ready/idle flow was dead. Use `getActivityFallbackState()` from core — it handles age-based decay and staleness caps correctly.
+**Step 4 is mandatory.** If you skip the JSONL entry fallback, `getActivityState` will return `null` whenever the native API fails (binary not in PATH, API changed, session not found, timeout). Status loses activity state and stuck-detection breaks. This was a real bug in the OpenCode plugin — `findOpenCodeSession` returned null due to a session creation issue, and without the fallback, the entire active/ready/idle flow was dead. Use `getActivityFallbackState()` from core — it handles age-based decay and staleness caps correctly.
 
 **Two activity detection patterns exist:**
 
-| Pattern | Used by | How it works |
-|---------|---------|-------------|
-| **Native JSONL** | Claude Code, Codex | Agent writes its own JSONL with rich state (`permission_request`, `tool_call`, `error`, etc.). `getActivityState` reads the last entry and maps it to activity states. |
-| **AO Activity JSONL** | Aider, OpenCode, new agents | Agent implements `recordActivity`. Lifecycle manager calls it each poll cycle with terminal output. It calls `classifyTerminalActivity()` → `appendActivityEntry()` to write to `{workspacePath}/.ao/activity.jsonl`. `getActivityState` reads from this file. |
+| Pattern               | Used by                      | How it works                                                                                                                                                                                                                                                   |
+| --------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Native JSONL**      | Claude Code, Codex           | Agent writes its own JSONL with rich state (`permission_request`, `tool_call`, `error`, etc.). `getActivityState` reads the last entry and maps it to activity states.                                                                                         |
+| **AO Activity JSONL** | Gemini, OpenCode, new agents | Agent implements `recordActivity`. Lifecycle manager calls it each poll cycle with terminal output. It calls `classifyTerminalActivity()` → `appendActivityEntry()` to write to `{workspacePath}/.ao/activity.jsonl`. `getActivityState` reads from this file. |
 
 **For agents using AO Activity JSONL (the common case for new plugins):**
 
 1. Implement `recordActivity` — delegate to the shared `recordTerminalActivity()`:
+
 ```typescript
 async recordActivity(session: Session, terminalOutput: string): Promise<void> {
   if (!session.workspacePath) return;
@@ -414,6 +386,7 @@ async recordActivity(session: Session, terminalOutput: string): Promise<void> {
 `recordTerminalActivity` handles classification, deduplication (20s window for non-actionable states), and appending. You don't need to implement dedup yourself.
 
 2. Implement `detectActivity` with patterns specific to the agent's terminal output:
+
 ```typescript
 detectActivity(terminalOutput: string): ActivityState {
   // Match the ACTUAL prompts/patterns the agent emits.
@@ -423,6 +396,7 @@ detectActivity(terminalOutput: string): ActivityState {
 ```
 
 3. In `getActivityState`, use `checkActivityLogState()` for waiting_input/blocked, then fall back to `getActivityFallbackState()`:
+
 ```typescript
 // checkActivityLogState returns non-null ONLY for waiting_input/blocked.
 // active/idle/ready intentionally return null — use the fallback for those.
@@ -451,19 +425,14 @@ if (fallback) return fallback;
 7. Returns `null` when both native signal and JSONL are unavailable
 
 **`isProcessRunning` must:**
-- Support tmux runtime (TTY-based `ps` lookup with process name regex)
-- Support process runtime (PID signal-0 check with EPERM handling)
+
+- Resolve liveness through the session's persisted tmux or Herdr runtime evidence
 - Match BOTH the node wrapper name AND the actual binary name (some agents install as `.agentname` with a dot prefix — the regex must handle this)
 - Return `false` (not `null`) on error
 
 ## Constraints
 
-- C-01: No new UI component libraries
-- C-02: No inline styles in new/modified code
-- C-04: Component files max 400 lines
-- C-05: Dark theme preserved (no redesign)
-- C-06: Next.js App Router only
-- C-07: No animation libraries
-- C-12: Test files for all new components
-- C-13: pnpm `workspace:*` protocol for cross-package deps
-- C-14: SSE 5s interval unchanged
+- C-01: Keep the shipped distribution headless; do not add dashboard or terminal UI dependencies.
+- C-02: Test new command, lifecycle, and adapter behavior.
+- C-03: Use pnpm `workspace:*` for cross-package dependencies.
+- C-04: Preserve persisted runtime/agent identity when operating on existing sessions.

@@ -18,7 +18,7 @@ import type { ActivityState, ActivityLogEntry, ActivityDetection } from "./types
  * Maximum age (ms) for `waiting_input`/`blocked` entries before they're
  * considered stale. If no new terminal output overwrites the entry within
  * this window, the state falls through to downstream fallbacks instead of
- * keeping the session stuck in `needs_input` on the dashboard forever.
+ * keeping the session stuck in `needs_input` in lifecycle/status output forever.
  */
 export const ACTIVITY_INPUT_STALENESS_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -47,8 +47,7 @@ export async function appendActivityEntry(
     ts: new Date().toISOString(),
     state,
     source,
-    ...(trigger !== undefined &&
-      (state === "waiting_input" || state === "blocked") && { trigger }),
+    ...(trigger !== undefined && (state === "waiting_input" || state === "blocked") && { trigger }),
   };
 
   await appendFile(logPath, JSON.stringify(entry) + "\n", "utf-8");
@@ -99,7 +98,14 @@ export async function readLastActivityEntry(
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
 
       const record = parsed as Record<string, unknown>;
-      const validStates = new Set(["active", "ready", "idle", "waiting_input", "blocked", "exited"]);
+      const validStates = new Set([
+        "active",
+        "ready",
+        "idle",
+        "waiting_input",
+        "blocked",
+        "exited",
+      ]);
       const validSources = new Set(["terminal", "native"]);
       if (
         typeof record.ts !== "string" ||

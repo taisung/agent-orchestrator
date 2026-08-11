@@ -1,4 +1,8 @@
-# AO Plugin Spec
+# AO Plugin Spec (historical extension design)
+
+> The personal distribution no longer ships the marketplace, installer, updater, or scaffolder described below.
+> Retained built-ins still implement these core interfaces. Explicit npm/local descriptors must already be
+> installed or built and are an advanced compatibility seam, not a supported marketplace workflow.
 
 This document defines the runtime contract and packaging requirements for Agent Orchestrator plugins.
 
@@ -74,41 +78,28 @@ Project config enables plugins through `plugins:` entries:
 
 ```yaml
 plugins:
-  - name: openclaw
-    source: registry
-    package: "@aoagents/ao-plugin-notifier-openclaw"
-    version: "0.1.1"
+  - name: custom-runtime
+    source: npm
+    package: "@example/ao-plugin-runtime-custom"
+  - name: local-notifier
+    source: local
+    path: /absolute/path/to/plugin/dist/index.js
 ```
 
 Descriptor fields:
 
 - `name`: logical plugin name shown in CLI UX
-- `source`: one of `registry`, `npm`, or `local`
-- `package`: package name for registry/npm-backed plugins
-- `version`: requested or installed version for store-backed plugins
+- `source`: `npm` or `local`
+- `package`: an independently installed package name for `source: npm`
 - `path`: local filesystem path for `source: local`
 - `enabled`: optional flag, defaults to `true`
 
-## Marketplace Registry
+AO does not install these dependencies. The npm package must already resolve from the checkout, and a local
+entrypoint must already be built. `source: registry` is rejected.
 
-AO’s bundled marketplace catalog lives at:
+## Distribution Boundary
 
-- `packages/cli/src/assets/plugin-registry.json`
+The personal distribution ships only its retained built-ins. It has no marketplace catalog, managed plugin store,
+installer, updater, or scaffolder. Explicit descriptors are a compatibility seam for manually managed extensions.
 
-Registry entries provide AO-specific metadata on top of the runtime contract:
-
-- `id`
-- `package`
-- `slot`
-- `description`
-- `source`
-- `latestVersion`
-- `setupAction` when post-install guidance is needed
-
-## Installation Model
-
-Registry and npm plugins install into the AO-managed store:
-
-- `~/.agent-orchestrator/plugins/`
-
-That store is shared across projects. `agent-orchestrator.yaml` remains the source of truth for whether a plugin is enabled in a given repo.
+The `terminal` interface remains for source compatibility, but no terminal plugin or CLI consumer is bundled.

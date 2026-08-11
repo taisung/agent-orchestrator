@@ -149,11 +149,13 @@ describe("loadBuiltins", () => {
 
     const fakeClaudeCode = makePlugin("agent", "claude-code");
     const fakeCodex = makePlugin("agent", "codex");
+    const fakeGemini = makePlugin("agent", "gemini");
     const fakeOpenCode = makePlugin("agent", "opencode");
 
     await registry.loadBuiltins(undefined, async (pkg: string) => {
       if (pkg === "@aoagents/ao-plugin-agent-claude-code") return fakeClaudeCode;
       if (pkg === "@aoagents/ao-plugin-agent-codex") return fakeCodex;
+      if (pkg === "@aoagents/ao-plugin-agent-gemini") return fakeGemini;
       if (pkg === "@aoagents/ao-plugin-agent-opencode") return fakeOpenCode;
       throw new Error(`Not found: ${pkg}`);
     });
@@ -161,211 +163,214 @@ describe("loadBuiltins", () => {
     const agents = registry.list("agent");
     expect(agents).toContainEqual(expect.objectContaining({ name: "claude-code", slot: "agent" }));
     expect(agents).toContainEqual(expect.objectContaining({ name: "codex", slot: "agent" }));
+    expect(agents).toContainEqual(expect.objectContaining({ name: "gemini", slot: "agent" }));
     expect(agents).toContainEqual(expect.objectContaining({ name: "opencode", slot: "agent" }));
 
     expect(registry.get("agent", "codex")).not.toBeNull();
     expect(registry.get("agent", "claude-code")).not.toBeNull();
+    expect(registry.get("agent", "gemini")).not.toBeNull();
     expect(registry.get("agent", "opencode")).not.toBeNull();
   });
 
-  it("registers gitlab tracker and scm plugins from importFn", async () => {
+  it("registers retained herdr, GitHub tracker, and GitHub SCM plugins from importFn", async () => {
     const registry = createPluginRegistry();
 
-    const fakeTracker = makePlugin("tracker", "gitlab");
-    const fakeScm = makePlugin("scm", "gitlab");
+    const fakeRuntime = makePlugin("runtime", "herdr");
+    const fakeTracker = makePlugin("tracker", "github");
+    const fakeScm = makePlugin("scm", "github");
 
     await registry.loadBuiltins(undefined, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-tracker-gitlab") return fakeTracker;
-      if (pkg === "@aoagents/ao-plugin-scm-gitlab") return fakeScm;
+      if (pkg === "@aoagents/ao-plugin-runtime-herdr") return fakeRuntime;
+      if (pkg === "@aoagents/ao-plugin-tracker-github") return fakeTracker;
+      if (pkg === "@aoagents/ao-plugin-scm-github") return fakeScm;
       throw new Error(`Not found: ${pkg}`);
     });
 
+    expect(registry.list("runtime")).toContainEqual(
+      expect.objectContaining({ name: "herdr", slot: "runtime" }),
+    );
     expect(registry.list("tracker")).toContainEqual(
-      expect.objectContaining({ name: "gitlab", slot: "tracker" }),
+      expect.objectContaining({ name: "github", slot: "tracker" }),
     );
     expect(registry.list("scm")).toContainEqual(
-      expect.objectContaining({ name: "gitlab", slot: "scm" }),
+      expect.objectContaining({ name: "github", slot: "scm" }),
     );
   });
 
   it("passes configured notifier plugin config to create()", async () => {
     const registry = createPluginRegistry();
-    const fakeWebhookNotifier = makePlugin("notifier", "webhook");
+    const fakeDesktopNotifier = makePlugin("notifier", "desktop");
     const config = makeOrchestratorConfig({
       notifiers: {
-        webhook: {
-          plugin: "webhook",
-          url: "http://127.0.0.1:8787/hook",
+        desktop: {
+          plugin: "desktop",
+          sound: true,
           retries: 2,
-          retryDelayMs: 500,
         },
       },
     });
 
     await registry.loadBuiltins(config, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-webhook") return fakeWebhookNotifier;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktopNotifier;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(fakeWebhookNotifier.create).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8787/hook",
+    expect(fakeDesktopNotifier.create).toHaveBeenCalledWith({
+      sound: true,
       retries: 2,
-      retryDelayMs: 500,
     });
   });
 
   it("matches notifier config by plugin name instead of instance key", async () => {
     const registry = createPluginRegistry();
-    const fakeWebhookNotifier = makePlugin("notifier", "webhook");
+    const fakeDesktopNotifier = makePlugin("notifier", "desktop");
     const config = makeOrchestratorConfig({
       notifiers: {
-        "my-webhook": {
-          plugin: "webhook",
-          url: "http://127.0.0.1:8787/custom-hook",
+        "my-desktop": {
+          plugin: "desktop",
+          title: "custom title",
           retries: 4,
         },
       },
     });
 
     await registry.loadBuiltins(config, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-webhook") return fakeWebhookNotifier;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktopNotifier;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(fakeWebhookNotifier.create).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8787/custom-hook",
+    expect(fakeDesktopNotifier.create).toHaveBeenCalledWith({
+      title: "custom title",
       retries: 4,
     });
   });
 
   it("registers alias-specific notifier instances for the same plugin", async () => {
     const registry = createPluginRegistry();
-    const fakeSlackNotifier = makePlugin("notifier", "slack");
+    const fakeDesktopNotifier = makePlugin("notifier", "desktop");
     const config = makeOrchestratorConfig({
       configPath: "/test/config.yaml",
       notifiers: {
         alerts: {
-          plugin: "slack",
-          webhookUrl: "https://hooks.slack.com/services/alerts",
-          channel: "#alerts",
+          plugin: "desktop",
+          title: "alerts",
         },
         ops: {
-          plugin: "slack",
-          webhookUrl: "https://hooks.slack.com/services/ops",
-          channel: "#ops",
+          plugin: "desktop",
+          title: "ops",
         },
       },
     });
 
     await registry.loadBuiltins(config, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-slack") return fakeSlackNotifier;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktopNotifier;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(fakeSlackNotifier.create).toHaveBeenCalledTimes(2);
-    expect(registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config).toEqual({
-      webhookUrl: "https://hooks.slack.com/services/alerts",
-      channel: "#alerts",
+    expect(fakeDesktopNotifier.create).toHaveBeenCalledTimes(2);
+    expect(
+      registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config,
+    ).toEqual({
+      title: "alerts",
       configPath: "/test/config.yaml",
     });
     expect(registry.get<{ _config: Record<string, unknown> }>("notifier", "ops")?._config).toEqual({
-      webhookUrl: "https://hooks.slack.com/services/ops",
-      channel: "#ops",
+      title: "ops",
       configPath: "/test/config.yaml",
     });
-    expect(registry.get("notifier", "slack")).not.toBeNull();
+    expect(registry.get("notifier", "desktop")).not.toBeNull();
     expect(registry.list("notifier")).toContainEqual(
-      expect.objectContaining({ name: "slack", slot: "notifier" }),
+      expect.objectContaining({ name: "desktop", slot: "notifier" }),
     );
     expect(registry.list("notifier")).toHaveLength(1);
   });
 
   it("prefers the notifier id matching the plugin name for direct plugin lookups", async () => {
     const registry = createPluginRegistry();
-    const fakeSlackNotifier = makePlugin("notifier", "slack");
+    const fakeDesktopNotifier = makePlugin("notifier", "desktop");
     const config = makeOrchestratorConfig({
       configPath: "/test/config.yaml",
       notifiers: {
-        slack: {
-          plugin: "slack",
-          webhookUrl: "https://hooks.slack.com/services/default",
-          channel: "#general",
+        desktop: {
+          plugin: "desktop",
+          title: "default",
         },
         alerts: {
-          plugin: "slack",
-          webhookUrl: "https://hooks.slack.com/services/alerts",
-          channel: "#alerts",
+          plugin: "desktop",
+          title: "alerts",
         },
       },
     });
 
     await registry.loadBuiltins(config, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-slack") return fakeSlackNotifier;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktopNotifier;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(registry.get<{ _config: Record<string, unknown> }>("notifier", "slack")?._config).toEqual({
-      webhookUrl: "https://hooks.slack.com/services/default",
-      channel: "#general",
+    expect(
+      registry.get<{ _config: Record<string, unknown> }>("notifier", "desktop")?._config,
+    ).toEqual({
+      title: "default",
       configPath: "/test/config.yaml",
     });
-    expect(registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config).toEqual({
-      webhookUrl: "https://hooks.slack.com/services/alerts",
-      channel: "#alerts",
+    expect(
+      registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config,
+    ).toEqual({
+      title: "alerts",
       configPath: "/test/config.yaml",
     });
   });
 
   it("passes notifier config from config.notifiers when loading builtins", async () => {
     const registry = createPluginRegistry();
-    const fakeOpenClaw = makePlugin("notifier", "openclaw");
+    const fakeDesktop = makePlugin("notifier", "desktop");
     const cfg = makeOrchestratorConfig({
       notifiers: {
-        openclaw: {
-          plugin: "openclaw",
-          url: "http://127.0.0.1:18789/hooks/agent",
-          token: "tok",
+        desktop: {
+          plugin: "desktop",
+          title: "AO",
+          sound: false,
         },
       },
     });
 
     await registry.loadBuiltins(cfg, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-openclaw") return fakeOpenClaw;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktop;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(fakeOpenClaw.create).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:18789/hooks/agent",
-      token: "tok",
+    expect(fakeDesktop.create).toHaveBeenCalledWith({
+      title: "AO",
+      sound: false,
     });
   });
 
   it("strips package loading metadata from notifier config", async () => {
     const registry = createPluginRegistry();
-    const fakeWebhook = makePlugin("notifier", "webhook");
+    const fakeDesktop = makePlugin("notifier", "desktop");
     const cfg = makeOrchestratorConfig({
       configPath: "/test/config.yaml",
       notifiers: {
-        mywebhook: {
-          plugin: "webhook",
+        alerts: {
+          plugin: "desktop",
           // package field is allowed for resolution but should be stripped:
-          package: "@aoagents/ao-plugin-notifier-webhook",
+          package: "@aoagents/ao-plugin-notifier-desktop",
           // These are plugin-specific fields that should be passed through:
-          url: "https://webhook.example.com/notify",
+          title: "alerts",
           retries: 3,
         },
       },
     });
 
     await registry.loadBuiltins(cfg, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-webhook") return fakeWebhook;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktop;
       throw new Error(`Not found: ${pkg}`);
     });
 
     // Loading metadata (package) should be stripped to prevent leakage
     // Plugin-specific fields (url, retries) should be passed through
-    expect(fakeWebhook.create).toHaveBeenCalledWith({
-      url: "https://webhook.example.com/notify",
+    expect(fakeDesktop.create).toHaveBeenCalledWith({
+      title: "alerts",
       retries: 3,
       configPath: "/test/config.yaml",
     });
@@ -373,11 +378,11 @@ describe("loadBuiltins", () => {
 
   it("warns and skips when path is used alongside plugin name in notifier config", async () => {
     const registry = createPluginRegistry();
-    const fakeWebhook = makePlugin("notifier", "webhook");
+    const fakeDesktop = makePlugin("notifier", "desktop");
     const cfg = makeOrchestratorConfig({
       notifiers: {
-        mywebhook: {
-          plugin: "webhook",
+        alerts: {
+          plugin: "desktop",
           path: "./some/path", // This triggers the collision check
         },
       },
@@ -386,42 +391,37 @@ describe("loadBuiltins", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     await registry.loadBuiltins(cfg, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-webhook") return fakeWebhook;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktop;
       return null;
     });
 
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('"path" field conflicts with reserved'));
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"path" field conflicts with reserved'),
+    );
     stderrSpy.mockRestore();
 
     // Plugin should not be registered due to config error
-    expect(registry.get("notifier", "webhook")).toBeNull();
+    expect(registry.get("notifier", "desktop")).toBeNull();
   });
 
   it("does not match notifier key when explicit plugin points to another notifier", async () => {
     const registry = createPluginRegistry();
-    const fakeOpenClaw = makePlugin("notifier", "openclaw");
-    const fakeWebhook = makePlugin("notifier", "webhook");
+    const fakeDesktop = makePlugin("notifier", "desktop");
     const cfg = makeOrchestratorConfig({
       notifiers: {
-        openclaw: {
-          plugin: "webhook",
-          url: "http://127.0.0.1:8787/hook",
-          retries: 3,
+        desktop: {
+          plugin: "external-notifier",
+          title: "external",
         },
       },
     });
 
     await registry.loadBuiltins(cfg, async (pkg: string) => {
-      if (pkg === "@aoagents/ao-plugin-notifier-openclaw") return fakeOpenClaw;
-      if (pkg === "@aoagents/ao-plugin-notifier-webhook") return fakeWebhook;
+      if (pkg === "@aoagents/ao-plugin-notifier-desktop") return fakeDesktop;
       throw new Error(`Not found: ${pkg}`);
     });
 
-    expect(fakeOpenClaw.create).toHaveBeenCalledWith(undefined);
-    expect(fakeWebhook.create).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8787/hook",
-      retries: 3,
-    });
+    expect(fakeDesktop.create).toHaveBeenCalledWith(undefined);
   });
 
   it("should use provided importFn instead of built-in import", async () => {
@@ -596,7 +596,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira", slot: "tracker" as const, version: "1.0.0", description: "Jira tracker" },
+      manifest: {
+        name: "jira",
+        slot: "tracker" as const,
+        version: "1.0.0",
+        description: "Jira tracker",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -637,7 +642,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira-enterprise", slot: "tracker" as const, version: "1.0.0", description: "Jira Enterprise" },
+      manifest: {
+        name: "jira-enterprise",
+        slot: "tracker" as const,
+        version: "1.0.0",
+        description: "Jira Enterprise",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -687,7 +697,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira", slot: "tracker" as const, version: "1.0.0", description: "Jira tracker" },
+      manifest: {
+        name: "jira",
+        slot: "tracker" as const,
+        version: "1.0.0",
+        description: "Jira tracker",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -732,7 +747,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "ms-teams", slot: "notifier" as const, version: "1.0.0", description: "Teams notifier" },
+      manifest: {
+        name: "ms-teams",
+        slot: "notifier" as const,
+        version: "1.0.0",
+        description: "Teams notifier",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -778,7 +798,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "ms-teams", slot: "notifier" as const, version: "1.0.0", description: "Teams notifier" },
+      manifest: {
+        name: "ms-teams",
+        slot: "notifier" as const,
+        version: "1.0.0",
+        description: "Teams notifier",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -838,7 +863,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "ms-teams", slot: "notifier" as const, version: "1.0.0", description: "Teams notifier" },
+      manifest: {
+        name: "ms-teams",
+        slot: "notifier" as const,
+        version: "1.0.0",
+        description: "Teams notifier",
+      },
       create: vi.fn((pluginConfig?: Record<string, unknown>) => ({
         name: "ms-teams",
         _config: pluginConfig,
@@ -885,7 +915,9 @@ describe("External plugin manifest validation", () => {
 
     expect(config.notifiers?.alerts?.plugin).toBe("ms-teams");
     expect(config.notifiers?.ops?.plugin).toBe("ms-teams");
-    expect(registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config).toEqual({
+    expect(
+      registry.get<{ _config: Record<string, unknown> }>("notifier", "alerts")?._config,
+    ).toEqual({
       webhookUrl: "https://teams.example/alerts",
       configPath: "/test/config.yaml",
     });
@@ -900,7 +932,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira", slot: "notifier" as const, version: "1.0.0", description: "Wrong slot!" },
+      manifest: {
+        name: "jira",
+        slot: "notifier" as const,
+        version: "1.0.0",
+        description: "Wrong slot!",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -935,7 +972,7 @@ describe("External plugin manifest validation", () => {
     await registry.loadFromConfig(config, importFn);
 
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("has slot \"notifier\" but was configured as \"tracker\""),
+      expect.stringContaining('has slot "notifier" but was configured as "tracker"'),
     );
     stderrSpy.mockRestore();
   });
@@ -944,7 +981,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira-cloud", slot: "tracker" as const, version: "1.0.0", description: "Jira Cloud" },
+      manifest: {
+        name: "jira-cloud",
+        slot: "tracker" as const,
+        version: "1.0.0",
+        description: "Jira Cloud",
+      },
       create: vi.fn(() => ({})),
     };
 
@@ -1005,7 +1047,12 @@ describe("External plugin manifest validation", () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
-      manifest: { name: "jira-cloud", slot: "tracker" as const, version: "1.0.0", description: "Jira Cloud" },
+      manifest: {
+        name: "jira-cloud",
+        slot: "tracker" as const,
+        version: "1.0.0",
+        description: "Jira Cloud",
+      },
       create: vi.fn(() => ({})),
     };
 

@@ -2,7 +2,8 @@
  * Config generator for `ao start <url>` — auto-detects project settings
  * from a repo URL and generates a valid agent-orchestrator.yaml.
  *
- * SCM-agnostic: parses GitHub, GitLab, Bitbucket URLs and infers plugins.
+ * URL parsing is host-agnostic, but the personal distribution only generates
+ * runnable configurations for GitHub because that is the retained SCM/tracker.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -182,8 +183,6 @@ export interface GenerateConfigOptions {
   parsed: ParsedRepoUrl;
   /** Local path to the cloned repo */
   repoPath: string;
-  /** Dashboard port (default: 3000) */
-  port?: number;
 }
 
 /**
@@ -191,9 +190,14 @@ export interface GenerateConfigOptions {
  * Returns the raw object ready for YAML serialization.
  */
 export function generateConfigFromUrl(options: GenerateConfigOptions): Record<string, unknown> {
-  const { parsed, repoPath, port = 3000 } = options;
+  const { parsed, repoPath } = options;
 
   const platform = detectScmPlatform(parsed.host);
+  if (platform !== "github") {
+    throw new Error(
+      `Cannot generate a runnable config for ${parsed.host}: this AO distribution supports GitHub SCM/tracker only.`,
+    );
+  }
   const defaultBranch = detectDefaultBranchFromDir(repoPath);
   const projectInfo = detectProjectInfo(repoPath);
   // Use original case for prefix generation (preserves CamelCase detection),
@@ -213,15 +217,8 @@ export function generateConfigFromUrl(options: GenerateConfigOptions): Record<st
     sessionPrefix: prefix,
   };
 
-  // SCM plugin — always set explicitly so applyProjectDefaults doesn't override.
-  // For known platforms, use the matching plugin. For unknown hosts, default to github
-  // (best available option since it's the only fully implemented SCM plugin).
-  projectConfig.scm = { plugin: platform !== "unknown" ? platform : "github" };
-
-  // Tracker — same platform as SCM for known hosts, github as fallback
-  projectConfig.tracker = {
-    plugin: platform === "github" || platform === "gitlab" ? platform : "github",
-  };
+  projectConfig.scm = { plugin: "github" };
+  projectConfig.tracker = { plugin: "github" };
 
   // Post-create commands based on detected package manager (JS ecosystem only)
   const JS_PACKAGE_MANAGERS: Record<string, string> = {
@@ -238,7 +235,6 @@ export function generateConfigFromUrl(options: GenerateConfigOptions): Record<st
   }
 
   return {
-    port,
     defaults: {
       runtime: "tmux",
       agent: "claude-code",
@@ -257,9 +253,9 @@ const CONFIG_KEY_COMMENTS: Record<string, string> = {
   // so generating `runtime: herdr` would produce a config that fails preflight
   // on a machine that has never run herdr. Name it here instead, so the choice
   // is discoverable without being imposed.
-  "defaults.runtime": " tmux | process | herdr (herdr needs a running server: herdr server)",
-  "defaults.agent": " claude-code | codex | aider | opencode",
-  "defaults.workspace": " worktree | clone",
+  "defaults.runtime": " tmux | herdr (herdr needs a running server: herdr server)",
+  "defaults.agent": " claude-code | codex | gemini | opencode",
+  "defaults.workspace": " worktree",
 };
 
 /**
@@ -301,7 +297,10 @@ export function isRepoAlreadyCloned(dir: string, expectedCloneUrl: string): bool
     if (sshMatch) {
       normalized = `https://${sshMatch[1]}/${sshMatch[2]}`;
     }
-    return normalized.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+    return normalized
+      .replace(/\.git$/, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
   };
 
   const expectedNorm = normalize(expectedCloneUrl);

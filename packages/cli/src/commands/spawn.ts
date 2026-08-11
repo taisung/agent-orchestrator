@@ -14,8 +14,6 @@ import {
   type DecomposerConfig,
   DEFAULT_DECOMPOSER_CONFIG,
 } from "@aoagents/ao-core";
-import { DEFAULT_PORT } from "../lib/constants.js";
-import { exec } from "../lib/shell.js";
 import { banner } from "../lib/format.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker } from "../lib/lifecycle-service.js";
@@ -90,7 +88,6 @@ async function spawnSession(
   config: OrchestratorConfig,
   projectId: string,
   issueId?: string,
-  openTab?: boolean,
   agent?: string,
   model?: string,
   claimOptions?: SpawnClaimOptions,
@@ -127,11 +124,8 @@ async function spawnSession(
 
     const issueLabel = issueId ? ` for issue #${issueId}` : "";
     const claimLabel = claimedPrUrl ? ` (claimed ${claimedPrUrl})` : "";
-    const port = config.port ?? DEFAULT_PORT;
-    spinner.succeed(
-      `Session ${chalk.green(session.id)} spawned${issueLabel}${claimLabel}`,
-    );
-    console.log(`  View:     ${chalk.dim(`http://localhost:${port}/sessions/${session.id}`)}`);
+    spinner.succeed(`Session ${chalk.green(session.id)} spawned${issueLabel}${claimLabel}`);
+    console.log(`  Attach:   ${chalk.dim(`ao session attach ${session.id}`)}`);
 
     // Warn if prompt delivery failed (for post-launch agents like Claude Code)
     const promptDelivered = session.metadata?.promptDelivered;
@@ -142,16 +136,6 @@ async function spawnSession(
             `    Use '${chalk.cyan("ao send " + session.id + ' "message..."')}' to send instructions manually.`,
         ),
       );
-    }
-
-    // Open terminal tab if requested
-    if (openTab) {
-      try {
-        const tmuxTarget = session.runtimeHandle?.id ?? session.id;
-        await exec("open-iterm-tab", [tmuxTarget]);
-      } catch {
-        // Terminal plugin not available
-      }
     }
 
     // Output for scripting
@@ -169,7 +153,6 @@ export function registerSpawn(program: Command): void {
     .description("Spawn a single agent session")
     .argument("[first]", "Issue identifier (project is auto-detected)")
     .argument("[second]", "" /* hidden second arg to catch old two-arg usage */)
-    .option("--open", "Open session in terminal tab")
     .option("--agent <name>", "Override the agent plugin (e.g. codex, claude-code)")
     .option("--model <name>", "Override the agent model (e.g. sonnet, gpt-5.6-terra)")
     .option("--claim-pr <pr>", "Immediately claim an existing PR for the spawned session")
@@ -181,7 +164,6 @@ export function registerSpawn(program: Command): void {
         first: string | undefined,
         second: string | undefined,
         opts: {
-          open?: boolean;
           agent?: string;
           model?: string;
           claimPr?: string;
@@ -263,15 +245,7 @@ export function registerSpawn(program: Command): void {
 
             if (leaves.length <= 1) {
               console.log(chalk.yellow("Task is atomic — spawning directly."));
-              await spawnSession(
-                config,
-                projectId,
-                issueId,
-                opts.open,
-                opts.agent,
-                opts.model,
-                claimOptions,
-              );
+              await spawnSession(config, projectId, issueId, opts.agent, opts.model, claimOptions);
             } else {
               // Create child issues and spawn sessions with lineage context
               const sm = await getSessionManager(config);
@@ -299,15 +273,7 @@ export function registerSpawn(program: Command): void {
               }
             }
           } else {
-            await spawnSession(
-              config,
-              projectId,
-              issueId,
-              opts.open,
-              opts.agent,
-              opts.model,
-              claimOptions,
-            );
+            await spawnSession(config, projectId, issueId, opts.agent, opts.model, claimOptions);
           }
         } catch (err) {
           console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
@@ -322,8 +288,7 @@ export function registerBatchSpawn(program: Command): void {
     .command("batch-spawn")
     .description("Spawn sessions for multiple issues with duplicate detection")
     .argument("<issues...>", "Issue identifiers (project is auto-detected)")
-    .option("--open", "Open sessions in terminal tabs")
-    .action(async (issues: string[], opts: { open?: boolean }) => {
+    .action(async (issues: string[]) => {
       const config = loadConfig();
       let projectId: string;
 
@@ -395,15 +360,6 @@ export function registerBatchSpawn(program: Command): void {
           created.push({ session: session.id, issue });
           spawnedIssues.add(issue.toLowerCase());
           console.log(chalk.green(`  Created ${session.id} for ${issue}`));
-
-          if (opts.open) {
-            try {
-              const tmuxTarget = session.runtimeHandle?.id ?? session.id;
-              await exec("open-iterm-tab", [tmuxTarget]);
-            } catch {
-              // best effort
-            }
-          }
         } catch (err) {
           failed.push({
             issue,
