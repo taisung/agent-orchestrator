@@ -79,6 +79,7 @@ update_ao_metadata() {
   local key="\$1" value="\$2"
   local ao_dir="\${AO_DATA_DIR:-}"
   local ao_session="\${AO_SESSION:-}"
+  local ao_state_root="\${AO_STATE_ROOT:-/__ao_state_root_unset__}"
 
   [[ -z "\$ao_dir" || -z "\$ao_session" ]] && return 0
 
@@ -89,21 +90,22 @@ update_ao_metadata() {
 
   # Validate: ao_dir must be an absolute path under known ao directories or /tmp
   case "\$ao_dir" in
-    "\$HOME"/.ao/* | "\$HOME"/.agent-orchestrator/* | /tmp/*) ;;
+    "\$HOME"/.ao/* | "\$HOME"/.agent-orchestrator/* | /tmp/* | "\$ao_state_root" | "\$ao_state_root"/*) ;;
     *) return 0 ;;
   esac
 
   local metadata_file="\$ao_dir/\$ao_session"
 
   # Resolve symlinks and verify canonicalized paths are still within trusted roots
-  local real_dir real_ao_dir
+  local real_dir real_ao_dir real_state_root
   real_ao_dir="\$(cd "\$ao_dir" 2>/dev/null && pwd -P)" || return 0
   real_dir="\$(cd "\$(dirname "\$metadata_file")" 2>/dev/null && pwd -P)" || return 0
+  real_state_root="\$(cd "\$ao_state_root" 2>/dev/null && pwd -P)" || real_state_root="/__ao_state_root_unset__"
 
   # Re-validate real_ao_dir against trusted roots after canonicalization
   # (prevents /tmp/../../home/user from escaping the allowlist)
   case "\$real_ao_dir" in
-    "\$HOME"/.ao/* | "\$HOME"/.ao | "\$HOME"/.agent-orchestrator/* | "\$HOME"/.agent-orchestrator | /tmp/*) ;;
+    "\$HOME"/.ao/* | "\$HOME"/.ao | "\$HOME"/.agent-orchestrator/* | "\$HOME"/.agent-orchestrator | /tmp/* | "\$real_state_root" | "\$real_state_root"/*) ;;
     *) return 0 ;;
   esac
 
@@ -317,11 +319,7 @@ export async function setupPathWrapperWorkspace(workspacePath: string): Promise<
   }
 
   if (needsUpdate) {
-    await atomicWriteFile(
-      join(getAoBinDir(), "ao-metadata-helper.sh"),
-      AO_METADATA_HELPER,
-      0o755,
-    );
+    await atomicWriteFile(join(getAoBinDir(), "ao-metadata-helper.sh"), AO_METADATA_HELPER, 0o755);
     // Write wrappers atomically, then write the version marker last.
     // If we crash between wrapper writes and marker write, the next
     // invocation will redo the writes (safe: wrappers are idempotent).

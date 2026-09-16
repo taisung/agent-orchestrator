@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildAgentPath, setupPathWrapperWorkspace } from "../agent-workspace-hooks.js";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  AO_METADATA_HELPER,
+  buildAgentPath,
+  setupPathWrapperWorkspace,
+} from "../agent-workspace-hooks.js";
 
 const { mockWriteFile, mockMkdir, mockReadFile, mockRename } = vi.hoisted(() => ({
   mockWriteFile: vi.fn().mockResolvedValue(undefined),
@@ -50,6 +57,58 @@ describe("buildAgentPath", () => {
   });
 });
 
+describe("AO_METADATA_HELPER", () => {
+  it("updates metadata under the configured state root and rejects paths outside it", () => {
+    const stateRoot = mkdtempSync("/var/tmp/ao-x-");
+    const outsideRoot = mkdtempSync("/var/tmp/ao-outside-");
+    const sessionsDir = join(stateRoot, "instance", "sessions");
+    const outsideSessionsDir = join(outsideRoot, "instance", "sessions");
+    const helperPath = join(stateRoot, "ao-metadata-helper.sh");
+    const sessionId = "app-1";
+    const metadataPath = join(sessionsDir, sessionId);
+    const outsideMetadataPath = join(outsideSessionsDir, sessionId);
+
+    try {
+      mkdirSync(sessionsDir, { recursive: true });
+      mkdirSync(outsideSessionsDir, { recursive: true });
+      writeFileSync(helperPath, AO_METADATA_HELPER);
+      writeFileSync(metadataPath, "status=working\n");
+      writeFileSync(outsideMetadataPath, "status=working\n");
+
+      const runHelper = (dataDir: string): void => {
+        execFileSync(
+          "bash",
+          [
+            "-c",
+            'source "$1"; update_ao_metadata "$2" "$3"',
+            "bash",
+            helperPath,
+            "status",
+            "updated",
+          ],
+          {
+            env: {
+              ...process.env,
+              AO_STATE_ROOT: stateRoot,
+              AO_DATA_DIR: dataDir,
+              AO_SESSION: sessionId,
+            },
+          },
+        );
+      };
+
+      runHelper(sessionsDir);
+      expect(readFileSync(metadataPath, "utf8")).toBe("status=updated\n");
+
+      runHelper(outsideSessionsDir);
+      expect(readFileSync(outsideMetadataPath, "utf8")).toBe("status=working\n");
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("setupPathWrapperWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,10 +117,7 @@ describe("setupPathWrapperWorkspace", () => {
 
   it("creates ao bin directory", async () => {
     await setupPathWrapperWorkspace("/workspace");
-    expect(mockMkdir).toHaveBeenCalledWith(
-      "/home/testuser/.ao/bin",
-      { recursive: true },
-    );
+    expect(mockMkdir).toHaveBeenCalledWith("/home/testuser/.ao/bin", { recursive: true });
   });
 
   it("writes wrapper scripts when version marker is missing", async () => {
@@ -69,8 +125,8 @@ describe("setupPathWrapperWorkspace", () => {
     // atomicWriteFile writes to .tmp then renames
     expect(mockRename).toHaveBeenCalled();
     // .ao/AGENTS.md is written directly
-    const agentsMdWrites = mockWriteFile.mock.calls.filter(
-      (c: unknown[]) => String(c[0]).includes(".ao/AGENTS.md"),
+    const agentsMdWrites = mockWriteFile.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).includes(".ao/AGENTS.md"),
     );
     expect(agentsMdWrites).toHaveLength(1);
   });
@@ -91,8 +147,8 @@ describe("setupPathWrapperWorkspace", () => {
   it("writes .ao/AGENTS.md with session context", async () => {
     await setupPathWrapperWorkspace("/workspace");
 
-    const agentsMdWrites = mockWriteFile.mock.calls.filter(
-      (c: unknown[]) => String(c[0]).includes(".ao/AGENTS.md"),
+    const agentsMdWrites = mockWriteFile.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).includes(".ao/AGENTS.md"),
     );
     expect(agentsMdWrites).toHaveLength(1);
     expect(String(agentsMdWrites[0][1])).toContain("Agent Orchestrator");
