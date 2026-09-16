@@ -154,3 +154,17 @@ owner's re-review named), each with a red-then-green receipt; full suite 1798 �
 0, re-run by the orchestrator with the same numbers. Fast-forwarded onto `fix/backport-upstream-activity-metadata`
 and rebuilt on the owner's word ("merge and rebuild"); `ao --version` / `ao status` answered after the rebuild.
 Wall time from brief to merge: ~45 min; worker context 96 % → 18 %.
+
+## 10. Addendum 2026-09-16 — round 2 of the 397b7dd1 review (three P2 findings)
+
+The owner's re-review of the merged round 1 found three gaps: `WRAPPER_VERSION` still `0.2.0` (existing
+installs kept the old helper), the Gemini plugin's private, outdated helper overwriting the shared one, and
+the lifecycle worker launch not passing `AO_STATE_ROOT`. Same routing (tooling / L1 / MEDIUM → codex
+`gpt-5.6-sol`, nex-2090, isolated worktree, no build in the primary checkout). Three commits (`fc36b57c`,
+`e4dedce2`, `954e3997`), each red-then-green; censuses: the marker has one production reader/writer, no plugin
+ships a private helper any more (Codex, Gemini, OpenCode all call `setupPathWrapperWorkspace`), the lifecycle
+launch is the only state-owning child spawn. Side effect accepted by the owner: Gemini workspaces now get
+`.ao/AGENTS.md` (gitignored) instead of an appended repo-tracked `AGENTS.md`, like the other plugins. Full
+suite re-run by the orchestrator in the real environment: 1809 passed / 20 skipped / 0 failed (round 1: 1803).
+Fast-forwarded onto `fix/backport-upstream-activity-metadata` and rebuilt on the owner's word; `ao --version`
+/ `ao status` answered after the rebuild. Wall time brief → merge: ~53 min; worker context compacted once.
