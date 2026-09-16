@@ -141,3 +141,16 @@ The 1741 §3 cells are priors; the log is what replaces them.
 - `~/agent-skills` `292328e` + `64e55bd` are local; push on request.
 - The 1737 increment 0 worker (nex-2087, codex Astra) is the first session routed under this policy; its landing
   adds the first post-policy rows to the router log.
+
+## 9. Addendum 2026-09-16 — the four 397b7dd1 review findings, fixed through the routing
+
+The owner forwarded a four-finding review of `397b7dd1` (clean-checkout build, `workspace: clone` accepted
+silently, `AO_STATE_ROOT` not propagated, metadata-helper allowlist fixed). Routed per §4 as tooling / L1 /
+MEDIUM: one codex `gpt-5.6-sol` worker (nex-2088), briefed with file:line anchors and a hard rule never to
+build in the primary checkout (the live `ao` runs from its `dist`). It worked in a separate worktree with
+`AO_STATE_ROOT` under `/tmp` and an isolated `tmux -L` server. Result: five commits (`4ec45f5c`, `d9e34adf`,
+`44443972`, `4e920326`, `3e8ebff3` — the last a regression test for the PID-based `NODE_ENV=test` root the
+owner's re-review named), each with a red-then-green receipt; full suite 1798 → 1803 passed / 20 skipped, exit
+0, re-run by the orchestrator with the same numbers. Fast-forwarded onto `fix/backport-upstream-activity-metadata`
+and rebuilt on the owner's word ("merge and rebuild"); `ao --version` / `ao status` answered after the rebuild.
+Wall time from brief to merge: ~45 min; worker context 96 % → 18 %.
