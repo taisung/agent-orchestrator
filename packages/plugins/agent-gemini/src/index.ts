@@ -2,6 +2,7 @@ import {
   shellEscape,
   HERDR_RUNTIME_NAME,
   isHerdrProcessRunning,
+  setupPathWrapperWorkspace,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -14,18 +15,24 @@ import {
   type WorkspaceHooksConfig,
 } from "@aoagents/ao-core";
 import { execFile } from "node:child_process";
-import { writeFile, mkdir, readFile, readdir, rename } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-function normalizePermissionMode(mode: string | undefined): "permissionless" | "default" | "auto-edit" | "suggest" | undefined {
+function normalizePermissionMode(
+  mode: string | undefined,
+): "permissionless" | "default" | "auto-edit" | "suggest" | undefined {
   if (!mode) return undefined;
   if (mode === "skip") return "permissionless";
-  if (mode === "permissionless" || mode === "default" || mode === "auto-edit" || mode === "suggest") {
+  if (
+    mode === "permissionless" ||
+    mode === "default" ||
+    mode === "auto-edit" ||
+    mode === "suggest"
+  ) {
     return mode;
   }
   return undefined;
@@ -44,256 +51,6 @@ export const manifest = {
   description: "Agent plugin: Gemini CLI",
   version: "0.1.0",
 };
-
-// =============================================================================
-// Shell Wrappers (automatic metadata updates — like Claude Code's PostToolUse)
-// =============================================================================
-
-/**
- * Helper script sourced by both gh and git wrappers.
- * Provides update_ao_metadata() for writing key=value to the session file.
- */
-/* eslint-disable no-useless-escape -- \$ escapes are intentional: bash scripts in JS template literals */
-const AO_METADATA_HELPER = `#!/usr/bin/env bash
-# ao-metadata-helper — shared by gh/git wrappers
-# Provides: update_ao_metadata <key> <value>
-
-update_ao_metadata() {
-  local key="\$1" value="\$2"
-  local ao_dir="\${AO_DATA_DIR:-}"
-  local ao_session="\${AO_SESSION:-}"
-
-  [[ -z "\$ao_dir" || -z "\$ao_session" ]] && return 0
-
-  # Validate: session name must not contain path separators or traversal
-  case "\$ao_session" in
-    */* | *..*) return 0 ;;
-  esac
-
-  # Validate: ao_dir must be an absolute path under known ao directories or /tmp
-  case "\$ao_dir" in
-    "\$HOME"/.ao/* | "\$HOME"/.agent-orchestrator/* | /tmp/*) ;;
-    *) return 0 ;;
-  esac
-
-  local metadata_file="\$ao_dir/\$ao_session"
-
-  # Resolve and verify the file is still within ao_dir
-  local real_dir real_ao_dir
-  real_ao_dir="\$(cd "\$ao_dir" 2>/dev/null && pwd -P)" || return 0
-  real_dir="\$(cd "\$(dirname "\$metadata_file")" 2>/dev/null && pwd -P)" || return 0
-  [[ "\$real_dir" == "\$real_ao_dir"* ]] || return 0
-
-  [[ -f "\$metadata_file" ]] || return 0
-
-  local temp_file="\${metadata_file}.tmp.\$\$"
-
-  # Strip newlines from value to prevent metadata line injection
-  local clean_value="\$(printf '%s' "\$value" | tr -d '\\n')"
-
-  # Escape sed metacharacters in value (& expands to matched text, | breaks delimiter)
-  local escaped_value="\$(printf '%s' "\$clean_value" | sed 's/[&|\\\\]/\\\\&/g')"
-
-  if grep -q "^\${key}=" "\$metadata_file" 2>/dev/null; then
-    sed "s|^\${key}=.*|\${key}=\${escaped_value}|" "\$metadata_file" > "\$temp_file"
-  else
-    cp "\$metadata_file" "\$temp_file"
-    printf '%s=%s\\n' "\$key" "\$clean_value" >> "\$temp_file"
-  fi
-
-  mv "\$temp_file" "\$metadata_file"
-}
-`;
-
-/**
- * gh wrapper — intercepts `gh pr create` and `gh pr merge` to auto-update
- * session metadata. All other commands pass through transparently.
- */
-const GH_WRAPPER = `#!/usr/bin/env bash
-# ao gh wrapper — auto-updates session metadata on PR operations
-
-# Find real gh by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
-real_gh=""
-
-# Prefer explicit gh path when provided by AO environment.
-# Guard against recursive self-reference to the wrapper in ~/.ao/bin.
-if [[ -n "\${GH_PATH:-}" && -x "\$GH_PATH" ]]; then
-  gh_dir="\$(cd "\$(dirname "\$GH_PATH")" 2>/dev/null && pwd)"
-  if [[ "\$gh_dir" != "\$ao_bin_dir" ]]; then
-    real_gh="\$GH_PATH"
-  fi
-fi
-
-if [[ -z "\$real_gh" ]]; then
-  real_gh="\$(PATH="\$clean_path" command -v gh 2>/dev/null)"
-fi
-
-if [[ -z "\$real_gh" ]]; then
-  echo "ao-wrapper: gh not found in PATH" >&2
-  exit 127
-fi
-
-# Source the metadata helper
-source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
-
-# Only capture output for commands we need to parse (pr/create, pr/merge).
-# All other commands pass through transparently without stream merging.
-case "\$1/\$2" in
-  pr/create|pr/merge)
-    tmpout="\$(mktemp)"
-    trap 'rm -f "\$tmpout"' EXIT
-
-    "\$real_gh" "\$@" 2>&1 | tee "\$tmpout"
-    exit_code=\${PIPESTATUS[0]}
-
-    if [[ \$exit_code -eq 0 ]]; then
-      output="\$(cat "\$tmpout")"
-      case "\$1/\$2" in
-        pr/create)
-          pr_url="\$(echo "\$output" | grep -Eo 'https://github\\.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)"
-          if [[ -n "\$pr_url" ]]; then
-            update_ao_metadata pr "\$pr_url"
-            update_ao_metadata status pr_open
-          fi
-          ;;
-        pr/merge)
-          update_ao_metadata status merged
-          ;;
-      esac
-    fi
-
-    exit \$exit_code
-    ;;
-  *)
-    exec "\$real_gh" "\$@"
-    ;;
-esac
-`;
-
-/**
- * git wrapper — intercepts branch creation commands to auto-update metadata.
- * All other commands pass through transparently.
- */
-const GIT_WRAPPER = `#!/usr/bin/env bash
-# ao git wrapper — auto-updates session metadata on branch operations
-
-# Find real git by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
-real_git="\$(PATH="\$clean_path" command -v git 2>/dev/null)"
-
-if [[ -z "\$real_git" ]]; then
-  echo "ao-wrapper: git not found in PATH" >&2
-  exit 127
-fi
-
-# Source the metadata helper
-source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
-
-# Run real git
-"\$real_git" "\$@"
-exit_code=\$?
-
-# Only update metadata on success
-if [[ \$exit_code -eq 0 ]]; then
-  case "\$1/\$2" in
-    checkout/-b)
-      update_ao_metadata branch "\$3"
-      ;;
-    switch/-c)
-      update_ao_metadata branch "\$3"
-      ;;
-  esac
-fi
-
-exit \$exit_code
-`;
-
-// =============================================================================
-// Workspace Setup
-// =============================================================================
-
-/**
- * Section appended to AGENTS.md as a secondary signal. The PATH-based wrappers
- * handle metadata updates automatically, but AGENTS.md reinforces the intent
- * and helps if the wrappers are bypassed.
- */
-const AO_AGENTS_MD_SECTION = `
-## Agent Orchestrator (ao) Session
-
-You are running inside an Agent Orchestrator managed workspace.
-Session metadata is updated automatically via shell wrappers.
-
-If automatic updates fail, you can manually update metadata:
-\`\`\`bash
-~/.ao/bin/ao-metadata-helper.sh  # sourced automatically
-# Then call: update_ao_metadata <key> <value>
-\`\`\`
-`;
-/* eslint-enable no-useless-escape */
-
-/**
- * Atomically write a file by writing to a temp file in the same directory,
- * then renaming. This prevents concurrent sessions from reading partially
- * written wrapper scripts.
- */
-async function atomicWriteFile(filePath: string, content: string, mode: number): Promise<void> {
-  const suffix = randomBytes(6).toString("hex");
-  const tmpPath = `${filePath}.tmp.${suffix}`;
-  await writeFile(tmpPath, content, { encoding: "utf-8", mode });
-  await rename(tmpPath, filePath);
-}
-
-async function setupGeminiWorkspace(workspacePath: string): Promise<void> {
-  // 1. Write shared wrappers to ~/.ao/bin/
-  await mkdir(AO_BIN_DIR, { recursive: true });
-
-  await atomicWriteFile(
-    join(AO_BIN_DIR, "ao-metadata-helper.sh"),
-    AO_METADATA_HELPER,
-    0o755,
-  );
-
-  // Only write wrappers if they don't exist or are outdated (check marker)
-  const markerPath = join(AO_BIN_DIR, ".ao-version");
-  const currentVersion = "0.1.1";
-  let needsUpdate = true;
-  try {
-    const existing = await readFile(markerPath, "utf-8");
-    if (existing.trim() === currentVersion) needsUpdate = false;
-  } catch {
-    // File doesn't exist — needs update
-  }
-
-  if (needsUpdate) {
-    await atomicWriteFile(join(AO_BIN_DIR, "gh"), GH_WRAPPER, 0o755);
-    await atomicWriteFile(join(AO_BIN_DIR, "git"), GIT_WRAPPER, 0o755);
-    await atomicWriteFile(markerPath, currentVersion, 0o644);
-  }
-
-  // 2. Append ao section to AGENTS.md (create if missing, skip if already present)
-  // NOTE: GEMINI.md (system prompt) is written at launch time via getLaunchCommand's
-  // compound shell prefix (cp/printf), not here, because the system prompt content
-  // is only available from AgentLaunchConfig, not at workspace setup time.
-  const agentsMdPath = join(workspacePath, "AGENTS.md");
-  let existingAgentsMd = "";
-  try {
-    existingAgentsMd = await readFile(agentsMdPath, "utf-8");
-  } catch {
-    // File doesn't exist yet
-  }
-
-  if (!existingAgentsMd.includes("Agent Orchestrator (ao) Session")) {
-    const content = existingAgentsMd
-      ? existingAgentsMd.trimEnd() + "\n" + AO_AGENTS_MD_SECTION
-      : AO_AGENTS_MD_SECTION.trimStart();
-    await writeFile(agentsMdPath, content, "utf-8");
-  }
-}
 
 // =============================================================================
 // Gemini Session Detection
@@ -388,7 +145,10 @@ function createGeminiAgent(): Agent {
       return "active";
     },
 
-    async getActivityState(session: Session, _readyThresholdMs?: number): Promise<ActivityDetection | null> {
+    async getActivityState(
+      session: Session,
+      _readyThresholdMs?: number,
+    ): Promise<ActivityDetection | null> {
       // Check if process is running first
       const exitedAt = new Date();
       if (!session.runtimeHandle) return { state: "exited", timestamp: exitedAt };
@@ -480,7 +240,10 @@ function createGeminiAgent(): Agent {
       // Gemini CLI supports -r latest to resume the most recent session
       const parts: string[] = ["gemini"];
 
-      if (normalizePermissionMode(project.agentConfig?.permissions as string | undefined) === "permissionless") {
+      if (
+        normalizePermissionMode(project.agentConfig?.permissions as string | undefined) ===
+        "permissionless"
+      ) {
         parts.push("--yolo");
       }
 
@@ -495,12 +258,12 @@ function createGeminiAgent(): Agent {
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
-      await setupGeminiWorkspace(workspacePath);
+      await setupPathWrapperWorkspace(workspacePath);
     },
 
     async postLaunchSetup(session: Session): Promise<void> {
       if (!session.workspacePath) return;
-      await setupGeminiWorkspace(session.workspacePath);
+      await setupPathWrapperWorkspace(session.workspacePath);
     },
   };
 }

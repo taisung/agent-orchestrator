@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Session, RuntimeHandle, AgentLaunchConfig, ProjectConfig } from "@aoagents/ao-core";
+import { execFileSync } from "node:child_process";
+import type * as NodeChildProcess from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
@@ -22,11 +26,12 @@ const {
   mockHomedir: vi.fn(() => "/mock/home"),
 }));
 
-vi.mock("node:child_process", () => {
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeChildProcess>();
   const fn = Object.assign((..._args: unknown[]) => {}, {
     [Symbol.for("nodejs.util.promisify.custom")]: mockExecFileAsync,
   });
-  return { execFile: fn };
+  return { ...actual, execFile: fn };
 });
 
 vi.mock("node:fs/promises", () => ({
@@ -429,7 +434,7 @@ describe("getRestoreCommand", () => {
 });
 
 // =========================================================================
-// setupWorkspaceHooks — shell wrapper creation + AGENTS.md
+// setupWorkspaceHooks — shared shell wrapper creation + .ao/AGENTS.md
 // =========================================================================
 describe("setupWorkspaceHooks", () => {
   const agent = create();
@@ -450,6 +455,47 @@ describe("setupWorkspaceHooks", () => {
     expect(helperCalls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("installs the shared helper that updates metadata under a /var/tmp state root", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
+
+    const helperCall = mockWriteFile.mock.calls.find(
+      (call: unknown[]) =>
+        typeof call[0] === "string" && call[0].includes("ao-metadata-helper.sh.tmp."),
+    );
+    expect(helperCall).toBeDefined();
+    const helperContent = String(helperCall?.[1]);
+    expect(helperContent).toContain("local ao_state_root=");
+
+    const stateRoot = mkdtempSync("/var/tmp/ao-gemini-state-");
+    const sessionsDir = join(stateRoot, "instance", "sessions");
+    const helperPath = join(stateRoot, "ao-metadata-helper.sh");
+    const metadataPath = join(sessionsDir, "gemini-1");
+
+    try {
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(helperPath, helperContent);
+      writeFileSync(metadataPath, "status=working\n");
+
+      execFileSync(
+        "bash",
+        ["-c", 'source "$1"; update_ao_metadata status updated', "bash", helperPath],
+        {
+          env: {
+            ...process.env,
+            AO_STATE_ROOT: stateRoot,
+            AO_DATA_DIR: sessionsDir,
+            AO_SESSION: "gemini-1",
+          },
+        },
+      );
+
+      expect(readFileSync(metadataPath, "utf8")).toBe("status=updated\n");
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("writes gh and git wrappers when version marker is missing", async () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT"));
 
@@ -462,7 +508,7 @@ describe("setupWorkspaceHooks", () => {
 
   it("skips gh/git wrappers when version marker is current", async () => {
     mockReadFile.mockImplementation((path: string) => {
-      if (path.includes(".ao-version")) return Promise.resolve("0.1.1");
+      if (path.includes(".ao-version")) return Promise.resolve("0.2.1");
       return Promise.reject(new Error("ENOENT"));
     });
 
@@ -473,7 +519,7 @@ describe("setupWorkspaceHooks", () => {
     expect(writtenFiles.some((f: string) => f.includes("/git.tmp."))).toBe(false);
   });
 
-  it("appends ao section to AGENTS.md", async () => {
+  it("writes session context to .ao/AGENTS.md without modifying the repository AGENTS.md", async () => {
     mockReadFile.mockImplementation((path: string) => {
       if (path.includes("AGENTS.md")) return Promise.resolve("# Existing content\n");
       return Promise.reject(new Error("ENOENT"));
@@ -485,12 +531,13 @@ describe("setupWorkspaceHooks", () => {
       (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("AGENTS.md"),
     );
     expect(agentsMdCalls.length).toBe(1);
+    expect(agentsMdCalls[0][0]).toBe("/workspace/test/.ao/AGENTS.md");
     const content = agentsMdCalls[0][1] as string;
     expect(content).toContain("Agent Orchestrator (ao) Session");
-    expect(content).toContain("# Existing content");
+    expect(content).not.toContain("# Existing content");
   });
 
-  it("creates AGENTS.md if it does not exist", async () => {
+  it("creates .ao/AGENTS.md if it does not exist", async () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT"));
 
     await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
@@ -499,24 +546,23 @@ describe("setupWorkspaceHooks", () => {
       (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("AGENTS.md"),
     );
     expect(agentsMdCalls.length).toBe(1);
+    expect(agentsMdCalls[0][0]).toBe("/workspace/test/.ao/AGENTS.md");
     const content = agentsMdCalls[0][1] as string;
     expect(content).toContain("Agent Orchestrator (ao) Session");
   });
 
-  it("is idempotent — does not duplicate ao section in AGENTS.md", async () => {
-    mockReadFile.mockImplementation((path: string) => {
-      if (path.includes("AGENTS.md")) {
-        return Promise.resolve("# Existing\n\n## Agent Orchestrator (ao) Session\nalready here\n");
-      }
-      return Promise.reject(new Error("ENOENT"));
-    });
+  it("rewrites deterministic .ao/AGENTS.md content on repeated setup", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
 
+    await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
     await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
 
     const agentsMdCalls = mockWriteFile.mock.calls.filter(
       (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("AGENTS.md"),
     );
-    expect(agentsMdCalls.length).toBe(0);
+    expect(agentsMdCalls).toHaveLength(2);
+    expect(agentsMdCalls[0][0]).toBe("/workspace/test/.ao/AGENTS.md");
+    expect(agentsMdCalls[1]).toEqual(agentsMdCalls[0]);
   });
 });
 
