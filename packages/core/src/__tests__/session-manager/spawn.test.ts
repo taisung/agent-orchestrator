@@ -138,6 +138,33 @@ describe("spawn", () => {
     }
   });
 
+  it("propagates the parent PID-based test state root to child ao processes", async () => {
+    const previousStateRoot = process.env["AO_STATE_ROOT"];
+    const previousNodeEnv = process.env["NODE_ENV"];
+
+    try {
+      delete process.env["AO_STATE_ROOT"];
+      process.env["NODE_ENV"] = "test";
+      const parentStateRoot = getStateRoot();
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await sm.spawn({ projectId: "my-app" });
+
+      const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const propagatedStateRoot = createCall.environment["AO_STATE_ROOT"];
+      expect(parentStateRoot).toContain(`ao-test-state-${process.pid}`);
+      expect(propagatedStateRoot).toBe(parentStateRoot);
+
+      process.env["AO_STATE_ROOT"] = propagatedStateRoot;
+      expect(getStateRoot()).toBe(parentStateRoot);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previousStateRoot;
+      if (previousNodeEnv === undefined) delete process.env["NODE_ENV"];
+      else process.env["NODE_ENV"] = previousNodeEnv;
+    }
+  });
+
   it("uses issue ID to derive branch name", async () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
 
