@@ -133,12 +133,12 @@ describe("setupPathWrapperWorkspace", () => {
 
   it("skips wrapper rewrite when version matches", async () => {
     mockReadFile
-      .mockResolvedValueOnce("0.2.0") // version marker matches
+      .mockResolvedValueOnce("0.2.1") // version marker matches
       .mockRejectedValueOnce(new Error("ENOENT")); // AGENTS.md doesn't exist
 
     await setupPathWrapperWorkspace("/workspace");
 
-    // Only metadata helper rename (1), no gh/git/marker renames
+    // A current marker suppresses all helper/wrapper rewrites.
     const renamedPaths = mockRename.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(renamedPaths.filter((p: string) => p.includes("/gh."))).toHaveLength(0);
     expect(renamedPaths.filter((p: string) => p.includes("/git."))).toHaveLength(0);
