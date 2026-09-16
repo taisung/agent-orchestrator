@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { getProjectBaseDir, type OrchestratorConfig } from "@aoagents/ao-core";
+import { getProjectBaseDir, getStateRoot, type OrchestratorConfig } from "@aoagents/ao-core";
 
 const LIFECYCLE_PID_FILE = "lifecycle-worker.pid";
 const LIFECYCLE_LOG_FILE = "lifecycle-worker.log";
@@ -191,6 +191,7 @@ export async function ensureLifecycleWorker(
         ...process.env,
         AO_LIFECYCLE_PROJECT: projectId,
         AO_CONFIG_PATH: config.configPath,
+        AO_STATE_ROOT: getStateRoot(),
       },
     });
 
