@@ -977,6 +977,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Agent plugin '${selection.agentName}' not found`);
     }
 
+    const workspaceName = project.workspace ?? config.defaults.workspace;
+    if (!plugins.workspace) {
+      const availableWorkspaces = registry
+        .list("workspace")
+        .map((manifest) => manifest.name)
+        .sort();
+      throw new Error(
+        `workspace "${workspaceName}" is not available; available: ${availableWorkspaces.join(", ") || "none"}`,
+      );
+    }
+
     // Validate issue exists BEFORE creating any resources
     let resolvedIssue: Issue | undefined;
     if (spawnConfig.issueId && plugins.tracker) {

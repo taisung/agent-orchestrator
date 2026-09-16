@@ -3,11 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
-import {
-  writeMetadata,
-  readMetadata,
-  readMetadataRaw,
-} from "../../metadata.js";
+import { writeMetadata, readMetadata, readMetadataRaw } from "../../metadata.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -69,6 +65,56 @@ describe("spawn", () => {
     expect(mockAgent.getLaunchCommand).toHaveBeenCalled();
     // Verify runtime was created
     expect(mockRuntime.create).toHaveBeenCalled();
+  });
+
+  it("rejects a configured workspace plugin that is not available before creating a runtime", async () => {
+    config.projects["my-app"]!.workspace = "clone";
+    const registryWithoutClone: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string, name: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockAgent;
+        if (slot === "workspace" && name === "worktree") return mockWorkspace;
+        return null;
+      }),
+      list: vi.fn().mockImplementation((slot: string) =>
+        slot === "workspace"
+          ? [
+              {
+                name: "worktree",
+                slot: "workspace",
+                description: "Git worktree workspace",
+                version: "0.0.0",
+              },
+            ]
+          : [],
+      ),
+    };
+    const sm = createSessionManager({ config, registry: registryWithoutClone });
+
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow(
+      'workspace "clone" is not available; available: worktree',
+    );
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("continues to spawn with the available worktree workspace plugin", async () => {
+    config.projects["my-app"]!.workspace = "worktree";
+    const registryWithWorktree: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string, name: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockAgent;
+        if (slot === "workspace" && name === "worktree") return mockWorkspace;
+        return null;
+      }),
+    };
+    const sm = createSessionManager({ config, registry: registryWithWorktree });
+
+    await expect(sm.spawn({ projectId: "my-app" })).resolves.toMatchObject({
+      workspacePath: "/tmp/ws",
+    });
+    expect(mockRuntime.create).toHaveBeenCalledOnce();
   });
 
   it("uses issue ID to derive branch name", async () => {
@@ -1870,6 +1916,5 @@ describe("spawn", () => {
 
       expect(session.runtimeHandle).toEqual(makeHandle("rt-1"));
     });
-
   });
 });
