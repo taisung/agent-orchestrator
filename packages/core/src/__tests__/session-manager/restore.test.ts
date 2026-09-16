@@ -1,15 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  mkdirSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import {
-  writeMetadata,
-  readMetadataRaw,
-  deleteMetadata,
-} from "../../metadata.js";
+import { getSessionsDir, getStateRoot } from "../../paths.js";
+import { writeMetadata, readMetadataRaw, deleteMetadata } from "../../metadata.js";
 import {
   SessionNotRestorableError,
   WorkspaceMissingError,
@@ -19,7 +13,12 @@ import {
   type Agent,
   type Workspace,
 } from "../../types.js";
-import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "../test-utils.js";
+import {
+  setupTestContext,
+  teardownTestContext,
+  makeHandle,
+  type TestContext,
+} from "../test-utils.js";
 import { installMockOpencode } from "./opencode-helpers.js";
 
 let ctx: TestContext;
@@ -34,7 +33,16 @@ let originalPath: string | undefined;
 
 beforeEach(() => {
   ctx = setupTestContext();
-  ({ tmpDir, sessionsDir, mockRuntime, mockAgent, mockWorkspace, mockRegistry, config, originalPath } = ctx);
+  ({
+    tmpDir,
+    sessionsDir,
+    mockRuntime,
+    mockAgent,
+    mockWorkspace,
+    mockRegistry,
+    config,
+    originalPath,
+  } = ctx);
 });
 
 afterEach(() => {
@@ -80,6 +88,37 @@ describe("restore", () => {
     expect(meta!["issue"]).toBe("TEST-1");
     expect(meta!["pr"]).toBe("https://github.com/org/my-app/pull/10");
     expect(meta!["createdAt"]).toBe("2025-01-01T00:00:00.000Z");
+  });
+
+  it("passes the resolved AO_STATE_ROOT to the restored runtime", async () => {
+    const wsPath = join(tmpDir, "ws-app-1");
+    mkdirSync(wsPath, { recursive: true });
+    const previousStateRoot = process.env["AO_STATE_ROOT"];
+    const rawStateRoot = `${tmpDir}/state/../custom-state`;
+
+    try {
+      process.env["AO_STATE_ROOT"] = rawStateRoot;
+      const resolvedStateRoot = getStateRoot();
+      const customSessionsDir = getSessionsDir(config.configPath!, config.projects["my-app"]!.path);
+      mkdirSync(customSessionsDir, { recursive: true });
+      writeMetadata(customSessionsDir, "app-1", {
+        worktree: wsPath,
+        branch: "feat/TEST-1",
+        status: "killed",
+        project: "my-app",
+        runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+      });
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await sm.restore("app-1");
+
+      const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.environment).toMatchObject({ AO_STATE_ROOT: resolvedStateRoot });
+      expect(resolvedStateRoot).not.toBe(rawStateRoot);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previousStateRoot;
+    }
   });
 
   it("continues restore even if old runtime destroy fails", async () => {

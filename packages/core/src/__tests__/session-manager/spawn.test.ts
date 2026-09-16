@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
+import { getStateRoot } from "../../paths.js";
 import { writeMetadata, readMetadata, readMetadataRaw } from "../../metadata.js";
 import type {
   OrchestratorConfig,
@@ -115,6 +116,26 @@ describe("spawn", () => {
       workspacePath: "/tmp/ws",
     });
     expect(mockRuntime.create).toHaveBeenCalledOnce();
+  });
+
+  it("passes the resolved AO_STATE_ROOT to the spawned runtime", async () => {
+    const previousStateRoot = process.env["AO_STATE_ROOT"];
+    const rawStateRoot = `${tmpDir}/state/../custom-state`;
+
+    try {
+      process.env["AO_STATE_ROOT"] = rawStateRoot;
+      const resolvedStateRoot = getStateRoot();
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await sm.spawn({ projectId: "my-app" });
+
+      const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.environment).toMatchObject({ AO_STATE_ROOT: resolvedStateRoot });
+      expect(resolvedStateRoot).not.toBe(rawStateRoot);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previousStateRoot;
+    }
   });
 
   it("uses issue ID to derive branch name", async () => {

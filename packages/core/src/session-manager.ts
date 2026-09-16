@@ -64,6 +64,7 @@ import {
 import { buildPrompt } from "./prompt-builder.js";
 import {
   getSessionsDir,
+  getStateRoot,
   getWorktreesDir,
   getProjectBaseDir,
   generateConfigHash,
@@ -1143,6 +1144,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           AO_CALLER_TYPE: "agent",
           AO_PROJECT_ID: spawnConfig.projectId,
           AO_CONFIG_PATH: config.configPath,
+          AO_STATE_ROOT: getStateRoot(),
         },
       });
     } catch (err) {
@@ -1560,6 +1562,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           AO_CALLER_TYPE: "orchestrator",
           AO_PROJECT_ID: orchestratorConfig.projectId,
           AO_CONFIG_PATH: config.configPath,
+          AO_STATE_ROOT: getStateRoot(),
         },
       });
     } catch (err) {
@@ -2564,6 +2567,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         AO_CALLER_TYPE: "agent",
         ...(projectId && { AO_PROJECT_ID: projectId }),
         AO_CONFIG_PATH: config.configPath,
+        AO_STATE_ROOT: getStateRoot(),
       },
     });
 
