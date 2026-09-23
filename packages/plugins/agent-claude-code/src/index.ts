@@ -766,9 +766,24 @@ function createClaudeCodeAgent(): Agent {
 
       const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
       switch (entry.lastType) {
+        // Activity + bookkeeping / metadata types written during active work.
+        // Recent means active, otherwise ready/idle by age.
+        // `cost-state` is the most common tail entry in real sessions.
         case "user":
         case "tool_use":
         case "progress":
+        case "file-history-snapshot":
+        case "file-history-delta":
+        case "queue-operation":
+        case "pr-link":
+        case "last-prompt":
+        case "cost-state":
+        case "attachment":
+        case "mode":
+        case "permission-mode":
+        case "ai-title":
+        case "atis-latch":
+        case "bridge-session":
           if (ageMs <= activeWindowMs) return { state: "active", timestamp };
           return { state: ageMs > threshold ? "idle" : "ready", timestamp };
 

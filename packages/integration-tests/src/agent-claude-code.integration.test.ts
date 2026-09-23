@@ -147,8 +147,18 @@ describe.skipIf(!realProject)("path encoding & JSONL reading (real Claude data)"
         "summary",
         "result",
         "file-history-snapshot",
+        "file-history-delta",
         "queue-operation",
         "pr-link",
+        // Bookkeeping / metadata types observed in real ~/.claude/projects data
+        // (cost-state is the most common last entry — written after each turn)
+        "cost-state",
+        "attachment",
+        "mode",
+        "permission-mode",
+        "ai-title",
+        "atis-latch",
+        "bridge-session",
       ];
       expect(knownTypes).toContain(entry.lastType);
     }
