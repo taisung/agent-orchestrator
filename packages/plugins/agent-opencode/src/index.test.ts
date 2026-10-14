@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type * as ChildProcess from "node:child_process";
 import type { Session, RuntimeHandle, AgentLaunchConfig } from "@aoagents/ao-core";
 
 const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity } =
@@ -9,6 +13,7 @@ const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalAc
   }));
 
 const mockExecFileAsync = vi.fn();
+const mockExecFileSync = vi.fn();
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -32,9 +37,10 @@ vi.mock("node:child_process", () => ({
       }
     }
   },
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
-import { create, manifest, default as defaultExport } from "./index.js";
+import { create, detect, manifest, default as defaultExport } from "./index.js";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -1166,5 +1172,393 @@ describe("isProcessRunning — herdr runtime", () => {
 
     const agent = create();
     expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
+  });
+});
+
+// =========================================================================
+// Launch and restore commands run against fake OpenCode 1.x and 2.x CLIs.
+// The fake copies the CLI behavior measured on 1.18.35 and 2.0.29: 2.x
+// rejects `run --command` and the TUI's --model/--agent, and only 2.x
+// has `opencode api`.
+// =========================================================================
+
+const OPENCODE_1 = "1.18.35";
+const OPENCODE_2 = "opencode v2.0.29";
+const GENERATIONS = [
+  { name: "1.x", version: OPENCODE_1 },
+  { name: "2.x", version: OPENCODE_2 },
+] as const;
+
+const FAKE_OPENCODE = `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+const env = process.env;
+fs.appendFileSync(env.FAKE_OC_LOG, JSON.stringify(argv) + "\\n");
+const major = Number((env.FAKE_OC_VERSION.match(/(\\d+)\\./) || [])[1] || 0);
+const v2 = major >= 2;
+const silent = env.FAKE_OC_CREATE === "none";
+function fail(message, code = 1) {
+  process.stderr.write(message + "\\n");
+  process.exit(code);
+}
+function flags(command, args, allowed) {
+  const given = {};
+  for (let i = 0; i < args.length; i += 2) {
+    if (!allowed.includes(args[i])) fail("Unrecognized flag: " + args[i] + " in command " + command);
+    given[args[i]] = args[i + 1];
+  }
+  return given;
+}
+if (argv[0] === "--version") {
+  process.stdout.write(env.FAKE_OC_VERSION + "\\n");
+  process.exit(0);
+}
+if (argv[0] === "version") fail("Error: Failed to change directory to version", v2 ? 1 : 0);
+if (argv[0] === "session" && argv[1] === "list") {
+  process.stdout.write(env.FAKE_OC_LIST || "[]");
+  process.exit(0);
+}
+if (argv[0] === "run") {
+  const runFlags = ["--format", "--title", "--model", "--agent", "--session"];
+  flags("opencode run", argv.slice(1), v2 ? runFlags : [...runFlags, "--command"]);
+  if (!silent) {
+    process.stdout.write(JSON.stringify({ type: "error", sessionID: env.FAKE_OC_SESSION }) + "\\n");
+  }
+  process.exit(0);
+}
+if (argv[0] === "api") {
+  if (!v2) fail("Error: Failed to change directory to api", 0);
+  const given = flags("opencode api", argv.slice(2), ["-d", "--param"]);
+  if (argv[1] === "session.create") {
+    const title = JSON.parse(given["-d"]).title;
+    if (!silent) process.stdout.write(JSON.stringify({ data: { id: env.FAKE_OC_SESSION, title } }));
+    process.exit(0);
+  }
+  if (env.FAKE_OC_API_FAIL) fail("HTTP 404 Not Found");
+  process.exit(0);
+}
+flags("opencode", argv, v2 ? ["--session", "--prompt"] : ["--session", "--prompt", "--model", "--agent"]);
+process.exit(0);
+`;
+
+type ActualChildProcess = typeof ChildProcess;
+
+let actualChildProcess: ActualChildProcess;
+let fakeRoot: string;
+let fakeBin: string;
+let workDir: string;
+let callLog: string;
+
+beforeAll(async () => {
+  actualChildProcess = await vi.importActual<ActualChildProcess>("node:child_process");
+  fakeRoot = mkdtempSync(join(tmpdir(), "ao-opencode-cli-"));
+  fakeBin = join(fakeRoot, "bin");
+  workDir = join(fakeRoot, "work");
+  callLog = join(fakeRoot, "calls.jsonl");
+  mkdirSync(fakeBin);
+  mkdirSync(workDir);
+  writeFileSync(join(fakeBin, "opencode"), FAKE_OPENCODE, { mode: 0o755 });
+});
+
+afterAll(() => {
+  rmSync(fakeRoot, { recursive: true, force: true });
+});
+
+interface FakeCliOptions {
+  version: string;
+  sessionId?: string;
+  list?: Array<{ id: string; title: string; updated: number }>;
+  createOutput?: "none";
+  apiFail?: boolean;
+}
+
+function fakeCliEnv(options: FakeCliOptions): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: `${fakeBin}:${process.env["PATH"] ?? ""}`,
+    FAKE_OC_LOG: callLog,
+    FAKE_OC_VERSION: options.version,
+    FAKE_OC_SESSION: options.sessionId ?? "ses_fakecreated",
+    FAKE_OC_LIST: JSON.stringify(options.list ?? []),
+    ...(options.createOutput ? { FAKE_OC_CREATE: options.createOutput } : {}),
+    ...(options.apiFail ? { FAKE_OC_API_FAIL: "1" } : {}),
+  };
+}
+
+/** Run a generated command in bash, as the tmux and herdr runtimes do, and return each fake CLI call. */
+function runAgainstFakeCli(command: string, options: FakeCliOptions) {
+  writeFileSync(callLog, "");
+  const result = actualChildProcess.spawnSync("bash", ["-c", command], {
+    cwd: workDir,
+    env: fakeCliEnv(options),
+    encoding: "utf-8",
+    timeout: 20_000,
+  });
+  const calls = readFileSync(callLog, "utf-8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
+  return {
+    status: result.status,
+    stderr: result.stderr,
+    calls,
+    tuiCalls: calls.filter((argv) => argv[0] === "--session"),
+    apiCalls: calls.filter((argv) => argv[0] === "api"),
+    runCalls: calls.filter((argv) => argv[0] === "run"),
+  };
+}
+
+function flagValue(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  return index === -1 ? undefined : argv[index + 1];
+}
+
+/** Inverse of the plugin's model split: the API reference must name the same CLI model. */
+function modelRefToCli(ref: { providerID: string; id: string; variant?: string }): string {
+  return `${ref.providerID}/${ref.id}${ref.variant ? `#${ref.variant}` : ""}`;
+}
+
+describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
+  const agent = create();
+  const model = "opencode-go/muse-spark-1.3-contributor";
+  const subagent = "plan";
+  const prompt = "Reply with OK";
+
+  it.each(GENERATIONS)("$name: opens the TUI on the captured session", ({ version }) => {
+    const config = makeLaunchConfig({ model, subagent, prompt });
+    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
+      version,
+      sessionId: "ses_gen",
+    });
+
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.tuiCalls).toHaveLength(1);
+    const tui = run.tuiCalls[0]!;
+    expect(flagValue(tui, "--session")).toBe("ses_gen");
+    expect(flagValue(tui, "--prompt")).toBe(prompt);
+  });
+
+  it("2.x: makes the titled session through the API, without run --command or TUI model flags", () => {
+    const config = makeLaunchConfig({ model, subagent, prompt });
+    const run = runAgainstFakeCli(agent.getLaunchCommand(config), { version: OPENCODE_2 });
+
+    expect(run.calls.some((argv) => argv.includes("--command"))).toBe(false);
+    expect(run.runCalls).toHaveLength(0);
+    const [create] = run.apiCalls;
+    expect(create?.[1]).toBe("session.create");
+    const body = JSON.parse(flagValue(create!, "-d")!);
+    expect(body.title).toBe(`AO:${config.sessionId}`);
+    expect(modelRefToCli(body.model)).toBe(model);
+    expect(body.agent).toBe(subagent);
+    expect(body.location).toEqual({ directory: realpathSync(workDir) });
+    expect(flagValue(run.tuiCalls[0]!, "--model")).toBeUndefined();
+    expect(flagValue(run.tuiCalls[0]!, "--agent")).toBeUndefined();
+  });
+
+  it("1.x: keeps run --command with the title, model and agent, then passes them to the TUI", () => {
+    const config = makeLaunchConfig({ model, subagent, prompt });
+    const run = runAgainstFakeCli(agent.getLaunchCommand(config), { version: OPENCODE_1 });
+
+    expect(run.apiCalls).toHaveLength(0);
+    const [runCall] = run.runCalls;
+    expect(flagValue(runCall!, "--title")).toBe(`AO:${config.sessionId}`);
+    expect(flagValue(runCall!, "--command")).toBe("true");
+    const tui = run.tuiCalls[0]!;
+    for (const flag of ["--model", "--agent"]) {
+      expect(flagValue(tui, flag)).toBe(flagValue(runCall!, flag));
+    }
+    expect(flagValue(tui, "--model")).toBe(model);
+    expect(flagValue(tui, "--agent")).toBe(subagent);
+  });
+
+  it("2.x: keeps the model variant in the API model reference", () => {
+    const variantModel = `${model}#xhigh`;
+    const command = agent.getLaunchCommand(makeLaunchConfig({ model: variantModel }));
+    const run = runAgainstFakeCli(command, { version: OPENCODE_2 });
+
+    const body = JSON.parse(flagValue(run.apiCalls[0]!, "-d")!);
+    expect(modelRefToCli(body.model)).toBe(variantModel);
+    expect(body.model.variant).toBeDefined();
+  });
+
+  it.each(GENERATIONS)(
+    "$name: falls back to the newest session list entry with the AO title",
+    ({ version }) => {
+      const config = makeLaunchConfig({ model, prompt });
+      const title = `AO:${config.sessionId}`;
+      const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
+        version,
+        createOutput: "none",
+        list: [
+          { id: "ses_older", title, updated: 1 },
+          { id: "ses_newer", title, updated: 2 },
+          { id: "ses_other", title: "AO:another", updated: 3 },
+        ],
+      });
+
+      expect(run.calls.some((argv) => argv[0] === "session" && argv[1] === "list")).toBe(true);
+      expect(run.status).toBe(0);
+      expect(run.tuiCalls).toHaveLength(1);
+      expect(flagValue(run.tuiCalls[0]!, "--session")).toBe("ses_newer");
+    },
+  );
+
+  it.each(GENERATIONS)(
+    "$name: stops with an error when neither capture nor lookup finds the session",
+    ({ version }) => {
+      const config = makeLaunchConfig({ model, prompt });
+      const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
+        version,
+        createOutput: "none",
+      });
+
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain(
+        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
+      );
+      expect(run.tuiCalls).toHaveLength(0);
+    },
+  );
+
+  it("takes the 1.x branch when the version output has no version number", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(makeLaunchConfig({ model })), {
+      version: "opencode dev",
+    });
+
+    expect(run.apiCalls).toHaveLength(0);
+    expect(flagValue(run.runCalls[0]!, "--command")).toBe("true");
+  });
+
+  it("2.x: stops before it makes a session when the model has no provider", () => {
+    const providerless = "muse-spark-1.3-contributor";
+    const command = agent.getLaunchCommand(makeLaunchConfig({ model: providerless }));
+    const run = runAgainstFakeCli(command, { version: OPENCODE_2 });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(providerless);
+    expect(run.apiCalls).toHaveLength(0);
+    expect(run.tuiCalls).toHaveLength(0);
+  });
+
+  it("1.x: passes a model without provider through to OpenCode as before", () => {
+    const providerless = "muse-spark-1.3-contributor";
+    const command = agent.getLaunchCommand(makeLaunchConfig({ model: providerless }));
+    const run = runAgainstFakeCli(command, { version: OPENCODE_1 });
+
+    expect(flagValue(run.runCalls[0]!, "--model")).toBe(providerless);
+    expect(flagValue(run.tuiCalls[0]!, "--model")).toBe(providerless);
+  });
+});
+
+describe("existing-session and restore commands against OpenCode 1.x and 2.x CLIs", () => {
+  const agent = create();
+  const model = "opencode-go/glm-5.3";
+  const subagent = "plan";
+  const existingId = "ses_existing";
+  const project = {
+    name: "proj",
+    repo: "o/r",
+    path: "/p",
+    defaultBranch: "main",
+    sessionPrefix: "p",
+  };
+
+  function reuseConfig(overrides: Partial<AgentLaunchConfig> = {}): AgentLaunchConfig {
+    return makeLaunchConfig({
+      projectConfig: { ...project, agentConfig: { opencodeSessionId: existingId } },
+      prompt: "continue",
+      ...overrides,
+    });
+  }
+
+  it.each(GENERATIONS)(
+    "$name: resumes without a model or agent through the same plain command",
+    ({ version }) => {
+      const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig()), { version });
+
+      expect(run.status).toBe(0);
+      expect(run.apiCalls).toHaveLength(0);
+      expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
+    },
+  );
+
+  it("2.x: stores the model and agent on the session, then opens the TUI without them", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
+      version: OPENCODE_2,
+    });
+
+    expect(run.status).toBe(0);
+    const byOperation = new Map(run.apiCalls.map((argv) => [argv[1], argv]));
+    const switchModel = byOperation.get("session.switchModel")!;
+    const switchAgent = byOperation.get("session.switchAgent")!;
+    for (const call of [switchModel, switchAgent]) {
+      expect(flagValue(call, "--param")).toBe(`sessionID=${existingId}`);
+    }
+    expect(modelRefToCli(JSON.parse(flagValue(switchModel, "-d")!).model)).toBe(model);
+    expect(JSON.parse(flagValue(switchAgent, "-d")!).agent).toBe(subagent);
+    expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
+  });
+
+  it("1.x: passes the model and agent to the TUI and calls no API", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
+      version: OPENCODE_1,
+    });
+
+    expect(run.status).toBe(0);
+    expect(run.apiCalls).toHaveLength(0);
+    const tui = run.tuiCalls[0]!;
+    expect(flagValue(tui, "--model")).toBe(model);
+    expect(flagValue(tui, "--agent")).toBe(subagent);
+  });
+
+  it("2.x: does not open the TUI when the API cannot set the model", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model })), {
+      version: OPENCODE_2,
+      apiFail: true,
+    });
+
+    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
+    expect(run.tuiCalls).toHaveLength(0);
+  });
+
+  it.each(GENERATIONS)("$name: restore applies the project model", async ({ version, name }) => {
+    const cmd = await agent.getRestoreCommand!(
+      makeSession({ metadata: { opencodeSessionId: existingId } }),
+      { ...project, agentConfig: { model } },
+    );
+    const run = runAgainstFakeCli(cmd!, { version });
+
+    expect(run.status).toBe(0);
+    expect(run.tuiCalls).toHaveLength(1);
+    const tui = run.tuiCalls[0]!;
+    expect(flagValue(tui, "--session")).toBe(existingId);
+    if (name === "2.x") {
+      expect(flagValue(tui, "--model")).toBeUndefined();
+      const [switchModel] = run.apiCalls;
+      expect(modelRefToCli(JSON.parse(flagValue(switchModel!, "-d")!).model)).toBe(model);
+    } else {
+      expect(flagValue(tui, "--model")).toBe(model);
+      expect(run.apiCalls).toHaveLength(0);
+    }
+  });
+});
+
+describe("detect", () => {
+  it.each(GENERATIONS)("$name: finds the opencode binary", ({ version }) => {
+    mockExecFileSync.mockImplementation((cmd: string, args: string[], opts: object) =>
+      actualChildProcess.execFileSync(cmd, args, { ...opts, env: fakeCliEnv({ version }) }),
+    );
+    writeFileSync(callLog, "");
+
+    expect(detect()).toBe(true);
+  });
+
+  it("is false when the opencode binary cannot run", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    expect(detect()).toBe(false);
   });
 });

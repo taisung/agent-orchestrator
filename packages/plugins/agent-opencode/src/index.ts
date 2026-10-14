@@ -119,6 +119,42 @@ process.stdin.on('data', chunk => {
   return script.replace(/\n/g, " ").replace(/\s+/g, " ");
 }
 
+/**
+ * Read the session ID from the single JSON document that
+ * `opencode api session.create` prints (`{"data":{"id":"ses_..."}}`).
+ * On anything else, echo the response to stderr so the pane shows the API error.
+ */
+function buildApiSessionIdCaptureScript(): string {
+  const script = `
+let input = '';
+process.stdin.on('data', c => input += c).on('end', () => {
+  let sid;
+  try { sid = JSON.parse(input).data.id; } catch {}
+  if (typeof sid === 'string' && /^ses_[A-Za-z0-9_-]+$/.test(sid)) {
+    process.stdout.write(sid);
+    process.exit(0);
+  }
+  process.stderr.write(input);
+  process.exit(1);
+});
+  `.trim();
+  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
+}
+
+/**
+ * Add the pane's working directory to a `session.create` body. The 2.x background
+ * service otherwise files the session under its own directory, where
+ * `opencode session list` run from the worktree cannot see it.
+ */
+function buildApiSessionBodyScript(): string {
+  const script = `
+const body = JSON.parse(process.argv[1]);
+body.location = { directory: process.cwd() };
+process.stdout.write(JSON.stringify(body));
+  `.trim();
+  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
+}
+
 function buildSessionLookupScript(): string {
   const script = `
 let input = '';
@@ -149,6 +185,104 @@ process.stdin.on('data', c => input += c).on('end', () => {
 });
   `.trim();
   return script.replace(/\n/g, " ").replace(/\s+/g, " ");
+}
+
+// =============================================================================
+// OpenCode CLI Generations
+// =============================================================================
+
+/**
+ * First OpenCode major version whose CLI stores the model and agent on the session
+ * through `opencode api`. 2.x removed `opencode run --command` (the 1.x way to make
+ * a titled session without a model turn) and the TUI's `--model`/`--agent` flags.
+ * Launch and restore commands read `opencode --version` in the pane and branch on
+ * this value, so they follow whichever binary the pane's PATH resolves.
+ */
+const OPENCODE_API_MAJOR = 2;
+
+/** `opencode --version` prints `1.18.35` on 1.x and `opencode v2.0.29` on 2.x. */
+const OPENCODE_MAJOR_PROBE =
+  "OC_MAJOR=$(opencode --version 2>/dev/null | sed -n 's/^[^0-9]*\\([0-9][0-9]*\\)\\..*$/\\1/p' | head -n 1)";
+
+/** Unknown or unparsable versions take the 1.x branch, which was the only behavior before 2.x. */
+function branchOnOpenCodeMajor(apiCommand: string, legacyCommand: string): string {
+  return `if [ "\${OC_MAJOR:-0}" -ge ${OPENCODE_API_MAJOR} ]; then ${apiCommand}; else ${legacyCommand}; fi`;
+}
+
+interface OpenCodeModelRef {
+  providerID: string;
+  id: string;
+  variant?: string;
+}
+
+/** Split `provider/model[#variant]` (the CLI `--model` form) into the 2.x API model reference. */
+function toOpenCodeModelRef(model: string): OpenCodeModelRef | null {
+  const slash = model.indexOf("/");
+  if (slash <= 0) return null;
+  const [id, variant] = model.slice(slash + 1).split("#", 2);
+  if (!id) return null;
+  return { providerID: model.slice(0, slash), id, ...(variant ? { variant } : {}) };
+}
+
+function invalidModelMessage(model: string): string {
+  return shellEscape(
+    `OpenCode ${OPENCODE_API_MAJOR}.x needs the model as provider/model[#variant], got: ${model}`,
+  );
+}
+
+/** The 1.x TUI and `opencode run` flags for the agent and model. */
+function buildLegacySessionOptions(model?: string, agent?: string): string[] {
+  return [
+    ...(agent ? ["--agent", shellEscape(agent)] : []),
+    ...(model ? ["--model", shellEscape(model)] : []),
+  ];
+}
+
+/** 2.x: store the model and agent on the session through the API, then open the TUI on it. */
+function buildApiResumeCommand(
+  sessionId: string,
+  promptOptions: string[],
+  model?: string,
+  agent?: string,
+): string {
+  const modelRef = model ? toOpenCodeModelRef(model) : undefined;
+  if (model && !modelRef) return `echo ${invalidModelMessage(model)} >&2`;
+
+  const sessionParam = shellEscape(`sessionID=${sessionId}`);
+  const apiCall = (operation: string, body: Record<string, unknown>) =>
+    `opencode api ${operation} --param ${sessionParam} -d ${shellEscape(JSON.stringify(body))}`;
+  const settings = [
+    ...(modelRef ? [apiCall("session.switchModel", { model: modelRef })] : []),
+    ...(agent ? [apiCall("session.switchAgent", { agent })] : []),
+  ];
+  const tuiCommand = ["opencode", "--session", shellEscape(sessionId), ...promptOptions].join(" ");
+  const failure = shellEscape(`failed to set the OpenCode model or agent for ${sessionId}`);
+  return `if ${settings.join(" && ")}; then ${tuiCommand}; else echo ${failure} >&2; fi`;
+}
+
+/**
+ * Open the TUI on an existing OpenCode session with an optional prompt, model and agent.
+ * 1.x takes the model and agent as TUI flags. 2.x rejects those flags, so the command
+ * stores them on the session through `opencode api` before it opens the TUI.
+ */
+function buildResumeCommand(
+  sessionId: string,
+  options: { promptValue?: string; model?: string; agent?: string },
+): string {
+  const promptOptions = options.promptValue ? ["--prompt", options.promptValue] : [];
+  const legacyOptions = buildLegacySessionOptions(options.model, options.agent);
+  const legacyCommand = [
+    "opencode",
+    "--session",
+    shellEscape(sessionId),
+    ...promptOptions,
+    ...legacyOptions,
+  ].join(" ");
+  // Without a model or agent, both generations accept the same command.
+  if (legacyOptions.length === 0) return legacyCommand;
+
+  const apiCommand = buildApiResumeCommand(sessionId, promptOptions, options.model, options.agent);
+  return `${OPENCODE_MAJOR_PROBE}; ${branchOnOpenCodeMajor(apiCommand, legacyCommand)}`;
 }
 
 // =============================================================================
@@ -214,21 +348,9 @@ function createOpenCodeAgent(): Agent {
     processName: "opencode",
 
     getLaunchCommand(config: AgentLaunchConfig): string {
-      const options: string[] = [];
-      const sharedOptions: string[] = [];
-
       const existingSessionId = asValidOpenCodeSessionId(
         (config.projectConfig.agentConfig as OpenCodeAgentConfig | undefined)?.opencodeSessionId,
       );
-
-      if (existingSessionId) {
-        options.push("--session", shellEscape(existingSessionId));
-      }
-
-      // Select specific OpenCode subagent if configured
-      if (config.subagent) {
-        sharedOptions.push("--agent", shellEscape(config.subagent));
-      }
 
       let promptValue: string | undefined;
       if (config.prompt) {
@@ -245,40 +367,56 @@ function createOpenCodeAgent(): Agent {
         promptValue = shellEscape(config.systemPrompt);
       }
 
-      if (config.model) {
-        sharedOptions.push("--model", shellEscape(config.model));
+      if (existingSessionId) {
+        return buildResumeCommand(existingSessionId, {
+          promptValue,
+          model: config.model,
+          agent: config.subagent,
+        });
       }
 
-      if (!existingSessionId) {
-        const runOptions = [
-          "--format",
-          "json",
-          "--title",
-          shellEscape(`AO:${config.sessionId}`),
-          ...sharedOptions,
-        ];
-        const captureScript = buildSessionIdCaptureScript();
-        const fallbackScript = buildSessionLookupScript();
-        const runCommand = ["opencode", "run", ...runOptions, "--command", "true"].join(" ");
-        const resumeOptions = [...(promptValue ? ["--prompt", promptValue] : []), ...sharedOptions];
-        const resumeOptionsSuffix = resumeOptions.length > 0 ? ` ${resumeOptions.join(" ")}` : "";
-        const missingSessionError = shellEscape(
-          `failed to discover OpenCode session ID for AO:${config.sessionId}`,
-        );
-        return [
-          `SES_ID=$(${runCommand} | node -e ${shellEscape(captureScript)})`,
-          `if [ -z "$SES_ID" ]; then SES_ID=$(opencode session list --format json | node -e ${shellEscape(fallbackScript)} ${shellEscape(`AO:${config.sessionId}`)}); fi`,
-          `[ -n "$SES_ID" ] && exec opencode --session "$SES_ID"${resumeOptionsSuffix}; echo ${missingSessionError} >&2; exit 1`,
-        ].join("; ");
-      }
+      const title = `AO:${config.sessionId}`;
+      const legacyOptions = buildLegacySessionOptions(config.model, config.subagent);
+      const promptOptions = promptValue ? ["--prompt", promptValue] : [];
 
-      if (promptValue) {
-        options.push("--prompt", promptValue);
-      }
+      // 1.x: `run --command true` makes the titled session, then fails on the unknown
+      // command without a model turn; its JSON error event carries the session ID.
+      const runCommand = [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--title",
+        shellEscape(title),
+        ...legacyOptions,
+        "--command",
+        "true",
+      ].join(" ");
+      const legacyCreate = `SES_ID=$(${runCommand} | node -e ${shellEscape(buildSessionIdCaptureScript())})`;
 
-      options.push(...sharedOptions);
+      // 2.x: the API makes the titled session with its model and agent, without a model turn.
+      const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
+      const createBody = JSON.stringify({
+        title,
+        ...(modelRef ? { model: modelRef } : {}),
+        ...(config.subagent ? { agent: config.subagent } : {}),
+      });
+      const apiCreate =
+        config.model && !modelRef
+          ? `echo ${invalidModelMessage(config.model)} >&2; exit 1`
+          : `SES_ID=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})" | node -e ${shellEscape(buildApiSessionIdCaptureScript())})`;
 
-      return ["opencode", ...options].join(" ");
+      const tuiCommand = ["exec", "opencode", "--session", '"$SES_ID"', ...promptOptions].join(" ");
+      const legacyTui = [tuiCommand, ...legacyOptions].join(" ");
+      const missingSessionError = shellEscape(
+        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
+      );
+      return [
+        OPENCODE_MAJOR_PROBE,
+        branchOnOpenCodeMajor(apiCreate, legacyCreate),
+        `if [ -z "$SES_ID" ]; then SES_ID=$(opencode session list --format json | node -e ${shellEscape(buildSessionLookupScript())} ${shellEscape(title)}); fi`,
+        `[ -n "$SES_ID" ] && ${branchOnOpenCodeMajor(tuiCommand, legacyTui)}; echo ${missingSessionError} >&2; exit 1`,
+      ].join("; ");
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {
@@ -446,14 +584,8 @@ function createOpenCodeAgent(): Agent {
 
       if (!sessionId) return null;
 
-      const parts: string[] = ["opencode", "--session", shellEscape(sessionId)];
-
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
-      if (agentConfig?.model) {
-        parts.push("--model", shellEscape(agentConfig.model as string));
-      }
-
-      return parts.join(" ");
+      return buildResumeCommand(sessionId, { model: agentConfig?.model as string | undefined });
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
@@ -477,7 +609,9 @@ export function create(): Agent {
 
 export function detect(): boolean {
   try {
-    execFileSync("opencode", ["version"], { stdio: "ignore" });
+    // `opencode version` is no version command: 1.x reads "version" as a project
+    // directory and still exits 0, 2.x exits 1. `--version` exits 0 on both.
+    execFileSync("opencode", ["--version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
