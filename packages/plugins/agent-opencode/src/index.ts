@@ -155,6 +155,30 @@ process.stdout.write(JSON.stringify(body));
   return script.replace(/\n/g, " ").replace(/\s+/g, " ");
 }
 
+/**
+ * Compare the session that `opencode api session.get` prints with the requested
+ * model and agent (argv[1]). Exit 1 and show the stored values when they differ.
+ * 2.x stores a model without a variant as variant `default`.
+ */
+function buildApiSettingsCheckScript(): string {
+  const script = `
+let input = '';
+process.stdin.on('data', c => input += c).on('end', () => {
+  const want = JSON.parse(process.argv[1]);
+  let got;
+  try { got = JSON.parse(input).data; } catch {}
+  if (!got || typeof got !== 'object') { process.stderr.write(input); process.exit(1); }
+  const variant = m => m.variant || 'default';
+  const modelOk = !want.model || (!!got.model && got.model.providerID === want.model.providerID && got.model.id === want.model.id && variant(got.model) === variant(want.model));
+  const agentOk = !want.agent || got.agent === want.agent;
+  if (modelOk && agentOk) process.exit(0);
+  process.stderr.write('OpenCode stored agent ' + JSON.stringify(got.agent) + ' and model ' + JSON.stringify(got.model) + '\\n');
+  process.exit(1);
+});
+  `.trim();
+  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
+}
+
 function buildSessionLookupScript(): string {
   const script = `
 let input = '';
@@ -216,18 +240,26 @@ interface OpenCodeModelRef {
 }
 
 /** Split `provider/model[#variant]` (the CLI `--model` form) into the 2.x API model reference. */
-function toOpenCodeModelRef(model: string): OpenCodeModelRef | null {
+function toOpenCodeModelRef(model: string): OpenCodeModelRef | undefined {
   const slash = model.indexOf("/");
-  if (slash <= 0) return null;
+  if (slash <= 0) return undefined;
   const [id, variant] = model.slice(slash + 1).split("#", 2);
-  if (!id) return null;
+  if (!id) return undefined;
   return { providerID: model.slice(0, slash), id, ...(variant ? { variant } : {}) };
 }
 
-function invalidModelMessage(model: string): string {
-  return shellEscape(
-    `OpenCode ${OPENCODE_API_MAJOR}.x needs the model as provider/model[#variant], got: ${model}`,
-  );
+/**
+ * The failure commands stop the script with status 1 and open no TUI, so the pane
+ * never runs OpenCode with settings other than the requested ones.
+ */
+function invalidModelCommand(model: string): string {
+  const message = `OpenCode ${OPENCODE_API_MAJOR}.x needs the model as provider/model[#variant], got: ${model}`;
+  return `echo ${shellEscape(message)} >&2; exit 1`;
+}
+
+/** `sessionWord` is the shell word that expands to the session ID. */
+function settingsFailureCommand(sessionWord: string): string {
+  return `echo ${shellEscape("failed to set the OpenCode model or agent for")} ${sessionWord} >&2; exit 1`;
 }
 
 /** The 1.x TUI and `opencode run` flags for the agent and model. */
@@ -238,6 +270,33 @@ function buildLegacySessionOptions(model?: string, agent?: string): string[] {
   ];
 }
 
+/**
+ * 2.x: store the model and agent on an existing session through the API, then read
+ * them back. The command succeeds only when the stored values equal the request.
+ * `sessionParam` is the shell word for `--param`, for example `'sessionID=ses_...'`.
+ */
+function buildApiSettingsCommand(
+  sessionParam: string,
+  modelRef: OpenCodeModelRef | undefined,
+  agent: string | undefined,
+): string {
+  const apiCall = (operation: string, body?: Record<string, unknown>) =>
+    [
+      "opencode",
+      "api",
+      operation,
+      "--param",
+      sessionParam,
+      ...(body ? ["-d", shellEscape(JSON.stringify(body))] : []),
+    ].join(" ");
+  const expected = { ...(modelRef ? { model: modelRef } : {}), ...(agent ? { agent } : {}) };
+  return [
+    ...(modelRef ? [apiCall("session.switchModel", { model: modelRef })] : []),
+    ...(agent ? [apiCall("session.switchAgent", { agent })] : []),
+    `${apiCall("session.get")} | node -e ${shellEscape(buildApiSettingsCheckScript())} ${shellEscape(JSON.stringify(expected))}`,
+  ].join(" && ");
+}
+
 /** 2.x: store the model and agent on the session through the API, then open the TUI on it. */
 function buildApiResumeCommand(
   sessionId: string,
@@ -246,18 +305,11 @@ function buildApiResumeCommand(
   agent?: string,
 ): string {
   const modelRef = model ? toOpenCodeModelRef(model) : undefined;
-  if (model && !modelRef) return `echo ${invalidModelMessage(model)} >&2`;
+  if (model && !modelRef) return invalidModelCommand(model);
 
-  const sessionParam = shellEscape(`sessionID=${sessionId}`);
-  const apiCall = (operation: string, body: Record<string, unknown>) =>
-    `opencode api ${operation} --param ${sessionParam} -d ${shellEscape(JSON.stringify(body))}`;
-  const settings = [
-    ...(modelRef ? [apiCall("session.switchModel", { model: modelRef })] : []),
-    ...(agent ? [apiCall("session.switchAgent", { agent })] : []),
-  ];
+  const settings = buildApiSettingsCommand(shellEscape(`sessionID=${sessionId}`), modelRef, agent);
   const tuiCommand = ["opencode", "--session", shellEscape(sessionId), ...promptOptions].join(" ");
-  const failure = shellEscape(`failed to set the OpenCode model or agent for ${sessionId}`);
-  return `if ${settings.join(" && ")}; then ${tuiCommand}; else echo ${failure} >&2; fi`;
+  return `if ${settings}; then ${tuiCommand}; else ${settingsFailureCommand(shellEscape(sessionId))}; fi`;
 }
 
 /**
@@ -378,6 +430,13 @@ function createOpenCodeAgent(): Agent {
       const title = `AO:${config.sessionId}`;
       const legacyOptions = buildLegacySessionOptions(config.model, config.subagent);
       const promptOptions = promptValue ? ["--prompt", promptValue] : [];
+      const tuiCommand = ["exec", "opencode", "--session", '"$SES_ID"', ...promptOptions].join(" ");
+      const findByTitle = `SES_ID=$(opencode session list --format json | node -e ${shellEscape(buildSessionLookupScript())} ${shellEscape(title)})`;
+      const missingSessionError = shellEscape(
+        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
+      );
+      const openTuiOrFail = (command: string) =>
+        `[ -n "$SES_ID" ] && ${command}; echo ${missingSessionError} >&2; exit 1`;
 
       // 1.x: `run --command true` makes the titled session, then fails on the unknown
       // command without a model turn; its JSON error event carries the session ID.
@@ -392,7 +451,11 @@ function createOpenCodeAgent(): Agent {
         "--command",
         "true",
       ].join(" ");
-      const legacyCreate = `SES_ID=$(${runCommand} | node -e ${shellEscape(buildSessionIdCaptureScript())})`;
+      const legacyCommand = [
+        `SES_ID=$(${runCommand} | node -e ${shellEscape(buildSessionIdCaptureScript())})`,
+        `if [ -z "$SES_ID" ]; then ${findByTitle}; fi`,
+        openTuiOrFail([tuiCommand, ...legacyOptions].join(" ")),
+      ].join("; ");
 
       // 2.x: the API makes the titled session with its model and agent, without a model turn.
       const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
@@ -401,22 +464,26 @@ function createOpenCodeAgent(): Agent {
         ...(modelRef ? { model: modelRef } : {}),
         ...(config.subagent ? { agent: config.subagent } : {}),
       });
-      const apiCreate =
+      // A failed create makes no session. A session with the title is then an older
+      // one from an earlier AO session with the same ID, so the command stops.
+      const apiCreate = `if OC_CREATE=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})"); then SES_ID=$(printf '%s\\n' "$OC_CREATE" | node -e ${shellEscape(buildApiSessionIdCaptureScript())}); else [ -z "$OC_CREATE" ] || printf '%s\\n' "$OC_CREATE" >&2; echo ${shellEscape(`failed to create the OpenCode session ${title}`)} >&2; exit 1; fi`;
+      // A create that succeeds without a usable ID falls back to the newest session with
+      // the title. That can be an older session with other settings, so the command
+      // stores the requested settings on it and opens the TUI only after a readback.
+      const settingsCheck =
+        modelRef || config.subagent
+          ? `; if [ -n "$SES_ID" ]; then ${buildApiSettingsCommand('"sessionID=$SES_ID"', modelRef, config.subagent)} || { ${settingsFailureCommand('"$SES_ID"')}; }; fi`
+          : "";
+      const apiCommand =
         config.model && !modelRef
-          ? `echo ${invalidModelMessage(config.model)} >&2; exit 1`
-          : `SES_ID=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})" | node -e ${shellEscape(buildApiSessionIdCaptureScript())})`;
+          ? invalidModelCommand(config.model)
+          : [
+              apiCreate,
+              `if [ -z "$SES_ID" ]; then ${findByTitle}${settingsCheck}; fi`,
+              openTuiOrFail(tuiCommand),
+            ].join("; ");
 
-      const tuiCommand = ["exec", "opencode", "--session", '"$SES_ID"', ...promptOptions].join(" ");
-      const legacyTui = [tuiCommand, ...legacyOptions].join(" ");
-      const missingSessionError = shellEscape(
-        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
-      );
-      return [
-        OPENCODE_MAJOR_PROBE,
-        branchOnOpenCodeMajor(apiCreate, legacyCreate),
-        `if [ -z "$SES_ID" ]; then SES_ID=$(opencode session list --format json | node -e ${shellEscape(buildSessionLookupScript())} ${shellEscape(title)}); fi`,
-        `[ -n "$SES_ID" ] && ${branchOnOpenCodeMajor(tuiCommand, legacyTui)}; echo ${missingSessionError} >&2; exit 1`,
-      ].join("; ");
+      return `${OPENCODE_MAJOR_PROBE}; ${branchOnOpenCodeMajor(apiCommand, legacyCommand)}`;
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {
