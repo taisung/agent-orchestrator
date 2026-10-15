@@ -137,7 +137,9 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   as-orchestrator ruled out as-64. Not touched: `scripts/fleet_watch.sh` and `tests/test_fleet_watch.sh`
   of agent-skills. Rule for every brief from now: each tmux command uses `-L <unique-name>` and runs
   with `TMUX` removed (`env -u TMUX`). Lifecycle workers, the watcher, and the private tmux servers of
-  ao-16 and ao-18 survived. ao-18 was restored at 11:49 and holds at its prompt; ao-16 is not restored.
+  ao-16 and ao-18 survived. On the owner's word, ao-18 was restored at 11:49 and ao-16 at 11:56, each
+  with a `.agent_resume.md` that names the cause and the rule; ao-16's model is pinned in its worktree
+  `.claude/settings.local.json`.
 - **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
   metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host

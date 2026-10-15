@@ -10,10 +10,19 @@
 The OpenCode 2.x arc (note `0009`, increments I-0 to I-7) is half done. I-1 (drop 1.x, require 2.0.29)
 and I-6 (`ao start` installs `@opencode/cli`) are on `main` and live: the primary checkout was rebuilt
 on the owner's word on 2026-10-15 at 10:19 EDT, and the five lifecycle workers were restarted at 10:20.
-Note `0010` (the M-1 to M-8 measurements) is on `main`. **I-2 is authored and waits for its review**:
-ao-14 (Muse) reported `done` at `1c2a93b6`, range `c949f902..1c2a93b6`, three commits. A separate arc,
-the `~/.ao/bin` PATH bug, runs in ao-15 (Muse, HIGH). `main` is `825b0dbc`, 26 commits ahead of
-`origin/main` (`273b62c1`); nothing of this arc is pushed.
+Note `0010` (the M-1 to M-8 measurements) is on `main`. **I-2 review round 1 runs** on
+`c949f902..1c2a93b6` (ao-14, Muse, three commits): ao-17 (V4.1 Flash) returned NOT-LAND-SAFE (M-1: the
+A4 version message is unreachable when no OpenCode session ID is stored, because core throws before
+`getRestoreCommand`; 2 minors), `development/reviews/i2_review_r1_v4flash.md`; ao-16 (Sonnet 5.5) still
+reviews. **The PATH arc review runs**: ao-15 (Muse) reported `done` at `345f1e6e` (one commit on
+`825b0dbc`), and ao-18 (Opus 5.5) reviews it. `main` is 30 commits ahead of `origin/main`
+(`273b62c1`); nothing of this arc is pushed.
+
+**Outage, 2026-10-15 11:41:47 EDT**: ao-16 ran `tmux kill-server` with `TMUX` set, which stopped the
+host's default tmux server and every session of every fleet (TODO Known Issues). The owner restarted
+both orchestrators at 11:42. This session (started 11:42:10) found the cause, and on the owner's word
+restored ao-18 (11:49) and ao-16 (11:56), each with a `.agent_resume.md` that names the cause and the
+tmux rule. ao-1, ao-14, ao-15 and ao-17 stay down until a round needs them.
 
 Until 2026-10-15 the agent-skills orchestrator (`as-orchestrator`) coordinated this work. From this
 handover on, this fork's own orchestrator owns I-2 to I-5 and the PATH arc. `as-orchestrator` keeps I-7
@@ -26,37 +35,41 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 
 | Session | Model | State | Branch tip | Disposition |
 | --- | --- | --- | --- | --- |
-| ao-1 | Claude Opus 5.5 | idle, about 20% context | `39549455` | every commit is on `main` by patch (`git cherry` all `-`); keep as the R7 rung or a HIGH author, or kill |
-| ao-14 | Muse (OpenCode 2.x) | done, I-2 | `1c2a93b6` | the author of I-2; keep for a round 2 |
-| ao-15 | Muse (OpenCode 2.x) | running, PATH arc | from `825b0dbc` | wait for its report |
-| ao-orchestrator | Claude Opus 5.5 | this session, in the primary checkout on `main` | `main` | `ao-orchestrator-2` (a mistaken start in a worktree) was killed by the owner; `as-orchestrator` removed the empty branches `orchestrator/ao-orchestrator-1` and `-2` (both at `273b62c1`, `git cherry` empty) |
+| ao-1 | Claude Opus 5.5 | down since the outage | `39549455` | every commit is on `main` by patch (`git cherry` all `-`); restore only if a HIGH author is needed, else kill |
+| ao-14 | Muse (OpenCode 2.x) | down since the outage, done, I-2 | `1c2a93b6` | the author of I-2; restore it for round 2 |
+| ao-15 | Muse (OpenCode 2.x) | down since the outage, done, PATH arc | `345f1e6e` | the author of the PATH fix; restore it if ao-18 asks for a round 2 |
+| ao-16 | Claude Sonnet 5.5 | restored 11:56, reviewing I-2 | `1c2a93b6` | lens 1 of 2; model pinned in its worktree `.claude/settings.local.json` (restore drops the spawn `--model`); it owns the stop of its scratch PIDs 30076, 75282, 88977, 75249, 88944 |
+| ao-17 | V4.1 Flash (OpenCode 2.x) | down, done | `1c2a93b6` | lens 2 of 2, verdict recorded and router row closed; kill it when I-2 lands |
+| ao-18 | Claude Opus 5.5 | restored 11:49, reviewing the PATH fix | `345f1e6e` | the single cross-family lens; it owns the stop of its scratch tmux server PID 78379 |
+| ao-orchestrator | Claude Opus 5.5 | this session, started 11:42:10 by the owner after the outage, in the primary checkout on `main` | `main` | the transcript of the session before the outage is `~/.claude/projects/-home-taisung-local-agent-orchestrator/ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` |
 
-**Watcher**: PID 4106781, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
-/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
-ao-1@... ao-14@... ao-15@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with
-`AO_CONFIG_PATH` set to `CONFIG_PATH`. `as-orchestrator` moved it to this session on 2026-10-15 at about
-11:22 EDT. To add or remove a worker, stop it by the PID in `watch.pid`, remove `watch.pid`, and start
-it again with the same options and the new `--preseed` list.
+**Watcher**: PID 4193251, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
+/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed ao-1@...
+ao-14@... ao-15@... ao-16@... ao-17@... ao-18@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`,
+run with `AO_CONFIG_PATH` set to `CONFIG_PATH`. It survived the outage (it is not in tmux). To add or
+remove a worker, stop it by the PID in `watch.pid`, remove `watch.pid`, and start it again with the
+same options and the new `--preseed` list.
 
-**Lifecycle worker** of this project: PID 3544115 (restarted 2026-10-15 10:20 EDT on the I-1 build).
+**Lifecycle worker** of this project: PID 3876010 (started 2026-10-15 11:07:17, `AO_CONFIG_PATH` set to
+`CONFIG_PATH`, cwd `REPO_PATH`). PID 3544115 no longer runs. A leaked scratch lifecycle worker from
+ao-5 still runs: PID 3062995 (`/tmp/ao-i1/config`, cwd deleted); the owner has not ruled on its stop.
 
-**Router rows still open in the agent-skills log** (`~/agent-skills/development/artifacts/model_router_log/log.csv`):
-ao-14 (I-2 author) and ao-15 (PATH author). Close them there with `~/agent-skills/scripts/router_log.py
-close --log <that file>`. Open every new row in this fork's log (profile `ROUTER_LOG`, `--create` on the
-first one).
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-16 and ao-18 are open, ao-17 is closed.
+In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
+author) and ao-15 (PATH author) are open; close them there with `~/agent-skills/scripts/router_log.py
+close --log <that file>`.
 
 ## Open and Blocked Items
 
-**I-2 review**: open - ao-14 done at `1c2a93b6` - dispatch the router's reviewer pair for
-python/L1/MEDIUM with a Muse author: Sonnet 5.5 (`--agent claude-code --model claude-sonnet-5-5`) and
-V4.1 Flash (`--agent opencode --model opencode-go/deepseek-v4.1-flash`). Model the brief on
-`~/.cache/agent-skills-haiku55-arc/brief-review-i1-r2.md`. Points for the review: the hanging-binary
-restore now takes about 21 s (three bounded 10 s calls, not one); `session.interrupt` answered
-`{"interrupted":false}` at the top level, not under `data`; `includeTitleDiscoveryForSessionId` stays in
-the `resolveOpenCodeSessionReuse` signature, unused; the truncation check (D2 of the report).
-**PATH arc**: running - ao-15 - wait for its report; the router's reviewer is one blind cross-family
-lens, Opus 5.5 (debugging/L1/HIGH). If ao-15 reports `partial` because the fix needs
-`session-manager.ts` or the OpenCode plugin, order that part after I-2 lands.
+**I-2 review**: running - ao-16 (Sonnet 5.5) - ao-17 returned NOT-LAND-SAFE (M-1 plus 2 minors);
+wait for ao-16, reconcile both reviews, then send round 2 to ao-14. Briefs:
+`~/.cache/agent-skills-haiku55-arc/brief-review-i2-r1-{sonnet,v4flash}.md`.
+**PATH arc review**: running - ao-18 (Opus 5.5) on `825b0dbc..345f1e6e` - the fix touches no file of
+I-2. Brief `~/.cache/agent-skills-haiku55-arc/brief-review-aobin-path-r1-opus.md`.
+**Restore drops the spawn model**: open - TODO Known Issues - a worker fix in the claude-code
+`getRestoreCommand` and the session metadata (HIGH).
+**Tmux rule in the agent-skills protocol text**: open - the owner decides whether as-orchestrator adds
+"`env -u TMUX` with every `tmux -L`" to the ao-spawn brief text.
 **Owner decisions**: open - the `AO_*` variables of nex-orchestrator in the global OpenCode service
 environment (restart the service from a clean shell, or not); the global OpenCode permissions that
 allow every action (keep, or pass a session ruleset); the trailer rule for this fork (TODO Known
@@ -72,24 +85,24 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Review I-2** - two blind lenses on `c949f902..1c2a93b6`, then land by fast-forward or cherry-pick.
+1. **Finish the I-2 review** - read the ao-16 review, reconcile it with ao-17, restore ao-14 and send
+   round 2 (M-1 of ao-17 at least), re-review, then land by fast-forward or cherry-pick.
    - Context: I-2 changes cleanup and reuse for every OpenCode session; after a rebuild every fleet runs
      it. A rebuild needs the owner's word, then a lifecycle restart.
    - Expected outcome: two LAND-SAFE verdicts, `main` holds I-2, the tree equals the reviewed tree.
-2. **Land the PATH fix** - review by Opus 5.5, then land; a rebuild puts the wrappers on every pane of
-   every fleet, so tell the owner what changes for a worker's `git` and `gh` calls before the rebuild.
-3. **I-3 and I-4** (after I-2), **then I-5** - route each with `~/agent-skills/scripts/routing.py route`;
-   I-3 and I-5 are HIGH by the profile.
+2. **Land the PATH fix** - after the ao-18 verdict; a rebuild puts the wrappers on every pane of every
+   fleet, so tell the owner what changes for a worker's `git` and `gh` calls before the rebuild.
+3. **Fix the restore model** (HIGH), then **I-3 and I-4** (after I-2), **then I-5** - route each with
+   `~/agent-skills/scripts/routing.py route`; I-3 and I-5 are HIGH by the profile.
 
 ## First Actions
 
 1. `cd /home/taisung/local/agent-orchestrator && git status -sb && git log --oneline -3` - expect
-   `main`, ahead of `origin/main`, at `825b0dbc` or the handover commit.
-2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status` - find this
-   session's name and the state of ao-1, ao-14 and ao-15.
-3. The watcher already notifies this session (PID 4106781, Live Sessions). Check it with
-   `ps -p $(cat ~/.cache/fleet_watch/ao-opencode2-2026-10-14/watch.pid)`.
-4. Read `~/.cache/agent-skills-haiku55-arc/ao-14-report-i2.md`, then write the two I-2 review briefs.
+   `main`, ahead of `origin/main`, at the handover commit. `D test-ao-config2.yaml` in the status is an
+   old working-tree deletion that this arc did not make; leave it.
+2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status`, then read
+   the first line of `.agent_report.md` of ao-16 and ao-18 (sentinels first).
+3. Check the watcher: `ps -p $(cat ~/.cache/fleet_watch/ao-opencode2-2026-10-14/watch.pid)`.
 
 ## Key Files
 
@@ -121,10 +134,10 @@ land after a rebuild, and only you rebuild, only on the owner's word (D-3). A re
 running `ao lifecycle-worker`: restart each by exact PID with
 `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py`, on the owner's word.
 
-The OpenCode 2.x arc follows note `0009` §13. I-1 and I-6 are live. I-2 is authored by ao-14 at
-`1c2a93b6` and needs its two blind reviews (Sonnet 5.5 and V4.1 Flash). ao-15 works on the separate
-`~/.ao/bin` PATH arc (HIGH; one Opus 5.5 review). ao-1 (Opus 5.5) is idle. The watcher already notifies
-this session, so your first action is to brief the I-2 reviewers.
+The OpenCode 2.x arc follows note `0009` §13. I-1 and I-6 are live. I-2 (ao-14 at `1c2a93b6`) is in
+review round 1: V4.1 Flash (ao-17) returned NOT-LAND-SAFE, and Sonnet 5.5 (ao-16) still reviews. The
+`~/.ao/bin` PATH fix (ao-15 at `345f1e6e`, HIGH) is in review by Opus 5.5 (ao-18). The watcher already
+notifies this session, so your first action is to read the sentinels of ao-16 and ao-18.
 
 Landmines. OpenCode 2.x workers are eager: write `.agent_task.md` first, then send one `ao send
 --no-wait`; a plain `ao send` waits 600 s, because the plugin still reads an idle 2.x pane as active
@@ -132,7 +145,12 @@ Landmines. OpenCode 2.x workers are eager: write `.agent_task.md` first, then se
 worktree to `main` before you write its brief. Before a new brief to a reused session, set line 1 of its
 `.agent_report.md` to `running|...` (D-30 of agent-skills). Workers never push, never build in the
 primary checkout, never write a global OpenCode file or `~/.ao/bin`, never read a `service.json`, and
-write to OpenCode only on an isolated store (0009 §2). Kill only exact PIDs; never `pkill`. No
+write to OpenCode only on an isolated store (0009 §2). Every tmux command of a worker uses
+`-L <unique-name>` with `TMUX` removed (`env -u TMUX`): `TMUX_TMPDIR` alone does not isolate inside a
+pane, and on 2026-10-15 one `tmux kill-server` stopped every fleet. Do not send `/model` to a worker: it
+rewrites the host-wide default in `~/.claude/settings.json`. `ao session restore` of a Claude worker
+takes the host default model, so pin a model in the worktree's `.claude/settings.local.json` first.
+Kill only exact PIDs; never `pkill`. No
 `Co-Authored-By` trailer and no emoji. `ao send` text has no quotes, apostrophes, backticks, `$`,
 parentheses or semicolons.
 
