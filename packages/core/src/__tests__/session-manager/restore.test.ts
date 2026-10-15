@@ -549,6 +549,86 @@ describe("restore", () => {
     expect(createCall.launchCommand).toBe("mock-agent --start");
   });
 
+  describe("when the agent refuses the restore", () => {
+    function registryWith(agent: Agent): PluginRegistry {
+      return {
+        ...mockRegistry,
+        get: vi.fn().mockImplementation((slot: string) => {
+          if (slot === "runtime") return mockRuntime;
+          if (slot === "agent") return agent;
+          if (slot === "workspace") return mockWorkspace;
+          return null;
+        }),
+      };
+    }
+
+    beforeEach(() => {
+      const wsPath = join(tmpDir, "ws-app-1");
+      mkdirSync(wsPath, { recursive: true });
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: wsPath,
+        branch: "feat/TEST-1",
+        status: "killed",
+        project: "my-app",
+        runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+      });
+    });
+
+    it("keeps the old runtime when getRestoreCommand throws", async () => {
+      const refusingAgent: Agent = {
+        ...mockAgent,
+        getRestoreCommand: vi.fn().mockRejectedValue(new Error("agent refused the restore")),
+      };
+      const sm = createSessionManager({ config, registry: registryWith(refusingAgent) });
+
+      await expect(sm.restore("app-1")).rejects.toThrow("agent refused the restore");
+
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+      expect(mockRuntime.create).not.toHaveBeenCalled();
+      expect(readMetadataRaw(sessionsDir, "app-1")!["status"]).toBe("killed");
+    });
+
+    it("keeps the old runtime when the fallback getLaunchCommand throws", async () => {
+      const refusingAgent: Agent = {
+        ...mockAgent,
+        getRestoreCommand: vi.fn().mockResolvedValue(null),
+        getLaunchCommand: vi.fn().mockImplementation(() => {
+          throw new Error("agent refused the launch");
+        }),
+      };
+      const sm = createSessionManager({ config, registry: registryWith(refusingAgent) });
+
+      await expect(sm.restore("app-1")).rejects.toThrow("agent refused the launch");
+
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+      expect(mockRuntime.create).not.toHaveBeenCalled();
+    });
+
+    it("destroys the old runtime only after the restore command is ready", async () => {
+      const calls: string[] = [];
+      const orderedAgent: Agent = {
+        ...mockAgent,
+        getRestoreCommand: vi.fn().mockImplementation(async () => {
+          calls.push("getRestoreCommand");
+          return "agent --resume";
+        }),
+      };
+      (mockRuntime.destroy as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        calls.push("destroy");
+      });
+      (mockRuntime.create as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        calls.push("create");
+        return makeHandle("rt-new");
+      });
+      const sm = createSessionManager({ config, registry: registryWith(orderedAgent) });
+
+      await sm.restore("app-1");
+
+      expect(calls).toEqual(["getRestoreCommand", "destroy", "create"]);
+      expect(mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-old"));
+    });
+  });
+
   it("preserves original createdAt/issue/PR metadata", async () => {
     const wsPath = join(tmpDir, "ws-app-1");
     mkdirSync(wsPath, { recursive: true });

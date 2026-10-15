@@ -2524,16 +2524,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    // 6. Destroy old runtime if still alive (e.g. tmux session survives agent crash)
-    if (session.runtimeHandle) {
-      try {
-        await plugins.runtime.destroy(session.runtimeHandle);
-      } catch {
-        // Best effort — may already be gone
-      }
-    }
-
-    // 7. Get launch command — try restore command first, fall back to fresh launch
+    // 6. Get launch command — try restore command first, fall back to fresh launch.
+    //    This runs before the old runtime is destroyed: an agent can refuse the
+    //    restore (for example an unsupported binary version), and a refusal must
+    //    leave the surviving pane and its scrollback in place.
     let launchCommand: string;
     const agentLaunchConfig = {
       sessionId,
@@ -2561,6 +2555,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
+
+    // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash)
+    if (session.runtimeHandle) {
+      try {
+        await plugins.runtime.destroy(session.runtimeHandle);
+      } catch {
+        // Best effort — may already be gone
+      }
+    }
 
     // 8. Create runtime (reuse tmuxName from metadata)
     const tmuxName = raw["tmuxName"];
