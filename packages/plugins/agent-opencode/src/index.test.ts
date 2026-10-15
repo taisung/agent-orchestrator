@@ -96,6 +96,12 @@ function mockTmuxWithProcess(processName: string, found = true) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The plugin gates on the Node-resolved `opencode --version` before the pane
+  // starts. Tests that need another version override this per test.
+  mockExecFileSync.mockImplementation((cmd: string) => {
+    if (cmd === "opencode") return "opencode v2.0.29\n";
+    throw new Error(`unexpected command: ${cmd}`);
+  });
 });
 
 describe("plugin manifest & exports", () => {
@@ -123,85 +129,89 @@ describe("plugin manifest & exports", () => {
 
 describe("getLaunchCommand", () => {
   const agent = create();
+  const model = "opencode-go/muse-spark-1.3-contributor";
 
-  it("generates base command without prompt", () => {
+  it("generates a base command that makes the session through the API", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain("opencode session list --format json");
-    expect(cmd).toContain("AO:sess-1");
+    expect(cmd).toContain('"title":"AO:sess-1"');
+  });
+
+  it("holds no version probe: the Node gate refuses old binaries before the pane starts", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model, prompt: "Go" }));
+    expect(cmd).not.toContain("OC_MAJOR");
+    expect(cmd).not.toContain("opencode --version");
+  });
+
+  it("makes the titled session without run --command or a title lookup", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model, prompt: "Go" }));
+    expect(cmd).not.toContain("run --format json");
+    expect(cmd).not.toContain("--command");
+    expect(cmd).not.toContain("opencode session list");
   });
 
   it("uses --prompt with shell-escaped prompt", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Fix it" }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Fix it'");
   });
 
-  it("includes --model with shell-escaped value", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model: "claude-sonnet-4-5-20250929" }));
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929'");
+  it("stores the model in the API body and passes no --model to the TUI", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model }));
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).toContain('"id":"muse-spark-1.3-contributor"');
+    expect(cmd).not.toContain("--model");
   });
 
   it("combines prompt and model", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ prompt: "Go", model: "claude-sonnet-4-5-20250929" }),
-    );
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'Go' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929'");
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Go", model }));
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Go'");
+    expect(cmd).not.toContain("--model");
   });
 
   it("escapes single quotes in prompt (POSIX shell escaping)", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "it's broken" }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'it'\\''s broken'");
   });
 
   it("omits optional flags when not provided", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig());
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).not.toContain("--model");
     expect(cmd).not.toContain("--agent");
+    expect(cmd).not.toContain('"agent"');
   });
 
-  it("includes --agent flag when subagent is provided", () => {
+  it("stores the agent in the API body when subagent is provided", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ subagent: "sisyphus" }));
-    expect(cmd).toContain("--agent 'sisyphus'");
+    expect(cmd).toContain('"agent":"sisyphus"');
+    expect(cmd).not.toContain("--agent");
   });
 
   it("generates command with agent and prompt", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ subagent: "sisyphus", prompt: "fix bug" }),
     );
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --agent 'sisyphus'",
-    );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'fix bug' --agent 'sisyphus'",
-    );
-    expect(cmd).toContain("--agent 'sisyphus'");
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"agent":"sisyphus"');
+    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix bug'");
+    expect(cmd).not.toContain("--agent");
   });
 
   it("generates command with agent, model, and prompt", () => {
     const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({
-        subagent: "sisyphus",
-        model: "claude-sonnet-4-5-20250929",
-        prompt: "fix the bug",
-      }),
+      makeLaunchConfig({ subagent: "sisyphus", model, prompt: "fix the bug" }),
     );
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --agent 'sisyphus' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'fix the bug' --agent 'sisyphus' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain("--agent 'sisyphus");
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929");
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).toContain('"agent":"sisyphus"');
+    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix the bug'");
+    expect(cmd).not.toContain("--agent");
+    expect(cmd).not.toContain("--model");
   });
 
   it("shell-escapes sessionId in the discovery failure message", () => {
@@ -212,10 +222,10 @@ describe("getLaunchCommand", () => {
     );
   });
 
-  it("keeps the fallback if-block shell-valid on one line", () => {
+  it("keeps the open-or-fail shape shell-valid on one line", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig());
 
-    expect(cmd).toContain('if [ -z "$SES_ID" ]; then SES_ID=$(opencode session list --format json');
+    expect(cmd).toContain('[ -n "$SES_ID" ] && exec opencode');
     expect(cmd).not.toContain("then;");
   });
 
@@ -223,44 +233,40 @@ describe("getLaunchCommand", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ subagent: "oracle", prompt: "review code" }),
     );
-    expect(cmd).toContain("--agent 'oracle'");
+    expect(cmd).toContain('"agent":"oracle"');
     expect(cmd).toContain("'review code'");
+    expect(cmd).not.toContain("--agent");
   });
 
   it("works with different agent names: librarian", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ subagent: "librarian", prompt: "find usages" }),
     );
-    expect(cmd).toContain("--agent 'librarian");
+    expect(cmd).toContain('"agent":"librarian"');
     expect(cmd).toContain("'find usages'");
+    expect(cmd).not.toContain("--agent");
   });
 
-  it("backward compatible: no agent flag when subagent not provided", () => {
+  it("backward compatible: no agent key when subagent not provided", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "fix it" }));
-    expect(cmd).not.toContain("--agent");
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).not.toContain('"agent"');
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix it'");
   });
 
   it("combines model and prompt without agent (backward compatible)", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ prompt: "Go", model: "claude-sonnet-4-5-20250929" }),
-    );
-    expect(cmd).not.toContain("--agent");
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'Go' --model 'claude-sonnet-4-5-20250929'",
-    );
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929");
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Go", model }));
+    expect(cmd).not.toContain('"agent"');
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Go'");
+    expect(cmd).not.toContain("--model");
   });
 
-  it("uses run bootstrap when systemPrompt is provided", () => {
+  it("uses API create when systemPrompt is provided", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ systemPrompt: "You are an orchestrator" }),
     );
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'You are an orchestrator'");
   });
 
@@ -268,7 +274,7 @@ describe("getLaunchCommand", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ systemPrompt: "You are an orchestrator", prompt: "do the task" }),
     );
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain(
       `exec opencode --session "$SES_ID" --prompt 'You are an orchestrator
 
@@ -284,13 +290,13 @@ do the task'`,
   it("handles very long systemPrompt", () => {
     const longPrompt = "A".repeat(500);
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ systemPrompt: longPrompt }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd.length).toBeGreaterThan(500);
   });
 
   it("generates command with systemPromptFile via shell substitution", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ systemPromptFile: "/tmp/prompt.md" }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/prompt.md\')"');
   });
 
@@ -298,7 +304,7 @@ do the task'`,
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ systemPromptFile: "/tmp/it's-prompt.md" }),
     );
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain(
       "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/it'\\''s-prompt.md')\"",
     );
@@ -311,7 +317,7 @@ do the task'`,
         systemPromptFile: "/tmp/file-prompt.md",
       }),
     );
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain(
       'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/file-prompt.md\')"',
     );
@@ -326,13 +332,12 @@ do the task'`,
         prompt: "fix the bug",
       }),
     );
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"agent":"sisyphus"');
     expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --agent 'sisyphus'",
+      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\"",
     );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\" --agent 'sisyphus'",
-    );
-    expect(cmd).toContain("--agent 'sisyphus");
+    expect(cmd).not.toContain("--agent");
     expect(cmd).toContain(
       "$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')",
     );
@@ -346,7 +351,8 @@ do the task'`,
         systemPromptFile: "/tmp/orchestrator.md",
       }),
     );
-    expect(cmd).toContain("opencode run --format json --title 'AO:my-orchestrator'");
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"title":"AO:my-orchestrator"');
     expect(cmd).toContain(
       'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/orchestrator.md\')"',
     );
@@ -360,11 +366,10 @@ do the task'`,
         prompt: "fix the bug",
       }),
     );
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"agent":"sisyphus"');
     expect(cmd).toContain(
-      "opencode run --format json --title 'AO:sess-1' --agent 'sisyphus'",
-    );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\" --agent 'sisyphus'",
+      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\"",
     );
     expect(cmd).toContain(
       "$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')",
@@ -380,7 +385,7 @@ do the task'`,
 
   it("handles prompt with newlines", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "line1\nline2\nline3" }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("'line1");
   });
 
@@ -411,10 +416,10 @@ do the task'`,
 
   it("handles empty prompt", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "" }));
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain("opencode session list --format json");
-    expect(cmd).toContain("AO:sess-1");
+    expect(cmd).toContain('"title":"AO:sess-1"');
+    expect(cmd).not.toContain("--prompt");
   });
 
   it("uses existing session id", () => {
@@ -435,9 +440,9 @@ do the task'`,
     expect(cmd).toBe("opencode --session 'ses_abc123' --prompt 'continue'");
   });
 
-  it("uses existing session id with --title fallback", () => {
+  it("uses existing session id without a version probe", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID"');
   });
 });
@@ -755,7 +760,7 @@ describe("getRestoreCommand", () => {
     expect(cmd).toBe("opencode --session 'ses_abc123'");
   });
 
-  it("includes model flag from project config", async () => {
+  it("stores the project model through the API instead of a TUI flag", async () => {
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
       {
@@ -764,10 +769,12 @@ describe("getRestoreCommand", () => {
         path: "/p",
         defaultBranch: "main",
         sessionPrefix: "p",
-        agentConfig: { model: "claude-sonnet-4-5-20250929" },
+        agentConfig: { model: "opencode-go/muse-spark-1.3-contributor" },
       },
     );
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929'");
+    expect(cmd).toContain("opencode api session.switchModel");
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).not.toContain("--model");
   });
 
   it("returns null when no session ID found", async () => {
@@ -839,63 +846,6 @@ describe("getEnvironment PATH", () => {
   });
 });
 
-describe("session ID capture from JSON stream", () => {
-  it("validates session_id format with ses_ prefix", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("session_id");
-    expect(cmd).toContain("sessionID");
-    expect(cmd).toContain("/^ses_[A-Za-z0-9_-]+$/");
-  });
-
-  it("parses JSON lines and extracts session_id or sessionID field", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("JSON.parse(trimmed)");
-    expect(cmd).toContain("obj.session_id");
-    expect(cmd).toContain("obj.sessionID");
-  });
-
-  it("handles buffer accumulation for partial lines", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("buffer.split");
-    expect(cmd).toContain("buffer = lines.pop()");
-  });
-});
-
-describe("title-based fallback sorting with newest-first", () => {
-  it("sorts by updated timestamp (newest first) when multiple sessions have the same title", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("opencode session list --format json");
-
-    expect(cmd).toContain("sort((a, b) =>");
-    expect(cmd).toContain("tb - ta");
-  });
-
-  it("validates session IDs with ses_ prefix pattern", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("isValidId");
-    expect(cmd).toContain("/^ses_[A-Za-z0-9_-]+$/");
-  });
-
-  it("handles numeric and string timestamps in sorting", () => {
-    const agent = create();
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain("typeof value ===");
-    expect(cmd).toContain("Number.isFinite");
-    expect(cmd).toContain("Date.parse(value)");
-  });
-});
-
 describe("invalid session ID rejection", () => {
   it("does not include --session for invalid opencodeSessionId in launch command", () => {
     const agent = create();
@@ -918,7 +868,7 @@ describe("invalid session ID rejection", () => {
       );
 
       expect(cmd).not.toContain(`--session '${invalidId}'`);
-      expect(cmd).toContain("opencode run --format json --title 'AO:sess-1'");
+      expect(cmd).toContain("opencode api session.create");
     }
   });
 
@@ -1176,28 +1126,22 @@ describe("isProcessRunning — herdr runtime", () => {
 });
 
 // =========================================================================
-// Launch and restore commands run against fake OpenCode 1.x and 2.x CLIs.
-// The fake copies the CLI behavior measured on 1.18.35 and 2.0.29: 2.x
-// rejects `run --command` and the TUI's --model/--agent, and only 2.x
-// has `opencode api`. Its 2.x API keeps the sessions in a JSON store, so a
-// test can read the model and agent of the session that the TUI opens.
+// Launch and restore commands run against a fake OpenCode 2.x CLI.
+// The fake copies the CLI behavior measured on 2.0.29: no `run` command,
+// no TUI model or agent flags, and an `opencode api` that keeps the
+// sessions in a JSON store, so a test can read the model and agent of the
+// session that the TUI opens. The version gate runs in Node before the
+// pane starts, so the fake has no version branch.
 // =========================================================================
 
-const OPENCODE_1 = "1.18.35";
 const OPENCODE_2 = "opencode v2.0.29";
-const GENERATIONS = [
-  { name: "1.x", version: OPENCODE_1 },
-  { name: "2.x", version: OPENCODE_2 },
-] as const;
 
 const FAKE_OPENCODE = `#!/usr/bin/env node
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const env = process.env;
 fs.appendFileSync(env.FAKE_OC_LOG, JSON.stringify(argv) + "\\n");
-const major = Number((env.FAKE_OC_VERSION.match(/(\\d+)\\./) || [])[1] || 0);
-const v2 = major >= 2;
-// FAKE_OC_CREATE: run and session.create print this text, exit 0 and make no session.
+// FAKE_OC_CREATE: session.create prints this text, exit 0 and makes no session.
 const rawCreate = env.FAKE_OC_CREATE;
 const failing = (env.FAKE_OC_API_FAIL || "").split(",");
 const ignored = (env.FAKE_OC_API_IGNORE || "").split(",");
@@ -1222,21 +1166,7 @@ if (argv[0] === "--version") {
   process.stdout.write(env.FAKE_OC_VERSION + "\\n");
   process.exit(0);
 }
-if (argv[0] === "version") fail("Error: Failed to change directory to version", v2 ? 1 : 0);
-if (argv[0] === "session" && argv[1] === "list") {
-  const rows = Object.entries(store).map(([id, s]) => ({ id, title: s.title, updated: s.updated }));
-  process.stdout.write(JSON.stringify(rows));
-  process.exit(0);
-}
-if (argv[0] === "run") {
-  const runFlags = ["--format", "--title", "--model", "--agent", "--session"];
-  flags("opencode run", argv.slice(1), v2 ? runFlags : [...runFlags, "--command"]);
-  if (rawCreate !== undefined) process.stdout.write(rawCreate);
-  else process.stdout.write(JSON.stringify({ type: "error", sessionID: env.FAKE_OC_SESSION }) + "\\n");
-  process.exit(0);
-}
 if (argv[0] === "api") {
-  if (!v2) fail("Error: Failed to change directory to api", 0);
   const operation = argv[1];
   const given = flags("opencode api", argv.slice(2), ["-d", "--param"]);
   if (failing.includes(operation)) {
@@ -1280,7 +1210,7 @@ if (argv[0] === "api") {
   save();
   process.exit(0);
 }
-flags("opencode", argv, v2 ? ["--session", "--prompt"] : ["--session", "--prompt", "--model", "--agent"]);
+flags("opencode", argv, ["--session", "--prompt"]);
 process.exit(0);
 `;
 
@@ -1327,11 +1257,10 @@ interface FakeSession {
 }
 
 interface FakeCliOptions {
-  version: string;
   sessionId?: string;
   /** Sessions that exist before the command runs. */
   list?: Array<FakeSession & { id: string }>;
-  /** `run` and `session.create` print this text, exit 0 and make no session. */
+  /** `session.create` prints this text, exit 0 and makes no session. */
   createOutput?: string;
   /** Settings that `session.create` stores and returns, in place of the request or in addition to it. */
   createStores?: { model?: FakeModelRef; agent?: string };
@@ -1349,7 +1278,7 @@ function fakeCliEnv(options: FakeCliOptions): NodeJS.ProcessEnv {
     PATH: `${fakeBin}:${process.env["PATH"] ?? ""}`,
     FAKE_OC_LOG: callLog,
     FAKE_OC_STORE: storeFile,
-    FAKE_OC_VERSION: options.version,
+    FAKE_OC_VERSION: OPENCODE_2,
     FAKE_OC_SESSION: options.sessionId ?? "ses_fakecreated",
     ...(options.createOutput !== undefined ? { FAKE_OC_CREATE: options.createOutput } : {}),
     ...(options.createStores
@@ -1417,16 +1346,15 @@ function expectSettings(
   else expect(stored!.agent).toEqual(before?.agent);
 }
 
-describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
+describe("launch command against the OpenCode 2.x CLI", () => {
   const agent = create();
   const model = "opencode-go/muse-spark-1.3-contributor";
   const subagent = "plan";
   const prompt = "Reply with OK";
 
-  it.each(GENERATIONS)("$name: opens the TUI on the captured session", ({ version }) => {
+  it("opens the TUI on the created session", () => {
     const config = makeLaunchConfig({ model, subagent, prompt });
     const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      version,
       sessionId: "ses_gen",
     });
 
@@ -1438,11 +1366,10 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(flagValue(tui, "--prompt")).toBe(prompt);
   });
 
-  it("2.x: makes the titled session through the API, without run --command or TUI model flags", () => {
+  it("makes the titled session through the API, with no TUI model flags", () => {
     const config = makeLaunchConfig({ model, subagent, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), { version: OPENCODE_2 });
+    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {});
 
-    expect(run.calls.some((argv) => argv.includes("--command"))).toBe(false);
     expect(run.runCalls).toHaveLength(0);
     const [create] = run.apiCalls;
     expect(create?.[1]).toBe("session.create");
@@ -1455,11 +1382,10 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(flagValue(run.tuiCalls[0]!, "--agent")).toBeUndefined();
   });
 
-  it("2.x: reads the created session back, then opens the TUI on it with the requested settings", () => {
+  it("reads the created session back, then opens the TUI on it with the requested settings", () => {
     const variantModel = `${model}#xhigh`;
     const config = makeLaunchConfig({ model: variantModel, subagent, prompt });
     const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      version: OPENCODE_2,
       sessionId: "ses_gen",
     });
 
@@ -1473,96 +1399,38 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(run.listCalls).toHaveLength(0);
   });
 
-  it("1.x: keeps run --command with the title, model and agent, then passes them to the TUI", () => {
-    const config = makeLaunchConfig({ model, subagent, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), { version: OPENCODE_1 });
-
-    expect(run.apiCalls).toHaveLength(0);
-    const [runCall] = run.runCalls;
-    expect(flagValue(runCall!, "--title")).toBe(`AO:${config.sessionId}`);
-    expect(flagValue(runCall!, "--command")).toBe("true");
-    const tui = run.tuiCalls[0]!;
-    for (const flag of ["--model", "--agent"]) {
-      expect(flagValue(tui, flag)).toBe(flagValue(runCall!, flag));
-    }
-    expect(flagValue(tui, "--model")).toBe(model);
-    expect(flagValue(tui, "--agent")).toBe(subagent);
-  });
-
-  it("2.x: keeps the model variant in the API model reference", () => {
+  it("keeps the model variant in the API model reference", () => {
     const variantModel = `${model}#xhigh`;
     const command = agent.getLaunchCommand(makeLaunchConfig({ model: variantModel }));
-    const run = runAgainstFakeCli(command, { version: OPENCODE_2 });
+    const run = runAgainstFakeCli(command, {});
 
     const body = JSON.parse(flagValue(run.apiCalls[0]!, "-d")!);
     expect(modelRefToCli(body.model)).toBe(variantModel);
     expect(body.model.variant).toBeDefined();
   });
 
-  // 2.x has no title fallback; see "2.x launch when session.create fails or returns no session ID".
-  it("1.x: falls back to the newest session list entry with the AO title", () => {
+  it("stops with an error when the create returns no session ID", () => {
     const config = makeLaunchConfig({ model, prompt });
-    const title = `AO:${config.sessionId}`;
     const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      version: OPENCODE_1,
       createOutput: "",
-      list: [
-        { id: "ses_older", title, updated: 1 },
-        { id: "ses_newer", title, updated: 2 },
-        { id: "ses_other", title: "AO:another", updated: 3 },
-      ],
     });
 
-    expect(run.listCalls).toHaveLength(1);
-    expect(run.status).toBe(0);
-    expect(run.tuiCalls).toHaveLength(1);
-    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe("ses_newer");
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(
+      `failed to discover OpenCode session ID for AO:${config.sessionId}`,
+    );
+    expect(run.tuiCalls).toHaveLength(0);
   });
 
-  it.each(GENERATIONS)(
-    "$name: stops with an error when neither capture nor lookup finds the session",
-    ({ version }) => {
-      const config = makeLaunchConfig({ model, prompt });
-      const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-        version,
-        createOutput: "",
-      });
-
-      expect(run.status).toBe(1);
-      expect(run.stderr).toContain(
-        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
-      );
-      expect(run.tuiCalls).toHaveLength(0);
-    },
-  );
-
-  it("takes the 1.x branch when the version output has no version number", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(makeLaunchConfig({ model })), {
-      version: "opencode dev",
-    });
-
-    expect(run.apiCalls).toHaveLength(0);
-    expect(flagValue(run.runCalls[0]!, "--command")).toBe("true");
-  });
-
-  it("2.x: stops before it makes a session when the model has no provider", () => {
+  it("stops before it makes a session when the model has no provider", () => {
     const providerless = "muse-spark-1.3-contributor";
     const command = agent.getLaunchCommand(makeLaunchConfig({ model: providerless }));
-    const run = runAgainstFakeCli(command, { version: OPENCODE_2 });
+    const run = runAgainstFakeCli(command, {});
 
     expect(run.status).toBe(1);
     expect(run.stderr).toContain(providerless);
     expect(run.apiCalls).toHaveLength(0);
     expect(run.tuiCalls).toHaveLength(0);
-  });
-
-  it("1.x: passes a model without provider through to OpenCode as before", () => {
-    const providerless = "muse-spark-1.3-contributor";
-    const command = agent.getLaunchCommand(makeLaunchConfig({ model: providerless }));
-    const run = runAgainstFakeCli(command, { version: OPENCODE_1 });
-
-    expect(flagValue(run.runCalls[0]!, "--model")).toBe(providerless);
-    expect(flagValue(run.tuiCalls[0]!, "--model")).toBe(providerless);
   });
 });
 
@@ -1596,7 +1464,6 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
     "a failed create does not open the older session with the same title ($label)",
     (settings) => {
       const run = runAgainstFakeCli(launch(settings), {
-        version: OPENCODE_2,
         apiFail: ["session.create"],
         list: [older],
       });
@@ -1613,7 +1480,6 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
 
   it("a failed create without a session with the title stops with status 1", () => {
     const run = runAgainstFakeCli(launch(request), {
-      version: OPENCODE_2,
       apiFail: ["session.create"],
     });
 
@@ -1637,7 +1503,6 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
       const newer = { ...older, id: "ses_newer", updated: 2 };
       const { id: _newerId, ...newerStored } = newer;
       const run = runAgainstFakeCli(launch(request), {
-        version: OPENCODE_2,
         createOutput: output,
         list: [older, newer],
       });
@@ -1655,7 +1520,6 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
     "a create that exits 0 without output stops without a title lookup ($label)",
     (settings) => {
       const run = runAgainstFakeCli(launch(settings), {
-        version: OPENCODE_2,
         createOutput: "",
         list: [older],
       });
@@ -1685,7 +1549,6 @@ describe("2.x launch checks the settings that session.create stored", () => {
     { label: "another model", createStores: { model: otherModel } },
   ])("stops with status 1 and no TUI when the service stores $label", ({ createStores }) => {
     const run = runAgainstFakeCli(launch(request), {
-      version: OPENCODE_2,
       sessionId: created,
       createStores,
     });
@@ -1703,7 +1566,6 @@ describe("2.x launch checks the settings that session.create stored", () => {
   it("stops when the stored variant differs from a request without a variant", () => {
     const { providerID, id } = otherModel;
     const run = runAgainstFakeCli(launch({ model: modelRefToCli({ providerID, id }) }), {
-      version: OPENCODE_2,
       sessionId: created,
       createStores: { model: { providerID, id, variant: "xhigh" } },
     });
@@ -1717,7 +1579,6 @@ describe("2.x launch checks the settings that session.create stored", () => {
     { label: "session.get prints the session and exits 1", options: { getExit: 1 } },
   ])("stops with status 1 and no TUI when $label", ({ options }) => {
     const run = runAgainstFakeCli(launch(request), {
-      version: OPENCODE_2,
       sessionId: created,
       ...options,
     });
@@ -1741,7 +1602,6 @@ describe("2.x launch checks the settings that session.create stored", () => {
     },
   ])("checks $label when only that is requested", ({ settings, createStores }) => {
     const run = runAgainstFakeCli(launch(settings), {
-      version: OPENCODE_2,
       sessionId: created,
       createStores,
     });
@@ -1754,7 +1614,6 @@ describe("2.x launch checks the settings that session.create stored", () => {
 
   it("runs no readback when no model and no agent were requested", () => {
     const run = runAgainstFakeCli(launch({}), {
-      version: OPENCODE_2,
       sessionId: created,
       createStores: { model: otherModel, agent: otherAgent },
     });
@@ -1765,7 +1624,7 @@ describe("2.x launch checks the settings that session.create stored", () => {
   });
 });
 
-describe("existing-session and restore commands against OpenCode 1.x and 2.x CLIs", () => {
+describe("existing-session and restore commands against the OpenCode 2.x CLI", () => {
   const agent = create();
   const model = "opencode-go/glm-5.3#xhigh";
   const subagent = "plan";
@@ -1802,20 +1661,16 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     return cmd!;
   }
 
-  it.each(GENERATIONS)(
-    "$name: resumes without a model or agent through the same plain command",
-    ({ version }) => {
-      const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig()), { version });
+  it("resumes without a model or agent through the same plain command", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig()), {});
 
-      expect(run.status).toBe(0);
-      expect(run.apiCalls).toHaveLength(0);
-      expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
-    },
-  );
+    expect(run.status).toBe(0);
+    expect(run.apiCalls).toHaveLength(0);
+    expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
+  });
 
-  it("2.x: stores the model and agent on the session, then opens the TUI without them", () => {
+  it("stores the model and agent on the session, then opens the TUI without them", () => {
     const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      version: OPENCODE_2,
       list: [existing],
     });
 
@@ -1832,24 +1687,11 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     expectSettings(run.tuiSession, { model, agent: subagent });
   });
 
-  it("1.x: passes the model and agent to the TUI and calls no API", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      version: OPENCODE_1,
-    });
-
-    expect(run.status).toBe(0);
-    expect(run.apiCalls).toHaveLength(0);
-    const tui = run.tuiCalls[0]!;
-    expect(flagValue(tui, "--model")).toBe(model);
-    expect(flagValue(tui, "--agent")).toBe(subagent);
-  });
-
   it.each([
     { label: "resume", command: async () => agent.getLaunchCommand(reuseConfig({ model })) },
     { label: "restore", command: () => restoreCommand(model) },
-  ])("2.x: $label stops with status 1 and no TUI when session.switchModel fails", async (c) => {
+  ])("$label stops with status 1 and no TUI when session.switchModel fails", async (c) => {
     const run = runAgainstFakeCli(await c.command(), {
-      version: OPENCODE_2,
       list: [existing],
       apiFail: ["session.switchModel"],
     });
@@ -1860,19 +1702,16 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     expect(run.store[existingId]?.model).toEqual(existing.model);
   });
 
-  it("2.x: resume stops with status 1 and no TUI when the session does not exist", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      version: OPENCODE_2,
-    });
+  it("resume stops with status 1 and no TUI when the session does not exist", () => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {});
 
     expect(run.status).toBe(1);
     expect(run.tuiCalls).toHaveLength(0);
     expect(run.stderr).toContain("HTTP 404 Not Found");
   });
 
-  it("2.x: resume stops with status 1 and no TUI when session.switchAgent fails after the model switch", () => {
+  it("resume stops with status 1 and no TUI when session.switchAgent fails after the model switch", () => {
     const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      version: OPENCODE_2,
       list: [existing],
       apiFail: ["session.switchAgent"],
     });
@@ -1887,10 +1726,9 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     { label: "resume", command: async () => agent.getLaunchCommand(reuseConfig({ model })) },
     { label: "restore", command: () => restoreCommand(model) },
   ])(
-    "2.x: $label stops with status 1 and no TUI when session.get prints the session and exits 1",
+    "$label stops with status 1 and no TUI when session.get prints the session and exits 1",
     async (c) => {
       const run = runAgainstFakeCli(await c.command(), {
-        version: OPENCODE_2,
         list: [existing],
         getExit: 1,
       });
@@ -1903,9 +1741,8 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     },
   );
 
-  it("2.x: resume stops with status 1 and no TUI when the readback differs from the request", () => {
+  it("resume stops with status 1 and no TUI when the readback differs from the request", () => {
     const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      version: OPENCODE_2,
       list: [existing],
       apiIgnore: ["session.switchAgent"],
     });
@@ -1922,11 +1759,10 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     },
     { label: "restore", command: (m: string) => restoreCommand(m) },
   ])(
-    "2.x: $label stops with status 1 before any API call when the model has no provider",
+    "$label stops with status 1 before any API call when the model has no provider",
     async (c) => {
       const providerless = "glm-5.3";
       const run = runAgainstFakeCli(await c.command(providerless), {
-        version: OPENCODE_2,
         list: [existing],
       });
 
@@ -1937,31 +1773,137 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     },
   );
 
-  it.each(GENERATIONS)("$name: restore applies the project model", async ({ version, name }) => {
-    const run = runAgainstFakeCli(await restoreCommand(model), { version, list: [existing] });
+  it("restore applies the project model through the API, with no TUI model flag", async () => {
+    const run = runAgainstFakeCli(await restoreCommand(model), { list: [existing] });
 
     expect(run.status).toBe(0);
     expect(run.tuiCalls).toHaveLength(1);
     const tui = run.tuiCalls[0]!;
     expect(flagValue(tui, "--session")).toBe(existingId);
-    if (name === "2.x") {
-      expect(flagValue(tui, "--model")).toBeUndefined();
-      expectSettings(run.tuiSession, { model, agent: existing.agent });
-    } else {
-      expect(flagValue(tui, "--model")).toBe(model);
-      expect(run.apiCalls).toHaveLength(0);
+    expect(flagValue(tui, "--model")).toBeUndefined();
+    expectSettings(run.tuiSession, { model, agent: existing.agent });
+  });
+});
+
+describe("version gate", () => {
+  const agent = create();
+
+  function versionOutput(version: string) {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return `${version}\n`;
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+  }
+
+  it.each([
+    { version: "opencode v2.0.29", label: "the measured floor" },
+    { version: "opencode v2.0.30", label: "a later patch" },
+    { version: "opencode v2.1.0", label: "a later minor" },
+    { version: "2.1.0-beta.1", label: "a pre-release past the floor" },
+    { version: "opencode v10.0.0", label: "a later major" },
+  ])("accepts $label ($version): the launch proceeds to the API", ({ version }) => {
+    versionOutput(version);
+    const cmd = agent.getLaunchCommand(makeLaunchConfig());
+    expect(cmd).toContain("opencode api session.create");
+  });
+
+  it.each([
+    { version: "1.18.35", label: "1.x" },
+    { version: "opencode v2.0.28", label: "one patch below the floor" },
+    { version: "opencode v2.0.9", label: "an older 2.x patch" },
+    { version: "2.0", label: "a version without a patch" },
+    { version: "opencode dev", label: "output without a version number" },
+  ])("refuses $label ($version): the launch fails before the pane starts", ({ version }) => {
+    versionOutput(version);
+    let error: unknown;
+    try {
+      agent.getLaunchCommand(makeLaunchConfig());
+    } catch (err) {
+      error = err;
     }
+    expect(error).toBeInstanceOf(Error);
+    // The message names the required version and the version it found.
+    expect((error as Error).message).toContain("2.0.29");
+    expect((error as Error).message).toContain(version);
+  });
+
+  it("refuses empty --version output: the message says what it found", () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return "\n";
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    let error: unknown;
+    try {
+      agent.getLaunchCommand(makeLaunchConfig());
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("2.0.29");
+  });
+
+  it("refuses a missing binary: the launch fails and names the requirement", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    let error: unknown;
+    try {
+      agent.getLaunchCommand(makeLaunchConfig());
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("2.0.29");
+    expect((error as Error).message).toContain("opencode not found");
+  });
+
+  it("refuses the restore path on an old binary as well", async () => {
+    versionOutput("1.18.35");
+    await expect(
+      agent.getRestoreCommand!(
+        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+        { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
+      ),
+    ).rejects.toThrow("1.18.35");
   });
 });
 
 describe("detect", () => {
-  it.each(GENERATIONS)("$name: finds the opencode binary", ({ version }) => {
-    mockExecFileSync.mockImplementation((cmd: string, args: string[], opts: object) =>
-      actualChildProcess.execFileSync(cmd, args, { ...opts, env: fakeCliEnv({ version }) }),
-    );
-    writeFileSync(callLog, "");
+  function versionOutput(version: string) {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return `${version}\n`;
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+  }
 
+  it.each([
+    "opencode v2.0.29",
+    "opencode v2.0.30",
+    "opencode v2.1.0",
+    "2.1.0-beta.1",
+    "opencode v10.0.0",
+  ])("finds a supported binary (%s)", (version) => {
+    versionOutput(version);
     expect(detect()).toBe(true);
+  });
+
+  it.each(["1.18.35", "opencode v2.0.28", "opencode dev"])(
+    "hides a refused binary (%s)",
+    (version) => {
+      versionOutput(version);
+      expect(detect()).toBe(false);
+    },
+  );
+
+  it("is false when --version prints nothing", () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return "\n";
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    expect(detect()).toBe(false);
   });
 
   it("is false when the opencode binary cannot run", () => {

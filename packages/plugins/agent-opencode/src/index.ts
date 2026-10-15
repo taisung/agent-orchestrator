@@ -75,51 +75,6 @@ function parseSessionList(raw: string): OpenCodeSessionListEntry[] {
 }
 
 /**
- * Parse JSON stream lines from `opencode run --format json` output.
- * Each line is a JSON object. We look for objects containing a session_id field.
- * The step_start event typically contains the session_id.
- */
-function buildSessionIdCaptureScript(): string {
-  const script = `
-let buffer = '';
-let captured = null;
-process.stdin.on('data', chunk => {
-  buffer += chunk;
-  const lines = buffer.split('\\n');
-  buffer = lines.pop() || '';
-  for (const line of lines) {
-    if (captured) continue;
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const obj = JSON.parse(trimmed);
-      const sid = (typeof obj.session_id === 'string' && obj.session_id) || (typeof obj.sessionID === 'string' && obj.sessionID);
-      if (sid && /^ses_[A-Za-z0-9_-]+$/.test(sid)) {
-        captured = sid;
-      }
-    } catch {}
-  }
-}).on('end', () => {
-  if (buffer.trim()) {
-    try {
-      const obj = JSON.parse(buffer.trim());
-      const sid = (typeof obj.session_id === 'string' && obj.session_id) || (typeof obj.sessionID === 'string' && obj.sessionID);
-      if (sid && /^ses_[A-Za-z0-9_-]+$/.test(sid)) {
-        captured = sid;
-      }
-    } catch {}
-  }
-  if (captured) {
-    process.stdout.write(captured);
-    process.exit(0);
-  }
-  process.exit(1);
-});
-  `.trim();
-  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
-}
-
-/**
  * Read the session ID from the single JSON document that
  * `opencode api session.create` prints (`{"data":{"id":"ses_..."}}`).
  * On anything else, echo the response to stderr so the pane shows the API error.
@@ -182,58 +137,92 @@ process.stdin.on('data', c => input += c).on('end', () => {
   return script.replace(/\n/g, " ").replace(/\s+/g, " ");
 }
 
-function buildSessionLookupScript(): string {
-  const script = `
-let input = '';
-process.stdin.on('data', c => input += c).on('end', () => {
-  const title = process.argv[1];
-  let rows;
-  try { rows = JSON.parse(input); } catch { process.exit(1); }
-  if (!Array.isArray(rows)) process.exit(1);
-  const isValidId = id => /^ses_[A-Za-z0-9_-]+$/.test(id);
-  const timestamp = value => {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string') {
-      const parsed = Date.parse(value);
-      return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
-    }
-    return Number.NEGATIVE_INFINITY;
-  };
-  const matches = rows
-    .filter(r => r && r.title === title && typeof r.id === 'string' && isValidId(r.id))
-    .sort((a, b) => {
-      const ta = timestamp(a.updated);
-      const tb = timestamp(b.updated);
-      if (ta === tb) return 0;
-      return tb - ta;
-    });
-  if (matches.length === 0) process.exit(1);
-  process.stdout.write(matches[0].id);
-});
-  `.trim();
-  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
-}
-
 // =============================================================================
-// OpenCode CLI Generations
+// OpenCode Version Gate
 // =============================================================================
 
 /**
- * First OpenCode major version whose CLI stores the model and agent on the session
- * through `opencode api`. 2.x removed `opencode run --command` (the 1.x way to make
- * a titled session without a model turn) and the TUI's `--model`/`--agent` flags.
- * Launch and restore commands read `opencode --version` in the pane and branch on
- * this value, so they follow whichever binary the pane's PATH resolves.
+ * Minimum OpenCode version this plugin supports. Only 2.0.29 is measured, and
+ * the 2.x API surface this plugin drives (`session.create`, `session.get`,
+ * `session.switchModel`, `session.switchAgent`) is read from the 2.0.29
+ * document, so anything older is refused. This is a minimum, not a major pin:
+ * any later 2.x (or later major) is accepted.
  */
-const OPENCODE_API_MAJOR = 2;
+const OPENCODE_MIN_VERSION = { major: 2, minor: 0, patch: 29 } as const;
 
-/** `opencode --version` prints `1.18.35` on 1.x and `opencode v2.0.29` on 2.x. */
-const OPENCODE_MAJOR_PROBE =
-  "OC_MAJOR=$(opencode --version 2>/dev/null | sed -n 's/^[^0-9]*\\([0-9][0-9]*\\)\\..*$/\\1/p' | head -n 1)";
+/** Named in the error that an explicit spawn on a refused host prints. */
+const OPENCODE_MIN_VERSION_TEXT = "2.0.29";
 
-/** Unknown or unparsable versions take the 1.x branch, which was the only behavior before 2.x. */
-function branchOnOpenCodeMajor(apiCommand: string, legacyCommand: string): string {
-  return `if [ "\${OC_MAJOR:-0}" -ge ${OPENCODE_API_MAJOR} ]; then ${apiCommand}; else ${legacyCommand}; fi`;
+interface OpenCodeVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/**
+ * Parse the first `major.minor.patch` triple in `opencode --version` output
+ * (`1.18.35` on 1.x, `opencode v2.0.29` on 2.x). A pre-release suffix such as
+ * `-beta.1` in `2.1.0-beta.1` is ignored: the gate is about the API surface
+ * the binary carries, and a pre-release of a version past the floor still
+ * carries it, so its numeric core decides. Anything without a triple
+ * (empty output, `opencode dev`) parses to null and is refused.
+ */
+function parseOpenCodeVersion(output: string): OpenCodeVersion | null {
+  const match = output.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)) {
+    return null;
+  }
+  return { major, minor, patch };
+}
+
+/** True when the version output names a release at or past the minimum. */
+function isSupportedOpenCodeVersion(output: string): boolean {
+  const version = parseOpenCodeVersion(output);
+  if (!version) return false;
+  if (version.major !== OPENCODE_MIN_VERSION.major) {
+    return version.major > OPENCODE_MIN_VERSION.major;
+  }
+  if (version.minor !== OPENCODE_MIN_VERSION.minor) {
+    return version.minor > OPENCODE_MIN_VERSION.minor;
+  }
+  return version.patch >= OPENCODE_MIN_VERSION.patch;
+}
+
+/**
+ * Read `opencode --version` through the Node process PATH, the same lookup
+ * the pane's shell performs (the pane prepends only the `~/.ao/bin` gh/git
+ * wrappers, so both resolve the same binary unless the user's shell init
+ * reorders PATH). Null when the binary is missing or prints nothing usable.
+ */
+function readOpenCodeVersionOutput(): string | null {
+  try {
+    const output = execFileSync("opencode", ["--version"], { encoding: "utf-8" });
+    const text = typeof output === "string" ? output : String(output);
+    return text.trim().length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildUnsupportedVersionMessage(found: string | null): string {
+  const detail = found === null ? "opencode not found" : `found ${found.trim()}`;
+  return `ao needs OpenCode ${OPENCODE_MIN_VERSION_TEXT} or later (${detail})`;
+}
+
+/**
+ * Fail an explicit spawn before the pane starts. `session-manager.ts` calls
+ * `getLaunchCommand` inside the try at spawn time, so this throw runs before
+ * `runtime.create`: the catch destroys the workspace and deletes the reserved
+ * metadata, and `ao spawn` exits nonzero without opening a TUI.
+ */
+function assertSupportedOpenCodeVersion(): void {
+  const output = readOpenCodeVersionOutput();
+  if (output !== null && isSupportedOpenCodeVersion(output)) return;
+  throw new Error(buildUnsupportedVersionMessage(output));
 }
 
 interface OpenCodeModelRef {
@@ -256,21 +245,13 @@ function toOpenCodeModelRef(model: string): OpenCodeModelRef | undefined {
  * never runs OpenCode with settings other than the requested ones.
  */
 function invalidModelCommand(model: string): string {
-  const message = `OpenCode ${OPENCODE_API_MAJOR}.x needs the model as provider/model[#variant], got: ${model}`;
+  const message = `OpenCode ${OPENCODE_MIN_VERSION.major}.x needs the model as provider/model[#variant], got: ${model}`;
   return `echo ${shellEscape(message)} >&2; exit 1`;
 }
 
 /** `sessionWord` is the shell word that expands to the session ID. */
 function settingsFailureCommand(sessionWord: string): string {
   return `echo ${shellEscape("failed to set the OpenCode model or agent for")} ${sessionWord} >&2; exit 1`;
-}
-
-/** The 1.x TUI and `opencode run` flags for the agent and model. */
-function buildLegacySessionOptions(model?: string, agent?: string): string[] {
-  return [
-    ...(agent ? ["--agent", shellEscape(agent)] : []),
-    ...(model ? ["--model", shellEscape(model)] : []),
-  ];
 }
 
 /** `sessionParam` is the shell word for `--param`, for example `'sessionID=ses_...'`. */
@@ -338,27 +319,20 @@ function buildApiResumeCommand(
 
 /**
  * Open the TUI on an existing OpenCode session with an optional prompt, model and agent.
- * 1.x takes the model and agent as TUI flags. 2.x rejects those flags, so the command
- * stores them on the session through `opencode api` before it opens the TUI.
+ * The model and agent are stored on the session through `opencode api` before the TUI
+ * opens; the TUI never takes model or agent flags (2.x rejects them).
  */
 function buildResumeCommand(
   sessionId: string,
   options: { promptValue?: string; model?: string; agent?: string },
 ): string {
   const promptOptions = options.promptValue ? ["--prompt", options.promptValue] : [];
-  const legacyOptions = buildLegacySessionOptions(options.model, options.agent);
-  const legacyCommand = [
-    "opencode",
-    "--session",
-    shellEscape(sessionId),
-    ...promptOptions,
-    ...legacyOptions,
-  ].join(" ");
-  // Without a model or agent, both generations accept the same command.
-  if (legacyOptions.length === 0) return legacyCommand;
+  // Without a model or agent, the command opens the session as stored.
+  if (!options.model && !options.agent) {
+    return ["opencode", "--session", shellEscape(sessionId), ...promptOptions].join(" ");
+  }
 
-  const apiCommand = buildApiResumeCommand(sessionId, promptOptions, options.model, options.agent);
-  return `${OPENCODE_MAJOR_PROBE}; ${branchOnOpenCodeMajor(apiCommand, legacyCommand)}`;
+  return buildApiResumeCommand(sessionId, promptOptions, options.model, options.agent);
 }
 
 // =============================================================================
@@ -424,6 +398,7 @@ function createOpenCodeAgent(): Agent {
     processName: "opencode",
 
     getLaunchCommand(config: AgentLaunchConfig): string {
+      assertSupportedOpenCodeVersion();
       const existingSessionId = asValidOpenCodeSessionId(
         (config.projectConfig.agentConfig as OpenCodeAgentConfig | undefined)?.opencodeSessionId,
       );
@@ -452,36 +427,15 @@ function createOpenCodeAgent(): Agent {
       }
 
       const title = `AO:${config.sessionId}`;
-      const legacyOptions = buildLegacySessionOptions(config.model, config.subagent);
       const promptOptions = promptValue ? ["--prompt", promptValue] : [];
       const tuiCommand = ["exec", "opencode", "--session", '"$SES_ID"', ...promptOptions].join(" ");
-      const findByTitle = `SES_ID=$(opencode session list --format json | node -e ${shellEscape(buildSessionLookupScript())} ${shellEscape(title)})`;
       const missingSessionError = shellEscape(
         `failed to discover OpenCode session ID for AO:${config.sessionId}`,
       );
       const openTuiOrFail = (command: string) =>
         `[ -n "$SES_ID" ] && ${command}; echo ${missingSessionError} >&2; exit 1`;
 
-      // 1.x: `run --command true` makes the titled session, then fails on the unknown
-      // command without a model turn; its JSON error event carries the session ID.
-      const runCommand = [
-        "opencode",
-        "run",
-        "--format",
-        "json",
-        "--title",
-        shellEscape(title),
-        ...legacyOptions,
-        "--command",
-        "true",
-      ].join(" ");
-      const legacyCommand = [
-        `SES_ID=$(${runCommand} | node -e ${shellEscape(buildSessionIdCaptureScript())})`,
-        `if [ -z "$SES_ID" ]; then ${findByTitle}; fi`,
-        openTuiOrFail([tuiCommand, ...legacyOptions].join(" ")),
-      ].join("; ");
-
-      // 2.x: the API makes the titled session with its model and agent, without a model turn.
+      // The API makes the titled session with its model and agent, without a model turn.
       const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
       const createBody = JSON.stringify({
         title,
@@ -506,7 +460,7 @@ function createOpenCodeAgent(): Agent {
           ? invalidModelCommand(config.model)
           : [apiCreate, ...settingsCheck, openTuiOrFail(tuiCommand)].join("; ");
 
-      return `${OPENCODE_MAJOR_PROBE}; ${branchOnOpenCodeMajor(apiCommand, legacyCommand)}`;
+      return apiCommand;
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {
@@ -666,6 +620,7 @@ function createOpenCodeAgent(): Agent {
     },
 
     async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
+      assertSupportedOpenCodeVersion();
       // Try metadata first, then query OpenCode's session list
       const sessionId =
         asValidOpenCodeSessionId(session.metadata?.opencodeSessionId) ??
@@ -698,14 +653,8 @@ export function create(): Agent {
 }
 
 export function detect(): boolean {
-  try {
-    // `opencode version` is no version command: 1.x reads "version" as a project
-    // directory and still exits 0, 2.x exits 1. `--version` exits 0 on both.
-    execFileSync("opencode", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  const output = readOpenCodeVersionOutput();
+  return output !== null && isSupportedOpenCodeVersion(output);
 }
 
 export default { manifest, create, detect } satisfies PluginModule<Agent>;
