@@ -35,7 +35,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
 ao-1@... ao-14@... ao-15@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with
 `AO_CONFIG_PATH` set to `CONFIG_PATH`. `as-orchestrator` moved it to this session on 2026-10-15 at about
-11:40 EDT. To add or remove a worker, stop it by the PID in `watch.pid`, remove `watch.pid`, and start
+11:22 EDT. To add or remove a worker, stop it by the PID in `watch.pid`, remove `watch.pid`, and start
 it again with the same options and the new `--preseed` list.
 
 **Lifecycle worker** of this project: PID 3544115 (restarted 2026-10-15 10:20 EDT on the I-1 build).
