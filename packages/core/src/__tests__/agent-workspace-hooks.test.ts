@@ -477,6 +477,30 @@ describe("wrapper recursion guard", () => {
     },
   );
 
+  it.each(spellings)(
+    "gh finds the real gh when PATH names its directory with %s",
+    async (_, spell) => {
+      const entry = spell(fx.binDir);
+      const fakeDir = join(fx.root, "fake-gh");
+      mkdirSync(fakeDir);
+      writeFileSync(join(fakeDir, "gh"), '#!/usr/bin/env bash\necho "fake-gh out: $*"\n', {
+        mode: 0o755,
+      });
+      const otherBin = join(fx.root, "other-home", ".ao", "bin");
+      mkdirSync(otherBin, { recursive: true });
+      copyFileSync(join(fx.binDir, "gh"), join(otherBin, "gh"));
+      chmodSync(join(otherBin, "gh"), 0o755);
+      const { GH_PATH: _ghPath, ...env } = fx.env;
+      const result = await runScript(join(entry, "gh"), ["api", "x"], {
+        cwd: fx.repo,
+        env: { ...env, PATH: `${entry}:${otherBin}:${fakeDir}:${fx.env["PATH"]}` },
+        timeoutMs: 3_000,
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result).toMatchObject({ code: 0, stdout: "fake-gh out: api x\n" });
+    },
+  );
+
   it("git skips another ao wrapper copy on PATH (another HOME or version)", async () => {
     const otherBin = join(fx.root, "other-home", ".ao", "bin");
     mkdirSync(otherBin, { recursive: true });

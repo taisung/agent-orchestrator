@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  GH_WRAPPER,
+  GIT_WRAPPER,
   PREFERRED_GH_PATH,
   type Session,
   type RuntimeHandle,
@@ -1823,35 +1825,17 @@ describe("shell wrapper content", () => {
   });
 
   describe("gh wrapper", () => {
-    it("skips every ao wrapper copy when it looks for the real gh", async () => {
-      // File identity (-ef) holds for every spelling of the wrapper's own
-      // directory; the header test catches other wrapper copies.
-      const content = await getWrapperContent("gh");
-      expect(content).toContain('[[ "$candidate" -ef "$0" ]] && return 1');
-      expect(content).toContain('[[ "$header" != "# ao $name wrapper"* ]]');
-      expect(content).not.toContain("grep -Fxv");
-    });
-
-    it("only captures output for pr/create", async () => {
-      const content = await getWrapperContent("gh");
-      expect(content).toContain('if [[ "$1/$2" != "pr/create" ]]; then');
-      expect(content).not.toContain("pr/merge");
+    it("installs the shared core gh wrapper", async () => {
+      // Core runs this script in its own tests (agent-workspace-hooks.test.ts):
+      // the recursion guard for every spelling and wrapper copy, GH_PATH,
+      // pr create and pr merge. So this test checks only that Codex installs
+      // that script, not how the script is written.
+      expect(await getWrapperContent("gh")).toBe(GH_WRAPPER);
     });
 
     it("uses exec for non-PR commands (transparent passthrough)", async () => {
       const content = await getWrapperContent("gh");
       expect(content).toContain('exec "$real_gh"');
-    });
-
-    it("prefers GH_PATH when provided and executable", async () => {
-      const content = await getWrapperContent("gh");
-      expect(content).toContain('[[ -f "$candidate" && -x "$candidate" ]] || return 1');
-      expect(content).toContain('real_gh="$GH_PATH"');
-    });
-
-    it("guards against a GH_PATH that points to an ao wrapper", async () => {
-      const content = await getWrapperContent("gh");
-      expect(content).toContain('ao_is_real_bin "$GH_PATH" gh');
     });
 
     it("extracts PR URL from gh pr create output", async () => {
@@ -1873,24 +1857,11 @@ describe("shell wrapper content", () => {
   });
 
   describe("git wrapper", () => {
-    it("skips every ao wrapper copy when it looks for the real git", async () => {
-      const content = await getWrapperContent("git");
-      expect(content).toContain('[[ "$candidate" -ef "$0" ]] && return 1');
-      expect(content).toContain("ao_find_real_bin git");
-      expect(content).not.toContain("grep -Fxv");
-    });
-
-    it("stores the branch that HEAD names after a checkout or switch", async () => {
-      const content = await getWrapperContent("git");
-      expect(content).toContain("checkout|switch) ;;");
-      expect(content).toContain("symbolic-ref -q HEAD");
-      expect(content).toContain('update_ao_metadata branch "$ao_branch"');
-    });
-
-    it("writes only for the session's own work tree", async () => {
-      const content = await getWrapperContent("git");
-      expect(content).toContain("rev-parse --show-toplevel");
-      expect(content).toContain('"$ao_top" -ef "$ao_worktree"');
+    it("installs the shared core git wrapper", async () => {
+      // Core runs this script in its own tests: the recursion guard, the
+      // branch that HEAD names after checkout or switch, and no write for
+      // another work tree.
+      expect(await getWrapperContent("git")).toBe(GIT_WRAPPER);
     });
 
     it("only updates metadata on success (exit code 0)", async () => {
