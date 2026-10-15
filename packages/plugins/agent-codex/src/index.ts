@@ -383,8 +383,9 @@ function createCodexAgent(): Agent {
       }
 
       // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
-      // The wrappers strip this directory from PATH before calling the real
-      // binary, so there's no infinite recursion.
+      // The wrappers keep PATH as it is and run the first git or gh on it that
+      // is not an ao wrapper (not the same file, and no ao wrapper header), so
+      // a wrapper never calls itself or another wrapper copy.
       env["PATH"] = buildAgentPath(process.env["PATH"]);
       env["GH_PATH"] = PREFERRED_GH_PATH;
       // Disable Codex's version check/update prompt for non-interactive AO sessions.
