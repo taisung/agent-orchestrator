@@ -83,7 +83,11 @@ import {
   OPENCODE_API_TIMEOUT_MS,
   type OpenCodeApiSession,
 } from "./opencode-api.js";
-import { acquireOpenCodeLaunchLock, type OpenCodeLaunchLock } from "./opencode-launch-lock.js";
+import {
+  acquireOpenCodeLaunchLock,
+  OPENCODE_SPAWN_DISCOVERY_WINDOW_MS,
+  type OpenCodeLaunchLock,
+} from "./opencode-launch-lock.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
@@ -92,18 +96,6 @@ import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js"
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
-
-/**
- * Row 23 (until I-3 creates the session in Node): how long a spawn or an
- * orchestrator start waits for its pane to create the OpenCode session. The
- * pane creates it only after `runtime.create` returns: a login shell starts,
- * then `opencode api session.create` runs (0.14 s on a warm service, 0.56 s
- * when the call must first start the background service; measured on
- * 2.0.29). 15 s is many times that, and it is the launch-check bound that
- * 0009 section 11 proposes for I-3. A hanging service ends the wait at this
- * bound too.
- */
-const OPENCODE_SPAWN_DISCOVERY_WINDOW_MS = 15_000;
 
 /**
  * Pause between two searches of that wait. One search is one `opencode api`
@@ -115,6 +107,21 @@ const OPENCODE_SPAWN_DISCOVERY_POLL_MS = 500;
 /** One line for the operator on stderr, where the command itself still succeeds. */
 function warnOperator(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+/** Only retained-runtime failures known to precede command delivery can discard uncertainty. */
+function failedBeforeCommandDelivery(runtimeName: string, error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cmd = "cmd" in error && typeof error.cmd === "string" ? error.cmd : "";
+  if (runtimeName === "tmux") return cmd.startsWith("tmux new-session ");
+  // Herdr wraps every pane.run failure; these top-level errors are from workspace.create.
+  if (runtimeName === "herdr")
+    return (
+      /^\S+ workspace create /.test(cmd) ||
+      error.message.startsWith("herdr error ") ||
+      error.message.startsWith("herdr workspace create returned no usable pane")
+    );
+  return false;
 }
 
 /** The error text on one line: an `execFile` message ends with a newline. */
@@ -161,6 +168,7 @@ async function discoverNewOpenCodeSession(
   sessionId: string,
   workspacePath: string,
   launchStartedAt: number,
+  recoveryHint: string,
 ): Promise<string | undefined> {
   const title = `AO:${sessionId}`;
   try {
@@ -176,7 +184,7 @@ async function discoverNewOpenCodeSession(
     if (result.status === "found") return result.session.id;
     if (result.status === "ambiguous") {
       warnOperator(
-        `ao: ${result.sessions.length} OpenCode sessions titled ${title} in ${workspacePath} were created during this start (${result.sessions.map((s) => s.id).join(", ")}); none is stored for ${sessionId}. Run \`ao session remap ${sessionId}\` to list them.`,
+        `ao: ${result.sessions.length} OpenCode sessions titled ${title} in ${workspacePath} were created during this start (${result.sessions.map((s) => s.id).join(", ")}); none is stored for ${sessionId}. Run \`ao session remap ${sessionId}\` to list them. ${recoveryHint}`,
       );
       return undefined;
     }
@@ -185,12 +193,12 @@ async function discoverNewOpenCodeSession(
         ? ` Last search error: ${shortErrorText(result.lastError)}`
         : "";
     warnOperator(
-      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches with this title and workspace are blocked until this launch is settled.${lastError}`,
+      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches need completed-create or dead-pane evidence. ${recoveryHint}${lastError}`,
     );
     return undefined;
   } catch (err) {
     warnOperator(
-      `ao: the search for the OpenCode session of ${sessionId} failed (${shortErrorText(err)}). Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI.`,
+      `ao: the search for the OpenCode session of ${sessionId} failed (${shortErrorText(err)}). Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. ${recoveryHint}`,
     );
     return undefined;
   }
@@ -665,6 +673,23 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return undefined;
   }
 
+  function hasOtherOpenCodeRecord(
+    sessionsDir: string,
+    sessionId: string,
+    openCodeId: string,
+  ): boolean {
+    return (
+      listMetadata(sessionsDir).some(
+        (id) =>
+          id !== sessionId &&
+          readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"] === openCodeId,
+      ) ||
+      listArchivedSessionIds(sessionsDir).some(
+        (id) => readArchivedMetadataRaw(sessionsDir, id)?.["opencodeSessionId"] === openCodeId,
+      )
+    );
+  }
+
   async function openCodeHolderReason(
     project: ProjectConfig,
     id: string,
@@ -694,7 +719,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         (async () => {
           if (await runtime.isAlive(handle)) return "live";
           // The retained runtimes swallow query errors as false. For tmux,
-          // require its explicit missing-session/server diagnostic too.
+          // require an explicit missing-session diagnostic from an answering server.
           // Herdr has no authoritative negative in the Runtime contract;
           // retain its ID until that contract can distinguish unavailable.
           if (handle.runtimeName === "herdr") return "unknown";
@@ -709,9 +734,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               if (
                 failure.code !== 1 ||
                 typeof failure.stderr !== "string" ||
-                !/can't find session:|no server running on|error connecting to .*\(No such file or directory\)/.test(
-                  failure.stderr,
-                )
+                !/can't find session:/.test(failure.stderr)
               ) {
                 return "unknown";
               }
@@ -1293,6 +1316,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
+      if (failedBeforeCommandDelivery(plugins.runtime.name, err)) {
+        launchLock?.cancel();
+      }
       launchLock?.release();
       // Clean up workspace and reserved ID if agent config or runtime creation failed
       if (
@@ -1306,7 +1332,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
       try {
-        deleteMetadata(sessionsDir, sessionId, false);
+        // A marker keeps this number reserved so the next worker gets a different key.
+        if (launchLock?.pending) updateMetadata(sessionsDir, sessionId, { status: "killed" });
+        deleteMetadata(sessionsDir, sessionId, launchLock?.pending ?? false);
       } catch {
         /* best effort */
       }
@@ -1333,6 +1361,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     try {
+      await launchLock?.recordRuntime(handle);
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,
@@ -1360,6 +1389,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           sessionId,
           workspacePath,
           launchStartedAt,
+          launchLock?.recoveryHint ?? "",
         );
         if (discovered) {
           session.metadata["opencodeSessionId"] = discovered;
@@ -1388,7 +1418,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
       try {
-        deleteMetadata(sessionsDir, sessionId, false);
+        // A marker keeps this number reserved so the next worker gets a different key.
+        if (launchLock?.pending) updateMetadata(sessionsDir, sessionId, { status: "killed" });
+        deleteMetadata(sessionsDir, sessionId, launchLock?.pending ?? false);
       } catch {
         /* best effort */
       }
@@ -1736,6 +1768,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
+      if (failedBeforeCommandDelivery(plugins.runtime.name, err)) {
+        launchLock?.cancel();
+      }
       launchLock?.release();
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
@@ -1761,6 +1796,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     try {
+      await launchLock?.recordRuntime(handle);
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,
@@ -1785,6 +1821,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           sessionId,
           workspacePath,
           launchStartedAt,
+          launchLock?.recoveryHint ?? "",
         );
         if (discovered) {
           session.metadata["opencodeSessionId"] = discovered;
@@ -2072,8 +2109,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
                 session.id,
                 session.metadata,
               ).agentName;
+              const mappedId = asValidOpenCodeSessionId(session.metadata["opencodeSessionId"]);
               const reason =
-                agentName === "opencode"
+                agentName === "opencode" &&
+                mappedId &&
+                hasOtherOpenCodeRecord(getProjectSessionsDir(project), session.id, mappedId)
                   ? await openCodeHolderReason(project, session.id, session.metadata)
                   : undefined;
               if (reason) warnOperator(`ao: kept ${session.id}: ${reason}.`);

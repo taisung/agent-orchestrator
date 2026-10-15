@@ -394,6 +394,67 @@ describe("with a real child process (fake opencode on PATH)", () => {
       }
     });
 
+    it("makes a final bounded search after suspension across the poll deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const startedAt = Date.now();
+        mockExecFileAsync.mockResolvedValueOnce(listAnswer([])).mockResolvedValueOnce(
+          listAnswer([
+            {
+              id: "ses_during_stall",
+              title: "AO:stall",
+              location: { directory: "/w" },
+              time: { created: startedAt + 50 },
+            },
+          ]),
+        );
+        const waiting = waitForOpenCodeSession(
+          { title: "AO:stall", directories: ["/w"], createdAtOrAfter: startedAt },
+          100,
+          20,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(startedAt + 1_000);
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await waiting).toMatchObject({
+          status: "found",
+          session: { id: "ses_during_stall" },
+        });
+        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+        expect(mockExecFileAsync.mock.calls[1][2].timeout).toBeGreaterThan(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rechecks a successful empty result buffered before suspension", async () => {
+      vi.useFakeTimers();
+      try {
+        const startedAt = Date.now();
+        mockExecFileAsync
+          .mockImplementationOnce(async () => {
+            vi.setSystemTime(startedAt + 1_000);
+            return listAnswer([]);
+          })
+          .mockResolvedValueOnce(
+            listAnswer([
+              {
+                id: "ses_buffered",
+                title: "AO:stall",
+                location: { directory: "/w" },
+                time: { created: startedAt + 50 },
+              },
+            ]),
+          );
+        expect(
+          await waitForOpenCodeSession({ title: "AO:stall", directories: ["/w"] }, 100, 20),
+        ).toMatchObject({ status: "found", session: { id: "ses_buffered" } });
+        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("ends within its window when the binary hangs", async () => {
       useMock([], { apiDelaySeconds: 5 });
       const startedAt = Date.now();

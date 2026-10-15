@@ -18,7 +18,8 @@
  *     "missing").
  *   - `waitForOpenCodeSession` (spawn and orchestrator start, row 23): a
  *     failed search counts as "not found yet"; the whole wait is bounded by
- *     its window, and the spawn goes on without a mapping when it ends.
+ *     its window (plus a final API bound after suspension), and the spawn
+ *     goes on without a mapping when it ends.
  *   - `removeOpenCodeSession` / `interruptOpenCodeSession`: throw; `kill`
  *     purge warns and archives anyway, `cleanup` records an error entry.
  * - The child's stderr is captured (`stdio` pipe) and never inherits the
@@ -388,7 +389,10 @@ export type OpenCodeSessionWaitResult =
  * so the first search usually runs too early; this searches again every
  * `pollMs`. A failed search (timeout or another error) counts as "not found
  * yet". Each search gets only the time left in the window, so the whole wait
- * ends within `windowMs` plus one process exit.
+ * ends within `windowMs` plus one process exit. If the event loop stalls
+ * across the deadline during a poll pause, make one final bounded search:
+ * a session may have appeared while the launcher was suspended. That recovery
+ * adds at most one API bound; a timed-out search does not cause another retry.
  *
  * This is a search primitive, not proof of pane ownership. Fresh-launch
  * callers must hold the host-wide OpenCode launch lock from BEFORE recording
@@ -404,20 +408,28 @@ export async function waitForOpenCodeSession(
   let lastError: unknown;
   for (;;) {
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
+    const finalSearch = remainingMs <= 0;
+    let searchCompleted = false;
     try {
       const sessions = await findOpenCodeSessionsByTitle(
         match,
-        Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs),
+        finalSearch ? OPENCODE_API_TIMEOUT_MS : Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs),
       );
+      searchCompleted = true;
       const [only, ...others] = sessions;
       if (only && others.length === 0) return { status: "found", session: only };
       if (only) return { status: "ambiguous", sessions };
     } catch (err) {
       lastError = err;
     }
+    if (finalSearch) break;
     const pauseMs = Math.min(pollMs, deadline - Date.now());
-    if (pauseMs <= 0) break;
+    if (pauseMs <= 0) {
+      // A completed result may have been buffered before suspension. A timeout
+      // already used the available budget and must not trigger another API call.
+      if (searchCompleted) continue;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
   return { status: "not-found", ...(lastError !== undefined ? { lastError } : {}) };

@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as OpenCodeApi from "../../opencode-api.js";
-import {
-  mkdirSync,
-  writeFileSync,
-  chmodSync,
-  readFileSync,
-  existsSync,
-} from "node:fs";
+import { mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createSessionManager } from "../../session-manager.js";
@@ -27,7 +21,12 @@ import type {
   Tracker,
   SCM,
 } from "../../types.js";
-import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "../test-utils.js";
+import {
+  setupTestContext,
+  teardownTestContext,
+  makeHandle,
+  type TestContext,
+} from "../test-utils.js";
 import {
   installMockOpencode,
   installMockOpencodeApi,
@@ -67,7 +66,17 @@ let originalPath: string | undefined;
 
 beforeEach(() => {
   ctx = setupTestContext();
-  ({ tmpDir, configPath, sessionsDir, mockRuntime, mockAgent, mockWorkspace, mockRegistry, config, originalPath } = ctx);
+  ({
+    tmpDir,
+    configPath,
+    sessionsDir,
+    mockRuntime,
+    mockAgent,
+    mockWorkspace,
+    mockRegistry,
+    config,
+    originalPath,
+  } = ctx);
 });
 
 afterEach(() => {
@@ -344,7 +353,9 @@ describe("kill", () => {
           "kept OpenCode session ses_shared of app-1: live session app-2 uses it",
         );
         // Not marked cleaned, so a later `ao session cleanup` can remove it.
-        expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+        expect(
+          readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"],
+        ).toBeUndefined();
       } finally {
         stderr.mockRestore();
       }
@@ -370,9 +381,13 @@ describe("kill", () => {
           expect(readMockApiSessions(mockBin).map((s) => s.id)).toEqual(["ses_shared"]);
           expect(existsSync(apiLogPath)).toBe(false);
           expect(
-            stderr.mock.calls.filter((call) => String(call[0]).includes("live session app-2 uses it")),
+            stderr.mock.calls.filter((call) =>
+              String(call[0]).includes("live session app-2 uses it"),
+            ),
           ).toHaveLength(2);
-          expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+          expect(
+            readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"],
+          ).toBeUndefined();
         } finally {
           stderr.mockRestore();
         }
@@ -424,9 +439,18 @@ describe("kill", () => {
       }
     });
 
-    it("keeps a holder when tmux reports an operational error as false", async () => {
+    it.each([
+      "permission denied",
+      "no server running on /tmp/other",
+      "error connecting to /tmp/other (No such file or directory)",
+      "unexpected exit code",
+      "",
+    ])("keeps a holder when tmux reports %s as false", async (diagnostic) => {
       const mockBin = installMockOpencodeApi(tmpDir, [{ id: "ses_shared", title: "AO:app-1" }]);
-      writeFileSync(join(mockBin, "tmux"), '#!/bin/sh\necho "permission denied" >&2\nexit 1\n');
+      writeFileSync(
+        join(mockBin, "tmux"),
+        `#!/usr/bin/env node\nconsole.error(${JSON.stringify(diagnostic === "unexpected exit code" ? "can't find session: holder" : diagnostic)}); process.exit(${diagnostic === "unexpected exit code" ? 2 : 1});\n`,
+      );
       chmodSync(join(mockBin, "tmux"), 0o755);
       process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
       writeSharedPair("merged");
@@ -449,6 +473,43 @@ describe("kill", () => {
       } finally {
         stderr.mockRestore();
       }
+    });
+
+    it("keeps a Herdr holder after a negative runtime check without trusting the agent negative", async () => {
+      const bin = installMockOpencodeApi(tmpDir, [{ id: "ses_shared", title: "AO:app-1" }]);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      writeSharedPair("merged");
+      updateMetadata(sessionsDir, "app-2", {
+        runtimeHandle: JSON.stringify({ id: "w1:p1", runtimeName: "herdr", data: {} }),
+      });
+      vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+      vi.mocked(mockAgent.isProcessRunning).mockResolvedValue(false);
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      await sm.kill("app-1", { purgeOpenCode: true });
+      const result = await sm.cleanup();
+      expect(result.killed).not.toContain("app-2");
+      expect(readMockApiSessions(bin).map((s) => s.id)).toEqual(["ses_shared"]);
+      expect(mockAgent.isProcessRunning).not.toHaveBeenCalled();
+    });
+
+    it("removes the shared ID after tmux explicitly answers that the holder is gone", async () => {
+      const bin = installMockOpencodeApi(tmpDir, [{ id: "ses_shared", title: "AO:app-1" }]);
+      writeFileSync(
+        join(bin, "tmux"),
+        '#!/bin/sh\necho "can\'t find session: holder" >&2\nexit 1\n',
+      );
+      chmodSync(join(bin, "tmux"), 0o755);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      writeSharedPair("merged");
+      updateMetadata(sessionsDir, "app-2", {
+        runtimeHandle: JSON.stringify({ id: "holder", runtimeName: "tmux", data: {} }),
+      });
+      vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+      vi.mocked(mockAgent.isProcessRunning).mockResolvedValue(false);
+      await createSessionManager({ config, registry: mockRegistry }).kill("app-1", {
+        purgeOpenCode: true,
+      });
+      expect(readMockApiSessions(bin)).toEqual([]);
     });
 
     it("removes it when the other session that stores it is killed", async () => {
@@ -1072,4 +1133,26 @@ describe("cleanup", () => {
 
     expect(result.killed).toContain("app-1");
   });
+  it.each(["unmapped", "unshared"])(
+    "archives a dead Herdr OpenCode session with an %s ID",
+    async (kind) => {
+      const bin = installMockOpencodeApi(tmpDir, [{ id: "ses_only", title: "AO:app-1" }]);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: "/tmp",
+        branch: "main",
+        status: "working",
+        project: "my-app",
+        agent: "opencode",
+        ...(kind === "unshared" ? { opencodeSessionId: "ses_only" } : {}),
+        runtimeHandle: JSON.stringify({ id: "w1:p1", runtimeName: "herdr", data: {} }),
+      });
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      expect((await sm.cleanup()).killed).toContain("app-1");
+      expect(readMetadata(sessionsDir, "app-1")).toBeNull();
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")).not.toBeNull();
+      expect((await sm.cleanup()).killed).not.toContain("app-1");
+    },
+  );
 });

@@ -1,12 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  chmodSync,
+} from "node:fs";
 import type * as LaunchLock from "../../opencode-launch-lock.js";
 import type * as OpenCodeApi from "../../opencode-api.js";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
 import { getStateRoot, getSessionsDir } from "../../paths.js";
-import { writeMetadata, readMetadata, readMetadataRaw } from "../../metadata.js";
+import {
+  writeMetadata,
+  readMetadata,
+  readMetadataRaw,
+  readArchivedMetadataRaw,
+} from "../../metadata.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -2241,7 +2255,7 @@ describe("OpenCode ownership across fleets", () => {
               directory: workspace,
               createdAt: Date.now(),
             }),
-          mine === 1 ? 50 : 350,
+          mine === 1 ? 300 : 350,
         );
         return makeHandle(`fleet-${mine}`);
       });
@@ -2252,7 +2266,7 @@ describe("OpenCode ownership across fleets", () => {
           ? sm.spawn({ projectId: "my-app" })
           : sm.spawnOrchestrator({ projectId: "my-app" });
       const first = start(a);
-      await vi.waitFor(() => expect(pane).toBe(1));
+      await vi.waitFor(() => expect(pane).toBe(1), { interval: 1 });
       const second = start(b);
       const [resultA, resultB] = await Promise.all([first, second]);
       expect(firstMappedBeforeSecondLaunch).toBe(true);
@@ -2262,7 +2276,7 @@ describe("OpenCode ownership across fleets", () => {
     },
   );
 
-  it("refuses a colliding start after discovery times out, even when the old pane creates later", async () => {
+  it("refuses an unresolved create, then recovers its late result without binding it to the next start", async () => {
     useOpenCodeProject({
       orchestratorWorkspaceMode: "project",
       orchestratorSessionStrategy: "ignore",
@@ -2275,12 +2289,6 @@ describe("OpenCode ownership across fleets", () => {
       const a = createSessionManager({ config, registry });
       const first = await a.spawnOrchestrator({ projectId: "my-app" });
       expect(first.metadata["opencodeSessionId"]).toBeUndefined();
-      addMockApiSession(mockBin, {
-        id: "ses_late_a",
-        title: `AO:${first.id}`,
-        directory: config.projects["my-app"].path,
-        createdAt: Date.now(),
-      });
       const otherConfig = { ...config, configPath: join(tmpDir, "fleet-b", "config.yaml") };
       mkdirSync(join(tmpDir, "fleet-b"));
       writeFileSync(otherConfig.configPath, "projects: {}\n");
@@ -2289,9 +2297,110 @@ describe("OpenCode ownership across fleets", () => {
         "earlier OpenCode launch is unresolved",
       );
       expect(mockRuntime.create).toHaveBeenCalledTimes(1);
+      addMockApiSession(mockBin, {
+        id: "ses_late_a",
+        title: `AO:${first.id}`,
+        directory: config.projects["my-app"].path,
+        createdAt: Date.now(),
+      });
+      vi.mocked(mockRuntime.create).mockImplementation(paneCreatesOpenCodeSession(mockBin));
+      const second = await b.spawnOrchestrator({ projectId: "my-app" });
+      expect(second.metadata["opencodeSessionId"]).toBe(`ses_pane_${second.id}`);
+      expect(second.metadata["opencodeSessionId"]).not.toBe("ses_late_a");
+      expect(stderr.lines()).toContain("earlier create finished");
+
       expect(stderr.lines()).toContain(`ao session remap ${first.id}`);
     } finally {
       stderr.restore();
     }
   });
+  it.each(["before delivery", "Herdr before delivery", "unknown", "post-launch"])(
+    "allows the next worker after a %s runtime failure",
+    async (stage) => {
+      useOpenCodeProject();
+      const bin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      if (stage === "before delivery") {
+        mockRuntime = { ...mockRuntime, name: "tmux" };
+        vi.mocked(mockRuntime.create).mockRejectedValueOnce(
+          Object.assign(new Error("new-session failed"), {
+            cmd: "tmux new-session -d -s app-1",
+          }),
+        );
+      } else if (stage === "Herdr before delivery") {
+        mockRuntime = { ...mockRuntime, name: "herdr" };
+        vi.mocked(mockRuntime.create).mockRejectedValueOnce(
+          new Error("herdr error unavailable: server stopped"),
+        );
+      } else if (stage === "unknown") {
+        vi.mocked(mockRuntime.create).mockRejectedValueOnce(new Error("create uncertain"));
+      } else {
+        agent.postLaunchSetup = vi
+          .fn()
+          .mockRejectedValueOnce(new Error("setup failed"))
+          .mockResolvedValue(undefined);
+      }
+      const sm = createSessionManager({ config, registry });
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow();
+      if (stage.endsWith("before delivery"))
+        expect(readdirSync(join(tmpDir, "launch-locks"))).toEqual([]);
+      else expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["status"]).toBe("killed");
+      vi.mocked(mockRuntime.create).mockImplementation(paneCreatesOpenCodeSession(bin));
+      const next = await sm.spawn({ projectId: "my-app" });
+      expect(next.id).toBe(stage.endsWith("before delivery") ? "app-1" : "app-2");
+      expect(next.metadata["opencodeSessionId"]).toBe(`ses_pane_${next.id}`);
+    },
+  );
+
+  it.each(["ownerless", "pane never created"])(
+    "recovers a %s marker on a fresh orchestrator start",
+    async (kind) => {
+      useOpenCodeProject({
+        orchestratorWorkspaceMode: "project",
+        orchestratorSessionStrategy: "ignore",
+      });
+      const bin = installMockOpencodeApi(tmpDir, []);
+      writeFileSync(
+        join(bin, "tmux"),
+        `#!/bin/sh
+if [ "$1" = display-message ]; then echo /tmp/ao27-test-socket; exit 0; fi
+echo "can't find session: earlier" >&2
+exit 1
+`,
+      );
+      chmodSync(join(bin, "tmux"), 0o755);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      const { registry } = openCodeRegistry();
+      vi.mocked(mockRuntime.create).mockResolvedValue({
+        id: "earlier",
+        runtimeName: "tmux",
+        data: {},
+      });
+      mkdirSync(join(tmpDir, "fleet-old"));
+      const firstConfig = { ...config, configPath: join(tmpDir, "fleet-old", "config.yaml") };
+      writeFileSync(firstConfig.configPath, "projects: {}\n");
+      const first = await createSessionManager({ config: firstConfig, registry }).spawnOrchestrator(
+        { projectId: "my-app" },
+      );
+      expect(first.metadata["opencodeSessionId"]).toBeUndefined();
+      const root = join(tmpDir, "launch-locks");
+      const dir = join(root, readdirSync(root)[0]);
+      const file = join(dir, "pending.json");
+      if (kind === "ownerless") {
+        rmSync(file);
+        utimesSync(dir, new Date(0), new Date(0));
+      } else {
+        const marker = JSON.parse(readFileSync(file, "utf8"));
+        expect(marker.runtimeHandle.id).toBe("earlier");
+        marker.startedAt = Date.now() - 60_000;
+        writeFileSync(file, JSON.stringify(marker));
+      }
+      vi.mocked(mockRuntime.create).mockImplementation(paneCreatesOpenCodeSession(bin));
+      const next = await createSessionManager({ config, registry }).spawnOrchestrator({
+        projectId: "my-app",
+      });
+      expect(next.metadata["opencodeSessionId"]).toBe(`ses_pane_${next.id}`);
+    },
+  );
 });
