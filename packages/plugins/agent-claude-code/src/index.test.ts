@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type * as ChildProcess from "node:child_process";
+import type * as Fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -54,7 +56,7 @@ vi.mock("node:fs/promises", () => ({
 // Only existsSync is mocked: core's removeAoBinFromPath and the launch tests
 // below use the real file system.
 vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
+  ...(await importOriginal<typeof Fs>()),
   existsSync: mockExistsSync,
 }));
 
@@ -323,8 +325,7 @@ describe("launch from a parent whose PATH holds the ao wrappers", () => {
   async function launch(
     parentEntry: string,
   ): Promise<{ path: string; ghPath: string; found: string }> {
-    const { spawnSync } =
-      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const { spawnSync } = await vi.importActual<typeof ChildProcess>("node:child_process");
     const parentEnv = {
       ...process.env,
       PATH: `${parentEntry}:${basePath}`,
@@ -337,7 +338,7 @@ describe("launch from a parent whose PATH holds the ao wrappers", () => {
 
     const child = spawnSync(
       "bash",
-      ["-c", 'printf "%s\\n" "$PATH" "${GH_PATH-unset}"; type -ap git gh'],
+      ["-c", 'printf "%s\\n" "$PATH"; printenv GH_PATH || echo unset; type -ap git gh'],
       { env: { ...parentEnv, ...launchEnv }, encoding: "utf8" },
     );
     const [path = "", ghPath = "", ...found] = child.stdout.split("\n");
