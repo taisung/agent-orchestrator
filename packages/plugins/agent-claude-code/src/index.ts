@@ -720,9 +720,12 @@ function createClaudeCodeAgent(): Agent {
       // PostToolUse hook (setupWorkspaceHooks) is the only metadata writer.
       // Leaving PATH out is not enough. The runtime starts the pane with the
       // PATH of the ao process, and that PATH holds ~/.ao/bin when ao runs in
-      // a Codex, Gemini or OpenCode pane. So PATH is set, without every ao
-      // wrapper directory, only when the inherited PATH holds one; a clean
-      // inherited PATH reaches the pane unchanged.
+      // a Codex, Gemini or OpenCode pane. So PATH is set without every ao
+      // wrapper directory and without every relative entry (the shell
+      // resolves a relative entry against the current directory, so after a
+      // cd it can reach the wrappers). It is set only when that removes
+      // something: an inherited PATH of absolute entries without wrappers
+      // reaches the pane unchanged.
       const inheritedPath = process.env["PATH"];
       if (inheritedPath !== undefined) {
         const path = removeAoBinFromPath(inheritedPath);

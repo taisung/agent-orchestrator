@@ -529,10 +529,17 @@ describe("removeAoBinFromPath", () => {
     rmSync(fx.root, { recursive: true, force: true });
   });
 
-  it("returns the same string when the PATH holds no ao wrapper directory", () => {
-    // Empty and relative entries, trailing slashes and duplicates stay as they are.
-    const clean = `/usr/local/bin/::.:relative/.ao/bin:${fx.root}/ao/bin:${fx.root}/.ao/bin2:/usr/bin:/usr/bin`;
+  it("returns the same string when the PATH holds only absolute entries and no wrappers", () => {
+    // Trailing slashes and duplicates stay as they are.
+    const clean = `/usr/local/bin/:${fx.root}/ao/bin:${fx.root}/.ao/bin2:/usr/bin:/usr/bin`;
     expect(removeAoBinFromPath(clean)).toBe(clean);
+  });
+
+  it("removes every relative entry: the shell resolves it against the current directory", () => {
+    // Empty, ".", a name, a "../" path and ~user (not expanded here) all
+    // depend on the directory at lookup time, so after a cd each one can
+    // reach a wrapper directory.
+    expect(removeAoBinFromPath(":/a::.:relative-link:../x:~user/bin:/b:")).toBe("/a:/b");
   });
 
   it("keeps a directory with a git that is not an ao wrapper", () => {

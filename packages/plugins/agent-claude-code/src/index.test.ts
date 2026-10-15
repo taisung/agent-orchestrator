@@ -279,13 +279,23 @@ describe("getEnvironment", () => {
     expect(env["AO_ISSUE_ID"]).toBeUndefined();
   });
 
-  it("sets no PATH when the inherited PATH holds no ao wrapper directory", () => {
-    // A clean inherited PATH reaches the pane unchanged, as before ao had
-    // wrappers: no PATH that could resolve another `claude` binary.
-    vi.stubEnv("PATH", "/usr/bin/::.:relative/.ao/bin:/bin:/usr/bin");
+  it("sets no PATH when the inherited PATH holds only absolute entries and no wrappers", () => {
+    // Such a PATH reaches the pane unchanged, as before ao had wrappers: no
+    // PATH that could resolve another `claude` binary.
+    vi.stubEnv("PATH", "/usr/bin/:/bin:/usr/bin");
     try {
       const env = agent.getEnvironment(makeLaunchConfig());
       expect(env).not.toHaveProperty("PATH");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("removes relative entries from the inherited PATH and keeps the absolute ones", () => {
+    vi.stubEnv("PATH", "/usr/bin::.:tools:/bin");
+    try {
+      const env = agent.getEnvironment(makeLaunchConfig());
+      expect(env["PATH"]).toBe("/usr/bin:/bin");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -322,26 +332,36 @@ describe("launch from a parent whose PATH holds the ao wrappers", () => {
     writeFileSync(join(dir, "git"), GIT_WRAPPER, { mode: 0o755 });
   }
 
-  async function launch(
-    parentEntry: string,
-  ): Promise<{ path: string; ghPath: string; found: string }> {
-    const { spawnSync } = await vi.importActual<typeof ChildProcess>("node:child_process");
-    const parentEnv = {
+  /** The parent environment, and the launch environment over it. */
+  function environments(parentEntry: string): {
+    parent: NodeJS.ProcessEnv;
+    child: NodeJS.ProcessEnv;
+  } {
+    const parent = {
       ...process.env,
       PATH: `${parentEntry}:${basePath}`,
       GH_PATH: join(binDir, "gh"),
     };
-    vi.stubEnv("PATH", parentEnv.PATH);
-    vi.stubEnv("GH_PATH", parentEnv.GH_PATH);
+    vi.stubEnv("PATH", parent.PATH);
+    vi.stubEnv("GH_PATH", parent.GH_PATH);
     const launchEnv = agent.getEnvironment(makeLaunchConfig());
     vi.unstubAllEnvs();
+    return { parent, child: { ...parent, ...launchEnv } };
+  }
 
-    const child = spawnSync(
-      "bash",
-      ["-c", 'printf "%s\\n" "$PATH"; printenv GH_PATH || echo unset; type -ap git gh'],
-      { env: { ...parentEnv, ...launchEnv }, encoding: "utf8" },
+  async function runBash(script: string, env: NodeJS.ProcessEnv, cwd?: string): Promise<string> {
+    const { spawnSync } = await vi.importActual<typeof ChildProcess>("node:child_process");
+    return spawnSync("bash", ["-c", script], { env, cwd, encoding: "utf8" }).stdout;
+  }
+
+  async function launch(
+    parentEntry: string,
+  ): Promise<{ path: string; ghPath: string; found: string }> {
+    const stdout = await runBash(
+      'printf "%s\\n" "$PATH"; printenv GH_PATH || echo unset; type -ap git gh',
+      environments(parentEntry).child,
     );
-    const [path = "", ghPath = "", ...found] = child.stdout.split("\n");
+    const [path = "", ghPath = "", ...found] = stdout.split("\n");
     return { path, ghPath, found: found.join("\n") };
   }
 
@@ -398,6 +418,37 @@ describe("launch from a parent whose PATH holds the ao wrappers", () => {
       },
     ],
   ];
+
+  it("the pane gets no wrapper through a relative entry, also after a cd", async () => {
+    // relative-link points at the wrappers in the pane's first directory and
+    // in the directory it changes to, so the parent PATH reaches the
+    // wrappers from both.
+    for (const dir of ["ws", "other"]) {
+      mkdirSync(join(root, dir));
+      symlinkSync(binDir, join(root, dir, "relative-link"));
+    }
+    const wrappersBeforeAndAfterCd = [
+      "wrappers() {",
+      "  local name file line",
+      "  for name in git gh; do",
+      '    for file in $(type -ap "$name"); do',
+      '      line=$(sed -n 2p "$file")',
+      '      if [[ "$line" == "# ao $name wrapper"* ]]; then echo "$PWD $file"; fi',
+      "    done",
+      "  done",
+      "}",
+      'printf "%s\\n" "$PATH"; wrappers; cd ../other && wrappers',
+    ].join("\n");
+    const { parent, child } = environments("relative-link");
+
+    // The parent environment alone reaches the wrappers before and after the cd.
+    const control = await runBash(wrappersBeforeAndAfterCd, parent, join(root, "ws"));
+    expect(control).toContain(`${join(root, "ws")} relative-link/git`);
+    expect(control).toContain(`${join(root, "other")} relative-link/gh`);
+
+    const pane = await runBash(wrappersBeforeAndAfterCd, child, join(root, "ws"));
+    expect(pane).toBe(`${basePath}\n`);
+  });
 
   it.each(spellings)("the pane gets no wrapper and no GH_PATH for %s", async (_, spell) => {
     const result = await launch(spell());

@@ -141,11 +141,7 @@ function namesAoBin(dir: string): boolean {
  * elsewhere). The header test reads the physical directory, the one that a
  * command lookup through this entry reaches.
  */
-function isAoWrapperDir(entry: string): boolean {
-  // bash expands a leading ~ in a PATH entry. Concatenation, not join(): join
-  // would also collapse "..".
-  const dir = entry === "~" || entry.startsWith("~/") ? `${homedir()}${entry.slice(1)}` : entry;
-  if (!isAbsolute(dir)) return false;
+function isAoWrapperDir(dir: string): boolean {
   if (namesAoBin(dir)) return true;
   const physical = physicalDir(dir);
   if (isAoBinPath(physical)) return true;
@@ -159,13 +155,24 @@ function isAoWrapperDir(entry: string): boolean {
  * panes must not run the wrappers (Claude Code). It matches every spelling of
  * the directory (a trailing slash, a doubled slash, a symlink, a symlink
  * followed by "..", a leading ~), the wrapper directory of another HOME, and
- * a wrapper copy elsewhere. It
- * keeps all other entries, in order, and returns the same string when it
+ * a wrapper copy elsewhere.
+ *
+ * It also removes every relative entry: an empty one, ".", or a name such as
+ * "tools". The shell resolves such an entry against the current directory at
+ * each command lookup, so after a cd it can reach a wrapper directory, and a
+ * check here cannot know the pane's directory then.
+ *
+ * It keeps all other entries, in order, and returns the same string when it
  * removes nothing.
  */
 export function removeAoBinFromPath(pathValue: string): string {
   const entries = pathValue.split(":");
-  const kept = entries.filter((entry) => !isAoWrapperDir(entry));
+  const kept = entries.filter((entry) => {
+    // bash expands a leading ~ in a PATH entry. Concatenation, not join():
+    // join would also collapse "..".
+    const dir = entry === "~" || entry.startsWith("~/") ? `${homedir()}${entry.slice(1)}` : entry;
+    return isAbsolute(dir) && !isAoWrapperDir(dir);
+  });
   return kept.length === entries.length ? pathValue : kept.join(":");
 }
 
