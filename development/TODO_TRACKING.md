@@ -160,6 +160,15 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix
   a worker's model with `/model`: on 2026-10-15 at 11:51 `/model claude-opus-5-5` on ao-18 also rewrote
   `~/.claude/settings.json` (`"opus"` to `"claude-opus-5-5"`); the orchestrator put back `"opus"` at once.
+- **Two GitHub workflows fail on every push to `main`** (seen on the push of 2026-10-15, `70d19d70`).
+  CI, Integration Tests and Security passed. **Onboarding Integration Test** waits for a dashboard
+  ("Waiting for dashboard to start..." then "Dashboard process died"); the headless trim removed the
+  dashboard, and the workflow has failed on every run since 2026-07-13. **Release** runs
+  `changesets/action` with `publish: pnpm release`; with no pending changeset it tries to publish every
+  `@aoagents/*` package and fails with `ENEEDAUTH`, because the repository has no secrets (no
+  `NPM_TOKEN`), so nothing was published. If a token is ever added, the fork would publish under the
+  upstream scope. Both need a workflow change (`.github/workflows/`, an owner decision). With no
+  secrets, the live OpenCode block of Integration Tests skips, so I-6 m-7 stays open.
 - **A rebuild does not reach running lifecycle workers.** Node loads `dist` at process start. On 2026-09-23
   after the rebuild, five `ao lifecycle-worker` processes still ran pre-rebuild code: `Coding-Orchestrator`
   (pid 57829), `Nexus` (60414), `my-project` (1770808), `FleetMonitor` (2303231), `agent-skills` (3054071).
