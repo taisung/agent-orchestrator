@@ -140,6 +140,17 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   ao-16 and ao-18 survived. On the owner's word, ao-18 was restored at 11:49 and ao-16 at 11:56, each
   with a `.agent_resume.md` that names the cause and the rule; ao-16's model is pinned in its worktree
   `.claude/settings.local.json`.
+- **"The integration package with `opencode` present" makes model turns on the global OpenCode
+  service** (found 2026-10-15 by the I-2 reviewer ao-16, m-6). The live block of
+  `packages/integration-tests/src/agent-opencode.integration.test.ts` runs `opencode run 'Say hello'`
+  when `~/.local/share/opencode/auth.json` exists, and it does on this host. A read-only
+  `session.list` of the global store shows 10 sessions titled like "Greeting request", created
+  11:06:44 to 11:21:01 in `/tmp` and `/tmp/ao-inttest-opencode-*`: two per run, five runs, during the
+  work of ao-14 and ao-15 (the two at 11:20-11:21 come after ao-14 finished, so ao-15 ran at least
+  those). The briefs asked for that run, so the workers kept their brief; the brief broke the rule
+  "global service read-only, no model turn". The sessions stay in the global store (a remove is a
+  write there). Rule for every brief from now: run the integration package with a fake `HOME`, so the
+  live block skips. Earlier arcs (I-1, I-6) asked for the same run and are not checked.
 - **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
   metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host
