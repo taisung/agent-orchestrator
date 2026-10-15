@@ -40,7 +40,12 @@ const WRAPPER_VERSION = "0.2.2";
 
 /**
  * Build a PATH string with ~/.ao/bin prepended for wrapper interception.
- * Deduplicates entries and ensures /usr/local/bin is early for gh resolution.
+ * Deduplicates entries and keeps the inherited order otherwise.
+ *
+ * /usr/local/bin is not moved forward: the gh wrapper takes gh from GH_PATH,
+ * and a promoted /usr/local/bin can shadow newer user copies of the agent
+ * binaries (claude, codex, gemini) and of tmux, which runtime-tmux looks up
+ * with this PATH.
  */
 export function buildAgentPath(basePath: string | undefined): string {
   const inherited = (basePath ?? DEFAULT_PATH).split(":").filter(Boolean);
@@ -54,7 +59,6 @@ export function buildAgentPath(basePath: string | undefined): string {
   };
 
   add(getAoBinDir());
-  add(PREFERRED_GH_BIN_DIR);
 
   for (const entry of inherited) add(entry);
 

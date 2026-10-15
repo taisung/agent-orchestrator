@@ -49,13 +49,13 @@ describe("buildAgentPath", () => {
     expect(result).toContain("/usr/bin");
   });
 
-  it("ensures /usr/local/bin is early for gh resolution", () => {
-    const result = buildAgentPath("/usr/bin:/bin");
-    const entries = result.split(":");
-    const aoIdx = entries.indexOf("/home/testuser/.ao/bin");
-    const ghIdx = entries.indexOf("/usr/local/bin");
-    expect(aoIdx).toBe(0);
-    expect(ghIdx).toBe(1);
+  it("keeps the inherited order after the ao bin dir and adds no /usr/local/bin", () => {
+    // /usr/local/bin can hold old agent binaries (claude, codex, gemini) that
+    // must not shadow the user's copies; GH_PATH already selects gh.
+    expect(buildAgentPath("/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin")).toBe(
+      "/home/testuser/.ao/bin:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin",
+    );
+    expect(buildAgentPath(undefined)).toBe("/home/testuser/.ao/bin:/usr/bin:/bin");
   });
 });
 

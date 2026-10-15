@@ -408,13 +408,15 @@ describe("getEnvironment", () => {
     expect(env["PATH"]?.startsWith("/mock/home/.ao/bin:")).toBe(true);
   });
 
-  it("puts /usr/local/bin before linuxbrew paths", () => {
+  it("keeps the inherited order after ~/.ao/bin (no /usr/local/bin promotion)", () => {
+    // GH_PATH selects gh; a promoted /usr/local/bin would shadow newer user
+    // copies of codex, claude and gemini.
     const originalPath = process.env["PATH"];
     process.env["PATH"] = "/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin";
     try {
       const env = agent.getEnvironment(makeLaunchConfig());
       expect(env["PATH"]).toBe(
-        "/mock/home/.ao/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin",
+        "/mock/home/.ao/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin",
       );
     } finally {
       process.env["PATH"] = originalPath;
@@ -447,7 +449,7 @@ describe("getEnvironment", () => {
     delete process.env["PATH"];
     try {
       const env = agent.getEnvironment(makeLaunchConfig());
-      expect(env["PATH"]).toBe("/mock/home/.ao/bin:/usr/local/bin:/usr/bin:/bin");
+      expect(env["PATH"]).toBe("/mock/home/.ao/bin:/usr/bin:/bin");
     } finally {
       process.env["PATH"] = originalPath;
     }
