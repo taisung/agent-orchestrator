@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const { mockHomedir } = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ import {
   AO_METADATA_HELPER,
   GH_WRAPPER,
   GIT_WRAPPER,
+  WRAPPER_VERSION,
   setupPathWrapperWorkspace,
 } from "../agent-workspace-hooks.js";
 
@@ -48,7 +49,7 @@ describe("PATH wrapper version upgrades", () => {
 
     expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
     expect(readFileSync(helperPath, "utf8")).toContain("local ao_state_root=");
-    expect(readFileSync(markerPath, "utf8")).toBe("0.2.2");
+    expect(readFileSync(markerPath, "utf8")).toBe(WRAPPER_VERSION);
   });
 
   it("repairs wrapper files when the marker is current but files are stale or missing", async () => {
@@ -59,7 +60,7 @@ describe("PATH wrapper version upgrades", () => {
     writeFileSync(helperPath, "current helper sentinel\n");
     writeFileSync(ghPath, "current gh sentinel\n");
     writeFileSync(gitPath, "current git sentinel\n");
-    writeFileSync(markerPath, "0.2.2");
+    writeFileSync(markerPath, WRAPPER_VERSION);
 
     await setupPathWrapperWorkspace(workspaceDir);
 
@@ -67,7 +68,7 @@ describe("PATH wrapper version upgrades", () => {
     expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
     expect(readFileSync(ghPath, "utf8")).toBe(GH_WRAPPER);
     expect(readFileSync(gitPath, "utf8")).toBe(GIT_WRAPPER);
-    expect(readFileSync(markerPath, "utf8")).toBe("0.2.2");
+    expect(readFileSync(markerPath, "utf8")).toBe(WRAPPER_VERSION);
   });
 
   it("leaves files untouched when the marker and all files are current", async () => {
@@ -78,14 +79,15 @@ describe("PATH wrapper version upgrades", () => {
     writeFileSync(helperPath, AO_METADATA_HELPER);
     writeFileSync(ghPath, GH_WRAPPER);
     writeFileSync(gitPath, GIT_WRAPPER);
-    writeFileSync(markerPath, "0.2.2");
-    const mtimeBefore = readFileSync(markerPath, "utf8");
+    writeFileSync(markerPath, WRAPPER_VERSION);
+    // A rewrite goes through a temp file and a rename, so it gives the path a
+    // new inode even when the content is the same.
+    const paths = [helperPath, ghPath, gitPath, markerPath];
+    const inodesBefore = paths.map((p) => statSync(p).ino);
 
     await setupPathWrapperWorkspace(workspaceDir);
 
-    expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
-    expect(readFileSync(ghPath, "utf8")).toBe(GH_WRAPPER);
-    expect(readFileSync(gitPath, "utf8")).toBe(GIT_WRAPPER);
-    expect(readFileSync(markerPath, "utf8")).toBe(mtimeBefore);
+    expect(paths.map((p) => statSync(p).ino)).toEqual(inodesBefore);
+    expect(readFileSync(markerPath, "utf8")).toBe(WRAPPER_VERSION);
   });
 });

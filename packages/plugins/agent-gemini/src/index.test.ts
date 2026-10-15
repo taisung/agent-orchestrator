@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Session, RuntimeHandle, AgentLaunchConfig, ProjectConfig } from "@aoagents/ao-core";
+import {
+  PREFERRED_GH_PATH,
+  type Session,
+  type RuntimeHandle,
+  type AgentLaunchConfig,
+  type ProjectConfig,
+} from "@aoagents/ao-core";
 import { execFileSync } from "node:child_process";
 import type * as NodeChildProcess from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -262,7 +268,7 @@ describe("getEnvironment", () => {
 
   it("sets GH_PATH to the preferred gh binary", () => {
     const env = agent.getEnvironment(makeLaunchConfig());
-    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+    expect(env["GH_PATH"]).toBe(PREFERRED_GH_PATH);
   });
 
   it("deduplicates PATH entries via buildAgentPath", () => {
@@ -525,15 +531,24 @@ describe("setupWorkspaceHooks", () => {
   });
 
   it("repairs gh/git wrappers when version marker is current but files are missing", async () => {
+    // The current version is the marker that a first install writes.
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
+    const markerWrite = mockWriteFile.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes(".ao-version.tmp."),
+    );
+    const currentVersion = String(markerWrite?.[1]);
+    expect(currentVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    mockWriteFile.mockClear();
+
     mockReadFile.mockImplementation((path: string) => {
-      if (path.includes(".ao-version")) return Promise.resolve("0.2.2");
+      if (path.includes(".ao-version")) return Promise.resolve(currentVersion);
       return Promise.reject(new Error("ENOENT"));
     });
 
     await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
 
-    // A matching marker with missing files must be repaired (tmux panes lose
-    // PATH, but the wrappers themselves must always be present).
+    // A matching marker with missing files must be repaired.
     const writtenFiles = mockWriteFile.mock.calls.map((c: unknown[]) => c[0] as string);
     expect(writtenFiles.some((f: string) => f.includes("/gh.tmp."))).toBe(true);
     expect(writtenFiles.some((f: string) => f.includes("/git.tmp."))).toBe(true);

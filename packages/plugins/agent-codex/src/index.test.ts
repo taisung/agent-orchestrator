@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type {
-  Session,
-  RuntimeHandle,
-  AgentLaunchConfig,
-  AgentSpecificConfig,
+import {
+  PREFERRED_GH_PATH,
+  type Session,
+  type RuntimeHandle,
+  type AgentLaunchConfig,
+  type AgentSpecificConfig,
 } from "@aoagents/ao-core";
 
 // ---------------------------------------------------------------------------
@@ -430,7 +431,7 @@ describe("getEnvironment", () => {
 
   it("sets GH_PATH to preferred wrapper target", () => {
     const env = agent.getEnvironment(makeLaunchConfig());
-    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+    expect(env["GH_PATH"]).toBe(PREFERRED_GH_PATH);
   });
 
   it("deduplicates ao and /usr/local/bin entries", () => {
@@ -1519,6 +1520,19 @@ describe("postLaunchSetup", () => {
 describe("setupWorkspaceHooks", () => {
   const agent = create();
 
+  /** The current wrapper version: the marker that a first install writes. */
+  async function currentWrapperVersion(): Promise<string> {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data", sessionId: "sess-1" });
+    const markerWrite = mockWriteFile.mock.calls.find(
+      (call: [string, string, object]) =>
+        typeof call[0] === "string" && call[0].includes(".ao-version.tmp."),
+    );
+    mockWriteFile.mockClear();
+    mockRename.mockClear();
+    return String(markerWrite?.[1]);
+  }
+
   it("has setupWorkspaceHooks method", () => {
     expect(typeof agent.setupWorkspaceHooks).toBe("function");
   });
@@ -1618,9 +1632,10 @@ describe("setupWorkspaceHooks", () => {
   it("repairs wrapper writes when version marker matches but files are missing", async () => {
     // Marker matches current version but wrapper files are missing —
     // the install must repair them (old code skipped on marker alone).
+    const version = await currentWrapperVersion();
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.2");
+        return Promise.resolve(version);
       }
       // Wrapper files and AGENTS.md read attempts
       return Promise.reject(new Error("ENOENT"));
@@ -1650,13 +1665,13 @@ describe("setupWorkspaceHooks", () => {
       sessionId: "sess-1",
     });
 
-    // Version marker is also atomically written
-    const versionWriteCall = mockWriteFile.mock.calls.find(
-      (call: [string, string, object]) =>
-        typeof call[0] === "string" && call[0].includes(".ao-version.tmp."),
+    // Version marker is also atomically written, after the three scripts
+    const tmpWrites = mockWriteFile.mock.calls.filter(
+      (call: [string, string, object]) => typeof call[0] === "string" && call[0].includes(".tmp."),
     );
-    expect(versionWriteCall).toBeDefined();
-    expect(versionWriteCall![1]).toBe("0.2.2");
+    const versionWriteCall = tmpWrites[tmpWrites.length - 1];
+    expect(versionWriteCall?.[0]).toContain(".ao-version.tmp.");
+    expect(versionWriteCall![1]).toMatch(/^\d+\.\d+\.\d+$/);
 
     const versionRenameCall = mockRename.mock.calls.find(
       (call: string[]) => typeof call[1] === "string" && call[1].endsWith(".ao-version"),
@@ -1666,9 +1681,10 @@ describe("setupWorkspaceHooks", () => {
 
   it("writes ao session context to .ao/AGENTS.md", async () => {
     // Version marker matches (skip wrapper install)
+    const version = await currentWrapperVersion();
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.2");
+        return Promise.resolve(version);
       }
       return Promise.reject(new Error("ENOENT"));
     });
@@ -1712,9 +1728,10 @@ describe("setupWorkspaceHooks", () => {
   });
 
   it("writes .ao/AGENTS.md without modifying repo-tracked AGENTS.md", async () => {
+    const version = await currentWrapperVersion();
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.2");
+        return Promise.resolve(version);
       }
       return Promise.reject(new Error("ENOENT"));
     });
@@ -1806,15 +1823,19 @@ describe("shell wrapper content", () => {
   });
 
   describe("gh wrapper", () => {
-    it("uses grep -Fxv for PATH cleaning (not regex grep)", async () => {
+    it("skips every ao wrapper copy when it looks for the real gh", async () => {
+      // File identity (-ef) holds for every spelling of the wrapper's own
+      // directory; the header test catches other wrapper copies.
       const content = await getWrapperContent("gh");
-      expect(content).toContain("grep -Fxv");
-      expect(content).not.toMatch(/grep -v "\^\$ao_bin_dir\$"/);
+      expect(content).toContain('[[ "$candidate" -ef "$0" ]] && return 1');
+      expect(content).toContain('[[ "$header" != "# ao $name wrapper"* ]]');
+      expect(content).not.toContain("grep -Fxv");
     });
 
-    it("only captures output for pr/create and pr/merge", async () => {
+    it("only captures output for pr/create", async () => {
       const content = await getWrapperContent("gh");
-      expect(content).toContain("pr/create|pr/merge");
+      expect(content).toContain('if [[ "$1/$2" != "pr/create" ]]; then');
+      expect(content).not.toContain("pr/merge");
     });
 
     it("uses exec for non-PR commands (transparent passthrough)", async () => {
@@ -1824,14 +1845,13 @@ describe("shell wrapper content", () => {
 
     it("prefers GH_PATH when provided and executable", async () => {
       const content = await getWrapperContent("gh");
-      expect(content).toContain("GH_PATH");
-      expect(content).toContain('-x "$GH_PATH"');
+      expect(content).toContain('[[ -f "$candidate" && -x "$candidate" ]] || return 1');
       expect(content).toContain('real_gh="$GH_PATH"');
     });
 
-    it("guards against recursive GH_PATH pointing to ao wrapper dir", async () => {
+    it("guards against a GH_PATH that points to an ao wrapper", async () => {
       const content = await getWrapperContent("gh");
-      expect(content).toContain('if [[ "$gh_dir" != "$ao_bin_dir" ]]');
+      expect(content).toContain('ao_is_real_bin "$GH_PATH" gh');
     });
 
     it("extracts PR URL from gh pr create output", async () => {
@@ -1840,9 +1860,9 @@ describe("shell wrapper content", () => {
       expect(content).toContain("update_ao_metadata pr");
     });
 
-    it("updates status to merged on gh pr merge", async () => {
+    it("never writes status=merged (the lifecycle reads the PR state)", async () => {
       const content = await getWrapperContent("gh");
-      expect(content).toContain("update_ao_metadata status merged");
+      expect(content).not.toContain("status merged");
     });
 
     it("cleans up temp file on exit", async () => {
@@ -1853,21 +1873,24 @@ describe("shell wrapper content", () => {
   });
 
   describe("git wrapper", () => {
-    it("uses grep -Fxv for PATH cleaning (not regex grep)", async () => {
+    it("skips every ao wrapper copy when it looks for the real git", async () => {
       const content = await getWrapperContent("git");
-      expect(content).toContain("grep -Fxv");
-      expect(content).not.toMatch(/grep -v "\^\$ao_bin_dir\$"/);
+      expect(content).toContain('[[ "$candidate" -ef "$0" ]] && return 1');
+      expect(content).toContain("ao_find_real_bin git");
+      expect(content).not.toContain("grep -Fxv");
     });
 
-    it("captures branch name from checkout -b", async () => {
+    it("stores the branch that HEAD names after a checkout or switch", async () => {
       const content = await getWrapperContent("git");
-      expect(content).toContain("checkout/-b");
-      expect(content).toContain("update_ao_metadata branch");
+      expect(content).toContain("checkout|switch) ;;");
+      expect(content).toContain("symbolic-ref -q HEAD");
+      expect(content).toContain('update_ao_metadata branch "$ao_branch"');
     });
 
-    it("captures branch name from switch -c", async () => {
+    it("writes only for the session's own work tree", async () => {
       const content = await getWrapperContent("git");
-      expect(content).toContain("switch/-c");
+      expect(content).toContain("rev-parse --show-toplevel");
+      expect(content).toContain('"$ao_top" -ef "$ao_worktree"');
     });
 
     it("only updates metadata on success (exit code 0)", async () => {

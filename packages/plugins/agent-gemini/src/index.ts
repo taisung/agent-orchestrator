@@ -122,7 +122,7 @@ function createGeminiAgent(): Agent {
       }
 
       // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
-      // The wrappers strip this directory from PATH before calling the real
+      // The wrappers skip every ao wrapper file when they look for the real
       // binary, so there's no infinite recursion. Use buildAgentPath (lazy
       // homedir) so HOME mocking in tests and per-spawn HOME works.
       env["PATH"] = buildAgentPath(process.env["PATH"]);

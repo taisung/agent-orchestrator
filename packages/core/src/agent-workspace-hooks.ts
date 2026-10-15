@@ -1,11 +1,15 @@
 /**
  * Shared PATH-based workspace hooks for agent plugins that don't have
- * native hook systems (Codex, Aider, OpenCode).
+ * native hook systems (Codex, Gemini, OpenCode).
  *
- * Installs ~/.ao/bin/gh and ~/.ao/bin/git wrappers that intercept
- * PR creation, PR merge, and branch operations to auto-update session metadata.
+ * Installs ~/.ao/bin/gh and ~/.ao/bin/git wrappers that record the PR URL of
+ * `gh pr create` and the branch that HEAD names after `git checkout` or
+ * `git switch` in the session metadata. Those plugins put ~/.ao/bin first in
+ * the PATH of their getEnvironment, and runtime-tmux runs the tmux client
+ * with that PATH so the pane gets it.
  *
- * Claude Code uses its own PostToolUse hook system instead.
+ * Claude Code does not use these wrappers: its getEnvironment sets no PATH,
+ * and its PostToolUse hook is its only metadata writer.
  */
 import { writeFile, mkdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +36,7 @@ function getAoBinDir(): string {
 }
 
 /** Current version of wrapper scripts — bump when scripts change */
-const WRAPPER_VERSION = "0.2.2";
+export const WRAPPER_VERSION = "0.2.3";
 
 // =============================================================================
 // PATH Builder
@@ -140,29 +144,59 @@ update_ao_metadata() {
 `;
 
 /**
- * gh wrapper — intercepts `gh pr create` and `gh pr merge` to auto-update
- * session metadata. All other commands pass through transparently.
+ * Shared by the gh and git wrappers: find the real binary on PATH.
+ *
+ * A candidate is skipped when it is this wrapper file (the -ef identity test
+ * holds for every spelling of its directory: a trailing slash, a doubled
+ * slash, a symlink) or any other ao wrapper copy (another HOME or another
+ * version, matched by its second-line header). So a wrapper never runs itself
+ * or another wrapper, which would recurse without end. Builtins only, so the
+ * search starts no extra process.
+ */
+const AO_FIND_REAL_BIN = `# Find the real binary: the first executable on PATH that is not an ao wrapper.
+# "-ef" matches this file under any spelling of its directory, and the header
+# test matches any other ao wrapper copy, so a wrapper never calls a wrapper.
+ao_is_real_bin() {
+  local candidate="\$1" name="\$2" header=""
+  [[ -f "\$candidate" && -x "\$candidate" ]] || return 1
+  [[ "\$candidate" -ef "\$0" ]] && return 1
+  { IFS= read -r -n 80 header; IFS= read -r -n 80 header; } 2>/dev/null < "\$candidate"
+  [[ "\$header" != "# ao \$name wrapper"* ]]
+}
+
+ao_find_real_bin() {
+  local name="\$1" dir
+  local -a dirs
+  IFS=: read -r -a dirs <<< "\$PATH"
+  for dir in "\${dirs[@]}"; do
+    [[ -n "\$dir" ]] || continue
+    if ao_is_real_bin "\$dir/\$name" "\$name"; then
+      ao_real_bin="\$dir/\$name"
+      return 0
+    fi
+  done
+  return 1
+}
+`;
+
+/**
+ * gh wrapper — records the PR of `gh pr create` in the session metadata.
+ * All other commands, `gh pr merge` included, run the real gh directly.
+ *
+ * `gh pr merge` writes nothing: "merged" is a terminal status, `--auto` only
+ * queues the merge, and the PR need not be this session's. The lifecycle
+ * reads the PR state from GitHub instead.
  */
 export const GH_WRAPPER = `#!/usr/bin/env bash
 # ao gh wrapper — auto-updates session metadata on PR operations
 
-# Find real gh by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
+${AO_FIND_REAL_BIN}
+# Prefer the explicit gh path from the AO environment.
 real_gh=""
-
-# Prefer explicit gh path when provided by AO environment.
-# Guard against recursive self-reference to the wrapper in ~/.ao/bin.
-if [[ -n "\${GH_PATH:-}" && -x "\$GH_PATH" ]]; then
-  gh_dir="\$(cd "\$(dirname "\$GH_PATH")" 2>/dev/null && pwd)"
-  if [[ "\$gh_dir" != "\$ao_bin_dir" ]]; then
-    real_gh="\$GH_PATH"
-  fi
-fi
-
-if [[ -z "\$real_gh" ]]; then
-  real_gh="\$(PATH="\$clean_path" command -v gh 2>/dev/null)"
+if [[ -n "\${GH_PATH:-}" ]] && ao_is_real_bin "\$GH_PATH" gh; then
+  real_gh="\$GH_PATH"
+elif ao_find_real_bin gh; then
+  real_gh="\$ao_real_bin"
 fi
 
 if [[ -z "\$real_gh" ]]; then
@@ -170,104 +204,138 @@ if [[ -z "\$real_gh" ]]; then
   exit 127
 fi
 
+# Only "gh pr create" is parsed. "gh pr merge" writes nothing: merged is a
+# terminal status that the lifecycle reads from GitHub.
+if [[ "\$1/\$2" != "pr/create" ]]; then
+  exec "\$real_gh" "\$@"
+fi
+
 # Source the metadata helper
+ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
 source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
 # No-op when the helper is missing so workers see only the real gh output.
 if ! command -v update_ao_metadata >/dev/null 2>&1; then
   update_ao_metadata() { return 0; }
 fi
 
-# Only capture output for commands we need to parse (pr/create, pr/merge).
-# All other commands pass through transparently without stream merging.
-case "\$1/\$2" in
-  pr/create|pr/merge)
-    tmpout="\$(mktemp)"
-    trap 'rm -f "\$tmpout"' EXIT
+tmpout="\$(mktemp)"
+trap 'rm -f "\$tmpout"' EXIT
 
-    "\$real_gh" "\$@" 2>&1 | tee "\$tmpout"
-    exit_code=\${PIPESTATUS[0]}
+# Only stdout goes through tee: gh prints the PR URL there. stderr stays on
+# stderr, so a caller that captures stdout gets no error text in the value.
+"\$real_gh" "\$@" | tee "\$tmpout"
+exit_code=\${PIPESTATUS[0]}
 
-    if [[ \$exit_code -eq 0 ]]; then
-      output="\$(cat "\$tmpout")"
-      case "\$1/\$2" in
-        pr/create)
-          pr_url="\$(echo "\$output" | grep -Eo 'https://github\\.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)"
-          if [[ -n "\$pr_url" ]]; then
-            update_ao_metadata pr "\$pr_url"
-            update_ao_metadata status pr_open
-          fi
-          ;;
-        pr/merge)
-          update_ao_metadata status merged
-          ;;
-      esac
-    fi
+if [[ \$exit_code -eq 0 ]]; then
+  pr_url="\$(grep -Eo 'https://github\\.com/[^/]+/[^/]+/pull/[0-9]+' "\$tmpout" | head -1)"
+  if [[ -n "\$pr_url" ]]; then
+    update_ao_metadata pr "\$pr_url"
+    update_ao_metadata status pr_open
+  fi
+fi
 
-    exit \$exit_code
-    ;;
-  *)
-    exec "\$real_gh" "\$@"
-    ;;
-esac
+exit \$exit_code
 `;
 
 /**
- * git wrapper — intercepts branch operations to auto-update metadata.
- * All other commands pass through transparently.
+ * git wrapper — records the session branch after `git checkout` and
+ * `git switch`. All other commands run the real git directly.
  *
- * Detects:
- * - git checkout -b <branch> / git switch -c <branch>  (new branch)
- * - git checkout <branch> / git switch <branch>         (existing feature branch)
+ * After a successful checkout or switch, it writes the branch that HEAD now
+ * names (`git symbolic-ref -q HEAD`), or nothing when HEAD is detached. So a
+ * file checkout (`git checkout -- <file>`), a detached switch and a checkout
+ * of a remote-tracking ref never store a wrong name, and flags such as `-q`
+ * or a global `-C <dir>` do not hide a new branch.
  *
- * For existing branch switches, only updates if the branch name looks like a
- * feature branch (contains / or -) to avoid noise from checkout of commits/tags.
- * Matches the same heuristic as Claude Code's PostToolUse hook.
+ * It writes only when the work tree of the call is the session's own work
+ * tree (the `worktree` key of the session metadata). `ao spawn` from the
+ * orchestrator pane checks out the worker branch in the new worktree, and
+ * that must not change the orchestrator's record.
  */
 export const GIT_WRAPPER = `#!/usr/bin/env bash
 # ao git wrapper — auto-updates session metadata on branch operations
 
-# Find real git by removing our wrapper directory from PATH
-ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
-clean_path="\$(echo "\$PATH" | tr ':' '\\n' | grep -Fxv "\$ao_bin_dir" | grep . | tr '\\n' ':')"
-clean_path="\${clean_path%:}"
-real_git="\$(PATH="\$clean_path" command -v git 2>/dev/null)"
-
-if [[ -z "\$real_git" ]]; then
+${AO_FIND_REAL_BIN}
+if ! ao_find_real_bin git; then
   echo "ao-wrapper: git not found in PATH" >&2
   exit 127
 fi
+real_git="\$ao_real_bin"
 
-# Source the metadata helper
-source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
-# No-op when the helper is missing so workers see only the real git output.
-if ! command -v update_ao_metadata >/dev/null 2>&1; then
-  update_ao_metadata() { return 0; }
+# Find the subcommand after the global options. Keep the options that select
+# the repository, so the reads after the call see the same repository.
+ao_sub=""
+ao_repo_opts=()
+ao_i=1
+while [[ \$ao_i -le \$# ]]; do
+  ao_arg="\${!ao_i}"
+  case "\$ao_arg" in
+    -C|-c|--git-dir|--work-tree|--config-env)
+      ao_i=\$((ao_i + 1))
+      ao_repo_opts+=("\$ao_arg" "\${!ao_i}")
+      ;;
+    --namespace|--super-prefix|--attr-source)
+      ao_i=\$((ao_i + 1))
+      ;;
+    --git-dir=*|--work-tree=*|--config-env=*)
+      ao_repo_opts+=("\$ao_arg")
+      ;;
+    -*)
+      ;;
+    *)
+      ao_sub="\$ao_arg"
+      break
+      ;;
+  esac
+  ao_i=\$((ao_i + 1))
+done
+
+# Only a checkout or a switch can change the session branch.
+case "\$ao_sub" in
+  checkout|switch) ;;
+  *) exec "\$real_git" "\$@" ;;
+esac
+
+# Read the session's own work tree and stored branch from its metadata.
+# Without a session record, git runs directly.
+ao_worktree=""
+ao_stored_branch=""
+ao_record="\${AO_DATA_DIR:-}/\${AO_SESSION:-}"
+if [[ -n "\${AO_DATA_DIR:-}" && -n "\${AO_SESSION:-}" && -f "\$ao_record" ]]; then
+  while IFS= read -r ao_line || [[ -n "\$ao_line" ]]; do
+    case "\$ao_line" in
+      worktree=*) ao_worktree="\${ao_line#worktree=}" ;;
+      branch=*) ao_stored_branch="\${ao_line#branch=}" ;;
+    esac
+  done < "\$ao_record"
+fi
+if [[ -z "\$ao_worktree" ]]; then
+  exec "\$real_git" "\$@"
 fi
 
-# Run real git
 "\$real_git" "\$@"
 exit_code=\$?
 
-# Only update metadata on success
+# Only update metadata on success, and only for the session's own work tree.
 if [[ \$exit_code -eq 0 ]]; then
-  case "\$1/\$2" in
-    checkout/-b)
-      update_ao_metadata branch "\$3"
-      ;;
-    switch/-c)
-      update_ao_metadata branch "\$3"
-      ;;
-    checkout/*|switch/*)
-      # Existing branch switch — only track feature-looking branches (contain / or -)
-      # Skip flags (e.g. -B), HEAD, tags, commit hashes, and simple names like "main"
-      branch="\$2"
-      # If $2 is a flag, the actual branch name is in $3
-      if [[ "\$branch" == -* ]]; then branch="\$3"; fi
-      if [[ -n "\$branch" && "\$branch" != "HEAD" && "\$branch" != -* && "\$branch" == *[/-]* ]]; then
-        update_ao_metadata branch "\$branch"
+  ao_top="\$("\$real_git" "\${ao_repo_opts[@]}" rev-parse --show-toplevel 2>/dev/null)"
+  if [[ -n "\$ao_top" && "\$ao_top" -ef "\$ao_worktree" ]]; then
+    # The branch that HEAD names now, or nothing when HEAD is detached. The
+    # full ref is read because --short gives "heads/<name>" when a tag has
+    # the same name.
+    ao_ref="\$("\$real_git" "\${ao_repo_opts[@]}" symbolic-ref -q HEAD 2>/dev/null)"
+    ao_branch="\${ao_ref#refs/heads/}"
+    if [[ -n "\$ao_ref" && "\$ao_branch" != "\$ao_ref" && "\$ao_branch" != "\$ao_stored_branch" ]]; then
+      # Source the metadata helper
+      ao_bin_dir="\$(cd "\$(dirname "\$0")" && pwd)"
+      source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
+      # No-op when the helper is missing so workers see only the real git output.
+      if ! command -v update_ao_metadata >/dev/null 2>&1; then
+        update_ao_metadata() { return 0; }
       fi
-      ;;
-  esac
+      update_ao_metadata branch "\$ao_branch"
+    fi
+  fi
 fi
 
 exit \$exit_code
@@ -311,7 +379,7 @@ async function atomicWriteFile(filePath: string, content: string, mode: number):
  * Install PATH-based shell wrappers and append an AO section to AGENTS.md.
  *
  * This is the standard workspace setup for agents that don't have native hook
- * systems (Codex, Aider, OpenCode). Call this from both `setupWorkspaceHooks`
+ * systems (Codex, Gemini, OpenCode). Call this from both `setupWorkspaceHooks`
  * and `postLaunchSetup`.
  *
  * 1. Creates ~/.ao/bin/ with gh/git wrappers and metadata helper script
@@ -321,9 +389,8 @@ export async function setupPathWrapperWorkspace(workspacePath: string): Promise<
   // 1. Write shared wrappers to ~/.ao/bin/.
   // Skip only when the version marker matches AND every wrapper file exists
   // with the exact expected content. A matching marker with a missing or
-  // stale file (deleted or hand-edited wrapper) is repaired. tmux panes lose
-  // PATH (runtime-tmux must re-export it) but the wrappers themselves must
-  // always be present once any spawn has run.
+  // stale file (deleted or hand-edited wrapper) is repaired, so the wrappers
+  // that a pane PATH names are present once any spawn has run.
   await mkdir(getAoBinDir(), { recursive: true });
 
   const markerPath = join(getAoBinDir(), ".ao-version");
