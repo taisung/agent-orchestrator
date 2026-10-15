@@ -10,22 +10,16 @@
 The OpenCode 2.x arc (note `0009`, increments I-0 to I-7) is half done. I-1 (drop 1.x, require 2.0.29)
 and I-6 (`ao start` installs `@opencode/cli`) are on `main` and live: the primary checkout was rebuilt
 on the owner's word on 2026-10-15 at 10:19 EDT, and the five lifecycle workers were restarted at 10:20.
-Note `0010` (the M-1 to M-8 measurements) is on `main`. **I-2 round 3 runs, by astra (ao-25, Codex)**:
-round 1 (ao-14, Muse) failed both lenses (B-1 no spawn mapping, B-2 cross-fleet bind, M-1, M-2). Round 2
-(`3b2bb918..3c1d04c9`, ao-1, Opus 5.5) fixed most findings, but sol-6-1 (ao-24) returned NOT-LAND-SAFE:
-B-1, two overlapping starts with the same title and directory both store the first pane's session, and
-a purge in the second fleet removes it (real on this host: the Nexus config holds a second
-`agent-orchestrator` project with the same path and `sessionPrefix: ao`); M-1, the shared-ID guard
-reads a terminal status such as `merged` as a dead holder although its pane is alive. Both ladder rungs
-failed, so on 2026-10-15 the owner named astra (R3). Its reviewer is Opus 5.5 (cross-family). **PATH fix
-round 3 runs, by ao-19 (Opus 5.5)**: round 1 (`4eadc823`, ao-15, Muse) failed its Opus review (ao-18);
-round 2 (`4eadc823..b21bb304`, ao-19) fixed or recorded every round-1 finding, but sol-6-1 (ao-23)
-returned NOT-LAND-SAFE: M-1, a Claude Code pane started from inside a Codex, Gemini or OpenCode pane
-inherits the `~/.ao/bin` wrappers, against the owner's hook-only rule; m-1, m-2. Under R7 the owner
-chose round 3 by ao-19; ao-23 re-checks. **The onboarding CI cleanup landed** (`ebc8e25b`, `c9a7ed93`,
-`19d99667`, ao-20, Muse, LAND-SAFE by Sonnet 5.5 and V4.1 Flash in both rounds). On the owner's word,
-`main` was pushed to `origin` on 2026-10-15 at 12:42 EDT (`origin/main` = `70d19d70`). The later
-commits on `main`, among them the CI cleanup, are not pushed.
+Note `0010` (the M-1 to M-8 measurements) is on `main`. **I-2 landed** on `main` as
+`f63b5b99..6d2e8262` after five rounds (Muse, Opus 5.5, then astra three times by the owner's name under
+R3; reviews Sonnet 5.5 and V4.1 Flash, sol-6-1, Opus 5.5 three times); round 5 is LAND-SAFE under the
+owner's stop rule. **The `~/.ao/bin` PATH fix landed** on `main` as `5884f9ad..9f06dc25` after four rounds
+(Muse, then Opus 5.5 ao-19 three times; reviews Opus 5.5, then sol-6-1 three times); round 4 is LAND-SAFE
+under the owner's stop rule. **Neither is live**: both need one rebuild of the primary checkout on the
+owner's word (TODO What Landed has the conditions). **The onboarding CI cleanup landed** (`ebc8e25b`,
+`c9a7ed93`, `19d99667`). On the owner's word, `main` was pushed to `origin` on 2026-10-15 at 12:42 EDT
+(`origin/main` = `70d19d70`). Every later commit on `main` (the CI cleanup, the PATH fix, I-2 and the
+docs) is not pushed.
 
 **Outage, 2026-10-15 11:41:47 EDT**: ao-16 ran `tmux kill-server` with `TMUX` set, which stopped the
 host's default tmux server and every session of every fleet (TODO Known Issues). The owner restarted
@@ -49,9 +43,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-25 | GPT-6-Astra (Codex) | idle, done, NOT-LAND-SAFE | `0080cf87` | I-2 round 3 author; 92% of its context used; row closed; round 4 went to a new astra session ao-27; earlier: one `fix(core)` commit: a host-wide launch lock in `/tmp/ao-opencode-launch-<uid>` with a pending marker that has no expiry, and a liveness guard; plan check passed; earlier: owner-named (R3); fixes sol-6-1 B-1 and M-1; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r3.md`; reviewer Opus 5.5 |
 | ao-23 | GPT-6.1-Sol (Codex) | idle, done, LAND-SAFE | `608b2b6b` | PATH round 4 LAND-SAFE under the owner stop rule; review `development/reviews/aobin_path_review_r4_sol61.md`; all its rows closed; earlier: brief `~/.cache/agent-skills-haiku55-arc/brief-review-aobin-path-r4-sol.md`, with the owner stop rule; context 67% at dispatch; earlier: PATH round 3: M-1 relative wrapper entries stay, M-2 symlink plus `..` hides the wrapper directory, m-1 every `*/.ao/bin` is removed; review `development/reviews/aobin_path_review_r3_sol61.md`; row closed; R7 next step is the owner; earlier: brief `~/.cache/agent-skills-haiku55-arc/brief-review-aobin-path-r3-sol.md`; earlier: PATH round 2: M-1 a Claude Code pane inherits the wrappers from a parent that has them; m-1, m-2; review `development/reviews/aobin_path_review_r2_sol61.md`; row closed; R7 next step is the owner |
 | ao-24 | GPT-6.1-Sol (Codex) | idle, done, NOT-LAND-SAFE | `3c1d04c9` | I-2 round 2: B-1 overlapping starts with the same title and directory bind and purge the first pane's session; M-1 the shared-ID guard skips a live holder with a terminal status; review `development/reviews/i2_review_r2_sol61.md`; row closed; R7 next step is the owner |
-| ao-26 | Claude Opus 5.5 | re-checking I-2 round 5 | `bfa5af45` | under the owner stop rule; its context compacted before this round; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r5-opus.md`; earlier: I-2 round 4: M-2 evidence rule 1 accepts a non-protocol create (a `main`-build fleet or a manual create), M-3 the timeout text tells the operator to `rm` a live holder's marker, m-5 to m-7; review `development/reviews/i2_review_r4_opus.md`; both rows closed; earlier: brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r4-opus.md`; asked to check the error-string classifier against the `runtime-tmux` on `main` (the PATH fix changed `create()`); earlier: I-2 round 3: B-1 a failed launch blocks every later worker spawn of the project, M-1 the pending marker has no recovery from evidence, 4 minors; its section "Judgment of the pending-marker trade-off" gives the smallest safe change; review `development/reviews/i2_review_r3_opus.md`; row closed; earlier: cross-family lens of the astra author; model pinned in its worktree; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r3-opus.md`; asked to judge the pending-marker trade-off closely |
+| ao-26 | Claude Opus 5.5 | idle, done, LAND-SAFE | `bfa5af45` | I-2 round 5 LAND-SAFE under the owner stop rule, 1 minor m-8; its own isolation breach made 2 global OpenCode model turns (TODO Known Issues); review `development/reviews/i2_review_r5_opus.md`; all rows closed; earlier: under the owner stop rule; its context compacted before this round; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r5-opus.md`; earlier: I-2 round 4: M-2 evidence rule 1 accepts a non-protocol create (a `main`-build fleet or a manual create), M-3 the timeout text tells the operator to `rm` a live holder's marker, m-5 to m-7; review `development/reviews/i2_review_r4_opus.md`; both rows closed; earlier: brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r4-opus.md`; asked to check the error-string classifier against the `runtime-tmux` on `main` (the PATH fix changed `create()`); earlier: I-2 round 3: B-1 a failed launch blocks every later worker spawn of the project, M-1 the pending marker has no recovery from evidence, 4 minors; its section "Judgment of the pending-marker trade-off" gives the smallest safe change; review `development/reviews/i2_review_r3_opus.md`; row closed; earlier: cross-family lens of the astra author; model pinned in its worktree; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r3-opus.md`; asked to judge the pending-marker trade-off closely |
 | ao-27 | GPT-6-Astra (Codex) | idle, done, NOT-LAND-SAFE | `ece9372e` | I-2 round 4 author; 82% of its context used; row closed; round 5 went to ao-28; earlier: one `fix(core)` commit: markers clear on evidence (a finished create since `startedAt`, or a dead pane on its recorded tmux socket after 25 s), a pre-delivery runtime failure clears the marker, an uncertain one archives the worker as `killed`; plan check passed; earlier: owner chose round 4 by astra on 2026-10-15 (R3); a new session because ao-25 was at 92% context; spec is the ao-26 smallest-safe-change list plus m-1 to m-4; the brief warns that a lock root chosen from `XDG_RUNTIME_DIR` would split the lock between launchers; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r4.md`; re-check ao-26 |
-| ao-28 | GPT-6-Astra (Codex) | done at `bfa5af45` | `bfa5af45` | one `fix(core)` commit: both recovery rules need an explicit tmux negative for the recorded earlier pane; live-holder timeout text with the PID and no `rm`; `ENOENT`-tolerant `complete` and `release`; plan check passed; earlier: owner chose round 5 by astra with a stop rule on 2026-10-15: if the re-check finds only cases that need a non-protocol creator or a contrived host state, record them as known limits and land; fixes ao-26 r4 M-2 (rule 1 only when the earlier pane is gone), M-3 (live-holder text, `ENOENT` tolerance), m-5 to m-7; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r5.md`; re-check ao-26 |
+| ao-28 | GPT-6-Astra (Codex) | idle, done, landed | `bfa5af45` | I-2 landed as `f63b5b99..6d2e8262`; row closed; earlier: one `fix(core)` commit: both recovery rules need an explicit tmux negative for the recorded earlier pane; live-holder timeout text with the PID and no `rm`; `ENOENT`-tolerant `complete` and `release`; plan check passed; earlier: owner chose round 5 by astra with a stop rule on 2026-10-15: if the re-check finds only cases that need a non-protocol creator or a contrived host state, record them as known limits and land; fixes ao-26 r4 M-2 (rule 1 only when the earlier pane is gone), M-3 (live-holder text, `ENOENT` tolerance), m-5 to m-7; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r5.md`; re-check ao-26 |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -74,7 +68,7 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-28 (author) and ao-26 (third row, I-2 round-5 re-check) are open; ao-19, ao-23 (three rows), ao-25, ao-26 (two earlier rows), ao-27, ao-1, ao-20, ao-21,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), none is open; ao-19, ao-23 (three rows), ao-25, ao-26 (three rows), ao-27, ao-28, ao-1, ao-20, ao-21,
 ao-22, ao-23 and ao-24 are closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
@@ -109,17 +103,13 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Review and land I-2** - when ao-25 (astra) reports, plan-check its diff, brief a fresh Opus 5.5
-   reviewer (blind, cross-family) on `3c1d04c9..<tip>` and the whole `49369f18..<tip>`, then land by
-   cherry-pick (the branch is not on `main`).
-   - Context: I-2 changes spawn-time discovery, cleanup, reuse and restore for every OpenCode session;
-     after a rebuild every fleet runs it. A rebuild needs the owner's word, then a lifecycle restart.
-   - Expected outcome: LAND-SAFE, `main` holds I-2, the tree equals the reviewed tree.
-2. **Roll out the PATH fix** - it is on `main` (`5884f9ad..9f06dc25`) but not live. On the owner's word:
-   let every old-build `ao` process that can install the wrappers finish or restart it, rebuild the
-   primary checkout, restart the lifecycle workers by exact PID, and give the owner the r4 owner text
-   first. One rebuild after I-2 lands is the least disruption.
-3. **Fix the restore model** (HIGH), then **I-3 and I-4** (after I-2), **then I-5** - route each with
+1. **Roll out the PATH fix and I-2 together** - both are on `main` but not live. On the owner's word:
+   give the owner the PATH owner text (`development/reviews/aobin_path_review_r4_sol61.md`, section "Owner
+   text audit and corrected text"); let every old-build `ao` process that can install the wrappers or
+   launch OpenCode finish, or restart it; rebuild the primary checkout once; restart the lifecycle workers
+   by exact PID.
+2. **Push `main`** on the owner's word: the next Onboarding CI run is the live check of the CI cleanup.
+3. **Fix the restore model** (HIGH), then **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with
    `~/agent-skills/scripts/routing.py route`; I-3 and I-5 are HIGH by the profile.
 
 ## First Actions

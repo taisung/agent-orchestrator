@@ -145,6 +145,27 @@ Durable progress record for this fork. Dated events only; the current state live
   (this host's startup adds `.`); the Claude hook's quoted-branch and direct-merge limits remain; Herdr
   is not measured.
 
+- `f63b5b99..6d2e8262` (2026-10-15, I-2 of note `0009`, 9 commits) - one OpenCode API helper (`execFile`
+  with an args array, a bound on every call, a cut answer never parsed), lookup, reuse, remove and
+  interrupt by the stored ID only (owner Q7), a spawn-time discovery wait with exact title, real
+  directory and created-time filters, a host-wide launch lock per real directory and title in
+  `/tmp/ao-opencode-launch-<uid>` (owner, mode 0700 and no symlink checked), a pending marker that clears
+  only on evidence (an explicit tmux negative for the recorded earlier pane on its recorded socket, then
+  a finished create since `startedAt` or a 25 s age), a liveness guard for shared IDs whatever the
+  holder's status, and restore refusals that keep the old pane. Authors: Muse ao-14 (r1), Opus 5.5 ao-1
+  (r2), astra ao-25, ao-27, ao-28 (r3 to r5, owner-named under R3). Reviews: Sonnet 5.5 ao-16 and V4.1
+  Flash ao-17 (r1), sol-6-1 ao-24 (r2), Opus 5.5 ao-26 (r3 to r5) (`development/reviews/i2_review_*.md`);
+  r5 LAND-SAFE under the owner's stop rule. Cherry-picked; the I-2 files equal the reviewed `bfa5af45`
+  except the 3 PATH-fix exports in `packages/core/src/index.ts`; ao-26 built and tested that combined
+  state. Not pushed. **Not live**: it needs the same rebuild as the PATH fix, on the owner's word.
+  Known limits: a marker whose tmux server exited with its last session needs the printed `rm -r`, and
+  the failure line for an uncertain `send-keys` failure then wrongly promises recovery (r5 m-8,
+  availability only); Herdr markers and markers without a socket need the manual path; another tmux
+  server that answers still counts as proof of death for the holder guard; every creator of the same
+  title and directory must use the protocol (an old build or a manual create can bypass the lock, but
+  can no longer settle a marker while the earlier pane lives); I-3 (Node-side create) removes the title
+  evidence at the root.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -200,6 +221,15 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   some stay `killed` with a live pane. Seen on the I-2 build and on `3b2bb918`. A running agent with a
   terminal status also defeats any guard that reads the status as proof of a dead pane (I-2 round-2
   M-1). Lifecycle worker follow-up.
+- **A private tmux server started from a worker shell gives its panes the real `HOME`** (found
+  2026-10-15 by ao-26 in the I-2 round-5 re-check, its own isolation breach). With only `TMUX` removed,
+  the new server's global environment held the reviewer's real `HOME`, so the panes' login shells put the
+  real `opencode` first on `PATH`; two panes made model turns on the GLOBAL OpenCode service
+  (`ses_ebe4c58ecffexfEl81wt8iCk4y`, `ses_ebe4c1ae5ffeUF3dHbjY63ravQ`, about 0.005 USD; the orchestrator
+  prompt ran there, ao-26 found no trace in the real state root or `~/.ao/bin` and no spawned worker).
+  Not removed (the global service is read-only for workers; the owner may remove them). Rule for every
+  brief from now: start every private tmux server from the scratch environment (fake `HOME`, scratch
+  `PATH`), and check each pane's `HOME` and `opencode` before a run.
 - **A full `pnpm test` in a worker pane leaks into the real state** (found 2026-10-15 by ao-1, I-2 round
   2). Run at 16:46:57Z with the real `HOME` and the worker's `AO_*` variables, it made two more model
   turns on the global OpenCode service (`ses_ebf89d5bcffe2gNXDKbG5frCqF`, `ses_ebf89c1e5ffeFjai3ZvtCwBo5F`,
