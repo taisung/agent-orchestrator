@@ -141,88 +141,153 @@ process.stdin.on('data', c => input += c).on('end', () => {
 // OpenCode Version Gate
 // =============================================================================
 
-/**
- * Minimum OpenCode version this plugin supports. Only 2.0.29 is measured, and
- * the 2.x API surface this plugin drives (`session.create`, `session.get`,
- * `session.switchModel`, `session.switchAgent`) is read from the 2.0.29
- * document, so anything older is refused. This is a minimum, not a major pin:
- * any later 2.x (or later major) is accepted.
- */
-const OPENCODE_MIN_VERSION = { major: 2, minor: 0, patch: 29 } as const;
-
-/** Named in the error that an explicit spawn on a refused host prints. */
-const OPENCODE_MIN_VERSION_TEXT = "2.0.29";
-
 interface OpenCodeVersion {
   major: number;
   minor: number;
   patch: number;
+  /** True for a semver pre-release such as `2.1.0-beta.1`. */
+  prerelease: boolean;
 }
 
 /**
- * Parse the first `major.minor.patch` triple in `opencode --version` output
- * (`1.18.35` on 1.x, `opencode v2.0.29` on 2.x). A pre-release suffix such as
- * `-beta.1` in `2.1.0-beta.1` is ignored: the gate is about the API surface
- * the binary carries, and a pre-release of a version past the floor still
- * carries it, so its numeric core decides. Anything without a triple
- * (empty output, `opencode dev`) parses to null and is refused.
+ * Minimum OpenCode version this plugin supports (owner decision Q9 of note
+ * 0009: a minimum, not a major pin). Only 2.0.29 is measured, and the 2.x API
+ * surface this plugin drives (`session.create`, `session.get`,
+ * `session.switchModel`, `session.switchAgent`) is read from the 2.0.29
+ * document, so anything older is refused and any later 2.x or later major is
+ * accepted.
+ */
+const OPENCODE_MIN_VERSION: OpenCodeVersion = { major: 2, minor: 0, patch: 29, prerelease: false };
+
+/** The floor as text, derived from the one definition above. */
+const OPENCODE_MIN_VERSION_TEXT = `${OPENCODE_MIN_VERSION.major}.${OPENCODE_MIN_VERSION.minor}.${OPENCODE_MIN_VERSION.patch}`;
+
+/**
+ * Bound on `opencode --version`. 2.0.29 answers in about 0.1 s; the bound only
+ * stops a hanging binary from blocking `ao spawn`, `ao start` and
+ * `ao session restore`, which call the probe synchronously.
+ */
+const OPENCODE_VERSION_TIMEOUT_MS = 10_000;
+
+/**
+ * One line of `opencode --version` output that starts with a version:
+ * `opencode v2.0.29` on 2.x, `1.18.35` on 1.x, with an optional semver
+ * pre-release (`-beta.1`), build suffix (`+abc`) and text after a space.
+ */
+const OPENCODE_VERSION_LINE =
+  /^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?:\s.*)?$/;
+
+/**
+ * Parse the first line of the output that starts with a version, so a notice
+ * that only contains a number (`update available 1.2.3`) cannot decide.
+ * Output without such a line (empty output, `opencode dev`) parses to null.
  */
 function parseOpenCodeVersion(output: string): OpenCodeVersion | null {
-  const match = output.match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) return null;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  const patch = Number(match[3]);
-  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)) {
-    return null;
+  for (const line of output.split(/\r?\n/)) {
+    const match = OPENCODE_VERSION_LINE.exec(line.trim());
+    if (!match) continue;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    const patch = Number(match[3]);
+    if (![major, minor, patch].every(Number.isSafeInteger)) return null;
+    return { major, minor, patch, prerelease: match[4] !== undefined };
   }
-  return { major, minor, patch };
-}
-
-/** True when the version output names a release at or past the minimum. */
-function isSupportedOpenCodeVersion(output: string): boolean {
-  const version = parseOpenCodeVersion(output);
-  if (!version) return false;
-  if (version.major !== OPENCODE_MIN_VERSION.major) {
-    return version.major > OPENCODE_MIN_VERSION.major;
-  }
-  if (version.minor !== OPENCODE_MIN_VERSION.minor) {
-    return version.minor > OPENCODE_MIN_VERSION.minor;
-  }
-  return version.patch >= OPENCODE_MIN_VERSION.patch;
+  return null;
 }
 
 /**
- * Read `opencode --version` through the Node process PATH, the same lookup
- * the pane's shell performs (the pane prepends only the `~/.ao/bin` gh/git
- * wrappers, so both resolve the same binary unless the user's shell init
- * reorders PATH). Null when the binary is missing or prints nothing usable.
+ * Semver order against the floor. A pre-release of a later version
+ * (`2.1.0-beta.1`) is past the floor and is accepted. A pre-release of the
+ * floor itself (`2.0.29-beta.1`) comes before the floor, as semver orders it,
+ * and is refused: the minimum is the measured 2.0.29 release.
  */
-function readOpenCodeVersionOutput(): string | null {
-  try {
-    const output = execFileSync("opencode", ["--version"], { encoding: "utf-8" });
-    const text = typeof output === "string" ? output : String(output);
-    return text.trim().length > 0 ? text : null;
-  } catch {
-    return null;
-  }
+function isAtLeastMinimum(version: OpenCodeVersion): boolean {
+  const floor = OPENCODE_MIN_VERSION;
+  if (version.major !== floor.major) return version.major > floor.major;
+  if (version.minor !== floor.minor) return version.minor > floor.minor;
+  if (version.patch !== floor.patch) return version.patch > floor.patch;
+  return !version.prerelease;
 }
 
-function buildUnsupportedVersionMessage(found: string | null): string {
-  const detail = found === null ? "opencode not found" : `found ${found.trim()}`;
-  return `ao needs OpenCode ${OPENCODE_MIN_VERSION_TEXT} or later (${detail})`;
+/** Short, one-line form of the probe output for the refusal message. */
+function summarizeVersionOutput(output: string): string {
+  const text = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(" | ");
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
+type OpenCodeVersionCheck = { supported: true } | { supported: false; reason: string };
+
+/**
+ * Run `opencode --version` and decide. The probe uses the Node process PATH,
+ * the same lookup the pane's shell performs unless the user's shell init
+ * reorders PATH. Each outcome that is not positive evidence of a supported
+ * release is a refusal with its own reason: a missing binary, no answer within
+ * the bound, a failed run (also when stdout holds a version, because a failing
+ * `--version` is not a working binary), empty output, and output that is not a
+ * version at or past the floor. stderr is discarded so it does not reach the
+ * terminal of `ao spawn`.
+ */
+function checkOpenCodeVersion(): OpenCodeVersionCheck {
+  let output: string;
+  try {
+    output = execFileSync("opencode", ["--version"], {
+      encoding: "utf-8",
+      timeout: OPENCODE_VERSION_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException & {
+      status?: number | null;
+      signal?: NodeJS.Signals | null;
+      stdout?: string | Buffer | null;
+    };
+    if (error.code === "ENOENT") {
+      return { supported: false, reason: "opencode not found on PATH" };
+    }
+    if (error.code === "ETIMEDOUT") {
+      return {
+        supported: false,
+        reason: `opencode --version gave no answer within ${OPENCODE_VERSION_TIMEOUT_MS / 1000} s`,
+      };
+    }
+    const stdout = error.stdout ? summarizeVersionOutput(String(error.stdout)) : "";
+    const how =
+      typeof error.status === "number"
+        ? `exited with status ${error.status}`
+        : error.signal
+          ? `was stopped by ${error.signal}`
+          : `could not run (${error.code ?? error.message})`;
+    return {
+      supported: false,
+      reason: `opencode --version ${how}${stdout ? `, output: ${stdout}` : ""}`,
+    };
+  }
+
+  const summary = summarizeVersionOutput(output);
+  if (summary.length === 0) {
+    return { supported: false, reason: "opencode --version printed nothing" };
+  }
+  const version = parseOpenCodeVersion(output);
+  if (version && isAtLeastMinimum(version)) return { supported: true };
+  return { supported: false, reason: `found ${summary}` };
 }
 
 /**
- * Fail an explicit spawn before the pane starts. `session-manager.ts` calls
- * `getLaunchCommand` inside the try at spawn time, so this throw runs before
- * `runtime.create`: the catch destroys the workspace and deletes the reserved
- * metadata, and `ao spawn` exits nonzero without opening a TUI.
+ * Fail an explicit spawn or restore before the pane starts. `session-manager.ts`
+ * calls `getLaunchCommand` and `getRestoreCommand` before `runtime.create` (and,
+ * on restore, before it destroys the old runtime), inside paths that clean up
+ * on a throw, so `ao spawn`, `ao start` and `ao session restore` exit nonzero
+ * without opening a TUI.
  */
 function assertSupportedOpenCodeVersion(): void {
-  const output = readOpenCodeVersionOutput();
-  if (output !== null && isSupportedOpenCodeVersion(output)) return;
-  throw new Error(buildUnsupportedVersionMessage(output));
+  const check = checkOpenCodeVersion();
+  if (check.supported) return;
+  throw new Error(`ao needs OpenCode ${OPENCODE_MIN_VERSION_TEXT} or later (${check.reason})`);
 }
 
 interface OpenCodeModelRef {
@@ -620,14 +685,17 @@ function createOpenCodeAgent(): Agent {
     },
 
     async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
-      assertSupportedOpenCodeVersion();
       // Try metadata first, then query OpenCode's session list
       const sessionId =
         asValidOpenCodeSessionId(session.metadata?.opencodeSessionId) ??
         (await findOpenCodeSession(session))?.id ??
         null;
 
+      // Without a session ID the caller falls back to getLaunchCommand, which
+      // runs the version check itself; check here only when this method returns
+      // a command, so one restore runs one probe.
       if (!sessionId) return null;
+      assertSupportedOpenCodeVersion();
 
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
       return buildResumeCommand(sessionId, { model: agentConfig?.model as string | undefined });
@@ -653,8 +721,7 @@ export function create(): Agent {
 }
 
 export function detect(): boolean {
-  const output = readOpenCodeVersionOutput();
-  return output !== null && isSupportedOpenCodeVersion(output);
+  return checkOpenCodeVersion().supported;
 }
 
 export default { manifest, create, detect } satisfies PluginModule<Agent>;

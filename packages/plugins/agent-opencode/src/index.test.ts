@@ -440,10 +440,25 @@ do the task'`,
     expect(cmd).toBe("opencode --session 'ses_abc123' --prompt 'continue'");
   });
 
-  it("uses existing session id without a version probe", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID"');
+  it("runs the version probe in Node and puts none in the pane command", () => {
+    const fresh = agent.getLaunchCommand(makeLaunchConfig());
+    const existing = agent.getLaunchCommand(
+      makeLaunchConfig({
+        projectConfig: {
+          name: "my-project",
+          repo: "owner/repo",
+          path: "/workspace/repo",
+          defaultBranch: "main",
+          sessionPrefix: "my",
+          agentConfig: { opencodeSessionId: "ses_abc123" },
+        },
+      }),
+    );
+
+    // One Node-side probe per command, and no probe text in either pane command.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    expect(fresh).not.toContain("--version");
+    expect(existing).not.toContain("--version");
   });
 });
 
@@ -1788,129 +1803,171 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
 describe("version gate", () => {
   const agent = create();
 
-  function versionOutput(version: string) {
+  function versionOutput(output: string) {
     mockExecFileSync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") return `${version}\n`;
+      if (cmd === "opencode") return output;
       throw new Error(`unexpected command: ${cmd}`);
     });
   }
 
-  it.each([
-    { version: "opencode v2.0.29", label: "the measured floor" },
-    { version: "opencode v2.0.30", label: "a later patch" },
-    { version: "opencode v2.1.0", label: "a later minor" },
-    { version: "2.1.0-beta.1", label: "a pre-release past the floor" },
-    { version: "opencode v10.0.0", label: "a later major" },
-  ])("accepts $label ($version): the launch proceeds to the API", ({ version }) => {
-    versionOutput(version);
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode api session.create");
-  });
-
-  it.each([
-    { version: "1.18.35", label: "1.x" },
-    { version: "opencode v2.0.28", label: "one patch below the floor" },
-    { version: "opencode v2.0.9", label: "an older 2.x patch" },
-    { version: "2.0", label: "a version without a patch" },
-    { version: "opencode dev", label: "output without a version number" },
-  ])("refuses $label ($version): the launch fails before the pane starts", ({ version }) => {
-    versionOutput(version);
-    let error: unknown;
-    try {
-      agent.getLaunchCommand(makeLaunchConfig());
-    } catch (err) {
-      error = err;
-    }
-    expect(error).toBeInstanceOf(Error);
-    // The message names the required version and the version it found.
-    expect((error as Error).message).toContain("2.0.29");
-    expect((error as Error).message).toContain(version);
-  });
-
-  it("refuses empty --version output: the message says what it found", () => {
-    mockExecFileSync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") return "\n";
-      throw new Error(`unexpected command: ${cmd}`);
-    });
-
-    let error: unknown;
-    try {
-      agent.getLaunchCommand(makeLaunchConfig());
-    } catch (err) {
-      error = err;
-    }
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("2.0.29");
-  });
-
-  it("refuses a missing binary: the launch fails and names the requirement", () => {
+  /** Make the probe fail the way execFileSync fails (the error carries code, status, signal, stdout). */
+  function probeFails(fields: Record<string, unknown>) {
     mockExecFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-
-    let error: unknown;
-    try {
-      agent.getLaunchCommand(makeLaunchConfig());
-    } catch (err) {
-      error = err;
-    }
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("2.0.29");
-    expect((error as Error).message).toContain("opencode not found");
-  });
-
-  it("refuses the restore path on an old binary as well", async () => {
-    versionOutput("1.18.35");
-    await expect(
-      agent.getRestoreCommand!(
-        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
-        { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
-      ),
-    ).rejects.toThrow("1.18.35");
-  });
-});
-
-describe("detect", () => {
-  function versionOutput(version: string) {
-    mockExecFileSync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") return `${version}\n`;
-      throw new Error(`unexpected command: ${cmd}`);
+      throw Object.assign(new Error("probe failed"), fields);
     });
   }
 
+  function launchError(): Error | undefined {
+    try {
+      agent.getLaunchCommand(makeLaunchConfig());
+    } catch (err) {
+      return err as Error;
+    }
+    return undefined;
+  }
+
   it.each([
-    "opencode v2.0.29",
-    "opencode v2.0.30",
-    "opencode v2.1.0",
-    "2.1.0-beta.1",
-    "opencode v10.0.0",
-  ])("finds a supported binary (%s)", (version) => {
-    versionOutput(version);
+    { output: "opencode v2.0.29\n", label: "the measured floor" },
+    { output: "opencode v2.0.30\n", label: "a later patch" },
+    { output: "opencode v2.1.0\n", label: "a later minor" },
+    { output: "opencode v10.0.0\n", label: "a later major" },
+    { output: "2.1.0-beta.1\n", label: "a pre-release past the floor" },
+    { output: "opencode v2.0.29+build.7\n", label: "build metadata on the floor" },
+    {
+      output: "update available 1.2.3\nopencode v2.0.29\n",
+      label: "a notice line before the version",
+    },
+    { output: "opencode v2.1.0 (abc123)\n", label: "text after the version" },
+  ])("accepts $label: the launch proceeds and detect() finds it", ({ output }) => {
+    versionOutput(output);
+    expect(launchError()).toBeUndefined();
+    expect(agent.getLaunchCommand(makeLaunchConfig())).toContain("opencode api session.create");
     expect(detect()).toBe(true);
   });
 
-  it.each(["1.18.35", "opencode v2.0.28", "opencode dev"])(
-    "hides a refused binary (%s)",
-    (version) => {
-      versionOutput(version);
-      expect(detect()).toBe(false);
-    },
-  );
-
-  it("is false when --version prints nothing", () => {
-    mockExecFileSync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") return "\n";
-      throw new Error(`unexpected command: ${cmd}`);
-    });
-
+  it.each([
+    { output: "1.18.35", label: "1.x" },
+    { output: "opencode v2.0.28", label: "one patch below the floor" },
+    { output: "opencode v2.0.9", label: "an older 2.x patch" },
+    { output: "2.0.29-beta.1", label: "a pre-release of the floor, which semver orders first" },
+    { output: "2.0.28-rc.1", label: "a pre-release below the floor" },
+    { output: "2.0", label: "a version without a patch" },
+    { output: "opencode dev", label: "output without a version number" },
+    { output: "built from 2.0.30", label: "a version that does not start the line" },
+  ])("refuses $label ($output): the message names the floor and what it found", ({ output }) => {
+    versionOutput(`${output}\n`);
+    const error = launchError();
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.message).toContain("2.0.29 or later");
+    expect(error!.message).toContain(`found ${output}`);
     expect(detect()).toBe(false);
   });
 
-  it("is false when the opencode binary cannot run", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-
+  it("refuses empty output and says the probe printed nothing, not that the binary is missing", () => {
+    versionOutput("\n");
+    const error = launchError();
+    expect(error!.message).toContain("printed nothing");
+    expect(error!.message).not.toContain("not found");
     expect(detect()).toBe(false);
+  });
+
+  it("refuses a missing binary and says it is not on PATH", () => {
+    probeFails({ code: "ENOENT" });
+    const error = launchError();
+    expect(error!.message).toContain("2.0.29 or later");
+    expect(error!.message).toContain("not found on PATH");
+    expect(detect()).toBe(false);
+  });
+
+  it("refuses a probe that runs past its bound and says so", () => {
+    probeFails({ code: "ETIMEDOUT", status: null, signal: "SIGKILL" });
+    const error = launchError();
+    expect(error!.message).toContain("no answer within");
+    expect(detect()).toBe(false);
+  });
+
+  it("refuses a failed run even when stdout holds a supported version, and names the status", () => {
+    probeFails({ status: 3, signal: null, stdout: "opencode v2.0.29\n" });
+    const error = launchError();
+    expect(error!.message).toContain("exited with status 3");
+    expect(error!.message).toContain("opencode v2.0.29");
+    expect(error!.message).not.toContain("not found");
+    expect(detect()).toBe(false);
+  });
+
+  it("refuses a probe stopped by a signal and names the signal", () => {
+    probeFails({ status: null, signal: "SIGTERM" });
+    expect(launchError()!.message).toContain("stopped by SIGTERM");
+  });
+
+  it("refuses a binary that cannot run and names the error code", () => {
+    probeFails({ code: "EACCES" });
+    expect(launchError()!.message).toContain("EACCES");
+  });
+
+  it("bounds the probe and keeps its stderr off the terminal", () => {
+    agent.getLaunchCommand(makeLaunchConfig());
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    const [cmd, args, options] = mockExecFileSync.mock.calls[0] as [
+      string,
+      string[],
+      { timeout?: number; stdio?: unknown[] },
+    ];
+    expect(cmd).toBe("opencode");
+    expect(args).toEqual(["--version"]);
+    expect(options.timeout).toBeGreaterThan(0);
+    expect(options.stdio?.[2]).toBe("ignore");
+  });
+
+  it("keeps the message on one line when the output has several lines", () => {
+    versionOutput("opencode dev\nsecond line\n");
+    const message = launchError()!.message;
+    expect(message).not.toContain("\n");
+    expect(message).toContain("opencode dev | second line");
+  });
+});
+
+describe("version gate on restore", () => {
+  const agent = create();
+  const project = {
+    name: "proj",
+    repo: "o/r",
+    path: "/p",
+    defaultBranch: "main",
+    sessionPrefix: "p",
+  };
+
+  it("refuses the restore of a known session on an old binary", async () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return "1.18.35\n";
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    await expect(
+      agent.getRestoreCommand!(
+        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+        project,
+      ),
+    ).rejects.toThrow("found 1.18.35");
+  });
+
+  it("runs one probe when it returns a restore command", async () => {
+    const cmd = await agent.getRestoreCommand!(
+      makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+      project,
+    );
+    expect(cmd).toBe("opencode --session 'ses_abc123'");
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the probe to the launch fallback when it finds no session", async () => {
+    mockExecFileAsync.mockRejectedValue(new Error("opencode not found"));
+    const restore = await agent.getRestoreCommand!(makeSession({ metadata: {} }), project);
+    expect(restore).toBeNull();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+
+    // The caller then falls back to getLaunchCommand, which probes once:
+    // one restore, one probe.
+    agent.getLaunchCommand(makeLaunchConfig());
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 });
