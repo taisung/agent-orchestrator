@@ -455,6 +455,9 @@ do the task'`,
       }),
     );
 
+    // The second command takes the existing-session path, not session.create.
+    expect(fresh).toContain("opencode api session.create");
+    expect(existing).toBe("opencode --session 'ses_abc123'");
     // One Node-side probe per command, and no probe text in either pane command.
     expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     expect(fresh).not.toContain("--version");
