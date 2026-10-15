@@ -135,7 +135,7 @@ Durable progress record for this fork. Dated events only; the current state live
   `*/.ao/bin` reserved for ao) and every relative PATH entry, and set an empty `GH_PATH`. Authors: Muse
   ao-15 (round 1), Opus 5.5 ao-19 (rounds 2 to 4). Reviews: ao-18 Opus r1, ao-23 sol-6-1 r2 to r4
   (`development/reviews/aobin_path_review_r{1..4}_*.md`); r4 LAND-SAFE under the owner's stop rule.
-  Cherry-picked; the fix files equal the reviewed `608b2b6b`. Pushed at 19:45 EDT. **Live** since the
+  Cherry-picked; the fix files equal the reviewed `608b2b6b`. Pushed at 19:44 EDT. **Live** since the
   rebuild at 19:43 EDT and the lifecycle-worker restarts at 19:43 (no `ao` spawn, start or restore was
   in flight). The owner text is in the r4 review, section "Owner text audit and corrected text".
   Known limits: a user-made chain of nine or more dangling symlinks to a future wrapper directory
@@ -155,7 +155,7 @@ Durable progress record for this fork. Dated events only; the current state live
   Flash ao-17 (r1), sol-6-1 ao-24 (r2), Opus 5.5 ao-26 (r3 to r5) (`development/reviews/i2_review_*.md`);
   r5 LAND-SAFE under the owner's stop rule. Cherry-picked; the I-2 files equal the reviewed `bfa5af45`
   except the 3 PATH-fix exports in `packages/core/src/index.ts`; ao-26 built and tested that combined
-  state. Pushed at 19:45 EDT. **Live** since the same rebuild and restarts.
+  state. Pushed at 19:44 EDT. **Live** since the same rebuild and restarts.
   Known limits: a marker whose tmux server exited with its last session needs the printed `rm -r`, and
   the failure line for an uncertain `send-keys` failure then wrongly promises recovery (r5 m-8,
   availability only); Herdr markers and markers without a socket need the manual path; another tmux
@@ -245,15 +245,16 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix
   a worker's model with `/model`: on 2026-10-15 at 11:51 `/model claude-opus-5-5` on ao-18 also rewrote
   `~/.claude/settings.json` (`"opus"` to `"claude-opus-5-5"`); the orchestrator put back `"opus"` at once.
-- **Two GitHub workflows fail on every push to `main`** (seen on the push of 2026-10-15, `70d19d70`).
-  CI, Integration Tests and Security passed. **Onboarding Integration Test** waits for a dashboard
-  ("Waiting for dashboard to start..." then "Dashboard process died"); the headless trim removed the
-  dashboard, and the workflow has failed on every run since 2026-07-13. **Release** runs
-  `changesets/action` with `publish: pnpm release`; with no pending changeset it tries to publish every
-  `@aoagents/*` package and fails with `ENEEDAUTH`, because the repository has no secrets (no
-  `NPM_TOKEN`), so nothing was published. If a token is ever added, the fork would publish under the
-  upstream scope. Both need a workflow change (`.github/workflows/`, an owner decision). With no
-  secrets, the live OpenCode block of Integration Tests skips, so I-6 m-7 stays open.
+- **The Release workflow fails on every push to `main`** (seen on `70d19d70` and on `c831caff`, the push
+  of 2026-10-15 at 19:44 EDT). It runs `changesets/action` with `publish: pnpm release`; with no pending
+  changeset it tries to publish every `@aoagents/*` package. The repository has no `NPM_TOKEN`, and the
+  action then tries npm trusted publishing by OIDC ("No NPM_TOKEN found, but OIDC is available"), which
+  fails with `ENEEDAUTH`, so nothing was published. If a token or a trusted-publisher entry for this
+  repository is ever added, the fork would publish under the upstream scope. It needs a workflow change
+  (`.github/workflows/`, an owner decision). With no secrets, the live OpenCode block of Integration
+  Tests skips, so I-6 m-7 stays open. **The Onboarding Integration Test passes** since the CI cleanup: on
+  `c831caff` (run 38825354653) step 6 ran `ao start --no-orchestrator`, printed "Startup complete" and
+  passed; CI, Integration Tests and Security passed too.
 - **A rebuild does not reach running lifecycle workers.** Node loads `dist` at process start. On 2026-09-23
   after the rebuild, five `ao lifecycle-worker` processes still ran pre-rebuild code: `Coding-Orchestrator`
   (pid 57829), `Nexus` (60414), `my-project` (1770808), `FleetMonitor` (2303231), `agent-skills` (3054071).

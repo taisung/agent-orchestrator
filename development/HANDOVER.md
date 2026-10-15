@@ -22,7 +22,7 @@ Nexus config and 2212230 for this config, Nexus 2210642, VSF 2210682). A module 
 under a fake `HOME`: Codex `PATH` starts with `~/.ao/bin`; Claude Code removes both wrapper spellings and
 `.` and sets an empty `GH_PATH`. The host's `~/.ao/bin` still holds 0.2.1 until the next spawn installs
 0.2.3. **The onboarding CI cleanup landed** (`ebc8e25b`,
-`c9a7ed93`, `19d99667`). On the owner's word, `main` was pushed to `origin` on 2026-10-15 at 12:42 EDT and again at 19:45 EDT, a
+`c9a7ed93`, `19d99667`). On the owner's word, `main` was pushed to `origin` on 2026-10-15 at 12:42 EDT and again at 19:44 EDT, a
 fast-forward `70d19d70..c831caff` (the CI cleanup, the PATH fix, I-2 and the docs). On the owner's word
 the 13 finished worker sessions (ao-1, ao-16, ao-18 to ao-28) were killed at 19:40 after a check that
 every branch is on `main` by patch and every review file equals its copy on `main`; ao-14, ao-15 and
@@ -112,8 +112,8 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 1. **Watch the first spawns on the new build** - the first Codex, Gemini or OpenCode spawn installs the
    0.2.3 wrappers; check `~/.ao/bin/.ao-version`, a worker's `git` and `gh` resolution, and its PR metadata.
-2. **Read the CI of the 19:45 push** - Onboarding is the live check of the CI cleanup; Release still
-   fails on `ENEEDAUTH` (owner decision open).
+2. **Decide the Release workflow** (owner) - on the 19:44 push CI, Integration Tests, Security and
+   Onboarding passed (Onboarding for the first time since 2026-07-13); Release still fails on `ENEEDAUTH`.
 3. **Fix the restore model** (HIGH), then **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with
    `~/agent-skills/scripts/routing.py route`; I-3 and I-5 are HIGH by the profile.
 
