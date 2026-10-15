@@ -157,14 +157,17 @@ process.stdout.write(JSON.stringify(body));
 
 /**
  * Compare the session that `opencode api session.get` prints with the requested
- * model and agent (argv[1]). Exit 1 and show the stored values when they differ.
+ * model and agent (argv[2]). Exit 1 when session.get exited nonzero (argv[1]),
+ * whatever it printed, and show the stored values when they differ from the request.
  * 2.x stores a model without a variant as variant `default`.
  */
 function buildApiSettingsCheckScript(): string {
   const script = `
 let input = '';
 process.stdin.on('data', c => input += c).on('end', () => {
-  const want = JSON.parse(process.argv[1]);
+  const status = process.argv[1];
+  if (status !== '0') { process.stderr.write(input + 'opencode api session.get exited with status ' + status + '\\n'); process.exit(1); }
+  const want = JSON.parse(process.argv[2]);
   let got;
   try { got = JSON.parse(input).data; } catch {}
   if (!got || typeof got !== 'object') { process.stderr.write(input); process.exit(1); }
@@ -270,30 +273,51 @@ function buildLegacySessionOptions(model?: string, agent?: string): string[] {
   ];
 }
 
+/** `sessionParam` is the shell word for `--param`, for example `'sessionID=ses_...'`. */
+function buildApiSessionCall(
+  operation: string,
+  sessionParam: string,
+  body?: Record<string, unknown>,
+): string {
+  return [
+    "opencode",
+    "api",
+    operation,
+    "--param",
+    sessionParam,
+    ...(body ? ["-d", shellEscape(JSON.stringify(body))] : []),
+  ].join(" ");
+}
+
+/**
+ * 2.x: read the session back with `session.get`. The command succeeds only when
+ * session.get exits 0 and the stored model and agent equal the request. The checker
+ * gets the exit status, because a pipeline into it would hide a failed session.get.
+ */
+function buildApiSettingsReadback(
+  sessionParam: string,
+  modelRef: OpenCodeModelRef | undefined,
+  agent: string | undefined,
+): string {
+  const expected = { ...(modelRef ? { model: modelRef } : {}), ...(agent ? { agent } : {}) };
+  return `{ OC_GET=$(${buildApiSessionCall("session.get", sessionParam)}); OC_GET_STATUS=$?; printf '%s\\n' "$OC_GET" | node -e ${shellEscape(buildApiSettingsCheckScript())} "$OC_GET_STATUS" ${shellEscape(JSON.stringify(expected))}; }`;
+}
+
 /**
  * 2.x: store the model and agent on an existing session through the API, then read
  * them back. The command succeeds only when the stored values equal the request.
- * `sessionParam` is the shell word for `--param`, for example `'sessionID=ses_...'`.
  */
 function buildApiSettingsCommand(
   sessionParam: string,
   modelRef: OpenCodeModelRef | undefined,
   agent: string | undefined,
 ): string {
-  const apiCall = (operation: string, body?: Record<string, unknown>) =>
-    [
-      "opencode",
-      "api",
-      operation,
-      "--param",
-      sessionParam,
-      ...(body ? ["-d", shellEscape(JSON.stringify(body))] : []),
-    ].join(" ");
-  const expected = { ...(modelRef ? { model: modelRef } : {}), ...(agent ? { agent } : {}) };
   return [
-    ...(modelRef ? [apiCall("session.switchModel", { model: modelRef })] : []),
-    ...(agent ? [apiCall("session.switchAgent", { agent })] : []),
-    `${apiCall("session.get")} | node -e ${shellEscape(buildApiSettingsCheckScript())} ${shellEscape(JSON.stringify(expected))}`,
+    ...(modelRef
+      ? [buildApiSessionCall("session.switchModel", sessionParam, { model: modelRef })]
+      : []),
+    ...(agent ? [buildApiSessionCall("session.switchAgent", sessionParam, { agent })] : []),
+    buildApiSettingsReadback(sessionParam, modelRef, agent),
   ].join(" && ");
 }
 
@@ -464,24 +488,23 @@ function createOpenCodeAgent(): Agent {
         ...(modelRef ? { model: modelRef } : {}),
         ...(config.subagent ? { agent: config.subagent } : {}),
       });
-      // A failed create makes no session. A session with the title is then an older
-      // one from an earlier AO session with the same ID, so the command stops.
-      const apiCreate = `if OC_CREATE=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})"); then SES_ID=$(printf '%s\\n' "$OC_CREATE" | node -e ${shellEscape(buildApiSessionIdCaptureScript())}); else [ -z "$OC_CREATE" ] || printf '%s\\n' "$OC_CREATE" >&2; echo ${shellEscape(`failed to create the OpenCode session ${title}`)} >&2; exit 1; fi`;
-      // A create that succeeds without a usable ID falls back to the newest session with
-      // the title. That can be an older session with other settings, so the command
-      // stores the requested settings on it and opens the TUI only after a readback.
+      // The TUI opens only on the ID that this create returned. There is no title
+      // lookup: a session with the title can be an older one from an earlier AO session
+      // with the same ID, and its conversation belongs to another task. Thus a failed
+      // create, or a create without a usable ID in its output, stops the command.
+      const apiCreate = `if OC_CREATE=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})"); then SES_ID=$(printf '%s\\n' "$OC_CREATE" | node -e ${shellEscape(buildApiSessionIdCaptureScript())}) || { echo ${missingSessionError} >&2; exit 1; }; else [ -z "$OC_CREATE" ] || printf '%s\\n' "$OC_CREATE" >&2; echo ${shellEscape(`failed to create the OpenCode session ${title}`)} >&2; exit 1; fi`;
+      // The service can store other settings than the request, so the command reads the
+      // new session back and checks only the requested model and agent.
       const settingsCheck =
         modelRef || config.subagent
-          ? `; if [ -n "$SES_ID" ]; then ${buildApiSettingsCommand('"sessionID=$SES_ID"', modelRef, config.subagent)} || { ${settingsFailureCommand('"$SES_ID"')}; }; fi`
-          : "";
+          ? [
+              `${buildApiSettingsReadback('"sessionID=$SES_ID"', modelRef, config.subagent)} || { ${settingsFailureCommand('"$SES_ID"')}; }`,
+            ]
+          : [];
       const apiCommand =
         config.model && !modelRef
           ? invalidModelCommand(config.model)
-          : [
-              apiCreate,
-              `if [ -z "$SES_ID" ]; then ${findByTitle}${settingsCheck}; fi`,
-              openTuiOrFail(tuiCommand),
-            ].join("; ");
+          : [apiCreate, ...settingsCheck, openTuiOrFail(tuiCommand)].join("; ");
 
       return `${OPENCODE_MAJOR_PROBE}; ${branchOnOpenCodeMajor(apiCommand, legacyCommand)}`;
     },

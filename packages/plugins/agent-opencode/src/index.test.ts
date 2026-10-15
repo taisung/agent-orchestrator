@@ -1197,7 +1197,8 @@ const env = process.env;
 fs.appendFileSync(env.FAKE_OC_LOG, JSON.stringify(argv) + "\\n");
 const major = Number((env.FAKE_OC_VERSION.match(/(\\d+)\\./) || [])[1] || 0);
 const v2 = major >= 2;
-const silent = env.FAKE_OC_CREATE === "none";
+// FAKE_OC_CREATE: run and session.create print this text, exit 0 and make no session.
+const rawCreate = env.FAKE_OC_CREATE;
 const failing = (env.FAKE_OC_API_FAIL || "").split(",");
 const ignored = (env.FAKE_OC_API_IGNORE || "").split(",");
 let store = {};
@@ -1230,9 +1231,8 @@ if (argv[0] === "session" && argv[1] === "list") {
 if (argv[0] === "run") {
   const runFlags = ["--format", "--title", "--model", "--agent", "--session"];
   flags("opencode run", argv.slice(1), v2 ? runFlags : [...runFlags, "--command"]);
-  if (!silent) {
-    process.stdout.write(JSON.stringify({ type: "error", sessionID: env.FAKE_OC_SESSION }) + "\\n");
-  }
+  if (rawCreate !== undefined) process.stdout.write(rawCreate);
+  else process.stdout.write(JSON.stringify({ type: "error", sessionID: env.FAKE_OC_SESSION }) + "\\n");
   process.exit(0);
 }
 if (argv[0] === "api") {
@@ -1245,10 +1245,17 @@ if (argv[0] === "api") {
   }
   if (operation === "session.create") {
     const body = JSON.parse(given["-d"]);
-    if (silent) process.exit(0);
+    if (rawCreate !== undefined) {
+      process.stdout.write(rawCreate);
+      process.exit(0);
+    }
+    // FAKE_OC_CREATE_STORES: settings that the service stores in place of the request.
+    const stores = JSON.parse(env.FAKE_OC_CREATE_STORES || "{}");
     const session = { title: body.title, updated: Date.now(), directory: body.location && body.location.directory };
-    if (body.model) session.model = storedModel(body.model);
-    if (body.agent) session.agent = body.agent;
+    const model = stores.model || body.model;
+    const agent = stores.agent || body.agent;
+    if (model) session.model = storedModel(model);
+    if (agent) session.agent = agent;
     store[env.FAKE_OC_SESSION] = session;
     save();
     process.stdout.write(JSON.stringify({ data: { id: env.FAKE_OC_SESSION, ...session } }) + "\\n");
@@ -1262,6 +1269,8 @@ if (argv[0] === "api") {
   }
   if (operation === "session.get") {
     process.stdout.write(JSON.stringify({ data: { id, ...session } }) + "\\n");
+    // FAKE_OC_GET_EXIT: session.get prints the stored session, then exits with this status.
+    if (env.FAKE_OC_GET_EXIT) fail("readback failed after the body", Number(env.FAKE_OC_GET_EXIT));
     process.exit(0);
   }
   if (ignored.includes(operation)) process.exit(0);
@@ -1313,6 +1322,8 @@ interface FakeSession {
   directory?: string;
   model?: FakeModelRef;
   agent?: string;
+  /** Marks the conversation of another task. */
+  conversation?: string;
 }
 
 interface FakeCliOptions {
@@ -1320,12 +1331,16 @@ interface FakeCliOptions {
   sessionId?: string;
   /** Sessions that exist before the command runs. */
   list?: Array<FakeSession & { id: string }>;
-  /** `none`: `run` and `session.create` exit 0 without output and make no session. */
-  createOutput?: "none";
+  /** `run` and `session.create` print this text, exit 0 and make no session. */
+  createOutput?: string;
+  /** Settings that `session.create` stores and returns, in place of the request or in addition to it. */
+  createStores?: { model?: FakeModelRef; agent?: string };
   /** API operations that fail with HTTP 500 and exit 1. */
   apiFail?: string[];
-  /** API operations that exit 0 but do not store the value. */
+  /** Switch operations that exit 0 but do not store the value. */
   apiIgnore?: string[];
+  /** `session.get` prints the stored session, then exits with this status. */
+  getExit?: number;
 }
 
 function fakeCliEnv(options: FakeCliOptions): NodeJS.ProcessEnv {
@@ -1336,9 +1351,13 @@ function fakeCliEnv(options: FakeCliOptions): NodeJS.ProcessEnv {
     FAKE_OC_STORE: storeFile,
     FAKE_OC_VERSION: options.version,
     FAKE_OC_SESSION: options.sessionId ?? "ses_fakecreated",
-    ...(options.createOutput ? { FAKE_OC_CREATE: options.createOutput } : {}),
+    ...(options.createOutput !== undefined ? { FAKE_OC_CREATE: options.createOutput } : {}),
+    ...(options.createStores
+      ? { FAKE_OC_CREATE_STORES: JSON.stringify(options.createStores) }
+      : {}),
     ...(options.apiFail ? { FAKE_OC_API_FAIL: options.apiFail.join(",") } : {}),
     ...(options.apiIgnore ? { FAKE_OC_API_IGNORE: options.apiIgnore.join(",") } : {}),
+    ...(options.getExit !== undefined ? { FAKE_OC_GET_EXIT: String(options.getExit) } : {}),
   };
 }
 
@@ -1389,7 +1408,7 @@ function modelRefToCli(ref: FakeModelRef): string {
 function expectSettings(
   stored: FakeSession | undefined,
   request: { model?: string; agent?: string },
-  before?: FakeSession,
+  before?: Pick<FakeSession, "model" | "agent">,
 ) {
   expect(stored).toBeDefined();
   if (request.model) expect(modelRefToCli(stored!.model!)).toBe(request.model);
@@ -1436,7 +1455,7 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(flagValue(run.tuiCalls[0]!, "--agent")).toBeUndefined();
   });
 
-  it("2.x: the session that the TUI opens holds the requested title, directory, model and agent", () => {
+  it("2.x: reads the created session back, then opens the TUI on it with the requested settings", () => {
     const variantModel = `${model}#xhigh`;
     const config = makeLaunchConfig({ model: variantModel, subagent, prompt });
     const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
@@ -1449,7 +1468,8 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(run.tuiSession?.title).toBe(`AO:${config.sessionId}`);
     expect(run.tuiSession?.directory).toBe(realpathSync(workDir));
     expectSettings(run.tuiSession, { model: variantModel, agent: subagent });
-    expect(run.apiOperations).toEqual(["session.create"]);
+    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
+    expect(flagValue(run.apiCalls[1]!, "--param")).toBe("sessionID=ses_gen");
     expect(run.listCalls).toHaveLength(0);
   });
 
@@ -1479,27 +1499,25 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
     expect(body.model.variant).toBeDefined();
   });
 
-  it.each(GENERATIONS)(
-    "$name: falls back to the newest session list entry with the AO title",
-    ({ version }) => {
-      const config = makeLaunchConfig({ model, prompt });
-      const title = `AO:${config.sessionId}`;
-      const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-        version,
-        createOutput: "none",
-        list: [
-          { id: "ses_older", title, updated: 1 },
-          { id: "ses_newer", title, updated: 2 },
-          { id: "ses_other", title: "AO:another", updated: 3 },
-        ],
-      });
+  // 2.x has no title fallback; see "2.x launch when session.create fails or returns no session ID".
+  it("1.x: falls back to the newest session list entry with the AO title", () => {
+    const config = makeLaunchConfig({ model, prompt });
+    const title = `AO:${config.sessionId}`;
+    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
+      version: OPENCODE_1,
+      createOutput: "",
+      list: [
+        { id: "ses_older", title, updated: 1 },
+        { id: "ses_newer", title, updated: 2 },
+        { id: "ses_other", title: "AO:another", updated: 3 },
+      ],
+    });
 
-      expect(run.calls.some((argv) => argv[0] === "session" && argv[1] === "list")).toBe(true);
-      expect(run.status).toBe(0);
-      expect(run.tuiCalls).toHaveLength(1);
-      expect(flagValue(run.tuiCalls[0]!, "--session")).toBe("ses_newer");
-    },
-  );
+    expect(run.listCalls).toHaveLength(1);
+    expect(run.status).toBe(0);
+    expect(run.tuiCalls).toHaveLength(1);
+    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe("ses_newer");
+  });
 
   it.each(GENERATIONS)(
     "$name: stops with an error when neither capture nor lookup finds the session",
@@ -1507,7 +1525,7 @@ describe("launch command against OpenCode 1.x and 2.x CLIs", () => {
       const config = makeLaunchConfig({ model, prompt });
       const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
         version,
-        createOutput: "none",
+        createOutput: "",
       });
 
       expect(run.status).toBe(1);
@@ -1553,13 +1571,14 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
   const config = makeLaunchConfig({ prompt: "Reply with OK" });
   const title = `AO:${config.sessionId}`;
   const request = { model: "opencode-go/muse-spark-1.3-contributor#xhigh", agent: "plan" };
-  // An older session with the same AO title and other settings, as 2.0.29 stores them.
+  // An older session with the same AO title, other settings and another task's conversation.
   const older = {
     id: "ses_older",
     title,
     updated: 1,
     model: { providerID: "opencode", id: "big-pickle", variant: "default" },
     agent: "build",
+    conversation: "ANOTHER_TASK",
   };
   const { id: _olderId, ...olderStored } = older;
   const settingCases = [
@@ -1604,62 +1623,145 @@ describe("2.x launch when session.create fails or returns no session ID", () => 
     expect(run.store).toEqual({});
   });
 
-  it.each(settingCases)(
-    "a create without a session ID opens the found session only with the requested settings ($label)",
-    (settings) => {
-      const run = runAgainstFakeCli(launch(settings), {
+  // Exit 0 does not show that a session with the title came from this create.
+  const unusableOutputs = [
+    { label: "empty output", output: "" },
+    { label: "malformed ID", output: JSON.stringify({ data: { id: "bad id" } }) },
+    { label: "ID without the ses_ prefix", output: JSON.stringify({ data: { id: "session-1" } }) },
+    { label: "output that is not JSON", output: "not json" },
+  ];
+
+  it.each(unusableOutputs)(
+    "a create that exits 0 with $label stops without a title lookup",
+    ({ output }) => {
+      const newer = { ...older, id: "ses_newer", updated: 2 };
+      const { id: _newerId, ...newerStored } = newer;
+      const run = runAgainstFakeCli(launch(request), {
         version: OPENCODE_2,
-        createOutput: "none",
-        list: [older],
+        createOutput: output,
+        list: [older, newer],
       });
 
-      expect(run.status).toBe(0);
-      expect(flagValue(run.tuiCalls[0]!, "--session")).toBe(older.id);
-      expectSettings(run.tuiSession, settings, olderStored);
-      const switches = [
-        ...(settings.model ? ["session.switchModel"] : []),
-        ...(settings.agent ? ["session.switchAgent"] : []),
-      ];
-      // Without a model and an agent, nothing is lost: no switch and no readback.
-      const readback = switches.length > 0 ? ["session.get"] : [];
-      expect(run.apiOperations).toEqual(["session.create", ...switches, ...readback]);
+      expect(run.status).toBe(1);
+      expect(run.tuiCalls).toHaveLength(0);
+      expect(run.stderr).toContain(`failed to discover OpenCode session ID for ${title}`);
+      expect(run.apiOperations).toEqual(["session.create"]);
+      expect(run.listCalls).toHaveLength(0);
+      expect(run.store).toEqual({ [older.id]: olderStored, [newer.id]: newerStored });
     },
   );
 
+  it.each(settingCases)(
+    "a create that exits 0 without output stops without a title lookup ($label)",
+    (settings) => {
+      const run = runAgainstFakeCli(launch(settings), {
+        version: OPENCODE_2,
+        createOutput: "",
+        list: [older],
+      });
+
+      expect(run.status).toBe(1);
+      expect(run.tuiCalls).toHaveLength(0);
+      expect(run.listCalls).toHaveLength(0);
+      expect(run.store[older.id]).toEqual(olderStored);
+    },
+  );
+});
+
+describe("2.x launch checks the settings that session.create stored", () => {
+  const agent = create();
+  const config = makeLaunchConfig({ prompt: "Reply with OK" });
+  const created = "ses_created";
+  const request = { model: "opencode-go/muse-spark-1.3-contributor#xhigh", agent: "plan" };
+  const otherModel = { providerID: "opencode", id: "big-pickle", variant: "default" };
+  const otherAgent = "build";
+
+  function launch(settings: { model?: string; agent?: string }): string {
+    return agent.getLaunchCommand({ ...config, model: settings.model, subagent: settings.agent });
+  }
+
   it.each([
-    { label: "session.switchModel fails", apiFail: ["session.switchModel"] },
-    { label: "session.switchAgent fails", apiFail: ["session.switchAgent"] },
-    { label: "session.get fails", apiFail: ["session.get"] },
-    { label: "session.switchModel stores nothing", apiIgnore: ["session.switchModel"] },
-    { label: "session.switchAgent stores nothing", apiIgnore: ["session.switchAgent"] },
-  ])("a create without a session ID opens no TUI when $label", ({ apiFail, apiIgnore }) => {
+    { label: "another agent", createStores: { agent: otherAgent } },
+    { label: "another model", createStores: { model: otherModel } },
+  ])("stops with status 1 and no TUI when the service stores $label", ({ createStores }) => {
     const run = runAgainstFakeCli(launch(request), {
       version: OPENCODE_2,
-      createOutput: "none",
-      list: [older],
-      apiFail,
-      apiIgnore,
+      sessionId: created,
+      createStores,
     });
 
+    expect(run.store[created]).toBeDefined();
     expect(run.status).toBe(1);
     expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${older.id}`);
+    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
+    expect(run.stderr).toContain(
+      `OpenCode stored agent ${JSON.stringify(run.store[created]!.agent)}`,
+    );
+    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${created}`);
   });
 
-  it("a readback with another variant than the request counts as a failure", () => {
-    // The request names the stored model without a variant, so only the variant differs.
-    const stored = { ...older, model: { ...older.model, variant: "xhigh" } };
-    const { providerID, id } = stored.model;
+  it("stops when the stored variant differs from a request without a variant", () => {
+    const { providerID, id } = otherModel;
     const run = runAgainstFakeCli(launch({ model: modelRefToCli({ providerID, id }) }), {
       version: OPENCODE_2,
-      createOutput: "none",
-      list: [stored],
-      apiIgnore: ["session.switchModel"],
+      sessionId: created,
+      createStores: { model: { providerID, id, variant: "xhigh" } },
     });
 
     expect(run.status).toBe(1);
     expect(run.tuiCalls).toHaveLength(0);
-    expect(run.apiOperations).toEqual(["session.create", "session.switchModel", "session.get"]);
+  });
+
+  it.each([
+    { label: "session.get fails", options: { apiFail: ["session.get"] } },
+    { label: "session.get prints the session and exits 1", options: { getExit: 1 } },
+  ])("stops with status 1 and no TUI when $label", ({ options }) => {
+    const run = runAgainstFakeCli(launch(request), {
+      version: OPENCODE_2,
+      sessionId: created,
+      ...options,
+    });
+
+    expectSettings(run.store[created], request);
+    expect(run.status).toBe(1);
+    expect(run.tuiCalls).toHaveLength(0);
+    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${created}`);
+  });
+
+  it.each([
+    {
+      label: "only the model",
+      settings: { model: request.model },
+      createStores: { agent: otherAgent },
+    },
+    {
+      label: "only the agent",
+      settings: { agent: request.agent },
+      createStores: { model: otherModel },
+    },
+  ])("checks $label when only that is requested", ({ settings, createStores }) => {
+    const run = runAgainstFakeCli(launch(settings), {
+      version: OPENCODE_2,
+      sessionId: created,
+      createStores,
+    });
+
+    expect(run.status).toBe(0);
+    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe(created);
+    expectSettings(run.tuiSession, settings, createStores);
+    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
+  });
+
+  it("runs no readback when no model and no agent were requested", () => {
+    const run = runAgainstFakeCli(launch({}), {
+      version: OPENCODE_2,
+      sessionId: created,
+      createStores: { model: otherModel, agent: otherAgent },
+    });
+
+    expect(run.status).toBe(0);
+    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe(created);
+    expect(run.apiOperations).toEqual(["session.create"]);
   });
 });
 
@@ -1780,6 +1882,26 @@ describe("existing-session and restore commands against OpenCode 1.x and 2.x CLI
     expect(run.apiOperations).toEqual(["session.switchModel", "session.switchAgent"]);
     expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
   });
+
+  it.each([
+    { label: "resume", command: async () => agent.getLaunchCommand(reuseConfig({ model })) },
+    { label: "restore", command: () => restoreCommand(model) },
+  ])(
+    "2.x: $label stops with status 1 and no TUI when session.get prints the session and exits 1",
+    async (c) => {
+      const run = runAgainstFakeCli(await c.command(), {
+        version: OPENCODE_2,
+        list: [existing],
+        getExit: 1,
+      });
+
+      expectSettings(run.store[existingId], { model, agent: existing.agent });
+      expect(run.status).toBe(1);
+      expect(run.tuiCalls).toHaveLength(0);
+      expect(run.stderr).toContain("opencode api session.get exited with status 1");
+      expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
+    },
+  );
 
   it("2.x: resume stops with status 1 and no TUI when the readback differs from the request", () => {
     const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
