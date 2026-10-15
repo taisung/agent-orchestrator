@@ -24,6 +24,9 @@ Durable progress record for this fork. Dated events only; the current state live
 - 2026-10-14 to 2026-10-15 — the OpenCode 2.x arc (`0009`, `0010`), coordinated by the agent-skills
   orchestrator: the 2.x plugin fix, I-6 and I-1 landed and live (What Landed). On 2026-10-15 the work
   moved to this repo's own orchestrator session, with a profile in `~/agent-skills`.
+- 2026-10-15 — `main` pushed to `origin` on the owner's word, a fast-forward from `273b62c1` (35 commits
+  plus the commit that records the push): the 2.x plugin fix, I-6, I-1 and the docs. No I-2 or PATH
+  round commit was on `main`. The old working-tree deletion of `test-ao-config2.yaml` was not committed.
 
 ## What Landed
 
