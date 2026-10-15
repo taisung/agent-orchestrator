@@ -83,6 +83,7 @@ import {
   OPENCODE_API_TIMEOUT_MS,
   type OpenCodeApiSession,
 } from "./opencode-api.js";
+import { acquireOpenCodeLaunchLock, type OpenCodeLaunchLock } from "./opencode-launch-lock.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
@@ -151,8 +152,8 @@ function describeOpenCodeCandidate(session: OpenCodeApiSession): string {
  * OpenCode session, and return the ID to store. A session is accepted only
  * when its title is exactly `AO:<sessionId>`, its `location.directory` is
  * this session's workspace, and it was created at or after `launchStartedAt`
- * (B-2: the title search spans every project of the service, and two fleets
- * with the same session prefix give the same title). When the wait ends
+ * while holding the host-wide launch lock. The lock prevents another fleet
+ * with the same title and workspace from creating during this window. When the wait ends
  * without one match, the spawn still succeeds, and the operator gets one
  * line that names `ao session remap`.
  */
@@ -184,7 +185,7 @@ async function discoverNewOpenCodeSession(
         ? ` Last search error: ${shortErrorText(result.lastError)}`
         : "";
     warnOperator(
-      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI.${lastError}`,
+      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches with this title and workspace are blocked until this launch is settled.${lastError}`,
     );
     return undefined;
   } catch (err) {
@@ -642,37 +643,106 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   /**
-   * The live AO session of this project, other than `exceptSessionId`, that
-   * stores `openCodeSessionId`. Live means active metadata (not archived)
-   * with a status that is not terminal; a stale non-terminal status counts as
-   * live, which keeps the ID. Issue reuse (row 24) puts one OpenCode session
-   * ID into a new AO session while an older AO session still stores it, so
-   * two AO sessions can share one ID. A purge for one of them must then
-   * neither interrupt nor remove it (m-4).
+   * Lifecycle status is not evidence of death: a merged or prematurely killed
+   * session can still have a live pane. Only two explicit negative liveness
+   * checks allow removal; missing handles/plugins, errors and hangs keep the ID.
+   * No enrichment or API title search runs as part of this guard.
    */
-  function findLiveOpenCodeSessionHolder(
+  async function findLiveOpenCodeSessionHolder(
     sessionsDir: string,
+    project: ProjectConfig,
     openCodeSessionId: string,
     exceptSessionId?: SessionId,
-  ): SessionId | undefined {
+  ): Promise<string | undefined> {
     for (const id of listMetadata(sessionsDir)) {
       if (id === exceptSessionId) continue;
       const raw = readMetadataRaw(sessionsDir, id);
-      if (!raw || TERMINAL_SESSION_STATUSES.has(raw["status"] ?? "")) continue;
-      if (asValidOpenCodeSessionId(raw["opencodeSessionId"]) === openCodeSessionId) return id;
+      if (!raw || asValidOpenCodeSessionId(raw["opencodeSessionId"]) !== openCodeSessionId)
+        continue;
+      const reason = await openCodeHolderReason(project, id, raw);
+      if (reason) return reason;
+    }
+    return undefined;
+  }
+
+  async function openCodeHolderReason(
+    project: ProjectConfig,
+    id: string,
+    raw: Record<string, string>,
+  ): Promise<string | undefined> {
+    const unknown = `session ${id} may still use it (liveness could not be checked)`;
+    const handle = raw["runtimeHandle"]
+      ? safeJsonParse<RuntimeHandle>(raw["runtimeHandle"])
+      : raw["tmuxName"]
+        ? {
+            id: raw["tmuxName"],
+            runtimeName: project.runtime ?? config.defaults.runtime,
+            data: {},
+          }
+        : null;
+    if (!handle || !handle.id || !handle.runtimeName || !handle.data) return unknown;
+    const runtime = registry.get<Runtime>("runtime", handle.runtimeName);
+    const agent = registry.get<Agent>(
+      "agent",
+      resolveSelectionForSession(project, id, raw).agentName,
+    );
+    if (!runtime || !agent) return unknown;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const state = await Promise.race([
+        (async () => {
+          if (await runtime.isAlive(handle)) return "live";
+          // The retained runtimes swallow query errors as false. For tmux,
+          // require its explicit missing-session/server diagnostic too.
+          // Herdr has no authoritative negative in the Runtime contract;
+          // retain its ID until that contract can distinguish unavailable.
+          if (handle.runtimeName === "herdr") return "unknown";
+          if (handle.runtimeName === "tmux") {
+            try {
+              await execFileAsync("tmux", ["has-session", "-t", `=${handle.id}`], {
+                timeout: 1_500,
+              });
+              return "live";
+            } catch (error) {
+              const failure = error as { code?: unknown; stderr?: unknown };
+              if (
+                failure.code !== 1 ||
+                typeof failure.stderr !== "string" ||
+                !/can't find session:|no server running on|error connecting to .*\(No such file or directory\)/.test(
+                  failure.stderr,
+                )
+              ) {
+                return "unknown";
+              }
+            }
+          }
+          return (await agent.isProcessRunning(handle)) ? "live" : "dead";
+        })(),
+        new Promise<"unknown">((resolve) => {
+          timer = setTimeout(() => resolve("unknown"), 2_000);
+        }),
+      ]);
+      if (state === "live") return `live session ${id} uses it`;
+      if (state !== "dead") return unknown;
+    } catch {
+      return unknown;
+    } finally {
+      clearTimeout(timer);
     }
     return undefined;
   }
 
   async function resolveOpenCodeSessionReuse(options: {
     sessionsDir: string;
+    project: ProjectConfig;
     criteria: { issueId?: string; sessionId?: string };
     strategy: "reuse" | "delete" | "ignore";
   }): Promise<string | undefined> {
     // Row 24: reuse by the stored ID only, no title discovery (owner Q7).
     // The orchestrator `delete` strategy deletes stored IDs only, too; an
     // older OpenCode session that no metadata stores is not found by title.
-    const { sessionsDir, criteria, strategy } = options;
+    const { sessionsDir, project, criteria, strategy } = options;
     if (strategy === "ignore") return undefined;
 
     const candidateIds = findOpenCodeSessionIds(sessionsDir, criteria);
@@ -682,7 +752,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // m-4: keep an ID that another live AO session still runs in. The
         // orchestrator path replaces the session with its own ID, so that
         // record does not count as another holder.
-        if (findLiveOpenCodeSessionHolder(sessionsDir, openCodeSessionId, criteria.sessionId)) {
+        if (
+          await findLiveOpenCodeSessionHolder(
+            sessionsDir,
+            project,
+            openCodeSessionId,
+            criteria.sessionId,
+          )
+        ) {
           continue;
         }
         await deleteOpenCodeSession(openCodeSessionId);
@@ -1167,6 +1244,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       plugins.agent.name === "opencode" && spawnConfig.issueId
         ? await resolveOpenCodeSessionReuse({
             sessionsDir,
+            project,
             criteria: { issueId: spawnConfig.issueId },
             strategy: opencodeIssueSessionStrategy,
           })
@@ -1187,13 +1265,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: spawnConfig.subagent ?? selection.subagent,
     };
 
-    // Row 23: the pane of this spawn creates its OpenCode session after this
-    // time, so an older session with the same title can never be accepted.
-    const launchStartedAt = Date.now();
+    let launchLock: OpenCodeLaunchLock | undefined;
+    let launchStartedAt = 0;
     let handle: RuntimeHandle;
     try {
       const launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
       const environment = plugins.agent.getEnvironment(agentLaunchConfig);
+      if (plugins.agent.name === "opencode" && !reusedOpenCodeSessionId) {
+        launchLock = await acquireOpenCodeLaunchLock(workspacePath, `AO:${sessionId}`);
+        launchStartedAt = await launchLock.start();
+      }
 
       handle = await plugins.runtime.create({
         sessionId: tmuxName ?? sessionId, // Use tmux name for runtime if available
@@ -1212,6 +1293,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
+      launchLock?.release();
       // Clean up workspace and reserved ID if agent config or runtime creation failed
       if (
         plugins.workspace &&
@@ -1287,6 +1369,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
+      if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
       // Clean up runtime and workspace on post-launch failure
       try {
@@ -1310,6 +1393,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         /* best effort */
       }
       throw err;
+    } finally {
+      launchLock?.release();
     }
 
     // Send initial prompt post-launch for agents that need it (e.g. Claude Code
@@ -1574,6 +1659,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         plugins.agent.name === "opencode" && orchestratorSessionStrategy === "reuse"
           ? await resolveOpenCodeSessionReuse({
               sessionsDir,
+              project,
               criteria: { sessionId },
               strategy: "reuse",
             })
@@ -1581,6 +1667,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (plugins.agent.name === "opencode" && orchestratorSessionStrategy === "delete") {
         await resolveOpenCodeSessionReuse({
           sessionsDir,
+          project,
           criteria: { sessionId },
           strategy: "delete",
         });
@@ -1621,15 +1708,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw err;
     }
 
-    // Row 23: the orchestrator pane creates its OpenCode session after this
-    // time. Two fleets can share both the title and the directory (the same
-    // project path and session prefix in two configs); this time separates
-    // an older orchestrator session from this one.
-    const launchStartedAt = Date.now();
+    let launchLock: OpenCodeLaunchLock | undefined;
+    let launchStartedAt = 0;
 
-    // Create runtime — clean up worktree and metadata on failure
+    // Serialize before recording time: another fleet can share this title and
+    // directory. A previous unresolved launch refuses before any new pane.
     let handle: RuntimeHandle;
     try {
+      if (plugins.agent.name === "opencode" && !reusableOpenCodeSessionId) {
+        launchLock = await acquireOpenCodeLaunchLock(workspacePath, `AO:${sessionId}`);
+        launchStartedAt = await launchLock.start();
+      }
       handle = await plugins.runtime.create({
         sessionId: tmuxName ?? sessionId,
         workspacePath,
@@ -1647,6 +1736,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
+      launchLock?.release();
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     }
@@ -1704,6 +1794,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
+      if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
       // Clean up runtime on post-launch failure
       try {
@@ -1713,6 +1804,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
+    } finally {
+      launchLock?.release();
     }
 
     return session;
@@ -1856,7 +1949,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // removal; the operator gets one line that says so (m-5).
       const mappedOpenCodeSessionId = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
       const holder = mappedOpenCodeSessionId
-        ? findLiveOpenCodeSessionHolder(sessionsDir, mappedOpenCodeSessionId, sessionId)
+        ? await findLiveOpenCodeSessionHolder(
+            sessionsDir,
+            project,
+            mappedOpenCodeSessionId,
+            sessionId,
+          )
         : undefined;
 
       if (mappedOpenCodeSessionId && holder) {
@@ -1864,7 +1962,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // would stop its running turn. Not marked cleaned, so a later
         // `ao session cleanup` removes it once no live session holds it.
         warnOperator(
-          `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${sessionId}: live session ${holder} uses it.`,
+          `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${sessionId}: ${holder}.`,
         );
       } else if (mappedOpenCodeSessionId) {
         try {
@@ -1966,7 +2064,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         if (!shouldKill && session.runtimeHandle && plugins.runtime) {
           try {
             const alive = await plugins.runtime.isAlive(session.runtimeHandle);
-            if (!alive) shouldKill = true;
+            if (!alive) {
+              // Do not archive an OpenCode holder on an uncertain negative and
+              // thereby remove it from the archived-purge guard below.
+              const agentName = resolveSelectionForSession(
+                project,
+                session.id,
+                session.metadata,
+              ).agentName;
+              const reason =
+                agentName === "opencode"
+                  ? await openCodeHolderReason(project, session.id, session.metadata)
+                  : undefined;
+              if (reason) warnOperator(`ao: kept ${session.id}: ${reason}.`);
+              else shouldKill = true;
+            }
           } catch {
             // Can't check — skip
           }
@@ -2009,12 +2121,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
           continue;
         }
-        if (
-          cleanupAgent === "opencode" &&
-          mappedOpenCodeSessionId &&
-          shouldPurgeOpenCode &&
-          findLiveOpenCodeSessionHolder(sessionsDir, mappedOpenCodeSessionId, archivedId)
-        ) {
+        const holder =
+          cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode
+            ? await findLiveOpenCodeSessionHolder(
+                sessionsDir,
+                project,
+                mappedOpenCodeSessionId,
+                archivedId,
+              )
+            : undefined;
+        if (holder) {
+          warnOperator(
+            `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${archivedId}: ${holder}.`,
+          );
           // m-4: a live session still runs in this OpenCode session (issue
           // reuse); remove it only once no live session holds it.
           pushSkipped(projectKey, archivedId);
@@ -2493,6 +2612,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           ...candidates.map((entry) => `  ${describeOpenCodeCandidate(entry)}`),
         ].join("\n"),
       );
+    }
+
+    const holder = await findLiveOpenCodeSessionHolder(
+      sessionsDir,
+      project,
+      candidate.id,
+      sessionId,
+    );
+    if (holder) {
+      throw new Error(`Cannot remap ${sessionId} to OpenCode session ${candidate.id}: ${holder}.`);
     }
 
     if (active) {

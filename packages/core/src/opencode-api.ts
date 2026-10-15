@@ -390,9 +390,10 @@ export type OpenCodeSessionWaitResult =
  * yet". Each search gets only the time left in the window, so the whole wait
  * ends within `windowMs` plus one process exit.
  *
- * Two or more matches end the wait as "ambiguous": the caller must not pick
- * one (two fleets with the same session prefix and the same directory can
- * start the same title at the same time).
+ * This is a search primitive, not proof of pane ownership. Fresh-launch
+ * callers must hold the host-wide OpenCode launch lock from BEFORE recording
+ * createdAtOrAfter through persistence. Otherwise two staggered creates can
+ * both observe the first single result. Visible duplicates still refuse.
  */
 export async function waitForOpenCodeSession(
   match: OpenCodeSessionMatch,

@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import type * as LaunchLock from "../../opencode-launch-lock.js";
 import type * as OpenCodeApi from "../../opencode-api.js";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
-import { getStateRoot } from "../../paths.js";
+import { getStateRoot, getSessionsDir } from "../../paths.js";
 import { writeMetadata, readMetadata, readMetadataRaw } from "../../metadata.js";
 import type {
   OrchestratorConfig,
@@ -42,6 +43,18 @@ vi.mock("../../opencode-api.js", async (importOriginal) => {
       windowMs: number,
       pollMs: number,
     ) => actual.waitForOpenCodeSession(match, Math.min(windowMs, 1_000), Math.min(pollMs, 100)),
+  };
+});
+
+vi.mock("../../opencode-launch-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof LaunchLock>();
+  return {
+    ...actual,
+    acquireOpenCodeLaunchLock: (workspace: string, title: string) =>
+      actual.acquireOpenCodeLaunchLock(workspace, title, {
+        root: join(tmpDir, "launch-locks"),
+        waitMs: 2_000,
+      }),
   };
 });
 
@@ -657,6 +670,7 @@ describe("spawn", () => {
       issue: "INT-42",
       agent: "opencode",
       opencodeSessionId: "ses_old_1",
+      runtimeHandle: JSON.stringify(makeHandle("old-1")),
     });
     writeMetadata(sessionsDir, "app-9", {
       worktree: "/tmp/old2",
@@ -666,8 +680,11 @@ describe("spawn", () => {
       issue: "INT-42",
       agent: "opencode",
       opencodeSessionId: "ses_old_2",
+      runtimeHandle: JSON.stringify(makeHandle("old-2")),
     });
 
+    vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+    vi.mocked(opencodeAgent.isProcessRunning).mockResolvedValue(false);
     const sm = createSessionManager({ config, registry: registryWithOpenCode });
     const session = await sm.spawn({ projectId: "my-app", issueId: "INT-42" });
 
@@ -2177,5 +2194,104 @@ describe("spawn", () => {
 
       expect(session.runtimeHandle).toEqual(makeHandle("rt-1"));
     });
+  });
+});
+
+describe("OpenCode ownership across fleets", () => {
+  it.each(["worker", "orchestrator"] as const)(
+    "serializes overlapping %s launches before the second pane creates its session",
+    async (kind) => {
+      useOpenCodeProject({
+        orchestratorWorkspaceMode: "project",
+        orchestratorSessionStrategy: "ignore",
+      });
+      const workspace = join(tmpDir, "shared-repo");
+      mkdirSync(workspace);
+      config.projects["my-app"].path = workspace;
+      const otherConfig = { ...config, configPath: join(tmpDir, "fleet-b", "config.yaml") };
+      mkdirSync(join(tmpDir, "fleet-b"));
+      writeFileSync(otherConfig.configPath, "projects: {}\n");
+      const firstDir = getSessionsDir(config.configPath, workspace);
+      const secondDir = getSessionsDir(otherConfig.configPath, workspace);
+      expect(firstDir).not.toBe(secondDir);
+      vi.mocked(mockWorkspace.create).mockResolvedValue({
+        path: workspace,
+        branch: "main",
+        sessionId: "app-1",
+        projectId: "my-app",
+      });
+      const mockBin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { registry } = openCodeRegistry();
+      let pane = 0;
+      let firstMappedBeforeSecondLaunch = false;
+      vi.mocked(mockRuntime.create).mockImplementation(async (launch) => {
+        const mine = ++pane;
+        const id = launch.environment["AO_SESSION"];
+        if (mine === 2) {
+          firstMappedBeforeSecondLaunch =
+            readMetadataRaw(firstDir, id)?.["opencodeSessionId"] === "ses_fleet_a";
+        }
+        // B appears only AFTER A was found, so another quiet poll is no fix.
+        setTimeout(
+          () =>
+            addMockApiSession(mockBin, {
+              id: mine === 1 ? "ses_fleet_a" : "ses_fleet_b",
+              title: `AO:${id}`,
+              directory: workspace,
+              createdAt: Date.now(),
+            }),
+          mine === 1 ? 50 : 350,
+        );
+        return makeHandle(`fleet-${mine}`);
+      });
+      const a = createSessionManager({ config, registry });
+      const b = createSessionManager({ config: otherConfig, registry });
+      const start = (sm: ReturnType<typeof createSessionManager>) =>
+        kind === "worker"
+          ? sm.spawn({ projectId: "my-app" })
+          : sm.spawnOrchestrator({ projectId: "my-app" });
+      const first = start(a);
+      await vi.waitFor(() => expect(pane).toBe(1));
+      const second = start(b);
+      const [resultA, resultB] = await Promise.all([first, second]);
+      expect(firstMappedBeforeSecondLaunch).toBe(true);
+      expect(resultA.metadata["opencodeSessionId"]).toBe("ses_fleet_a");
+      expect(resultB.metadata["opencodeSessionId"]).toBe("ses_fleet_b");
+      expect(readMetadataRaw(secondDir, resultB.id)?.["opencodeSessionId"]).toBe("ses_fleet_b");
+    },
+  );
+
+  it("refuses a colliding start after discovery times out, even when the old pane creates later", async () => {
+    useOpenCodeProject({
+      orchestratorWorkspaceMode: "project",
+      orchestratorSessionStrategy: "ignore",
+    });
+    const mockBin = installMockOpencodeApi(tmpDir, []);
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const { registry } = openCodeRegistry();
+    const stderr = captureStderr();
+    try {
+      const a = createSessionManager({ config, registry });
+      const first = await a.spawnOrchestrator({ projectId: "my-app" });
+      expect(first.metadata["opencodeSessionId"]).toBeUndefined();
+      addMockApiSession(mockBin, {
+        id: "ses_late_a",
+        title: `AO:${first.id}`,
+        directory: config.projects["my-app"].path,
+        createdAt: Date.now(),
+      });
+      const otherConfig = { ...config, configPath: join(tmpDir, "fleet-b", "config.yaml") };
+      mkdirSync(join(tmpDir, "fleet-b"));
+      writeFileSync(otherConfig.configPath, "projects: {}\n");
+      const b = createSessionManager({ config: otherConfig, registry });
+      await expect(b.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
+        "earlier OpenCode launch is unresolved",
+      );
+      expect(mockRuntime.create).toHaveBeenCalledTimes(1);
+      expect(stderr.lines()).toContain(`ao session remap ${first.id}`);
+    } finally {
+      stderr.restore();
+    }
   });
 });

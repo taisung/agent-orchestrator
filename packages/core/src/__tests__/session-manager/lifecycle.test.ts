@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as OpenCodeApi from "../../opencode-api.js";
 import {
   mkdirSync,
+  writeFileSync,
+  chmodSync,
   readFileSync,
   existsSync,
 } from "node:fs";
@@ -10,6 +12,7 @@ import { homedir } from "node:os";
 import { createSessionManager } from "../../session-manager.js";
 import {
   writeMetadata,
+  updateMetadata,
   readMetadata,
   readArchivedMetadataRaw,
   deleteMetadata,
@@ -347,6 +350,107 @@ describe("kill", () => {
       }
     });
 
+    it.each(["merged", "killed", "done", "terminated", "cleanup"])(
+      "keeps a live %s holder during purge and archived cleanup",
+      async (status) => {
+        const apiLogPath = join(tmpDir, "live-terminal.log");
+        const mockBin = installMockOpencodeApi(
+          tmpDir,
+          [{ id: "ses_shared", title: "AO:app-1", directory: "/tmp/ws" }],
+          { apiLogPath },
+        );
+        process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+        writeSharedPair(status);
+        const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        try {
+          const sm = createSessionManager({ config, registry: mockRegistry });
+          await sm.kill("app-1", { purgeOpenCode: true });
+          const result = await sm.cleanup();
+          expect(result.skipped).toContain("app-1");
+          expect(readMockApiSessions(mockBin).map((s) => s.id)).toEqual(["ses_shared"]);
+          expect(existsSync(apiLogPath)).toBe(false);
+          expect(
+            stderr.mock.calls.filter((call) => String(call[0]).includes("live session app-2 uses it")),
+          ).toHaveLength(2);
+          expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+        } finally {
+          stderr.mockRestore();
+        }
+      },
+    );
+
+    it.each([
+      "runtime error",
+      "agent error",
+      "agent alive",
+      "missing handle",
+      "missing plugin",
+      "hang",
+    ])("keeps a merged holder with %s", async (mode) => {
+      const mockBin = installMockOpencodeApi(tmpDir, [
+        { id: "ses_shared", title: "AO:app-1", directory: "/tmp/ws" },
+      ]);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeSharedPair("merged");
+      if (mode === "runtime error")
+        vi.mocked(mockRuntime.isAlive).mockRejectedValue(new Error("unavailable"));
+      if (mode === "agent error" || mode === "agent alive") {
+        vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+        if (mode === "agent error")
+          vi.mocked(mockAgent.isProcessRunning).mockRejectedValue(new Error("unavailable"));
+      }
+      if (mode === "missing handle") updateMetadata(sessionsDir, "app-2", { runtimeHandle: "" });
+      if (mode === "missing plugin") {
+        const original = vi.mocked(mockRegistry.get).getMockImplementation();
+        if (!original) throw new Error("missing registry mock implementation");
+        vi.spyOn(mockRegistry, "get").mockImplementation((slot, name) =>
+          slot === "runtime" ? null : original(slot, name),
+        );
+      }
+      if (mode === "hang")
+        vi.mocked(mockRuntime.isAlive).mockImplementation(() => new Promise(() => {}));
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const sm = createSessionManager({ config, registry: mockRegistry });
+        await sm.kill("app-1", { purgeOpenCode: true });
+        // Direct purge already tests the bound; avoid list()'s separate timeout on the hanging double.
+        if (mode !== "hang") await sm.cleanup();
+        expect(readMockApiSessions(mockBin).map((s) => s.id)).toEqual(["ses_shared"]);
+        expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
+          mode === "agent alive" ? "live session app-2 uses it" : "liveness could not be checked",
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it("keeps a holder when tmux reports an operational error as false", async () => {
+      const mockBin = installMockOpencodeApi(tmpDir, [{ id: "ses_shared", title: "AO:app-1" }]);
+      writeFileSync(join(mockBin, "tmux"), '#!/bin/sh\necho "permission denied" >&2\nexit 1\n');
+      chmodSync(join(mockBin, "tmux"), 0o755);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeSharedPair("merged");
+      updateMetadata(sessionsDir, "app-2", {
+        runtimeHandle: JSON.stringify({ id: "holder", runtimeName: "tmux", data: {} }),
+      });
+      vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+      vi.mocked(mockAgent.isProcessRunning).mockResolvedValue(false);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const sm = createSessionManager({ config, registry: mockRegistry });
+        await sm.kill("app-1", { purgeOpenCode: true });
+        const cleaned = await sm.cleanup();
+        expect(cleaned.killed).not.toContain("app-2");
+        expect(readMetadata(sessionsDir, "app-2")).not.toBeNull();
+        expect(readMockApiSessions(mockBin).map((session) => session.id)).toEqual(["ses_shared"]);
+        expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
+          "liveness could not be checked",
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
     it("removes it when the other session that stores it is killed", async () => {
       const deleteLogPath = join(tmpDir, "opencode-delete-kill-shared-dead.log");
       const mockBin = installMockOpencodeApi(
@@ -356,6 +460,8 @@ describe("kill", () => {
       );
       process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
       writeSharedPair("killed");
+      vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+      vi.mocked(mockAgent.isProcessRunning).mockResolvedValue(false);
 
       const sm = createSessionManager({ config, registry: mockRegistry });
       await sm.kill("app-1", { purgeOpenCode: true });

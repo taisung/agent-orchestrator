@@ -617,3 +617,34 @@ describe("remap", () => {
     });
   });
 });
+
+
+describe("archived remap ownership", () => {
+  it("refuses to bind an archived record to a live merged holder", async () => {
+    const mockBin = installMockOpencodeApi(tmpDir, [
+      { id: "ses_held", title: "AO:app-1", directory: "/tmp/ws" },
+    ]);
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    writeMetadata(sessionsDir, "app-1", {
+      agent: "opencode",
+      worktree: "/tmp/ws",
+      branch: "main",
+      status: "killed",
+    });
+    deleteMetadata(sessionsDir, "app-1", true);
+    updateArchivedMetadata(sessionsDir, "app-1", { opencodeCleanedAt: "earlier" });
+    writeMetadata(sessionsDir, "app-2", {
+      agent: "opencode",
+      worktree: "/tmp/ws",
+      branch: "main",
+      status: "merged",
+      opencodeSessionId: "ses_held",
+      runtimeHandle: JSON.stringify(makeHandle("holder")),
+    });
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await expect(sm.remap("app-1", true)).rejects.toThrow("live session app-2 uses it");
+    const archived = readArchivedMetadataRaw(sessionsDir, "app-1");
+    expect(archived?.["opencodeSessionId"]).toBeUndefined();
+    expect(archived?.["opencodeCleanedAt"]).toBe("earlier");
+  });
+});
