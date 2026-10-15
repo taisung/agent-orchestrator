@@ -135,11 +135,9 @@ Durable progress record for this fork. Dated events only; the current state live
   `*/.ao/bin` reserved for ao) and every relative PATH entry, and set an empty `GH_PATH`. Authors: Muse
   ao-15 (round 1), Opus 5.5 ao-19 (rounds 2 to 4). Reviews: ao-18 Opus r1, ao-23 sol-6-1 r2 to r4
   (`development/reviews/aobin_path_review_r{1..4}_*.md`); r4 LAND-SAFE under the owner's stop rule.
-  Cherry-picked; the fix files equal the reviewed `608b2b6b`. Not pushed. **Not live**: it needs a
-  rebuild of the primary checkout on the owner's word, and before that every old-build `ao` process
-  that can install the wrappers (in-flight spawn, batch, start or restore calls, resident SessionManager
-  users such as the lifecycle workers) must finish or be restarted, or it can put the 0.2.1 wrappers
-  back. The owner text is in the r4 review, section "Owner text audit and corrected text".
+  Cherry-picked; the fix files equal the reviewed `608b2b6b`. Pushed at 19:45 EDT. **Live** since the
+  rebuild at 19:43 EDT and the lifecycle-worker restarts at 19:43 (no `ao` spawn, start or restore was
+  in flight). The owner text is in the r4 review, section "Owner text audit and corrected text".
   Known limits: a user-made chain of nine or more dangling symlinks to a future wrapper directory
   survives the filter; shell startup files can add the wrappers or a relative entry back inside a pane
   (this host's startup adds `.`); the Claude hook's quoted-branch and direct-merge limits remain; Herdr
@@ -157,7 +155,7 @@ Durable progress record for this fork. Dated events only; the current state live
   Flash ao-17 (r1), sol-6-1 ao-24 (r2), Opus 5.5 ao-26 (r3 to r5) (`development/reviews/i2_review_*.md`);
   r5 LAND-SAFE under the owner's stop rule. Cherry-picked; the I-2 files equal the reviewed `bfa5af45`
   except the 3 PATH-fix exports in `packages/core/src/index.ts`; ao-26 built and tested that combined
-  state. Not pushed. **Not live**: it needs the same rebuild as the PATH fix, on the owner's word.
+  state. Pushed at 19:45 EDT. **Live** since the same rebuild and restarts.
   Known limits: a marker whose tmux server exited with its last session needs the printed `rm -r`, and
   the failure line for an uncertain `send-keys` failure then wrongly promises recovery (r5 m-8,
   availability only); Herdr markers and markers without a socket need the manual path; another tmux
