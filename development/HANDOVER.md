@@ -41,10 +41,11 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | Session | Model | State | Branch tip | Disposition |
 | --- | --- | --- | --- | --- |
 | ao-1 | Claude Opus 5.5 | restored 12:16, authoring I-2 round 2 | from `3b2bb918` | brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r2.md`; model pinned in its worktree `.claude/settings.local.json`; its branch was moved to `main` (all old commits on `main` by patch) |
-| ao-19 | Claude Opus 5.5 | spawned 12:20, authoring PATH round 2 | from `4eadc823` | brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-aobin-path-r2.md`; model pinned in its worktree |
+| ao-19 | Claude Opus 5.5 | done at `b21bb304` | `b21bb304` | PATH round 2, four `fix(<scope>)` commits on `4eadc823`; plan check passed; its report D9 is the owner text before the rebuild |
+| ao-23 | GPT-6.1-Sol (Codex) | reviewing PATH round 2 | `b21bb304` | `4eadc823..b21bb304` and the whole `e674e84a..b21bb304`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-aobin-path-r2-sol.md` |
 | ao-20 | Muse (OpenCode 2.x) | done at `0a81e224` | `0a81e224` | owner ask: removed steps 6 to 10 of the onboarding CI test and the compose `ports` and `shm_size`; plan check passed; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash.md` |
 | ao-21 | Claude Sonnet 5.5 | reviewing `5ad7e1ce..0a81e224` | `0a81e224` | CI cleanup lens 1 of 2; model pinned in its worktree |
-| ao-22 | V4.1 Flash (OpenCode 2.x) | reviewing `5ad7e1ce..0a81e224` | `0a81e224` | CI cleanup lens 2 of 2 |
+| ao-22 | V4.1 Flash (OpenCode 2.x) | done, LAND-SAFE | `0a81e224` | CI cleanup lens 2 of 2: 3 minors (m-1 the deprecated dashboard key `port: 9000` stays in the step 4 fixture); row closed |
 | ao-14 | Muse (OpenCode 2.x) | down since the outage, done | `1c2a93b6` | the round-1 author of I-2; R7 moved round 2 away; kill it when I-2 lands |
 | ao-15 | Muse (OpenCode 2.x) | down since the outage, done | `345f1e6e` | the round-1 author of the PATH fix; kill it when the fix lands |
 | ao-16 | Claude Sonnet 5.5 | idle, done | `1c2a93b6` | I-2 lens 1, verdict recorded, row closed, its scratch processes stopped; kill it when I-2 lands |
@@ -52,9 +53,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-18 | Claude Opus 5.5 | idle, done | `345f1e6e` | the PATH lens, verdict recorded, row closed; kill it when the fix lands |
 | ao-orchestrator | Claude Opus 5.5 | this session, started 11:42:10 by the owner after the outage, in the primary checkout on `main` | `main` | the transcript of the session before the outage is `~/.claude/projects/-home-taisung-local-agent-orchestrator/ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` |
 
-**Watcher**: PID 1598778, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
+**Watcher**: PID 1719449, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
 -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed ao-1@...
-ao-19@... ao-21@... ao-22@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with `AO_CONFIG_PATH` set to
+ao-21@... ao-23@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with `AO_CONFIG_PATH` set to
 `CONFIG_PATH`. It survived the outage (it is not in tmux). To add or remove a worker, stop it by the PID
 in `watch.pid`, remove `watch.pid`, and start it again with the same options and the new `--preseed`
 list.
@@ -64,8 +65,8 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-1, ao-19 and ao-20 (authors) and ao-21 and
-ao-22 (CI cleanup reviewers) are open; ao-16,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-1, ao-19 and ao-20 (authors), ao-21 (CI
+cleanup reviewer) and ao-23 (PATH round-2 reviewer) are open; ao-22 is closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
 author) and ao-15 (PATH author) are open; close them there with `~/agent-skills/scripts/router_log.py
