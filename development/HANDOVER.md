@@ -29,12 +29,14 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-1 | Claude Opus 5.5 | idle, about 20% context | `39549455` | every commit is on `main` by patch (`git cherry` all `-`); keep as the R7 rung or a HIGH author, or kill |
 | ao-14 | Muse (OpenCode 2.x) | done, I-2 | `1c2a93b6` | the author of I-2; keep for a round 2 |
 | ao-15 | Muse (OpenCode 2.x) | running, PATH arc | from `825b0dbc` | wait for its report |
-| ao-orchestrator-2 | Claude | isolated, worktree at `273b62c1` | `orchestrator/ao-orchestrator-2` | started by mistake in a worktree; the owner kills it; its branch and `orchestrator/ao-orchestrator-1` hold no work, remove them after a `git cherry` check |
+| ao-orchestrator | Claude Opus 5.5 | this session, in the primary checkout on `main` | `main` | `ao-orchestrator-2` (a mistaken start in a worktree) was killed by the owner; `as-orchestrator` removed the empty branches `orchestrator/ao-orchestrator-1` and `-2` (both at `273b62c1`, `git cherry` empty) |
 
-**Watcher**: PID 3806753, `~/agent-skills/scripts/fleet_watch.sh -o as-orchestrator -w
-/home/taisung/.worktrees/agent-orchestrator --fallback as-orchestrator -i 60 -s 20 --preseed
-ao-1@... ao-14@... ao-15@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`. It still notifies
-`as-orchestrator`. Restart it with `-o` and `--fallback` set to this session (First Actions).
+**Watcher**: PID 4106781, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
+/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
+ao-1@... ao-14@... ao-15@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with
+`AO_CONFIG_PATH` set to `CONFIG_PATH`. `as-orchestrator` moved it to this session on 2026-10-15 at about
+11:40 EDT. To add or remove a worker, stop it by the PID in `watch.pid`, remove `watch.pid`, and start
+it again with the same options and the new `--preseed` list.
 
 **Lifecycle worker** of this project: PID 3544115 (restarted 2026-10-15 10:20 EDT on the I-1 build).
 
@@ -85,11 +87,8 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
    `main`, ahead of `origin/main`, at `825b0dbc` or the handover commit.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status` - find this
    session's name and the state of ao-1, ao-14 and ao-15.
-3. Move the watcher to this session: `kill -TERM 3806753` (check `cat
-   ~/.cache/fleet_watch/ao-opencode2-2026-10-14/watch.pid` first), remove that `watch.pid`, then start
-   `fleet_watch.sh` again with `-o <this session> --fallback <this session>`, the same `-w`, `-i 60 -s
-   20` and `--preseed` for the live workers, `FLEET_WATCH_STATE` set to the same state directory and
-   `AO_CONFIG_PATH` set to `CONFIG_PATH`.
+3. The watcher already notifies this session (PID 4106781, Live Sessions). Check it with
+   `ps -p $(cat ~/.cache/fleet_watch/ao-opencode2-2026-10-14/watch.pid)`.
 4. Read `~/.cache/agent-skills-haiku55-arc/ao-14-report-i2.md`, then write the two I-2 review briefs.
 
 ## Key Files
@@ -124,8 +123,8 @@ running `ao lifecycle-worker`: restart each by exact PID with
 
 The OpenCode 2.x arc follows note `0009` §13. I-1 and I-6 are live. I-2 is authored by ao-14 at
 `1c2a93b6` and needs its two blind reviews (Sonnet 5.5 and V4.1 Flash). ao-15 works on the separate
-`~/.ao/bin` PATH arc (HIGH; one Opus 5.5 review). ao-1 (Opus 5.5) is idle. Your first action is to move
-the watcher to this session (First Actions 3), then brief the I-2 reviewers.
+`~/.ao/bin` PATH arc (HIGH; one Opus 5.5 review). ao-1 (Opus 5.5) is idle. The watcher already notifies
+this session, so your first action is to brief the I-2 reviewers.
 
 Landmines. OpenCode 2.x workers are eager: write `.agent_task.md` first, then send one `ao send
 --no-wait`; a plain `ao send` waits 600 s, because the plugin still reads an idle 2.x pane as active
