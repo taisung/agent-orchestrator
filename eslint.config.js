@@ -7,13 +7,8 @@ export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
-      "**/dist-server/**",
       "**/node_modules/**",
-      "**/.next/**",
       "**/coverage/**",
-      "packages/web/next-env.d.ts",
-      "packages/web/next.config.js",
-      "packages/web/postcss.config.mjs",
       "test-clipboard*.mjs",
       "test-clipboard*.sh",
     ],
@@ -76,14 +71,6 @@ export default tseslint.config(
     files: ["packages/cli/**/*.ts"],
     rules: {
       "no-console": "off",
-    },
-  },
-
-  // Relaxed rules for Next.js pages/components
-  {
-    files: ["packages/web/**/*.tsx", "packages/web/**/*.ts"],
-    rules: {
-      "no-console": "off", // Next.js uses console for server logs
     },
   },
 
