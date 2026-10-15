@@ -372,7 +372,7 @@ describe("restore", () => {
     expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
   });
 
-  it("re-discovers OpenCode mapping when stored mapping is invalid", async () => {
+  it("fails restore with the remap hint when the stored mapping is invalid", async () => {
     const wsPath = join(tmpDir, "ws-app-restore-invalid-map");
     mkdirSync(wsPath, { recursive: true });
     const deleteLogPath = join(tmpDir, "opencode-restore-invalid-remap.log");
@@ -399,11 +399,9 @@ describe("restore", () => {
     });
 
     const sm = createSessionManager({ config, registry: mockRegistry });
-    const restored = await sm.restore("app-1");
-
-    expect(restored.status).toBe("spawning");
-    const meta = readMetadataRaw(sessionsDir, "app-1");
-    expect(meta?.["opencodeSessionId"]).toBe("ses_restore_discovered");
+    // I-2 (A4): no title search on restore; an invalid stored ID counts as
+    // no stored ID and fails with the remap hint.
+    await expect(sm.restore("app-1")).rejects.toThrow(/no stored OpenCode session ID.*ao session remap/);
   }, 15000);
 
   it("uses orchestratorModel when restoring orchestrator sessions", async () => {

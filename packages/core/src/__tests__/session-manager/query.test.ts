@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFileSync, utimesSync } from "node:fs";
+import { utimesSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { writeMetadata, readMetadataRaw } from "../../metadata.js";
@@ -633,7 +633,7 @@ describe("get", () => {
     expect(session?.projectId).toBe("my-app");
   });
 
-  it("auto-discovers and persists OpenCode session mapping when missing", async () => {
+  it("leaves OpenCode session mapping missing when no stored ID exists", async () => {
     const deleteLogPath = join(tmpDir, "opencode-get-remap.log");
     const mockBin = installMockOpencode(
       tmpDir,
@@ -660,13 +660,14 @@ describe("get", () => {
     const session = await sm.get("app-1");
 
     expect(session).not.toBeNull();
-    expect(session?.metadata["opencodeSessionId"]).toBe("ses_get_discovered");
+    // I-2: no title auto-discovery on get/list; remap is manual.
+    expect(session?.metadata["opencodeSessionId"]).toBeUndefined();
 
     const meta = readMetadataRaw(sessionsDir, "app-1");
-    expect(meta?.["opencodeSessionId"]).toBe("ses_get_discovered");
+    expect(meta?.["opencodeSessionId"]).toBeUndefined();
   });
 
-  it("reuses a single OpenCode session list lookup when multiple unmapped sessions are listed", async () => {
+  it("does not call the OpenCode API for unmapped sessions during list", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-list-shared.log");
     const listLogPath = join(tmpDir, "opencode-list-shared.log");
     const mockBin = installMockOpencode(
@@ -702,15 +703,9 @@ describe("get", () => {
     const sessions = await sm.list();
 
     expect(sessions).toHaveLength(2);
-    expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe(
-      "ses_get_discovered_1",
-    );
-    expect(readMetadataRaw(sessionsDir, "app-2")?.["opencodeSessionId"]).toBe(
-      "ses_get_discovered_2",
-    );
-
-    const listInvocations = readFileSync(listLogPath, "utf-8").trim().split("\n").filter(Boolean);
-    expect(listInvocations).toHaveLength(1);
+    // I-2: unmapped sessions stay unmapped; no shared list lookup.
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBeUndefined();
+    expect(readMetadataRaw(sessionsDir, "app-2")?.["opencodeSessionId"]).toBeUndefined();
   });
 
   it("preserves arbitrary metadata flags on loaded sessions", async () => {

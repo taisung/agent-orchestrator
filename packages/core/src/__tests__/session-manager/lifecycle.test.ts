@@ -186,7 +186,11 @@ describe("kill", () => {
 
   it("purges mapped OpenCode session when requested", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-kill-purge.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_purge", title: "AO:app-1" }]),
+      deleteLogPath,
+    );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
     writeMetadata(sessionsDir, "app-1", {
@@ -203,7 +207,10 @@ describe("kill", () => {
     await sm.kill("app-1", { purgeOpenCode: true });
 
     const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    expect(deleteLog).toContain("session delete ses_purge");
+    // Row 20: interrupt first, then remove, both by the stored ID.
+    expect(deleteLog).toContain("session.interrupt");
+    expect(deleteLog).toContain("session.remove");
+    expect(deleteLog).toContain("sessionID=ses_purge");
   });
 
   it("skips purge when mapped OpenCode session id is invalid", async () => {
@@ -274,7 +281,11 @@ describe("cleanup", () => {
 
   it("deletes mapped OpenCode session during cleanup", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_cleanup", title: "AO:app-1" }]),
+      deleteLogPath,
+    );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
     const mockSCM: SCM = {
@@ -319,7 +330,8 @@ describe("cleanup", () => {
 
     expect(result.killed).toContain("app-1");
     const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    expect(deleteLog).toContain("session delete ses_cleanup");
+    expect(deleteLog).toContain("session.remove");
+    expect(deleteLog).toContain("sessionID=ses_cleanup");
   });
 
   it("treats missing mapped OpenCode session as already cleaned", async () => {
@@ -372,7 +384,11 @@ describe("cleanup", () => {
 
   it("deletes mapped OpenCode session from archived killed sessions", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-archived.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_archived", title: "AO:app-6" }]),
+      deleteLogPath,
+    );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
     writeMetadata(sessionsDir, "app-6", {
@@ -391,12 +407,17 @@ describe("cleanup", () => {
 
     expect(result.killed).toContain("app-6");
     const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    expect(deleteLog).toContain("session delete ses_archived");
+    expect(deleteLog).toContain("session.remove");
+    expect(deleteLog).toContain("sessionID=ses_archived");
   });
 
   it("does not skip archived cleanup for matching session IDs in other projects", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-archived-cross-project.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_archived_project2", title: "AO:app-1" }]),
+      deleteLogPath,
+    );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
     const project2Path = join(tmpDir, "my-app-2");
@@ -441,7 +462,8 @@ describe("cleanup", () => {
     const result = await sm.cleanup();
 
     const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    expect(deleteLog).toContain("session delete ses_archived_project2");
+    expect(deleteLog).toContain("session.remove");
+    expect(deleteLog).toContain("sessionID=ses_archived_project2");
     expect(result.killed).toContain("my-app-2:app-1");
     expect(result.skipped).toContain("my-app:app-1");
   });

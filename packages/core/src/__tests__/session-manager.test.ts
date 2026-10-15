@@ -79,7 +79,7 @@ describe("deleteSession retry loop", () => {
       runtimeHandle: JSON.stringify(makeHandle("rt-1")),
     });
 
-    let deleteCallCount = 0;
+    let removeCallCount = 0;
     const mockError = new Error("OpenCode delete failed");
 
     vi.mocked(execFile).mockImplementation(((file: string, args: string[], options: any, callback?: any) => {
@@ -87,11 +87,15 @@ describe("deleteSession retry loop", () => {
       if (!cb) return null as any;
 
       const argsArray = Array.isArray(args) ? args : [];
-      if (argsArray[1] === "delete") {
-        deleteCallCount++;
+      // I-2: `kill --purge` runs `api session.interrupt` (best effort, once)
+      // then `api session.remove` with retries.
+      if (argsArray[0] === "api" && argsArray[1] === "session.interrupt") {
+        cb(null, JSON.stringify({ data: { interrupted: false } }), "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.remove") {
+        removeCallCount++;
         cb(mockError, "", "");
-      } else if (argsArray[1] === "list") {
-        cb(null, "[]", "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.get") {
+        cb(null, JSON.stringify({ data: { id: "ses_test_123" } }), "");
       }
       return null as any;
     }) as any);
@@ -101,8 +105,8 @@ describe("deleteSession retry loop", () => {
     // Execute kill with purgeOpenCode option
     await sm.kill("app-1", { purgeOpenCode: true });
 
-    // Verify delete was called 3 times (one for each retry)
-    expect(deleteCallCount).toBe(3);
+    // Verify remove was called 3 times (one for each retry)
+    expect(removeCallCount).toBe(3);
   });
 
   it("verifies retry delays - confirms delays are 0ms, 200ms, 600ms", async () => {
@@ -127,11 +131,13 @@ describe("deleteSession retry loop", () => {
       if (!cb) return null as any;
 
       const argsArray = Array.isArray(args) ? args : [];
-      if (argsArray[1] === "delete") {
+      if (argsArray[0] === "api" && argsArray[1] === "session.interrupt") {
+        cb(null, JSON.stringify({ data: { interrupted: false } }), "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.remove") {
         callTimes.push(Date.now());
         cb(mockError, "", "");
-      } else if (argsArray[1] === "list") {
-        cb(null, "[]", "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.get") {
+        cb(null, JSON.stringify({ data: { id: "ses_test_456" } }), "");
       }
       return null as any;
     }) as any);
@@ -177,12 +183,14 @@ describe("deleteSession retry loop", () => {
       if (!cb) return null as any;
 
       const argsArray = Array.isArray(args) ? args : [];
-      if (argsArray[1] === "delete") {
+      if (argsArray[0] === "api" && argsArray[1] === "session.interrupt") {
+        cb(null, JSON.stringify({ data: { interrupted: false } }), "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.remove") {
         deleteCallCount++;
         const error = deleteCallCount === 3 ? lastError : new Error(`Error ${deleteCallCount}`);
         cb(error, "", "");
-      } else if (argsArray[1] === "list") {
-        cb(null, "[]", "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.get") {
+        cb(null, JSON.stringify({ data: { id: "ses_test_789" } }), "");
       }
       return null as any;
     }) as any);
@@ -217,17 +225,19 @@ describe("deleteSession retry loop", () => {
       if (!cb) return null as any;
 
       const argsArray = Array.isArray(args) ? args : [];
-      if (argsArray[1] === "delete") {
+      if (argsArray[0] === "api" && argsArray[1] === "session.interrupt") {
+        cb(null, JSON.stringify({ data: { interrupted: false } }), "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.remove") {
         deleteCallCount++;
         if (deleteCallCount === 1) {
           // First attempt fails
           cb(new Error("First attempt failed"), "", "");
         } else {
-          // Second attempt succeeds
+          // Second attempt succeeds (empty stdout = 204)
           cb(null, "", "");
         }
-      } else if (argsArray[1] === "list") {
-        cb(null, "[]", "");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.get") {
+        cb(null, JSON.stringify({ data: { id: "ses_test_abc" } }), "");
       }
       return null as any;
     }) as any);
@@ -252,11 +262,17 @@ describe("deleteSession retry loop", () => {
       runtimeHandle: JSON.stringify(makeHandle("rt-5")),
     });
 
-    const notFoundError = new Error("Session not found: ses_test_def") as Error & {
-      stderr?: string;
-      stdout?: string;
-    };
-    notFoundError.stderr = "Error: session not found: ses_test_def";
+    // I-2 404 shape: stdout carries SessionNotFoundError, stderr carries 404.
+    const notFoundStdout = JSON.stringify({
+      _tag: "SessionNotFoundError",
+      sessionID: "ses_test_def",
+      message: "Session not found: ses_test_def",
+    });
+    const notFoundError = Object.assign(new Error("HTTP 404 Not Found"), {
+      stdout: notFoundStdout,
+      stderr: "HTTP 404 Not Found",
+      status: 1,
+    });
 
     let deleteCallCount = 0;
 
@@ -265,11 +281,13 @@ describe("deleteSession retry loop", () => {
       if (!cb) return null as any;
 
       const argsArray = Array.isArray(args) ? args : [];
-      if (argsArray[1] === "delete") {
+      if (argsArray[0] === "api" && argsArray[1] === "session.interrupt") {
+        cb(notFoundError, notFoundStdout, "HTTP 404 Not Found");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.remove") {
         deleteCallCount++;
-        cb(notFoundError, "", "");
-      } else if (argsArray[1] === "list") {
-        cb(null, "[]", "");
+        cb(notFoundError, notFoundStdout, "HTTP 404 Not Found");
+      } else if (argsArray[0] === "api" && argsArray[1] === "session.get") {
+        cb(null, JSON.stringify({ data: { id: "ses_test_def" } }), "");
       }
       return null as any;
     }) as any);
@@ -277,7 +295,7 @@ describe("deleteSession retry loop", () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
     await sm.kill("app-5", { purgeOpenCode: true });
 
-    // Verify delete was called only once - no retries for "not found" errors
+    // Verify remove was called only once - a 404 is already gone (no retry)
     expect(deleteCallCount).toBe(1);
   });
 });

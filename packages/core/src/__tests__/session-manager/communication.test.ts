@@ -160,7 +160,7 @@ describe("send", () => {
     );
   });
 
-  it("auto-discovers OpenCode mapping before sending when missing", async () => {
+  it("does not auto-discover OpenCode mapping before sending when missing", async () => {
     const deleteLogPath = join(tmpDir, "opencode-send-remap.log");
     const mockBin = installMockOpencode(
       tmpDir,
@@ -189,12 +189,13 @@ describe("send", () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
     await sm.send("app-1", "hello");
 
+    // I-2: no title discovery on send; the operator repairs with remap.
     const meta = readMetadataRaw(sessionsDir, "app-1");
-    expect(meta?.["opencodeSessionId"]).toBe("ses_send_discovered");
+    expect(meta?.["opencodeSessionId"]).toBeUndefined();
     expect(mockRuntime.sendMessage).toHaveBeenCalledWith(makeHandle("rt-1"), "hello");
   });
 
-  it("re-discovers OpenCode mapping before sending when stored mapping is invalid", async () => {
+  it("does not re-discover OpenCode mapping before sending when stored mapping is invalid", async () => {
     const deleteLogPath = join(tmpDir, "opencode-send-remap-invalid.log");
     const mockBin = installMockOpencode(
       tmpDir,
@@ -224,8 +225,9 @@ describe("send", () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
     await sm.send("app-1", "hello");
 
+    // I-2: an invalid stored ID is left alone (no title fallback).
     const meta = readMetadataRaw(sessionsDir, "app-1");
-    expect(meta?.["opencodeSessionId"]).toBe("ses_send_discovered_valid");
+    expect(meta?.["opencodeSessionId"]).toBe("ses bad id");
     expect(mockRuntime.sendMessage).toHaveBeenCalledWith(makeHandle("rt-1"), "hello");
   });
 

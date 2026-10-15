@@ -325,6 +325,15 @@ describe("spawn", () => {
   });
 
   it("reuses OpenCode session mapping by issue when available", async () => {
+    // I-2: reuse verifies the stored ID via `session.get`; seed the mock so
+    // the stored session exists.
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_existing", title: "AO:app-9" }]),
+      join(tmpDir, "opencode-delete-reuse.log"),
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+
     const opencodeAgent: Agent = {
       ...mockAgent,
       name: "opencode",
@@ -378,7 +387,80 @@ describe("spawn", () => {
     expect(metadata?.["opencodeSessionId"]).toBe("ses_existing");
   });
 
+  it("does not replace a gone stored ID with a title match on issue reuse (row 24)", async () => {
+    // D5: the stored ID 404s, but another session carries the same AO title.
+    // Reuse must not bind the title match.
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([{ id: "ses_title_match", title: "AO:app-9" }]),
+      join(tmpDir, "opencode-delete-reuse-gone.log"),
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+
+    const opencodeAgent: Agent = {
+      ...mockAgent,
+      name: "opencode",
+    };
+
+    const registryWithOpenCode: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return opencodeAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    config = {
+      ...config,
+      defaults: { ...config.defaults, agent: "opencode" },
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"],
+          agent: "opencode",
+        },
+      },
+    };
+
+    writeMetadata(sessionsDir, "app-9", {
+      worktree: "/tmp/old",
+      branch: "feat/INT-42",
+      status: "killed",
+      project: "my-app",
+      issue: "INT-42",
+      agent: "opencode",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      opencodeSessionId: "ses_gone",
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithOpenCode });
+    const session = await sm.spawn({ projectId: "my-app", issueId: "INT-42" });
+
+    expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectConfig: expect.objectContaining({
+          agentConfig: expect.not.objectContaining({ opencodeSessionId: expect.any(String) }),
+        }),
+      }),
+    );
+
+    const metadata = readMetadataRaw(sessionsDir, session.id);
+    expect(metadata?.["opencodeSessionId"]).toBeUndefined();
+  });
+
   it("reuses most recent session-id candidate without relying on timestamps", async () => {
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([
+        { id: "ses_invalid_ts", title: "AO:app-1" },
+        { id: "ses_valid_newer", title: "AO:app-2" },
+      ]),
+      join(tmpDir, "opencode-delete-reuse-newer.log"),
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+
     const opencodeAgent: Agent = {
       ...mockAgent,
       name: "opencode",
@@ -497,7 +579,14 @@ describe("spawn", () => {
 
   it("deletes old issue mappings and starts fresh when opencodeIssueSessionStrategy is delete", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-issue.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
+    const mockBin = installMockOpencode(
+      tmpDir,
+      JSON.stringify([
+        { id: "ses_old_1", title: "AO:app-8" },
+        { id: "ses_old_2", title: "AO:app-9" },
+      ]),
+      deleteLogPath,
+    );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
     const opencodeAgent: Agent = {
@@ -551,8 +640,9 @@ describe("spawn", () => {
     const session = await sm.spawn({ projectId: "my-app", issueId: "INT-42" });
 
     const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    expect(deleteLog).toContain("session delete ses_old_1");
-    expect(deleteLog).toContain("session delete ses_old_2");
+    expect(deleteLog).toContain("session.remove");
+    expect(deleteLog).toContain("sessionID=ses_old_1");
+    expect(deleteLog).toContain("sessionID=ses_old_2");
 
     expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1450,9 +1540,14 @@ describe("spawn", () => {
       const sm = createSessionManager({ config: configWithDelete, registry: registryWithOpenCode });
       await sm.spawnOrchestrator({ projectId: "my-app" });
 
-      const deleteLog = readFileSync(deleteLogPath, "utf-8");
-      expect(deleteLog).toContain("session delete ses_old");
-      expect(deleteLog).toContain("session delete ses_new");
+      // I-2 row 24: delete is by stored ID only, no title discovery. With no
+      // stored mapping, nothing is deleted even though title matches exist.
+      const { existsSync: existsSyncDeleteLog } = await import("node:fs");
+      if (existsSyncDeleteLog(deleteLogPath)) {
+        const deleteLog = readFileSync(deleteLogPath, "utf-8");
+        expect(deleteLog).not.toContain("sessionID=ses_old");
+        expect(deleteLog).not.toContain("sessionID=ses_new");
+      }
 
       expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1517,7 +1612,7 @@ describe("spawn", () => {
       expect(meta?.["opencodeSessionId"]).toBe("ses_discovered_orchestrator");
     });
 
-    it("reuses mapped OpenCode session id when strategy is reuse and opencode lists it by title", async () => {
+    it("does not reuse by title on orchestrator start without a stored mapping", async () => {
       const deleteLogPath = join(tmpDir, "opencode-delete-orchestrator-reuse-restart.log");
       const mockBin = installMockOpencode(
         tmpDir,
@@ -1562,10 +1657,13 @@ describe("spawn", () => {
       const sm = createSessionManager({ config: configWithReuse, registry: registryWithOpenCode });
       await sm.spawnOrchestrator({ projectId: "my-app" });
 
+      // I-2 row 24: reuse is by stored ID only, so with no stored mapping the
+      // launch carries no ID; the row-23 post-launch discovery still persists
+      // the title match.
       expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           projectConfig: expect.objectContaining({
-            agentConfig: expect.objectContaining({ opencodeSessionId: "ses_existing" }),
+            agentConfig: expect.not.objectContaining({ opencodeSessionId: expect.any(String) }),
           }),
         }),
       );
@@ -1614,16 +1712,18 @@ describe("spawn", () => {
       const sm = createSessionManager({ config: configWithReuse, registry: registryWithOpenCode });
       await sm.spawnOrchestrator({ projectId: "my-app" });
 
+      // I-2 row 24: no title reuse on the launch; row 23 still discovers
+      // post-launch, so the launch carries no ID.
       expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           projectConfig: expect.objectContaining({
-            agentConfig: expect.objectContaining({ opencodeSessionId: "ses_existing" }),
+            agentConfig: expect.not.objectContaining({ opencodeSessionId: expect.any(String) }),
           }),
         }),
       );
     });
 
-    it("reuses OpenCode session by title when orchestrator mapping is missing", async () => {
+    it("does not reuse OpenCode session by title when orchestrator mapping is missing", async () => {
       const deleteLogPath = join(tmpDir, "opencode-delete-orchestrator-reuse-title.log");
       const mockBin = installMockOpencode(
         tmpDir,
@@ -1664,10 +1764,12 @@ describe("spawn", () => {
       const sm = createSessionManager({ config: configWithReuse, registry: registryWithOpenCode });
       await sm.spawnOrchestrator({ projectId: "my-app" });
 
+      // I-2 row 24: no title reuse on the launch; row 23 still persists the
+      // title match post-launch.
       expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           projectConfig: expect.objectContaining({
-            agentConfig: expect.objectContaining({ opencodeSessionId: "ses_title_match" }),
+            agentConfig: expect.not.objectContaining({ opencodeSessionId: expect.any(String) }),
           }),
         }),
       );
