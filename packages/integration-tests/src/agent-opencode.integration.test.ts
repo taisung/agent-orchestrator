@@ -201,13 +201,11 @@ describe("getLaunchCommand (integration)", () => {
       subagent: "sisyphus",
       prompt: "fix the bug",
     });
-    expect(cmd).toContain("--agent 'sisyphus'");
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:test-1' --agent 'sisyphus' --command true",
-    );
+    expect(cmd).toContain('"agent":"sisyphus"');
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("'fix the bug'");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix the bug'");
-    expect(cmd).toContain("--agent 'sisyphus'");
+    expect(cmd).not.toContain("--agent");
   });
 
   it("generates correct command with systemPrompt", () => {
@@ -216,7 +214,7 @@ describe("getLaunchCommand (integration)", () => {
       systemPrompt: "You are an orchestrator",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain(
       `exec opencode --session "$SES_ID" --prompt 'You are an orchestrator
 
@@ -230,7 +228,7 @@ do the task'`,
       systemPromptFile: "/tmp/orchestrator-prompt.md",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain(
       "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator-prompt.md'; printf '\\n\\n'; printf %s 'do the task')\"",
     );
@@ -239,10 +237,12 @@ do the task'`,
   it("generates correct command with model override", () => {
     const cmd = agent.getLaunchCommand({
       ...baseConfig,
-      model: "claude-sonnet-4-5-20250929",
+      model: "opencode-go/muse-spark-1.3-contributor",
       prompt: "do the task",
     });
-    expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929'");
+    expect(cmd).toContain('"providerID":"opencode-go"');
+    expect(cmd).toContain('"id":"muse-spark-1.3-contributor"');
+    expect(cmd).not.toContain("--model");
   });
 
   it("combines subagent + systemPrompt + model + prompt", () => {
@@ -250,17 +250,17 @@ do the task'`,
       ...baseConfig,
       subagent: "oracle",
       systemPrompt: "You are an expert",
-      model: "gpt-5.2",
+      model: "opencode-go/gpt-5.2",
       prompt: "review this code",
     });
-    expect(cmd).toContain("--agent 'oracle'");
+    expect(cmd).toContain('"agent":"oracle"');
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"providerID":"opencode-go"');
     expect(cmd).toContain(
-      "opencode run --format json --title 'AO:test-1' --agent 'oracle' --model 'gpt-5.2' --command true",
+      "exec opencode --session \"$SES_ID\" --prompt 'You are an expert\n\nreview this code'",
     );
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'You are an expert\n\nreview this code' --agent 'oracle' --model 'gpt-5.2'",
-    );
-    expect(cmd).toContain("--model 'gpt-5.2'");
+    expect(cmd).not.toContain("--model");
+    expect(cmd).not.toContain("--agent");
   });
 
   it("systemPromptFile takes precedence over systemPrompt", () => {
@@ -280,9 +280,8 @@ do the task'`,
       permissions: "permissionless",
       systemPromptFile: "/tmp/orchestrator-prompt.md",
     });
-    expect(cmd).toContain(
-      "opencode run --format json --title 'AO:test-orchestrator' --command true",
-    );
+    expect(cmd).toContain("opencode api session.create");
+    expect(cmd).toContain('"title":"AO:test-orchestrator"');
     expect(cmd).toContain(
       'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/orchestrator-prompt.md\')"',
     );
@@ -309,7 +308,7 @@ do the task'`,
       ...baseConfig,
       prompt: "fix  and `backtick` and 'quote'",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("fix  and `backtick`");
     expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt');
   });
@@ -319,10 +318,10 @@ do the task'`,
       ...baseConfig,
       prompt: "",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain("opencode session list --format json");
-    expect(cmd).toContain("AO:test-1");
+    expect(cmd).toContain('"title":"AO:test-1"');
+    expect(cmd).not.toContain("--prompt");
   });
 
   it("handles prompt with newlines", () => {
@@ -330,17 +329,17 @@ do the task'`,
       ...baseConfig,
       prompt: "line1\nline2",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt \'line1');
   });
 
-  it("uses run bootstrap launch for fresh sessions", () => {
+  it("uses API create launch for fresh sessions", () => {
     const cmd = agent.getLaunchCommand({
       ...baseConfig,
       prompt: "start work",
     });
-    expect(cmd).toContain("--title 'AO:test-1'");
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
+    expect(cmd).toContain('"title":"AO:test-1"');
+    expect(cmd).toContain("opencode api session.create");
     expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'start work'");
     expect(cmd).toContain('exec opencode --session "$SES_ID"');
   });
