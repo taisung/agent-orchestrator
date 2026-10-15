@@ -509,3 +509,20 @@ minors, with the correction that each increment brief must use:
   `succeeded`, in 11 `projectID` values).
 - §3, §5.2, §5.3, §6: the isolated-store measurements cannot be checked again, because that service
   is gone; M-1 to M-5 measure them again.
+
+## 18. The owner's answers to §15 (2026-10-14, about 21:55 EDT)
+
+- **Q1:** `ao start` installs with `npm install -g @opencode/cli`. If npm `opencode-ai` is installed, it
+  adds `--force` and says so.
+- **Q2:** one `opencode-api.ts` helper in core, used by core and the plugin.
+- **Q3:** poll with `opencode api` in I-4; decide on the event stream after M-3.
+- **Q4:** the model-turn measurements M-1 to M-8 run in throwaway sessions on the global service, with
+  a unique title, on the flat plan. The worker removes only the sessions that it created. No credential
+  is copied.
+- **Q5:** the `ao send` default is `queue`. M-5 measures `queue` and `steer` before I-5 lands.
+- **Q6:** on a 1.x host, `detect()` reports OpenCode as missing, and an explicit
+  `ao spawn --agent opencode` fails with a message that names 2.x.
+- **Q7:** reuse a session by its stored ID only; no title search.
+- **Q8:** count `reasoning` tokens in `outputTokens`.
+- **Q9:** the gate is a MINIMUM version of 2.0.29, not only major 2. An older 2.x is refused with a
+  message. (The Muse reviewer had suggested major 2; the owner chose the minimum.)
