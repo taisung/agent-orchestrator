@@ -595,11 +595,50 @@ describe("removeAoBinFromPath", () => {
       },
     ],
     ["a leading ~ (homedir is /home/testuser)", () => "~/.ao/bin"],
+    [
+      "a symlink followed by .. (link/../bin reaches .ao/bin)",
+      (f) => {
+        mkdirSync(join(f.root, "home", ".ao", "subdir"));
+        mkdirSync(join(f.root, "lexical"));
+        symlinkSync(join(f.root, "home", ".ao", "subdir"), join(f.root, "lexical", "link"));
+        return join(f.root, "lexical", "link") + "/../bin";
+      },
+    ],
+    [
+      "a symlink followed by .. before the install creates .ao/bin",
+      (f) => {
+        mkdirSync(join(f.root, "later-home", ".ao", "subdir"), { recursive: true });
+        mkdirSync(join(f.root, "lexical"));
+        symlinkSync(join(f.root, "later-home", ".ao", "subdir"), join(f.root, "lexical", "link"));
+        return join(f.root, "lexical", "link") + "/../bin";
+      },
+    ],
+    [
+      "a symlink followed by .. that reaches a gh wrapper copy",
+      (f) => {
+        mkdirSync(join(f.root, "copydir", "sub"), { recursive: true });
+        copyFileSync(join(f.binDir, "gh"), join(f.root, "copydir", "gh"));
+        mkdirSync(join(f.root, "lexical"));
+        symlinkSync(join(f.root, "copydir", "sub"), join(f.root, "lexical", "link"));
+        return join(f.root, "lexical", "link") + "/..";
+      },
+    ],
   ];
 
   it.each(spellings)("removes a wrapper directory named with %s", (_, spell) => {
     const entry = spell(fx);
     expect(removeAoBinFromPath(`${entry}:${rest}`)).toBe(rest);
+  });
+
+  it("keeps an entry that names .ao/bin only after a lexical collapse of ..", () => {
+    // <root>/.ao/link/../bin is <root>/plain/bin for the kernel: link is
+    // followed before "..". That directory is not an ao wrapper directory.
+    mkdirSync(join(fx.root, "plain", "sub"), { recursive: true });
+    mkdirSync(join(fx.root, "plain", "bin"));
+    mkdirSync(join(fx.root, ".ao"));
+    symlinkSync(join(fx.root, "plain", "sub"), join(fx.root, ".ao", "link"));
+    const entry = join(fx.root, ".ao", "link") + "/../bin";
+    expect(removeAoBinFromPath(`${entry}:${rest}`)).toBe(`${entry}:${rest}`);
   });
 
   it("removes every wrapper entry and keeps the others in order", () => {

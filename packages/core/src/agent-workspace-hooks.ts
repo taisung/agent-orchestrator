@@ -14,7 +14,7 @@
  */
 import { closeSync, openSync, readSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { writeFile, mkdir, readFile, rename } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 
@@ -72,27 +72,35 @@ export function buildAgentPath(basePath: string | undefined): string {
 }
 
 /**
- * The real path of a directory. For a missing directory or a dangling
- * symlink, the link target or the real path of the nearest existing parent
- * plus the rest, so a wrapper directory that an install creates later still
- * matches.
+ * The physical path of an absolute PATH entry as the kernel resolves it: a
+ * symlink is followed before a later ".." applies, so "link/.." is the parent
+ * of the link's target, not the directory that holds the link. For an entry
+ * that does not resolve yet (a missing directory, a dangling symlink), the
+ * start that resolves is resolved and the rest is added part by part, so a
+ * wrapper directory that an install creates later still matches.
  */
-function canonicalDir(dir: string, hops = 0): string {
-  const resolved = resolve(dir);
+function physicalDir(dir: string, hops = 0): string {
   try {
-    return realpathSync(resolved);
+    return realpathSync.native(dir);
   } catch {
     // Missing, or a symlink whose target is missing.
   }
+  const parent = dirname(dir);
+  if (parent === dir) return dir;
+  const name = basename(dir);
+  const base = physicalDir(parent, hops);
+  if (name === "..") return dirname(base);
+  if (name === "." || name === "") return base;
+  const path = join(base, name);
   if (hops < 8) {
     try {
-      return canonicalDir(resolve(dirname(resolved), readlinkSync(resolved)), hops + 1);
+      const target = readlinkSync(path);
+      return physicalDir(isAbsolute(target) ? target : `${base}/${target}`, hops + 1);
     } catch {
       // Not a symlink.
     }
   }
-  const parent = dirname(resolved);
-  return parent === resolved ? resolved : join(canonicalDir(parent, hops), basename(resolved));
+  return path;
 }
 
 /** Same header test as ao_is_real_bin in the wrappers: line 2 is "# ao <name> wrapper". */
@@ -117,22 +125,41 @@ const isAoBinPath = (dir: string): boolean =>
   basename(dir) === "bin" && basename(dirname(dir)) === ".ao";
 
 /**
- * An ao wrapper directory is the install location <some HOME>/.ao/bin, by its
- * own name or by its real path, whether the wrappers are there yet or not; or
- * any directory that holds an ao git or gh wrapper (a copy elsewhere).
+ * The entry as written ends in .ao/bin. Empty and "." parts are dropped (the
+ * kernel ignores them); ".." parts stay, because only the physical path can
+ * say where they lead.
+ */
+function namesAoBin(dir: string): boolean {
+  const parts = dir.split("/").filter((part) => part !== "" && part !== ".");
+  return parts.at(-1) === "bin" && parts.at(-2) === ".ao";
+}
+
+/**
+ * An ao wrapper directory is the install location <some HOME>/.ao/bin, by the
+ * entry's own name or by its physical path, whether the wrappers are there
+ * yet or not; or any directory that holds an ao git or gh wrapper (a copy
+ * elsewhere). The header test reads the physical directory, the one that a
+ * command lookup through this entry reaches.
  */
 function isAoWrapperDir(entry: string): boolean {
-  const dir = entry === "~" || entry.startsWith("~/") ? join(homedir(), entry.slice(1)) : entry;
+  // bash expands a leading ~ in a PATH entry. Concatenation, not join(): join
+  // would also collapse "..".
+  const dir = entry === "~" || entry.startsWith("~/") ? `${homedir()}${entry.slice(1)}` : entry;
   if (!isAbsolute(dir)) return false;
-  if (isAoBinPath(resolve(dir)) || isAoBinPath(canonicalDir(dir))) return true;
-  return isAoWrapperFile(join(dir, "git"), "git") || isAoWrapperFile(join(dir, "gh"), "gh");
+  if (namesAoBin(dir)) return true;
+  const physical = physicalDir(dir);
+  if (isAoBinPath(physical)) return true;
+  return (
+    isAoWrapperFile(join(physical, "git"), "git") || isAoWrapperFile(join(physical, "gh"), "gh")
+  );
 }
 
 /**
  * Remove every ao wrapper directory from a PATH value, for an agent whose
  * panes must not run the wrappers (Claude Code). It matches every spelling of
- * the directory (a trailing slash, a doubled slash, a symlink, a leading ~),
- * the wrapper directory of another HOME, and a wrapper copy elsewhere. It
+ * the directory (a trailing slash, a doubled slash, a symlink, a symlink
+ * followed by "..", a leading ~), the wrapper directory of another HOME, and
+ * a wrapper copy elsewhere. It
  * keeps all other entries, in order, and returns the same string when it
  * removes nothing.
  */

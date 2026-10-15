@@ -388,6 +388,15 @@ describe("launch from a parent whose PATH holds the ao wrappers", () => {
       "a wrapper directory that an install creates later",
       () => join(root, "new-home", ".ao", "bin"),
     ],
+    [
+      "a symlink followed by .. (the kernel follows the link first)",
+      () => {
+        mkdirSync(join(home, ".ao", "subdir"));
+        mkdirSync(join(root, "lexical"));
+        symlinkSync(join(home, ".ao", "subdir"), join(root, "lexical", "link"));
+        return `${join(root, "lexical", "link")}/../bin`;
+      },
+    ],
   ];
 
   it.each(spellings)("the pane gets no wrapper and no GH_PATH for %s", async (_, spell) => {
