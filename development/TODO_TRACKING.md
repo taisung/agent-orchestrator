@@ -57,6 +57,19 @@ Durable progress record for this fork. Dated events only; the current state live
   owner keeps the host on OpenCode 2.x; a later arc drops the 1.x branch, moves `ao send`,
   activity and cost to `opencode api`, and fixes the `ao start` install (`npm install -g opencode-ai` has no
   2.x release). That arc is tracked in `~/agent-skills/development/TODO_TRACKING.md`, Known Issues.
+- `2ef9c3a3` (2026-10-14, ao-1) — `development/0009_opencode_2x_api_fit_design.md`, the design of the
+  OpenCode 2.x API fit (increments I-1 to I-7); review section 17 and the owner's answers in section 18
+  (`96db1f72`, `64cd3750`, `439c16fb`).
+- `d8c666b1`, `41562abb` (2026-10-14, ao-6, Muse; increment I-6 of 0009) — `ao start` installs OpenCode
+  with `npm install -g @opencode/cli`, and adds `--force` with a one-line notice when npm `opencode-ai` is
+  installed globally (read-only `npm ls -g opencode-ai --depth=0 --json`). The package name has one
+  source. `.github/workflows/integration-tests.yml` installs `@opencode/cli`. Review: round 1 LAND-SAFE by
+  V4.1 Flash (3 minors) and by Sonnet 5.5 (M-1: no test reached the call site; 5 call-site mutants
+  survived); round 2 added call-site tests that kill all 5, re-check LAND-SAFE (m-7: watch the first CI
+  run with secrets, its live OpenCode block now meets 2.0.29; m-8: one test comment). Left open: a timeout
+  on `npm ls` (needs `lib/shell.ts`), the export surface, the picker hint. `ao-cli` tests 243 passed.
+  Reviews `development/reviews/i6_review_r{1,2}_*.md`. Fast-forward, tree equal to the reviewed tree.
+  Not pushed, not rebuilt.
 
 ## Decisions
 
