@@ -73,6 +73,24 @@ Durable progress record for this fork. Dated events only; the current state live
   docs only; I-1 is not on `main`): all 12 packages `Done`; the built `resolveOpenCodeInstall()` returns
   `npm install -g @opencode/cli` with no notice on this host (`npm ls -g opencode-ai` exit 1); the plugin
   `dist` is unchanged. I-6 is not used by the lifecycle workers, so they were not restarted.
+- `e6e6f7c9`, `5a313fa1` (round 1, ao-5, Muse) and `a310ae17`, `51f006ff`, `2e71ecf6`, `d52f6ca3`,
+  `6abab58d` (round 2, ao-1, Claude Opus 5.5) (2026-10-15; increment I-1 of 0009) — the OpenCode plugin
+  drops the 1.x branch and needs OpenCode 2.0.29 or later (owner Q9). `detect()` hides an older or
+  missing OpenCode; an explicit spawn or restore fails with a message that names the reason (owner Q6).
+  The version probe runs in Node, stops after 10 s, and keeps its stderr off the terminal. Core: a
+  refused orchestrator launch now cleans up its worktree, metadata and prompt file, as a refused worker
+  spawn does; `restore()` builds the restore command before it destroys the old runtime, so a refused
+  restore keeps the old pane (checked against the claude-code, codex, gemini and opencode plugins). The
+  integration launch tests run against a fake 2.0.29, so CI needs no OpenCode. Review: round 1
+  NOT-LAND-SAFE by Sonnet 5.5 and by V4.1 Flash (B-1: 14 integration tests needed a host OpenCode;
+  M-1: the orchestrator-launch leak; M-2: no probe timeout); R7 moved round 2 to Opus; round 2
+  LAND-SAFE by V4.1 Flash and by Muse, 3 minors each. Open minors: a restore with a hanging binary
+  waits about 40 s (the older `findOpenCodeSession` timeout is 30 s; I-2 removes it); a refused binary
+  with no stored session ID fails in core discovery with a message that does not name the version; a
+  refused spawn leaves its branch; the lifecycle worker can mark a reserved ID `killed` during the
+  10 s probe (seen 1 of 2 runs); the refusal message omits the probe's stderr. Author suite: 1890
+  passed, 20 skipped. Reviews `development/reviews/i1_review_r{1,2}_*.md`. Cherry-picked onto
+  `3e161305`; the tree equals the reviewed `39549455` except this file. Not pushed, not rebuilt.
 
 ## Decisions
 
