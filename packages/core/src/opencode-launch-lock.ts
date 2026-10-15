@@ -89,7 +89,10 @@ function reclaimEmpty(path: string): boolean {
 }
 
 /** A short filesystem lease serializes recovery as well as launches. */
-async function takeLease(path: string, wait: () => Promise<void>): Promise<() => void> {
+async function takeLease(
+  path: string,
+  wait: (path: string, owners: string[]) => Promise<void>,
+): Promise<() => void> {
   const token = `${process.pid}-${randomUUID()}.owner`;
   for (;;) {
     // Publish a populated directory atomically. A suspended live contender must
@@ -111,11 +114,11 @@ async function takeLease(path: string, wait: () => Promise<void>): Promise<() =>
         continue;
       }
       if (owners.length === 0 && reclaimEmpty(path)) continue;
+      await wait(path, owners);
     } catch (error) {
       if (hasCode(error, "ENOENT")) continue;
       throw error;
     }
-    await wait();
   }
 }
 
@@ -168,7 +171,7 @@ async function paneDefinitelyGone(pending: PendingLaunch): Promise<boolean> {
  * Serialize fresh launches across fleets, from before the timestamp through ID persistence.
  * The compatibility directory still excludes round-3 launchers. A separate lease lets a
  * successor inspect/recover its pending marker without two reapers accepting it concurrently.
- * Only completed-create evidence or a sufficiently old, explicitly dead pane settles uncertainty.
+ * Recovery requires an explicitly dead pane plus completed-create evidence or sufficient age.
  * `root` and `waitMs` are test seams; production always uses the fixed per-uid namespace.
  */
 export async function acquireOpenCodeLaunchLock(
@@ -206,16 +209,20 @@ export async function acquireOpenCodeLaunchLock(
   const recoveryHint = `After stopping and settling the earlier pane and any in-flight create request, run \`rm -r -- ${shellEscape(lockPath)}\` to remove the marker directory ${lockPath}.`;
   const deadline = performance.now() + (options.waitMs ?? WAIT_MS);
   let waiting = false;
-  const wait = async () => {
+  const wait = async (blockedPath: string, owners: string[]) => {
     if (!waiting) {
       process.stderr.write(
-        `ao: waiting for the OpenCode launch lock for ${title} in ${directory} (${lockPath}).\n`,
+        `ao: waiting for the OpenCode launch lock for ${title} in ${directory} (${blockedPath}).\n`,
       );
       waiting = true;
     }
     if (performance.now() >= deadline) {
+      const pids = owners.map((entry) => Number(entry.split("-", 1)[0]));
+      const hint = pids.length
+        ? pids.map((pid) => `Held by PID ${pid}; wait, or stop PID ${pid} first.`).join(" ")
+        : "Retry after checking the owner of this directory.";
       throw new Error(
-        `Timed out waiting for the OpenCode launch lock for ${title} in ${directory} (${lockPath}); no pane was launched. ${recoveryHint}`,
+        `Timed out waiting for the OpenCode launch lock for ${title} in ${directory} (${blockedPath}); no pane was launched. ${hint}`,
       );
     }
     await pause(Math.min(50, Math.max(1, deadline - performance.now())));
@@ -239,15 +246,16 @@ export async function acquireOpenCodeLaunchLock(
       }
       const previous = owners.length === 1 ? owners[0] : undefined;
       if (owners.length > 1 || (previous && !definitelyDead(Number(previous.split("-", 1)[0])))) {
-        await wait();
+        await wait(lockPath, owners);
         continue;
       }
       if (existsSync(pendingPath)) {
         const pending = readPending(pendingPath, title, directory);
         let evidence: string | undefined;
-        if (pending) {
-          // Exactly one create and no retry in the pane script. A hit settles that
-          // attempt even if discovery/remap failed; the next timestamp excludes it.
+        if (pending && (await paneDefinitelyGone(pending))) {
+          // An old build or manual create can match while the earlier pane is
+          // still creating. A match settles uncertainty only with own-server
+          // proof that the earlier pane is gone; the next timestamp excludes it.
           try {
             const sessions = await findOpenCodeSessionsByTitle(
               {
@@ -261,21 +269,20 @@ export async function acquireOpenCodeLaunchLock(
               ),
             );
             if (sessions.length > 0)
-              evidence = `earlier create finished (${sessions.map((s) => s.id).join(", ")})`;
+              evidence = `earlier pane is gone and a matching create finished (${sessions.map((s) => s.id).join(", ")})`;
           } catch {
             // An unavailable search is not evidence. The independent dead-pane proof may still work.
           }
           if (
             !evidence &&
             Date.now() - pending.startedAt >=
-              OPENCODE_SPAWN_DISCOVERY_WINDOW_MS + OPENCODE_API_TIMEOUT_MS &&
-            (await paneDefinitelyGone(pending))
+              OPENCODE_SPAWN_DISCOVERY_WINDOW_MS + OPENCODE_API_TIMEOUT_MS
           )
             evidence = "earlier pane is gone and its create window has elapsed";
         }
         if (!evidence) {
           throw new Error(
-            `Cannot safely launch ${title} in ${directory}: an earlier OpenCode launch is unresolved (${lockPath}). ${recoveryHint} A delayed create could otherwise be mistaken for this launch.`,
+            `Cannot safely launch ${title} in ${directory}: an earlier OpenCode launch is unresolved (${lockPath}). A live earlier pane or unverified pane death keeps its marker, even if a matching session exists. ${recoveryHint} A delayed create could otherwise be mistaken for this launch.`,
           );
         }
         unlinkSync(pendingPath);
@@ -298,7 +305,7 @@ export async function acquireOpenCodeLaunchLock(
         );
         continue;
       }
-      await wait();
+      await wait(lockPath, owners);
     }
   } catch (error) {
     releaseLease();
@@ -314,7 +321,11 @@ export async function acquireOpenCodeLaunchLock(
     renameSync(temp, pendingPath);
   };
   const complete = () => {
-    if (pending) unlinkSync(pendingPath);
+    try {
+      if (pending) unlinkSync(pendingPath);
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
     pending = undefined;
   };
   return {
@@ -334,7 +345,9 @@ export async function acquireOpenCodeLaunchLock(
         try {
           const { stdout } = await execFileAsync(
             "tmux",
-            ["display-message", "-p", "-t", `=${handle.id}`, "#{socket_path}"],
+            // Socket identity is server-wide. The named pane may already have
+            // been removed by runtime.create's failure cleanup.
+            ["display-message", "-p", "#{socket_path}"],
             { timeout: 1_500 },
           );
           const socket = stdout.trim();
@@ -343,7 +356,7 @@ export async function acquireOpenCodeLaunchLock(
             persist();
           }
         } catch {
-          // Keep the handle; absence of server identity means recovery by API evidence only.
+          // Keep the handle; without server identity only manual recovery is safe.
         }
       }
     },
@@ -359,6 +372,8 @@ export async function acquireOpenCodeLaunchLock(
       try {
         unlinkSync(ownerPath);
         if (!existsSync(pendingPath)) rmdirSync(lockPath);
+      } catch (error) {
+        if (!hasCode(error, "ENOENT")) throw error;
       } finally {
         releaseLease();
       }

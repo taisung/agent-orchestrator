@@ -390,9 +390,9 @@ export type OpenCodeSessionWaitResult =
  * `pollMs`. A failed search (timeout or another error) counts as "not found
  * yet". Each search gets only the time left in the window, so the whole wait
  * ends within `windowMs` plus one process exit. If the event loop stalls
- * across the deadline during a poll pause, make one final bounded search:
+ * across the deadline during a poll pause or an in-flight search, make one final bounded search:
  * a session may have appeared while the launcher was suspended. That recovery
- * adds at most one API bound; a timed-out search does not cause another retry.
+ * adds at most one API bound; an ordinary timeout does not cause another retry.
  *
  * This is a search primitive, not proof of pane ownership. Fresh-launch
  * callers must hold the host-wide OpenCode launch lock from BEFORE recording
@@ -407,27 +407,35 @@ export async function waitForOpenCodeSession(
   const deadline = Date.now() + windowMs;
   let lastError: unknown;
   for (;;) {
-    const remainingMs = deadline - Date.now();
+    const searchStartedAt = Date.now();
+    const remainingMs = deadline - searchStartedAt;
     const finalSearch = remainingMs <= 0;
+    const searchBound = finalSearch
+      ? OPENCODE_API_TIMEOUT_MS
+      : Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs);
     let searchCompleted = false;
+    let emptyAfterTimeout = false;
     try {
-      const sessions = await findOpenCodeSessionsByTitle(
-        match,
-        finalSearch ? OPENCODE_API_TIMEOUT_MS : Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs),
-      );
+      const sessions = await findOpenCodeSessionsByTitle(match, searchBound);
       searchCompleted = true;
       const [only, ...others] = sessions;
       if (only && others.length === 0) return { status: "found", session: only };
       if (only) return { status: "ambiguous", sessions };
     } catch (err) {
       lastError = err;
+      // After SIGCONT Node can run an overdue execFile timer before reading
+      // the child's output, reporting exit 0 with an empty pipe.
+      emptyAfterTimeout =
+        err instanceof Error &&
+        err.message === "opencode api session.list returned empty output with exit 0" &&
+        Date.now() - searchStartedAt > searchBound;
     }
     if (finalSearch) break;
     const pauseMs = Math.min(pollMs, deadline - Date.now());
     if (pauseMs <= 0) {
-      // A completed result may have been buffered before suspension. A timeout
-      // already used the available budget and must not trigger another API call.
-      if (searchCompleted) continue;
+      // Buffered results and searches spanning a suspension need one fresh
+      // observation. A normal timeout still ends at the discovery deadline.
+      if (searchCompleted || emptyAfterTimeout || Date.now() - deadline > searchBound) continue;
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, pauseMs));

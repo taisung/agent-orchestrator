@@ -130,6 +130,44 @@ function shortErrorText(err: unknown): string {
   return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
+/** Release errors must not replace the launch/setup error that caused cleanup. */
+function releaseOpenCodeLaunchLock(lock: OpenCodeLaunchLock | undefined, failed: boolean): void {
+  try {
+    lock?.release();
+  } catch (error) {
+    if (!failed) throw error;
+    warnOperator(`ao: could not release the OpenCode launch lock: ${shortErrorText(error)}`);
+  }
+}
+
+async function recordFailedOpenCodeLaunch(
+  lock: OpenCodeLaunchLock | undefined,
+  handle: RuntimeHandle,
+  error: unknown,
+): Promise<void> {
+  if (!lock) return;
+  try {
+    if (failedBeforeCommandDelivery(handle.runtimeName, error)) {
+      lock.cancel();
+    } else if (lock.pending) {
+      // The runtime may already have removed the pane after failed delivery.
+      // Its known name and server still allow a later explicit absence check.
+      await lock.recordRuntime(handle);
+      const recovery =
+        handle.runtimeName === "tmux"
+          ? `A fresh start can recover once the recorded pane is proven gone and ${(OPENCODE_SPAWN_DISCOVERY_WINDOW_MS + OPENCODE_API_TIMEOUT_MS) / 1000} s have elapsed since launch.`
+          : "This runtime requires manual recovery.";
+      warnOperator(`ao: uncertain OpenCode launch ${handle.id}. ${recovery} ${lock.recoveryHint}`);
+    }
+  } catch (cleanupError) {
+    warnOperator(
+      `ao: could not update the failed OpenCode launch marker: ${shortErrorText(cleanupError)}. ${lock.recoveryHint}`,
+    );
+  } finally {
+    releaseOpenCodeLaunchLock(lock, true);
+  }
+}
+
 /**
  * The directories that the OpenCode session of a workspace can carry in
  * `location.directory`. The pane sends `process.cwd()`, which is the real
@@ -193,7 +231,7 @@ async function discoverNewOpenCodeSession(
         ? ` Last search error: ${shortErrorText(result.lastError)}`
         : "";
     warnOperator(
-      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches need completed-create or dead-pane evidence. ${recoveryHint}${lastError}`,
+      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches need proof that the earlier pane is gone, plus a matching create or an elapsed create window. ${recoveryHint}${lastError}`,
     );
     return undefined;
   } catch (err) {
@@ -1316,10 +1354,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
-      if (failedBeforeCommandDelivery(plugins.runtime.name, err)) {
-        launchLock?.cancel();
-      }
-      launchLock?.release();
+      await recordFailedOpenCodeLaunch(
+        launchLock,
+        { id: tmuxName ?? sessionId, runtimeName: plugins.runtime.name, data: {} },
+        err,
+      );
       // Clean up workspace and reserved ID if agent config or runtime creation failed
       if (
         plugins.workspace &&
@@ -1360,6 +1399,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       },
     };
 
+    let setupFailed = false;
     try {
       await launchLock?.recordRuntime(handle);
       writeMetadata(sessionsDir, sessionId, {
@@ -1401,6 +1441,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
+      setupFailed = true;
       // Clean up runtime and workspace on post-launch failure
       try {
         await plugins.runtime.destroy(handle);
@@ -1426,7 +1467,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       throw err;
     } finally {
-      launchLock?.release();
+      releaseOpenCodeLaunchLock(launchLock, setupFailed);
     }
 
     // Send initial prompt post-launch for agents that need it (e.g. Claude Code
@@ -1768,10 +1809,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
-      if (failedBeforeCommandDelivery(plugins.runtime.name, err)) {
-        launchLock?.cancel();
-      }
-      launchLock?.release();
+      await recordFailedOpenCodeLaunch(
+        launchLock,
+        { id: tmuxName ?? sessionId, runtimeName: plugins.runtime.name, data: {} },
+        err,
+      );
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     }
@@ -1795,6 +1837,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       },
     };
 
+    let setupFailed = false;
     try {
       await launchLock?.recordRuntime(handle);
       writeMetadata(sessionsDir, sessionId, {
@@ -1833,6 +1876,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
+      setupFailed = true;
       // Clean up runtime on post-launch failure
       try {
         await plugins.runtime.destroy(handle);
@@ -1842,7 +1886,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     } finally {
-      launchLock?.release();
+      releaseOpenCodeLaunchLock(launchLock, setupFailed);
     }
 
     return session;

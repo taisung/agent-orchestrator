@@ -455,6 +455,61 @@ describe("with a real child process (fake opencode on PATH)", () => {
       }
     });
 
+    it.each(["empty exit 0", "overdue timeout"])(
+      "makes one final search after suspension during a search: %s",
+      async (failure) => {
+        vi.useFakeTimers();
+        try {
+          const startedAt = Date.now();
+          mockExecFileAsync
+            .mockImplementationOnce(async () => {
+              // Empty output just after its search bound, or a timeout whose
+              // callback was delayed by more than another whole search bound.
+              vi.setSystemTime(startedAt + (failure === "empty exit 0" ? 150 : 1_000));
+              if (failure === "empty exit 0") return { stdout: "", stderr: "" };
+              throw execError("killed", "", "", { killed: true, signal: "SIGTERM" });
+            })
+            .mockResolvedValueOnce(
+              listAnswer([
+                {
+                  id: "ses_inflight_stall",
+                  title: "AO:stall",
+                  location: { directory: "/w" },
+                  time: { created: startedAt + 50 },
+                },
+              ]),
+            );
+          expect(
+            await waitForOpenCodeSession({ title: "AO:stall", directories: ["/w"] }, 100, 20),
+          ).toMatchObject({ status: "found", session: { id: "ses_inflight_stall" } });
+          expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it("does not retry a failed final search after suspension", async () => {
+      vi.useFakeTimers();
+      try {
+        const startedAt = Date.now();
+        mockExecFileAsync.mockImplementation(async () => {
+          vi.setSystemTime(Date.now() + 60_000);
+          return { stdout: "", stderr: "" };
+        });
+        const result = await waitForOpenCodeSession(
+          { title: "AO:stall", directories: ["/w"] },
+          100,
+          20,
+        );
+        expect(result.status).toBe("not-found");
+        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+        expect(Date.now()).toBeGreaterThan(startedAt);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("ends within its window when the binary hangs", async () => {
       useMock([], { apiDelaySeconds: 5 });
       const startedAt = Date.now();

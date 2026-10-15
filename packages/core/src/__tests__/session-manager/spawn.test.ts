@@ -60,15 +60,24 @@ vi.mock("../../opencode-api.js", async (importOriginal) => {
   };
 });
 
+const lockFaults = vi.hoisted(() => ({ release: false }));
+
 vi.mock("../../opencode-launch-lock.js", async (importOriginal) => {
   const actual = await importOriginal<typeof LaunchLock>();
   return {
     ...actual,
-    acquireOpenCodeLaunchLock: (workspace: string, title: string) =>
-      actual.acquireOpenCodeLaunchLock(workspace, title, {
+    acquireOpenCodeLaunchLock: async (workspace: string, title: string) => {
+      const lock = await actual.acquireOpenCodeLaunchLock(workspace, title, {
         root: join(tmpDir, "launch-locks"),
         waitMs: 2_000,
-      }),
+      });
+      const release = lock.release;
+      lock.release = () => {
+        release();
+        if (lockFaults.release) throw new Error("release failed");
+      };
+      return lock;
+    },
   };
 });
 
@@ -83,6 +92,7 @@ let config: OrchestratorConfig;
 let originalPath: string | undefined;
 
 beforeEach(() => {
+  lockFaults.release = false;
   ctx = setupTestContext();
   ({
     tmpDir,
@@ -2276,13 +2286,28 @@ describe("OpenCode ownership across fleets", () => {
     },
   );
 
-  it("refuses an unresolved create, then recovers its late result without binding it to the next start", async () => {
+  it("refuses an outside create while the earlier pane lives, then recovers after it stops without binding its late result", async () => {
     useOpenCodeProject({
       orchestratorWorkspaceMode: "project",
       orchestratorSessionStrategy: "ignore",
     });
     const mockBin = installMockOpencodeApi(tmpDir, []);
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const gone = join(tmpDir, "earlier-gone");
+    writeFileSync(
+      join(mockBin, "tmux"),
+      `#!/bin/sh
+if [ "$1" = display-message ]; then echo /tmp/ao28-test-socket; exit 0; fi
+if [ -f '${gone}' ]; then echo "can't find session: earlier" >&2; exit 1; fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    vi.mocked(mockRuntime.create).mockResolvedValue({
+      id: "earlier",
+      runtimeName: "tmux",
+      data: {},
+    });
     const { registry } = openCodeRegistry();
     const stderr = captureStderr();
     try {
@@ -2293,6 +2318,12 @@ describe("OpenCode ownership across fleets", () => {
       mkdirSync(join(tmpDir, "fleet-b"));
       writeFileSync(otherConfig.configPath, "projects: {}\n");
       const b = createSessionManager({ config: otherConfig, registry });
+      addMockApiSession(mockBin, {
+        id: "ses_outside",
+        title: `AO:${first.id}`,
+        directory: config.projects["my-app"].path,
+        createdAt: Date.now(),
+      });
       await expect(b.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
         "earlier OpenCode launch is unresolved",
       );
@@ -2303,11 +2334,13 @@ describe("OpenCode ownership across fleets", () => {
         directory: config.projects["my-app"].path,
         createdAt: Date.now(),
       });
+      // Stop the earlier pane on its recorded server before recovery.
+      writeFileSync(gone, "");
       vi.mocked(mockRuntime.create).mockImplementation(paneCreatesOpenCodeSession(mockBin));
       const second = await b.spawnOrchestrator({ projectId: "my-app" });
       expect(second.metadata["opencodeSessionId"]).toBe(`ses_pane_${second.id}`);
       expect(second.metadata["opencodeSessionId"]).not.toBe("ses_late_a");
-      expect(stderr.lines()).toContain("earlier create finished");
+      expect(stderr.lines()).toContain("earlier pane is gone and a matching create finished");
 
       expect(stderr.lines()).toContain(`ao session remap ${first.id}`);
     } finally {
@@ -2350,6 +2383,121 @@ describe("OpenCode ownership across fleets", () => {
       const next = await sm.spawn({ projectId: "my-app" });
       expect(next.id).toBe(stage.endsWith("before delivery") ? "app-1" : "app-2");
       expect(next.metadata["opencodeSessionId"]).toBe(`ses_pane_${next.id}`);
+    },
+  );
+
+  it.each(["worker", "orchestrator"] as const)(
+    "keeps the %s pane and persisted mapping when its marker directory is removed",
+    async (kind) => {
+      useOpenCodeProject({
+        orchestratorWorkspaceMode: "project",
+        orchestratorSessionStrategy: "ignore",
+      });
+      const bin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      vi.mocked(mockRuntime.create).mockImplementation(paneCreatesOpenCodeSession(bin));
+      agent.postLaunchSetup = vi.fn(async () => {
+        const root = join(tmpDir, "launch-locks");
+        const key = readdirSync(root).find((entry) => !entry.endsWith(".lease"));
+        if (!key) throw new Error("no marker");
+        rmSync(join(root, key), { recursive: true });
+      });
+      const sm = createSessionManager({ config, registry });
+      const session =
+        kind === "worker"
+          ? await sm.spawn({ projectId: "my-app" })
+          : await sm.spawnOrchestrator({ projectId: "my-app" });
+      expect(session.metadata["opencodeSessionId"]).toBe(`ses_pane_${session.id}`);
+      expect(readMetadataRaw(sessionsDir, session.id)?.["opencodeSessionId"]).toBe(
+        `ses_pane_${session.id}`,
+      );
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["worker", "orchestrator"] as const)(
+    "preserves the first %s setup error when release also fails",
+    async (kind) => {
+      useOpenCodeProject();
+      const { agent, registry } = openCodeRegistry();
+      const firstError = new Error("original setup failure");
+      agent.postLaunchSetup = vi.fn().mockRejectedValue(firstError);
+      lockFaults.release = true;
+      const stderr = captureStderr();
+      try {
+        const sm = createSessionManager({ config, registry });
+        await expect(
+          kind === "worker"
+            ? sm.spawn({ projectId: "my-app" })
+            : sm.spawnOrchestrator({ projectId: "my-app" }),
+        ).rejects.toBe(firstError);
+        expect(stderr.lines()).toContain("release failed");
+        expect(mockRuntime.destroy).toHaveBeenCalledTimes(1);
+      } finally {
+        stderr.restore();
+      }
+    },
+  );
+
+  it.each(["worker", "orchestrator"] as const)(
+    "records the known %s handle after failed delivery so its marker can recover",
+    async (kind) => {
+      useOpenCodeProject({
+        orchestratorWorkspaceMode: "project",
+        orchestratorSessionStrategy: "ignore",
+      });
+      const bin = installMockOpencodeApi(tmpDir, []);
+      writeFileSync(
+        join(bin, "tmux"),
+        `#!/bin/sh
+if [ "$1" = display-message ]; then
+  # The runtime has removed its pane: targeted socket queries must fail.
+  for arg do if [ "$arg" = -t ]; then exit 1; fi; done
+  echo /tmp/ao28-test-socket; exit 0
+fi
+echo "can't find session: earlier" >&2
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      mockRuntime = { ...mockRuntime, name: "tmux" };
+      const { registry } = openCodeRegistry();
+      vi.mocked(mockRuntime.create).mockRejectedValueOnce(
+        new Error("Failed to send launch command"),
+      );
+      const stderr = captureStderr();
+      try {
+        const sm = createSessionManager({ config, registry });
+        await expect(
+          kind === "worker"
+            ? sm.spawn({ projectId: "my-app" })
+            : sm.spawnOrchestrator({ projectId: "my-app" }),
+        ).rejects.toThrow("Failed to send launch command");
+        const root = join(tmpDir, "launch-locks");
+        const dir = join(root, readdirSync(root)[0]);
+        const file = join(dir, "pending.json");
+        const marker = JSON.parse(readFileSync(file, "utf8"));
+        expect(marker.runtimeHandle).toMatchObject({
+          id: vi.mocked(mockRuntime.create).mock.calls[0][0].sessionId,
+          runtimeName: "tmux",
+        });
+        expect(marker.tmuxSocket).toBe("/tmp/ao28-test-socket");
+        expect(stderr.lines()).toContain(dir);
+        expect(stderr.lines()).toContain("25 s have elapsed since launch");
+        const { acquireOpenCodeLaunchLock } = await import("../../opencode-launch-lock.js");
+        await expect(acquireOpenCodeLaunchLock(marker.directory, marker.title)).rejects.toThrow(
+          "unresolved",
+        );
+        marker.startedAt = Date.now() - 60_000;
+        writeFileSync(file, JSON.stringify(marker));
+        const recovered = await acquireOpenCodeLaunchLock(marker.directory, marker.title);
+        recovered.release();
+        expect(readdirSync(root)).toEqual([]);
+      } finally {
+        stderr.restore();
+      }
     },
   );
 
