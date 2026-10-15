@@ -55,7 +55,9 @@ function makeHandle(id: string, createdAt?: number): RuntimeHandle {
 import tmuxPlugin, { manifest, create } from "../index.js";
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Reset, not only clear: a test that queues more once-values than create()
+  // uses must not feed them to the next test.
+  vi.resetAllMocks();
 });
 
 describe("manifest", () => {
@@ -127,41 +129,68 @@ describe("runtime.create()", () => {
     expect(args).toContain("FOO=bar");
   });
 
-  it("re-exports PATH in the pane because tmux -e PATH does not reach it", async () => {
+  it("runs the new-session client with the environment's PATH", async () => {
     const runtime = create();
+    const panePath = "/home/u/.ao/bin:/home/u/bin:/usr/bin:/bin";
 
     mockTmuxSuccess(); // new-session
-    mockTmuxSuccess(); // export PATH (-l)
-    mockTmuxSuccess(); // export PATH (Enter)
     mockTmuxSuccess(); // launch command
 
     await runtime.create({
       sessionId: "path-session",
       workspacePath: "/tmp/ws",
       launchCommand: "bash",
-      environment: { PATH: "/home/u/.ao/bin:/usr/bin:/bin" },
+      environment: { PATH: panePath, AO_SESSION: "path-session" },
     });
 
-    // Session env keeps -e PATH so show-environment still shows the intent.
-    const firstCallArgs = mockExecFileCustom.mock.calls[0][1] as string[];
-    expect(firstCallArgs).toContain("PATH=/home/u/.ao/bin:/usr/bin:/bin");
+    // tmux 3.4 gives the pane the PATH of the unattached client, so the client
+    // process gets the built PATH; the rest of its environment is ao's own.
+    const [cmd, args, options] = mockExecFileCustom.mock.calls[0] as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv; timeout: number },
+    ];
+    expect(cmd).toBe("tmux");
+    expect(args[0]).toBe("new-session");
+    expect(args).toContain(`PATH=${panePath}`);
+    expect(options.timeout).toBe(5_000);
+    expect(options.env?.["PATH"]).toBe(panePath);
+    expect(options.env?.["HOME"]).toBe(process.env["HOME"]);
 
-    // Pane gets an explicit export before the launch command.
+    // Nothing is typed into the pane except the launch command.
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(2);
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       2,
       "tmux",
-      ["send-keys", "-t", "path-session", "-l", "export PATH='/home/u/.ao/bin:/usr/bin:/bin'"],
+      ["send-keys", "-t", "path-session", "bash", "Enter"],
       expectedTmuxOptions,
     );
-    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
-      3,
-      "tmux",
-      ["send-keys", "-t", "path-session", "Enter"],
-      expectedTmuxOptions,
-    );
+    for (const call of mockExecFileCustom.mock.calls) {
+      expect((call[1] as string[]).join(" ")).not.toContain("export");
+    }
   });
 
-  it("does not send a PATH export when environment has no PATH", async () => {
+  it("passes a PATH longer than one tty line (4095 bytes) unchanged", async () => {
+    const runtime = create();
+    const longPath = Array.from({ length: 200 }, (_, i) => `/tmp/long/dir-number-${i}`).join(":");
+    expect(longPath.length).toBeGreaterThan(4095);
+
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+
+    await runtime.create({
+      sessionId: "long-path",
+      workspacePath: "/tmp/ws",
+      launchCommand: "bash",
+      environment: { PATH: longPath },
+    });
+
+    const options = mockExecFileCustom.mock.calls[0][2] as { env?: NodeJS.ProcessEnv };
+    expect(options.env?.["PATH"]).toBe(longPath);
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the default client environment when the environment has no PATH", async () => {
     const runtime = create();
 
     mockTmuxSuccess();
@@ -174,6 +203,12 @@ describe("runtime.create()", () => {
       environment: { AO_SESSION: "x" },
     });
 
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      1,
+      "tmux",
+      ["new-session", "-d", "-s", "nopath-session", "-c", "/tmp/ws", "-e", "AO_SESSION=x"],
+      expectedTmuxOptions,
+    );
     expect(mockExecFileCustom).toHaveBeenCalledTimes(2);
   });
 

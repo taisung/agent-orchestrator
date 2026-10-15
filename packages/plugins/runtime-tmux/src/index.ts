@@ -43,8 +43,14 @@ function writeLaunchScript(command: string): string {
 
 /** Run a tmux command and return stdout */
 async function tmux(...args: string[]): Promise<string> {
+  return runTmux(args);
+}
+
+/** Run a tmux command with an optional client environment and return stdout */
+async function runTmux(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await execFileAsync("tmux", args, {
     timeout: TMUX_COMMAND_TIMEOUT_MS,
+    ...(env && { env }),
   });
   return stdout.trimEnd();
 }
@@ -63,26 +69,24 @@ export function create(): Runtime {
         envArgs.push("-e", `${key}=${value}`);
       }
 
-      // Create tmux session in detached mode
-      await tmux("new-session", "-d", "-s", sessionName, "-c", config.workspacePath, ...envArgs);
+      // Create tmux session in detached mode.
+      // tmux 3.4 gives a new pane the PATH of the client that runs
+      // `new-session` when that client is not attached (spawn.c: "only
+      // unattached clients"), not the `-e PATH` value. So the client runs with
+      // the built PATH, and the pane's login shell then applies its startup
+      // files on top of it. `-e PATH` stays, so the session environment
+      // (`show-environment`) still holds it. Node also looks up the tmux
+      // binary with this PATH.
+      const panePath = config.environment?.["PATH"];
+      await runTmux(
+        ["new-session", "-d", "-s", sessionName, "-c", config.workspacePath, ...envArgs],
+        panePath ? { ...process.env, PATH: panePath } : undefined,
+      );
 
       // Send the launch command — clean up the session if this fails.
       // Use a temp script for long commands so the pane shows a short
       // invocation instead of a pasted wall of shell.
       try {
-        // tmux 3.4 does not propagate PATH from `-e` (or `set-environment`)
-        // to pane processes: the session environment shows PATH but a direct
-        // `env` in the pane and the login shell both lack it, while other
-        // `-e` vars (AO_SESSION, GH_PATH) do reach the pane. The login shell
-        // preserves PATH when it receives it, so re-export PATH inside the
-        // pane after the shell starts and before the agent launches. Session
-        // env keeps `-e PATH` so `show-environment` still shows the intent.
-        const panePath = config.environment?.["PATH"];
-        if (panePath) {
-          await tmux("send-keys", "-t", sessionName, "-l", `export PATH=${shellEscape(panePath)}`);
-          await sleep(300);
-          await tmux("send-keys", "-t", sessionName, "Enter");
-        }
         if (config.launchCommand.length > 200) {
           const invocation = writeLaunchScript(config.launchCommand);
           await tmux("send-keys", "-t", sessionName, "-l", invocation);
