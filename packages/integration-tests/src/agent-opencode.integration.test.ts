@@ -12,12 +12,12 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import type { ActivityDetection, AgentSessionInfo } from "@aoagents/ao-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import opencodePlugin from "@aoagents/ao-plugin-agent-opencode";
 import {
   isTmuxAvailable,
@@ -178,11 +178,41 @@ describe.skipIf(!canRun)("agent-opencode (integration)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Launch command tests (no external dependencies)
+// Fake `opencode` binaries for the version gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a fake `opencode` that prints `output` (no single quotes) to a new
+ * directory and return the directory. The plugin runs `opencode --version`
+ * before it builds a launch command, so the tests below put a fake first on
+ * PATH and do not depend on the host's OpenCode (CI installs none).
+ */
+async function writeFakeOpencode(output: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "ao-inttest-opencode-fake-"));
+  await writeFile(join(dir, "opencode"), `#!/bin/sh\nprintf '%s\\n' '${output}'\n`, {
+    mode: 0o755,
+  });
+  return dir;
+}
+
+// ---------------------------------------------------------------------------
+// Launch command tests (a fake opencode 2.0.29 on PATH; no host OpenCode needed)
 // ---------------------------------------------------------------------------
 
 describe("getLaunchCommand (integration)", () => {
   const agent = opencodePlugin.create();
+  const originalPath = process.env.PATH;
+  let fakeDir: string;
+
+  beforeAll(async () => {
+    fakeDir = await writeFakeOpencode("opencode v2.0.29");
+    process.env.PATH = `${fakeDir}${delimiter}${originalPath ?? ""}`;
+  });
+
+  afterAll(async () => {
+    process.env.PATH = originalPath;
+    await rm(fakeDir, { recursive: true, force: true });
+  });
 
   const baseConfig = {
     sessionId: "test-1",
@@ -356,6 +386,60 @@ do the task'`,
       prompt: "continue",
     });
     expect(cmd).toBe("opencode --session 'ses_abc123' --prompt 'continue'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Version gate through a real child process (fake binaries on PATH)
+// ---------------------------------------------------------------------------
+
+describe("version gate (integration)", () => {
+  const agent = opencodePlugin.create();
+  const originalPath = process.env.PATH;
+  const dirs: string[] = [];
+  const config = {
+    sessionId: "gate-1",
+    projectConfig: {
+      name: "test",
+      repo: "owner/repo",
+      path: "/workspace",
+      defaultBranch: "main",
+      sessionPrefix: "test",
+    },
+    prompt: "start",
+  };
+
+  async function onlyOnPath(dir: string): Promise<void> {
+    dirs.push(dir);
+    process.env.PATH = dir;
+  }
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+  });
+
+  afterAll(async () => {
+    for (const dir of dirs) await rm(dir, { recursive: true, force: true });
+  });
+
+  it("accepts opencode v2.0.29: the launch command is built and detect() finds it", async () => {
+    await onlyOnPath(await writeFakeOpencode("opencode v2.0.29"));
+    expect(agent.getLaunchCommand(config)).toContain("opencode api session.create");
+    expect(opencodePlugin.detect!()).toBe(true);
+  });
+
+  it("refuses 1.18.35 before any command is built, and detect() hides it", async () => {
+    await onlyOnPath(await writeFakeOpencode("1.18.35"));
+    expect(() => agent.getLaunchCommand(config)).toThrow(
+      "ao needs OpenCode 2.0.29 or later (found 1.18.35)",
+    );
+    expect(opencodePlugin.detect!()).toBe(false);
+  });
+
+  it("refuses a host with no opencode on PATH and says so", async () => {
+    await onlyOnPath(await mkdtemp(join(tmpdir(), "ao-inttest-opencode-empty-")));
+    expect(() => agent.getLaunchCommand(config)).toThrow("not found on PATH");
+    expect(opencodePlugin.detect!()).toBe(false);
   });
 });
 
