@@ -69,7 +69,10 @@ Durable progress record for this fork. Dated events only; the current state live
   run with secrets, its live OpenCode block now meets 2.0.29; m-8: one test comment). Left open: a timeout
   on `npm ls` (needs `lib/shell.ts`), the export surface, the picker hint. `ao-cli` tests 243 passed.
   Reviews `development/reviews/i6_review_r{1,2}_*.md`. Fast-forward, tree equal to the reviewed tree.
-  Not pushed, not rebuilt.
+  Not pushed. Rebuilt in place on the owner's word (D-3), 2026-10-14 23:30 EDT, at `20af1efa` (I-6 and
+  docs only; I-1 is not on `main`): all 12 packages `Done`; the built `resolveOpenCodeInstall()` returns
+  `npm install -g @opencode/cli` with no notice on this host (`npm ls -g opencode-ai` exit 1); the plugin
+  `dist` is unchanged. I-6 is not used by the lifecycle workers, so they were not restarted.
 
 ## Decisions
 
