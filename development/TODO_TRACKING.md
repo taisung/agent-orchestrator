@@ -126,6 +126,25 @@ Durable progress record for this fork. Dated events only; the current state live
   Cherry-picked; the tree equals the reviewed `353ef189` outside `development/`. Not pushed. No build:
   CI and lint files only. The first CI run on `main` after a push is the live check of step 6.
 
+- `5884f9ad..9f06dc25` (2026-10-15, the `~/.ao/bin` PATH fix, 13 commits) - Codex, Gemini and OpenCode
+  panes get the ao `git` and `gh` wrappers on their PATH (the tmux client now carries the built PATH, so
+  no typed `export PATH` and no `/usr/local/bin` promotion); the wrappers write only true values (the
+  real HEAD branch of the session's own worktree, `pr=` and `pr_open` on a recognised PR URL, never
+  `merged`) and guard against recursion by file identity; Claude Code keeps its own hook only (owner
+  decision M-4 a): its launches remove every inherited ao wrapper directory (physical resolution, every
+  `*/.ao/bin` reserved for ao) and every relative PATH entry, and set an empty `GH_PATH`. Authors: Muse
+  ao-15 (round 1), Opus 5.5 ao-19 (rounds 2 to 4). Reviews: ao-18 Opus r1, ao-23 sol-6-1 r2 to r4
+  (`development/reviews/aobin_path_review_r{1..4}_*.md`); r4 LAND-SAFE under the owner's stop rule.
+  Cherry-picked; the fix files equal the reviewed `608b2b6b`. Not pushed. **Not live**: it needs a
+  rebuild of the primary checkout on the owner's word, and before that every old-build `ao` process
+  that can install the wrappers (in-flight spawn, batch, start or restore calls, resident SessionManager
+  users such as the lifecycle workers) must finish or be restarted, or it can put the 0.2.1 wrappers
+  back. The owner text is in the r4 review, section "Owner text audit and corrected text".
+  Known limits: a user-made chain of nine or more dangling symlinks to a future wrapper directory
+  survives the filter; shell startup files can add the wrappers or a relative entry back inside a pane
+  (this host's startup adds `.`); the Claude hook's quoted-branch and direct-merge limits remain; Herdr
+  is not measured.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
