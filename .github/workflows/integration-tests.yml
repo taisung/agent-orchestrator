@@ -41,7 +41,7 @@ jobs:
         run: npm install -g @openai/codex
 
       - name: Install OpenCode
-        run: npm install -g opencode-ai
+        run: npm install -g @opencode/cli
 
       # --- Build project ---
       - run: pnpm install --frozen-lockfile

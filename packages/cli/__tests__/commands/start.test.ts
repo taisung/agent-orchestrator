@@ -16,6 +16,32 @@ import type { SessionManager } from "@aoagents/ao-core";
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
+const { spawnCalls } = vi.hoisted(() => {
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+  return { spawnCalls: [] as Array<[string, string[]]> };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { EventEmitter } = await import("node:events");
+  return {
+    ...actual,
+    spawn: ((cmd: string, args: string[]) => {
+      spawnCalls.push([cmd, args]);
+      const emitter = new EventEmitter();
+      setImmediate(() => emitter.emit("close", 0));
+      return emitter;
+    }) as unknown as typeof actual.spawn,
+  };
+});
+
+vi.mock("../../src/lib/prompts.js", () => ({
+  promptSelect: vi.fn(),
+  promptConfirm: vi.fn(),
+}));
+
 const {
   mockExec,
   mockExecSilent,
@@ -161,6 +187,7 @@ import {
   isLegacyOpenCodeInstalled,
   resolveOpenCodeInstall,
 } from "../../src/commands/start.js";
+import { promptSelect, promptConfirm } from "../../src/lib/prompts.js";
 
 let tmpDir: string;
 let program: Command;
@@ -168,6 +195,7 @@ let cwdSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "ao-start-test-"));
+  spawnCalls.length = 0;
 
   program = new Command();
   program.exitOverride();
@@ -208,6 +236,13 @@ beforeEach(() => {
   mockStopLifecycleWorker.mockReset();
   mockStopLifecycleWorker.mockResolvedValue(true);
   mockProcessCwd.mockReset();
+  // Install-prompt defaults: skip the runtime install and decline optional
+  // tool installs, preserving the pre-TTY behavior for tests that never
+  // exercise the install path.
+  vi.mocked(promptSelect).mockReset();
+  vi.mocked(promptSelect).mockResolvedValue("skip");
+  vi.mocked(promptConfirm).mockReset();
+  vi.mocked(promptConfirm).mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -964,10 +999,13 @@ describe("start command — OpenCode 2.x install option", () => {
     );
 
     await expect(isLegacyOpenCodeInstalled()).resolves.toBe(true);
-    expect(mockExec).toHaveBeenCalledWith(
-      "npm",
-      ["ls", "-g", "opencode-ai", "--depth=0", "--json"],
-    );
+    expect(mockExec).toHaveBeenCalledWith("npm", [
+      "ls",
+      "-g",
+      "opencode-ai",
+      "--depth=0",
+      "--json",
+    ]);
   });
 
   it("detects legacy absent from the read-only npm ls exit-1 shape", async () => {
@@ -976,16 +1014,32 @@ describe("start command — OpenCode 2.x install option", () => {
     mockNpmLsFailure('{\n  "name": "lib"\n}\n');
 
     await expect(isLegacyOpenCodeInstalled()).resolves.toBe(false);
-    expect(mockExec).toHaveBeenCalledWith(
-      "npm",
-      ["ls", "-g", "opencode-ai", "--depth=0", "--json"],
-    );
+    expect(mockExec).toHaveBeenCalledWith("npm", [
+      "ls",
+      "-g",
+      "opencode-ai",
+      "--depth=0",
+      "--json",
+    ]);
   });
 
   it("treats a failed detection as absent without throwing", async () => {
     mockNpmLsFailure(null);
 
     await expect(isLegacyOpenCodeInstalled()).resolves.toBe(false);
+  });
+
+  it("detects legacy present from err.stdout when npm exits nonzero", async () => {
+    // npm can reject yet still print the package on stdout; the catch
+    // branch parses that output instead of defaulting to absent.
+    mockNpmLsFailure(
+      JSON.stringify({
+        name: "lib",
+        dependencies: { "opencode-ai": { version: "1.19.0", overridden: false } },
+      }),
+    );
+
+    await expect(isLegacyOpenCodeInstalled()).resolves.toBe(true);
   });
 
   it("resolves the install plan relationally: present adds the flag and notice, absent adds neither", async () => {
@@ -1016,5 +1070,89 @@ describe("start command — OpenCode 2.x install option", () => {
 
     expect(failed.args).toEqual(absent.args);
     expect(failed.notice).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode install call site — through `promptInstallAgentRuntime` via
+// `createConfigOnly`, asserting the argv that reaches `spawn`. `spawn` and
+// the prompts are mocked, and `exec` is mocked, so no real npm runs.
+// ---------------------------------------------------------------------------
+
+describe("start command — OpenCode install call site", () => {
+  const presentStdout = JSON.stringify({
+    name: "lib",
+    dependencies: { "opencode-ai": { version: "1.19.0", overridden: false } },
+  });
+
+  async function runInstallChoice(choice: string): Promise<void> {
+    const { detectEnvironment } = await import("../../src/lib/detect-env.js");
+    vi.mocked(detectEnvironment).mockResolvedValue({
+      isGitRepo: false,
+      gitRemote: null,
+      ownerRepo: null,
+      currentBranch: null,
+      defaultBranch: null,
+      hasTmux: true,
+      hasGh: false,
+      ghAuthed: false,
+      hasLinearKey: false,
+      hasSlackWebhook: false,
+    });
+    const { detectProjectType } = await import("../../src/lib/project-detection.js");
+    vi.mocked(detectProjectType).mockReturnValue({ languages: [], frameworks: [] });
+    const { detectAvailableAgents, detectAgentRuntime } =
+      await import("../../src/lib/detect-agent.js");
+    vi.mocked(detectAvailableAgents).mockResolvedValue([]);
+    vi.mocked(detectAgentRuntime).mockResolvedValue("claude-code");
+    const { isHumanCaller } = await import("../../src/lib/caller-context.js");
+    vi.mocked(isHumanCaller).mockReturnValue(true);
+    vi.mocked(promptSelect).mockResolvedValue(choice);
+    mockProcessCwd.mockReturnValue(tmpDir);
+    await createConfigOnly();
+  }
+
+  function loggedOutput(): string {
+    return vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+  }
+
+  it("opencode with legacy absent installs @opencode/cli with no --force and no notice", async () => {
+    mockExec.mockRejectedValue(
+      Object.assign(new Error("Command failed: npm ls -g opencode-ai"), {
+        stdout: '{\n  "name": "lib"\n}\n',
+        stderr: "",
+        code: 1,
+      }),
+    );
+
+    await runInstallChoice("opencode");
+
+    expect(spawnCalls).toEqual([["npm", ["install", "-g", "@opencode/cli"]]]);
+    expect(loggedOutput()).not.toContain("--force");
+  });
+
+  it("opencode with legacy present adds --force and prints the one-line notice", async () => {
+    mockExec.mockResolvedValue({ stdout: presentStdout, stderr: "" });
+
+    await runInstallChoice("opencode");
+
+    expect(spawnCalls).toEqual([["npm", ["install", "-g", "@opencode/cli", "--force"]]]);
+    const logged = loggedOutput();
+    expect(logged).toContain("--force");
+    expect(logged).toContain("opencode-ai");
+  });
+
+  it("another agent with legacy present keeps its own row and runs no detection", async () => {
+    mockExec.mockResolvedValue({ stdout: presentStdout, stderr: "" });
+
+    await runInstallChoice("codex");
+
+    const codex = AGENT_INSTALL_OPTIONS.find((o) => o.id === "codex");
+    expect(spawnCalls).toEqual([[codex?.cmd, codex?.args]]);
+    expect(mockExec.mock.calls.some((c) => c[0] === "npm")).toBe(false);
+    expect(loggedOutput()).not.toContain("--force");
   });
 });

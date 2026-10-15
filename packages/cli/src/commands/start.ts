@@ -425,7 +425,7 @@ export const AGENT_INSTALL_OPTIONS: AgentInstallOption[] = [
     id: "opencode",
     label: "OpenCode",
     cmd: "npm",
-    args: ["install", "-g", "@opencode/cli"],
+    args: ["install", "-g", OPENCODE_NPM_PACKAGE],
   },
 ];
 
