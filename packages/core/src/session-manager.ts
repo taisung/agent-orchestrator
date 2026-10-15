@@ -19,6 +19,7 @@ import {
   mkdirSync,
   utimesSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { execFile } from "node:child_process";
 import { basename, join, resolve } from "node:path";
@@ -74,10 +75,13 @@ import {
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
   getOpenCodeSession,
-  listOpenCodeSessionsByTitle,
+  findOpenCodeSessionsByTitle,
+  waitForOpenCodeSession,
   removeOpenCodeSession,
   interruptOpenCodeSession,
+  OpenCodeApiTimeoutError,
   OPENCODE_API_TIMEOUT_MS,
+  type OpenCodeApiSession,
 } from "./opencode-api.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
@@ -88,13 +92,117 @@ const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
 
+/**
+ * Row 23 (until I-3 creates the session in Node): how long a spawn or an
+ * orchestrator start waits for its pane to create the OpenCode session. The
+ * pane creates it only after `runtime.create` returns: a login shell starts,
+ * then `opencode api session.create` runs (0.14 s on a warm service, 0.56 s
+ * when the call must first start the background service; measured on
+ * 2.0.29). 15 s is many times that, and it is the launch-check bound that
+ * 0009 section 11 proposes for I-3. A hanging service ends the wait at this
+ * bound too.
+ */
+const OPENCODE_SPAWN_DISCOVERY_WINDOW_MS = 15_000;
+
+/**
+ * Pause between two searches of that wait. One search is one `opencode api`
+ * process (about 0.14 s and 0.2 s of CPU); a 500 ms pause keeps the wait
+ * under half a core and adds at most about 0.5 s after the pane's create.
+ */
+const OPENCODE_SPAWN_DISCOVERY_POLL_MS = 500;
+
+/** One line for the operator on stderr, where the command itself still succeeds. */
+function warnOperator(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+/** The error text on one line: an `execFile` message ends with a newline. */
+function shortErrorText(err: unknown): string {
+  const text = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
+/**
+ * The directories that the OpenCode session of a workspace can carry in
+ * `location.directory`. The pane sends `process.cwd()`, which is the real
+ * path, so a workspace path behind a symlink is searched under both names.
+ */
+function openCodeDirectoriesFor(workspacePath: string): string[] {
+  const directories = [resolve(workspacePath)];
+  try {
+    directories.push(realpathSync(workspacePath));
+  } catch {
+    // A missing path has no real path; the given path is the only candidate.
+  }
+  return [...new Set(directories)];
+}
+
+function describeOpenCodeCandidate(session: OpenCodeApiSession): string {
+  const created = session.time?.created;
+  const createdText =
+    typeof created === "number" && Number.isFinite(created)
+      ? new Date(created).toISOString()
+      : "unknown";
+  return `${session.id}  directory ${session.location?.directory ?? "unknown"}  created ${createdText}`;
+}
+
+/**
+ * Row 23 (until I-3): wait for the pane of a new session to create its
+ * OpenCode session, and return the ID to store. A session is accepted only
+ * when its title is exactly `AO:<sessionId>`, its `location.directory` is
+ * this session's workspace, and it was created at or after `launchStartedAt`
+ * (B-2: the title search spans every project of the service, and two fleets
+ * with the same session prefix give the same title). When the wait ends
+ * without one match, the spawn still succeeds, and the operator gets one
+ * line that names `ao session remap`.
+ */
+async function discoverNewOpenCodeSession(
+  sessionId: string,
+  workspacePath: string,
+  launchStartedAt: number,
+): Promise<string | undefined> {
+  const title = `AO:${sessionId}`;
+  try {
+    const result = await waitForOpenCodeSession(
+      {
+        title,
+        directories: openCodeDirectoriesFor(workspacePath),
+        createdAtOrAfter: launchStartedAt,
+      },
+      OPENCODE_SPAWN_DISCOVERY_WINDOW_MS,
+      OPENCODE_SPAWN_DISCOVERY_POLL_MS,
+    );
+    if (result.status === "found") return result.session.id;
+    if (result.status === "ambiguous") {
+      warnOperator(
+        `ao: ${result.sessions.length} OpenCode sessions titled ${title} in ${workspacePath} were created during this start (${result.sessions.map((s) => s.id).join(", ")}); none is stored for ${sessionId}. Run \`ao session remap ${sessionId}\` to list them.`,
+      );
+      return undefined;
+    }
+    const lastError =
+      result.lastError !== undefined
+        ? ` Last search error: ${shortErrorText(result.lastError)}`
+        : "";
+    warnOperator(
+      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI.${lastError}`,
+    );
+    return undefined;
+  } catch (err) {
+    warnOperator(
+      `ao: the search for the OpenCode session of ${sessionId} failed (${shortErrorText(err)}). Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI.`,
+    );
+    return undefined;
+  }
+}
+
 async function deleteOpenCodeSession(sessionId: string): Promise<void> {
   const validatedSessionId = asValidOpenCodeSessionId(sessionId);
   if (!validatedSessionId) return;
   // Rows 9 and 21: `session.remove` by ID. A 404 (already removed) is success.
-  // On timeout or another error, retry, then throw with `cause` from the
-  // helper; `kill` purge swallows (best effort, archive anyway), `cleanup`
-  // records an error entry.
+  // On another error, retry, then throw with `cause` from the helper; `kill`
+  // purge warns (and archives anyway), `cleanup` records an error entry. A
+  // timeout ends the retries: three tries of a hanging service cost three
+  // full bounds (about 30 s) and the third answers no sooner than the first.
   const retryDelaysMs = [0, 200, 600];
   let lastError: unknown;
   for (const delayMs of retryDelaysMs) {
@@ -106,6 +214,7 @@ async function deleteOpenCodeSession(sessionId: string): Promise<void> {
       return;
     } catch (err) {
       lastError = err;
+      if (err instanceof OpenCodeApiTimeoutError) break;
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -115,62 +224,16 @@ async function interruptThenRemoveOpenCodeSession(sessionId: string): Promise<vo
   const validatedSessionId = asValidOpenCodeSessionId(sessionId);
   if (!validatedSessionId) return;
   // Row 20 (`ao session kill --purge-session`): stop a running loop before
-  // the delete. Both steps are best effort here; a 404 is already gone.
-  // On timeout the helper throws; the `kill` caller swallows and archives
-  // anyway. `cleanup` never calls this (archived sessions are not running).
+  // the delete. The interrupt is best effort (a 404 is already gone, and the
+  // remove runs even when the interrupt hangs). The remove throws after its
+  // retries; the `kill` caller warns and archives anyway. `cleanup` never
+  // calls this (archived sessions are not running).
   try {
     await interruptOpenCodeSession(validatedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
   } catch {
     // Best effort: fall through to the remove even when the interrupt hangs.
   }
   await deleteOpenCodeSession(validatedSessionId);
-}
-
-interface OpenCodeSessionListEntry {
-  id: string;
-  title: string;
-  updatedAt?: number;
-}
-
-function toListEntry(apiSession: {
-  id: string;
-  title?: string;
-  time?: { updated?: number };
-}): OpenCodeSessionListEntry {
-  const entry: OpenCodeSessionListEntry = {
-    id: apiSession.id,
-    title: typeof apiSession.title === "string" ? apiSession.title : "",
-  };
-  const updated = apiSession.time?.updated;
-  if (typeof updated === "number" && Number.isFinite(updated)) {
-    entry.updatedAt = updated;
-  }
-  return entry;
-}
-
-async function discoverOpenCodeSessionIdsByTitle(
-  sessionId: string,
-  timeoutMs = OPENCODE_DISCOVERY_TIMEOUT_MS,
-): Promise<string[]> {
-  // Row 22 (manual `remap`) and, until I-3, row 23 (spawn-time discovery):
-  // `session.list --param search=AO:<id>` plus an exact title match (0009
-  // section 3: `search` is a substring). On timeout the helper throws; `remap`
-  // propagates (a hang reports as a hang, not as "missing"), while the
-  // spawn-time callers treat it as "not discovered" and continue.
-  const title = `AO:${sessionId}`;
-  const sessions = await listOpenCodeSessionsByTitle(title, timeoutMs);
-  return sessions.map((entry) => toListEntry(entry)).map((entry) => entry.id);
-}
-
-async function discoverOpenCodeSessionIdByTitle(
-  sessionId: string,
-  timeoutMs?: number,
-): Promise<string | undefined> {
-  const matches = await discoverOpenCodeSessionIdsByTitle(
-    sessionId,
-    timeoutMs ?? OPENCODE_DISCOVERY_TIMEOUT_MS,
-  );
-  return matches[0];
 }
 
 /** Escape regex metacharacters in a string. */
@@ -578,16 +641,37 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return [...new Set(ids)];
   }
 
+  /**
+   * The live AO session of this project, other than `exceptSessionId`, that
+   * stores `openCodeSessionId`. Live means active metadata (not archived)
+   * with a status that is not terminal; a stale non-terminal status counts as
+   * live, which keeps the ID. Issue reuse (row 24) puts one OpenCode session
+   * ID into a new AO session while an older AO session still stores it, so
+   * two AO sessions can share one ID. A purge for one of them must then
+   * neither interrupt nor remove it (m-4).
+   */
+  function findLiveOpenCodeSessionHolder(
+    sessionsDir: string,
+    openCodeSessionId: string,
+    exceptSessionId?: SessionId,
+  ): SessionId | undefined {
+    for (const id of listMetadata(sessionsDir)) {
+      if (id === exceptSessionId) continue;
+      const raw = readMetadataRaw(sessionsDir, id);
+      if (!raw || TERMINAL_SESSION_STATUSES.has(raw["status"] ?? "")) continue;
+      if (asValidOpenCodeSessionId(raw["opencodeSessionId"]) === openCodeSessionId) return id;
+    }
+    return undefined;
+  }
+
   async function resolveOpenCodeSessionReuse(options: {
     sessionsDir: string;
     criteria: { issueId?: string; sessionId?: string };
     strategy: "reuse" | "delete" | "ignore";
-    includeTitleDiscoveryForSessionId?: boolean;
   }): Promise<string | undefined> {
     // Row 24: reuse by the stored ID only, no title discovery (owner Q7).
-    // `includeTitleDiscoveryForSessionId` stays in the signature so older
-    // callers still typecheck, but it is ignored: even the orchestrator
-    // `delete` path deletes only stored IDs, never title matches.
+    // The orchestrator `delete` strategy deletes stored IDs only, too; an
+    // older OpenCode session that no metadata stores is not found by title.
     const { sessionsDir, criteria, strategy } = options;
     if (strategy === "ignore") return undefined;
 
@@ -595,6 +679,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     if (strategy === "delete") {
       for (const openCodeSessionId of [...new Set(candidateIds)]) {
+        // m-4: keep an ID that another live AO session still runs in. The
+        // orchestrator path replaces the session with its own ID, so that
+        // record does not count as another holder.
+        if (findLiveOpenCodeSessionHolder(sessionsDir, openCodeSessionId, criteria.sessionId)) {
+          continue;
+        }
         await deleteOpenCodeSession(openCodeSessionId);
       }
       return undefined;
@@ -606,10 +696,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // service does not block the spawn; the spawn proceeds without reuse.
     for (const openCodeSessionId of [...new Set(candidateIds)]) {
       try {
-        const existing = await getOpenCodeSession(
-          openCodeSessionId,
-          OPENCODE_DISCOVERY_TIMEOUT_MS,
-        );
+        const existing = await getOpenCodeSession(openCodeSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
         if (existing) return openCodeSessionId;
       } catch {
         continue;
@@ -829,18 +916,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   async function ensureHandleAndEnrich(
     session: Session,
     sessionName: string,
-    sessionsDir: string,
     project: ProjectConfig,
-    effectiveAgentName: string,
     plugins: ReturnType<typeof resolvePlugins>,
   ): Promise<void> {
-    // I-2: no title auto-discovery here. Only the stored ID is used; a
-    // session without one stays unmapped until the operator runs
-    // `ao session remap` (row 22) or the spawn-time discovery (row 23, I-3).
-    void effectiveAgentName;
-    void sessionName;
-    void sessionsDir;
-
+    // I-2: no title auto-discovery here (owner Q7). The stored ID comes from
+    // the spawn (row 23) or from a manual `ao session remap` (row 22).
     const tmuxNameFromMetadata = session.metadata["tmuxName"]?.trim();
     const hasTmuxNameFromMetadata =
       typeof tmuxNameFromMetadata === "string" && tmuxNameFromMetadata.length > 0;
@@ -1107,6 +1187,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: spawnConfig.subagent ?? selection.subagent,
     };
 
+    // Row 23: the pane of this spawn creates its OpenCode session after this
+    // time, so an older session with the same title can never be accepted.
+    const launchStartedAt = Date.now();
     let handle: RuntimeHandle;
     try {
       const launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
@@ -1185,24 +1268,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         await plugins.agent.postLaunchSetup(session);
       }
 
-      if (
-        plugins.agent.name === "opencode" &&
-        opencodeIssueSessionStrategy === "reuse" &&
-        !session.metadata["opencodeSessionId"]
-      ) {
-        // Row 23 (kept for I-2, removed in I-3): title discovery after spawn.
-        // Best effort: on timeout or another API error, continue without a
-        // mapping rather than failing the spawn.
-        try {
-          const discovered = await discoverOpenCodeSessionIdByTitle(
-            sessionId,
-            OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS,
-          );
-          if (discovered) {
-            session.metadata["opencodeSessionId"] = discovered;
-          }
-        } catch {
-          // No mapping; the operator can `ao session remap` it later.
+      if (plugins.agent.name === "opencode" && !session.metadata["opencodeSessionId"]) {
+        // Row 23 (until I-3): wait for the pane to create this session's
+        // OpenCode session and store its ID, for every issue strategy (the
+        // strategy decides about older sessions, not about this one). Never
+        // throws: when the wait ends without one match, the spawn succeeds
+        // without a mapping and the operator gets the `ao session remap` line.
+        const discovered = await discoverNewOpenCodeSession(
+          sessionId,
+          workspacePath,
+          launchStartedAt,
+        );
+        if (discovered) {
+          session.metadata["opencodeSessionId"] = discovered;
         }
       }
 
@@ -1505,7 +1583,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           sessionsDir,
           criteria: { sessionId },
           strategy: "delete",
-          includeTitleDiscoveryForSessionId: true,
         });
       }
     } catch (err) {
@@ -1543,6 +1620,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     }
+
+    // Row 23: the orchestrator pane creates its OpenCode session after this
+    // time. Two fleets can share both the title and the directory (the same
+    // project path and session prefix in two configs); this time separates
+    // an older orchestrator session from this one.
+    const launchStartedAt = Date.now();
 
     // Create runtime — clean up worktree and metadata on failure
     let handle: RuntimeHandle;
@@ -1605,23 +1688,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         await plugins.agent.postLaunchSetup(session);
       }
 
-      if (
-        plugins.agent.name === "opencode" &&
-        orchestratorSessionStrategy === "reuse" &&
-        !session.metadata["opencodeSessionId"]
-      ) {
-        // Row 23 (kept for I-2, removed in I-3): title discovery after
-        // orchestrator start. Best effort; a timeout leaves no mapping.
-        try {
-          const discovered = await discoverOpenCodeSessionIdByTitle(
-            sessionId,
-            OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS,
-          );
-          if (discovered) {
-            session.metadata["opencodeSessionId"] = discovered;
-          }
-        } catch {
-          // No mapping; the operator can `ao session remap` it later.
+      if (plugins.agent.name === "opencode" && !session.metadata["opencodeSessionId"]) {
+        // Row 23 (until I-3): the same wait as a worker spawn, for every
+        // orchestrator strategy. Never throws; see `discoverNewOpenCodeSession`.
+        const discovered = await discoverNewOpenCodeSession(
+          sessionId,
+          workspacePath,
+          launchStartedAt,
+        );
+        if (discovered) {
+          session.metadata["opencodeSessionId"] = discovered;
         }
       }
 
@@ -1678,14 +1754,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const enrichTimeout = new Promise<void>((resolve) => {
         enrichTimeoutId = setTimeout(resolve, OPENCODE_DISCOVERY_TIMEOUT_MS + 2_000);
       });
-      const enrichPromise = ensureHandleAndEnrich(
-        session,
-        sessionName,
-        sessionsDir,
-        project,
-        effectiveAgentName,
-        plugins,
-      ).catch(() => {});
+      const enrichPromise = ensureHandleAndEnrich(session, sessionName, project, plugins).catch(
+        () => {},
+      );
       try {
         await Promise.race([enrichPromise, enrichTimeout]);
       } finally {
@@ -1731,14 +1802,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const selection = resolveSelectionForSession(project, sessionId, repaired.raw);
       const effectiveAgentName = selection.agentName;
       const plugins = resolvePlugins(project, effectiveAgentName);
-      await ensureHandleAndEnrich(
-        session,
-        sessionId,
-        sessionsDir,
-        project,
-        effectiveAgentName,
-        plugins,
-      );
+      await ensureHandleAndEnrich(session, sessionId, project, plugins);
 
       return session;
     }
@@ -1787,17 +1851,29 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let didPurgeOpenCodeSession = false;
     if (options?.purgeOpenCode === true && cleanupAgent === "opencode") {
       // Row 20: `session.interrupt`, then `session.remove`, by the stored ID
-      // only (no title discovery). Best effort: a timeout or another error
-      // still archives the AO session; the OpenCode session may need a manual
-      // `ao session cleanup` retry once the service answers again.
+      // only (no title discovery). A failure still archives the AO session
+      // without `opencodeCleanedAt`, so `ao session cleanup` retries the
+      // removal; the operator gets one line that says so (m-5).
       const mappedOpenCodeSessionId = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
+      const holder = mappedOpenCodeSessionId
+        ? findLiveOpenCodeSessionHolder(sessionsDir, mappedOpenCodeSessionId, sessionId)
+        : undefined;
 
-      if (mappedOpenCodeSessionId) {
+      if (mappedOpenCodeSessionId && holder) {
+        // m-4: issue reuse gave this ID to a live session too; an interrupt
+        // would stop its running turn. Not marked cleaned, so a later
+        // `ao session cleanup` removes it once no live session holds it.
+        warnOperator(
+          `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${sessionId}: live session ${holder} uses it.`,
+        );
+      } else if (mappedOpenCodeSessionId) {
         try {
           await interruptThenRemoveOpenCodeSession(mappedOpenCodeSessionId);
           didPurgeOpenCodeSession = true;
-        } catch {
-          void 0;
+        } catch (err) {
+          warnOperator(
+            `ao: could not remove OpenCode session ${mappedOpenCodeSessionId} of ${sessionId} (${shortErrorText(err)}); \`ao session cleanup\` retries the removal.`,
+          );
         }
       }
     }
@@ -1933,7 +2009,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
           continue;
         }
-        if (cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode) {
+        if (
+          cleanupAgent === "opencode" &&
+          mappedOpenCodeSessionId &&
+          shouldPurgeOpenCode &&
+          findLiveOpenCodeSessionHolder(sessionsDir, mappedOpenCodeSessionId, archivedId)
+        ) {
+          // m-4: a live session still runs in this OpenCode session (issue
+          // reuse); remove it only once no live session holds it.
+          pushSkipped(projectKey, archivedId);
+        } else if (cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode) {
           if (!options?.dryRun) {
             try {
               await deleteOpenCodeSession(mappedOpenCodeSessionId);
@@ -1972,14 +2057,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function send(sessionId: SessionId, message: string): Promise<void> {
-    const { raw, sessionsDir, project } = requireSessionRecord(sessionId);
+    const { raw, project } = requireSessionRecord(sessionId);
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
     const selectedAgent = selection.agentName;
-    // I-2: no title discovery before a send. Only the stored ID is used; a
-    // session without one sends through the runtime with no API timestamp
-    // check (the operator can `ao session remap` it first).
-    void sessionsDir;
+    // I-2: no title discovery before a send (owner Q7). Only the stored ID is
+    // used; a session without one sends through the runtime with no API
+    // timestamp check.
     const parsedHandle = raw["runtimeHandle"]
       ? safeJsonParse<RuntimeHandle>(raw["runtimeHandle"])
       : null;
@@ -2027,10 +2111,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // error, return undefined so the send confirmation falls back to the
       // pane-output checks instead of failing the send.
       try {
-        const existing = await getOpenCodeSession(
-          mappedSessionId,
-          OPENCODE_DISCOVERY_TIMEOUT_MS,
-        );
+        const existing = await getOpenCodeSession(mappedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
         const updated = existing?.time?.updated;
         return typeof updated === "number" && Number.isFinite(updated) ? updated : undefined;
       } catch {
@@ -2357,8 +2438,26 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
   }
 
+  /** The latest archived record of `sessionId`, in the first project that has one (like `restore`). */
+  function findArchivedSessionRecord(sessionId: SessionId): LocatedSession | null {
+    for (const [projectId, project] of Object.entries(config.projects)) {
+      const sessionsDir = getProjectSessionsDir(project);
+      const raw = readArchivedMetadataRaw(sessionsDir, sessionId);
+      if (raw) return { raw, sessionsDir, project, projectId };
+    }
+    return null;
+  }
+
   async function remap(sessionId: SessionId, force = false): Promise<string> {
-    const { raw, sessionsDir, project } = requireSessionRecord(sessionId);
+    // A killed session is archived, and its refused restore tells the
+    // operator to run `ao session remap`, so remap also repairs the latest
+    // archived record when there is no active one.
+    const active = findSessionRecord(sessionId);
+    const located = active ?? findArchivedSessionRecord(sessionId);
+    if (!located) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    const { raw, sessionsDir, project } = located;
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
     const selectedAgent = selection.agentName;
@@ -2366,23 +2465,47 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Session ${sessionId} is not using the opencode agent`);
     }
 
-    // Row 22: manual repair only. `session.list --param search` plus an exact
-    // title match (no substring fallback). On timeout the helper throws, so a
-    // hanging binary reports as a hang rather than as "missing".
     const mapped = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
-    const discovered = force
-      ? await discoverOpenCodeSessionIdByTitle(sessionId, OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS)
-      : (mapped ??
-        (await discoverOpenCodeSessionIdByTitle(
-          sessionId,
-          OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS,
-        )));
-    if (!discovered) {
-      throw new Error(`OpenCode session mapping is missing for ${sessionId}`);
+    if (mapped && !force) return mapped;
+
+    // Row 22: manual repair only. The exact title `AO:<id>` in this session's
+    // workspace (B-2: the search spans every project of the service, and two
+    // fleets with the same session prefix give the same title). More than one
+    // candidate is refused with the list; this never picks one. On timeout
+    // the helper throws, so a hanging binary reports as a hang, not as
+    // "missing".
+    const title = `AO:${sessionId}`;
+    const workspacePath = raw["worktree"] || project.path;
+    const candidates = await findOpenCodeSessionsByTitle(
+      { title, directories: openCodeDirectoriesFor(workspacePath) },
+      OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS,
+    );
+    const [candidate] = candidates;
+    if (!candidate) {
+      throw new Error(
+        `OpenCode session mapping is missing for ${sessionId}: no OpenCode session titled ${title} in ${workspacePath}`,
+      );
+    }
+    if (candidates.length > 1) {
+      throw new Error(
+        [
+          `${candidates.length} OpenCode sessions titled ${title} in ${workspacePath}; refusing to pick one for ${sessionId}:`,
+          ...candidates.map((entry) => `  ${describeOpenCodeCandidate(entry)}`),
+        ].join("\n"),
+      );
     }
 
-    updateMetadata(sessionsDir, sessionId, { opencodeSessionId: discovered });
-    return discovered;
+    if (active) {
+      updateMetadata(sessionsDir, sessionId, { opencodeSessionId: candidate.id });
+    } else {
+      // An archive purged earlier carries `opencodeCleanedAt`, and `cleanup`
+      // skips such a record; clear it so the new ID is removed in its turn.
+      updateArchivedMetadata(sessionsDir, sessionId, {
+        opencodeSessionId: candidate.id,
+        opencodeCleanedAt: "",
+      });
+    }
+    return candidate.id;
   }
 
   async function restore(sessionId: SessionId): Promise<Session> {
@@ -2422,18 +2545,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
-    const selectedAgent = selection.agentName;
-    if (selectedAgent === "opencode" && !asValidOpenCodeSessionId(raw["opencodeSessionId"])) {
-      // A4: no stored OpenCode session ID. No title search on restore (I-2);
-      // the operator repairs the mapping by hand. The plugin's
-      // `getRestoreCommand` runs the I-1 version probe first, so a refused
-      // binary still reports the version problem (not only this mapping
-      // error) once the restore command is built below.
-      throw new SessionNotRestorableError(
-        sessionId,
-        `no stored OpenCode session ID for ${sessionId}; run \`ao session remap ${sessionId}\` to re-discover it by exact title`,
-      );
-    }
 
     // 2. Reconstruct Session from metadata and enrich with live runtime state.
     //    metadataToSession sets activity: null, so without enrichment a crashed
@@ -2450,6 +2561,52 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       throw new SessionNotRestorableError(sessionId, "session is not in a terminal state");
     }
+
+    // 4. Validate required plugins (plugins already resolved above for enrichment)
+    if (!plugins.runtime) {
+      throw new Error(`Runtime plugin '${project.runtime ?? config.defaults.runtime}' not found`);
+    }
+    if (!plugins.agent) {
+      throw new Error(`Agent plugin '${selection.agentName}' not found`);
+    }
+
+    // 5. Get launch command — try restore command first, fall back to fresh launch.
+    //    This runs before any change: before the archive is copied back, the
+    //    workspace is recreated or the old runtime is destroyed. An agent can
+    //    refuse the restore, and a refusal must change nothing and leave the
+    //    surviving pane and its scrollback in place. The OpenCode plugin
+    //    refuses here (I-2 A4, M-1, m-1): its version gate runs first, so a
+    //    refused binary names the version problem even when no OpenCode
+    //    session ID is stored; then a missing stored ID and a stored session
+    //    that is gone (404) each raise `SessionNotRestorableError`.
+    const workspacePath = raw["worktree"] || project.path;
+    let launchCommand: string;
+    const agentLaunchConfig = {
+      sessionId,
+      projectConfig: {
+        ...project,
+        agentConfig: {
+          ...selection.agentConfig,
+          ...(selection.role === "orchestrator" ? { permissions: "permissionless" as const } : {}),
+          ...(session.metadata?.opencodeSessionId
+            ? { opencodeSessionId: session.metadata.opencodeSessionId }
+            : {}),
+        },
+      },
+      issueId: session.issueId ?? undefined,
+      permissions: selection.role === "orchestrator" ? "permissionless" : selection.permissions,
+      model: selection.model,
+      subagent: selection.subagent,
+    };
+
+    if (plugins.agent.getRestoreCommand) {
+      const restoreCmd = await plugins.agent.getRestoreCommand(session, project);
+      launchCommand = restoreCmd ?? plugins.agent.getLaunchCommand(agentLaunchConfig);
+    } else {
+      launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+    }
+
+    const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
     if (fromArchive) {
       writeMetadata(sessionsDir, sessionId, {
@@ -2472,16 +2629,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       });
     }
 
-    // 4. Validate required plugins (plugins already resolved above for enrichment)
-    if (!plugins.runtime) {
-      throw new Error(`Runtime plugin '${project.runtime ?? config.defaults.runtime}' not found`);
-    }
-    if (!plugins.agent) {
-      throw new Error(`Agent plugin '${selection.agentName}' not found`);
-    }
-
-    // 5. Check workspace
-    const workspacePath = raw["worktree"] || project.path;
+    // 6. Check workspace
     const workspaceExists = plugins.workspace?.exists
       ? await plugins.workspace.exists(workspacePath)
       : existsSync(workspacePath);
@@ -2516,38 +2664,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         );
       }
     }
-
-    // 6. Get launch command — try restore command first, fall back to fresh launch.
-    //    This runs before the old runtime is destroyed: an agent can refuse the
-    //    restore (for example an unsupported binary version), and a refusal must
-    //    leave the surviving pane and its scrollback in place.
-    let launchCommand: string;
-    const agentLaunchConfig = {
-      sessionId,
-      projectConfig: {
-        ...project,
-        agentConfig: {
-          ...selection.agentConfig,
-          ...(selection.role === "orchestrator" ? { permissions: "permissionless" as const } : {}),
-          ...(session.metadata?.opencodeSessionId
-            ? { opencodeSessionId: session.metadata.opencodeSessionId }
-            : {}),
-        },
-      },
-      issueId: session.issueId ?? undefined,
-      permissions: selection.role === "orchestrator" ? "permissionless" : selection.permissions,
-      model: selection.model,
-      subagent: selection.subagent,
-    };
-
-    if (plugins.agent.getRestoreCommand) {
-      const restoreCmd = await plugins.agent.getRestoreCommand(session, project);
-      launchCommand = restoreCmd ?? plugins.agent.getLaunchCommand(agentLaunchConfig);
-    } else {
-      launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
-    }
-
-    const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
     // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash)
     if (session.runtimeHandle) {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type * as OpenCodeApi from "../../opencode-api.js";
 import {
   mkdirSync,
   readFileSync,
@@ -10,6 +11,7 @@ import { createSessionManager } from "../../session-manager.js";
 import {
   writeMetadata,
   readMetadata,
+  readArchivedMetadataRaw,
   deleteMetadata,
 } from "../../metadata.js";
 import { getSessionsDir, getWorktreesDir } from "../../paths.js";
@@ -23,7 +25,31 @@ import type {
   SCM,
 } from "../../types.js";
 import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "../test-utils.js";
-import { installMockOpencode, installMockOpencodeWithNotFoundDelete } from "./opencode-helpers.js";
+import {
+  installMockOpencode,
+  installMockOpencodeApi,
+  installMockOpencodeWithNotFoundDelete,
+  readMockApiSessions,
+} from "./opencode-helpers.js";
+
+// A test can lower the bound of every `opencode api` remove and interrupt call
+// (the real bound is 10 s), so a hanging-binary test ends in a few seconds.
+// The calls stay real child processes against the fake binary.
+const apiBound = vi.hoisted(() => ({ capMs: undefined as number | undefined }));
+vi.mock("../../opencode-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof OpenCodeApi>();
+  const bound = (timeoutMs?: number): number | undefined =>
+    apiBound.capMs === undefined
+      ? timeoutMs
+      : Math.min(timeoutMs ?? actual.OPENCODE_API_TIMEOUT_MS, apiBound.capMs);
+  return {
+    ...actual,
+    removeOpenCodeSession: (sessionId: string, timeoutMs?: number) =>
+      actual.removeOpenCodeSession(sessionId, bound(timeoutMs)),
+    interruptOpenCodeSession: (sessionId: string, timeoutMs?: number) =>
+      actual.interruptOpenCodeSession(sessionId, bound(timeoutMs)),
+  };
+});
 
 let ctx: TestContext;
 let tmpDir: string;
@@ -42,6 +68,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  apiBound.capMs = undefined;
   teardownTestContext(ctx);
 });
 
@@ -186,10 +213,13 @@ describe("kill", () => {
 
   it("purges mapped OpenCode session when requested", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-kill-purge.log");
-    const mockBin = installMockOpencode(
+    const mockBin = installMockOpencodeApi(
       tmpDir,
-      JSON.stringify([{ id: "ses_purge", title: "AO:app-1" }]),
-      deleteLogPath,
+      [
+        { id: "ses_purge", title: "AO:app-1", directory: "/tmp/ws" },
+        { id: "ses_other", title: "AO:app-2", directory: "/tmp/ws2" },
+      ],
+      { deleteLogPath },
     );
     process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
 
@@ -206,11 +236,16 @@ describe("kill", () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
     await sm.kill("app-1", { purgeOpenCode: true });
 
-    const deleteLog = readFileSync(deleteLogPath, "utf-8");
-    // Row 20: interrupt first, then remove, both by the stored ID.
-    expect(deleteLog).toContain("session.interrupt");
-    expect(deleteLog).toContain("session.remove");
-    expect(deleteLog).toContain("sessionID=ses_purge");
+    // Row 20: interrupt first, then remove, both by the stored ID only. The
+    // interrupt must come first: a remove of a running session leaves its
+    // loop running in the service.
+    const calls = readFileSync(deleteLogPath, "utf-8").trim().split("\n");
+    expect(calls).toEqual([
+      "api session.interrupt --param sessionID=ses_purge",
+      "api session.remove --param sessionID=ses_purge",
+    ]);
+    expect(readMockApiSessions(mockBin).map((session) => session.id)).toEqual(["ses_other"]);
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeTruthy();
   });
 
   it("skips purge when mapped OpenCode session id is invalid", async () => {
@@ -233,6 +268,219 @@ describe("kill", () => {
 
     expect(existsSync(deleteLogPath)).toBe(false);
   }, 15000);
+
+  it("does not search by title on purge when no ID is stored (Q7)", async () => {
+    // A same-title session exists in the session's workspace. Without a
+    // stored ID, a purge touches no OpenCode session.
+    const apiLogPath = join(tmpDir, "opencode-api-kill-unmapped.log");
+    const mockBin = installMockOpencodeApi(
+      tmpDir,
+      [{ id: "ses_same_title", title: "AO:app-1", directory: "/tmp/ws" }],
+      { apiLogPath },
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp/ws",
+      branch: "main",
+      status: "working",
+      project: "my-app",
+      agent: "opencode",
+      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+    });
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.kill("app-1", { purgeOpenCode: true });
+
+    expect(existsSync(apiLogPath)).toBe(false);
+    expect(readMockApiSessions(mockBin).map((session) => session.id)).toEqual(["ses_same_title"]);
+  });
+
+  describe("purge of an OpenCode session that another session uses (m-4)", () => {
+    function writeSharedPair(otherStatus: string): void {
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: "/tmp/ws",
+        branch: "feat/INT-42",
+        status: "working",
+        project: "my-app",
+        issue: "INT-42",
+        agent: "opencode",
+        opencodeSessionId: "ses_shared",
+        runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+      });
+      writeMetadata(sessionsDir, "app-2", {
+        worktree: "/tmp/ws2",
+        branch: "feat/INT-42",
+        status: otherStatus,
+        project: "my-app",
+        issue: "INT-42",
+        agent: "opencode",
+        opencodeSessionId: "ses_shared",
+        runtimeHandle: JSON.stringify(makeHandle("rt-2")),
+      });
+    }
+
+    it("neither interrupts nor removes it while the other session is live", async () => {
+      const apiLogPath = join(tmpDir, "opencode-api-kill-shared.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_shared", title: "AO:app-1", directory: "/tmp/ws" }],
+        { apiLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeSharedPair("working");
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        const sm = createSessionManager({ config, registry: mockRegistry });
+        await sm.kill("app-1", { purgeOpenCode: true });
+
+        expect(existsSync(apiLogPath)).toBe(false);
+        expect(readMockApiSessions(mockBin).map((session) => session.id)).toEqual(["ses_shared"]);
+        expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
+          "kept OpenCode session ses_shared of app-1: live session app-2 uses it",
+        );
+        // Not marked cleaned, so a later `ao session cleanup` can remove it.
+        expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it("removes it when the other session that stores it is killed", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-kill-shared-dead.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_shared", title: "AO:app-1", directory: "/tmp/ws" }],
+        { deleteLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeSharedPair("killed");
+
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      await sm.kill("app-1", { purgeOpenCode: true });
+
+      expect(readFileSync(deleteLogPath, "utf-8")).toContain(
+        "api session.remove --param sessionID=ses_shared",
+      );
+      expect(readMockApiSessions(mockBin)).toEqual([]);
+    });
+
+    it("cleanup keeps an archived mapping while a live session uses it", async () => {
+      const apiLogPath = join(tmpDir, "opencode-api-cleanup-shared.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_shared", title: "AO:app-1", directory: "/tmp/ws" }],
+        { apiLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeSharedPair("working");
+      deleteMetadata(sessionsDir, "app-1", true);
+
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      const result = await sm.cleanup();
+
+      expect(result.skipped).toContain("app-1");
+      expect(result.killed).not.toContain("app-1");
+      expect(existsSync(apiLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((session) => session.id)).toEqual(["ses_shared"]);
+    });
+  });
+
+  it("warns once with the ID and the retry when the purge fails, and cleanup retries it (m-5)", async () => {
+    const failingBin = installMockOpencodeApi(
+      tmpDir,
+      [{ id: "ses_stuck", title: "AO:app-1", directory: "/tmp/ws" }],
+      { failOperations: ["session.remove"] },
+    );
+    process.env.PATH = `${failingBin}:${originalPath ?? ""}`;
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp/ws",
+      branch: "main",
+      status: "working",
+      project: "my-app",
+      agent: "opencode",
+      opencodeSessionId: "ses_stuck",
+      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+    });
+
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    try {
+      await expect(sm.kill("app-1", { purgeOpenCode: true })).resolves.toBeUndefined();
+      const warning = stderr.mock.calls.map((call) => String(call[0])).join("");
+      expect(warning.trim().split("\n")).toHaveLength(1);
+      expect(warning).toContain("could not remove OpenCode session ses_stuck of app-1");
+      expect(warning).toContain("`ao session cleanup` retries the removal");
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+
+    // The service answers again: cleanup removes the archived mapping.
+    const deleteLogPath = join(tmpDir, "opencode-delete-retry.log");
+    const workingBin = installMockOpencodeApi(
+      tmpDir,
+      [{ id: "ses_stuck", title: "AO:app-1", directory: "/tmp/ws" }],
+      { deleteLogPath },
+    );
+    process.env.PATH = `${workingBin}:${originalPath ?? ""}`;
+    const result = await sm.cleanup();
+
+    expect(result.killed).toContain("app-1");
+    expect(readFileSync(deleteLogPath, "utf-8")).toContain(
+      "api session.remove --param sessionID=ses_stuck",
+    );
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeTruthy();
+  }, 30_000);
+
+  it("ends a purge at its bound when the binary hangs, and still archives", async () => {
+    apiBound.capMs = 1_500;
+    const apiLogPath = join(tmpDir, "opencode-api-kill-hang.log");
+    const mockBin = installMockOpencodeApi(
+      tmpDir,
+      [{ id: "ses_hang", title: "AO:app-1", directory: "/tmp/ws" }],
+      { apiDelaySeconds: 60, apiLogPath },
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp/ws",
+      branch: "main",
+      status: "working",
+      project: "my-app",
+      agent: "opencode",
+      opencodeSessionId: "ses_hang",
+      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+    });
+
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      const started = Date.now();
+      await sm.kill("app-1", { purgeOpenCode: true });
+      const elapsedMs = Date.now() - started;
+
+      // One bounded interrupt, then one bounded remove: a timeout ends the
+      // remove retries. Two bounds plus process exits, far below the 60 s
+      // that the binary hangs.
+      const operations = readFileSync(apiLogPath, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => (JSON.parse(line) as string[])[1]);
+      expect(operations).toEqual(["session.interrupt", "session.remove"]);
+      expect(elapsedMs).toBeLessThan(6_000);
+      const warning = stderr.mock.calls.map((call) => String(call[0])).join("");
+      expect(warning).toContain("did not answer within 1500 ms");
+      // One line: the `execFile` message of a timeout ends with a newline.
+      expect(warning.trim().split("\n")).toHaveLength(1);
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(readMetadata(sessionsDir, "app-1")).toBeNull();
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+  }, 20_000);
 });
 
 describe("cleanup", () => {

@@ -8,6 +8,9 @@ import { createSessionManager } from "../../session-manager.js";
 import {
   writeMetadata,
   readMetadataRaw,
+  deleteMetadata,
+  readArchivedMetadataRaw,
+  updateArchivedMetadata,
 } from "../../metadata.js";
 import type {
   OrchestratorConfig,
@@ -16,7 +19,11 @@ import type {
   Agent,
 } from "../../types.js";
 import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "../test-utils.js";
-import { installMockOpencode, installMockOpencodeSequence } from "./opencode-helpers.js";
+import {
+  installMockOpencode,
+  installMockOpencodeApi,
+  installMockOpencodeSequence,
+} from "./opencode-helpers.js";
 
 let ctx: TestContext;
 let tmpDir: string;
@@ -358,6 +365,7 @@ describe("remap", () => {
         {
           id: "ses_fresh",
           title: "AO:app-1",
+          directory: "/tmp",
         },
       ]),
       deleteLogPath,
@@ -390,6 +398,7 @@ describe("remap", () => {
         {
           id: "ses_slow_discovery",
           title: "AO:app-1",
+          directory: "/tmp",
         },
       ]),
       deleteLogPath,
@@ -440,6 +449,7 @@ describe("remap", () => {
         {
           id: "ses_discovered",
           title: "AO:app-1",
+          directory: "/tmp",
         },
       ]),
       deleteLogPath,
@@ -471,6 +481,7 @@ describe("remap", () => {
         {
           id: "ses_discovered_valid",
           title: "AO:app-1",
+          directory: "/tmp",
         },
       ]),
       deleteLogPath,
@@ -503,6 +514,7 @@ describe("remap", () => {
         {
           id: "ses_project_agent",
           title: "AO:app-1",
+          directory: "/tmp",
         },
       ]),
       deleteLogPath,
@@ -528,5 +540,80 @@ describe("remap", () => {
     expect(mapped).toBe("ses_project_agent");
     const meta = readMetadataRaw(sessionsDir, "app-1");
     expect(meta?.["opencodeSessionId"]).toBe("ses_project_agent");
+  });
+
+  it("repairs the latest archived record of a killed session, so a restore can follow", async () => {
+    // `kill` archives the record, and the refused restore of a session with
+    // no stored ID names `ao session remap`; remap must find that record.
+    const mockBin = installMockOpencodeApi(tmpDir, [
+      { id: "ses_archived_own", title: "AO:app-1", directory: "/tmp", createdAt: 5 },
+    ]);
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: "main",
+      status: "killed",
+      project: "my-app",
+      agent: "opencode",
+      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+    });
+    deleteMetadata(sessionsDir, "app-1", true);
+    // A purge marked the archive as cleaned earlier.
+    updateArchivedMetadata(sessionsDir, "app-1", { opencodeCleanedAt: "2026-10-15T00:00:00.000Z" });
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await expect(sm.remap("app-1")).resolves.toBe("ses_archived_own");
+
+    const archived = readArchivedMetadataRaw(sessionsDir, "app-1");
+    expect(archived?.["opencodeSessionId"]).toBe("ses_archived_own");
+    expect(archived?.["opencodeCleanedAt"]).toBeUndefined();
+    expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
+  });
+
+  describe("only sessions of this workspace (B-2)", () => {
+    function writeUnmapped(): void {
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: "/tmp",
+        branch: "main",
+        status: "working",
+        project: "my-app",
+        agent: "opencode",
+        runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+      });
+    }
+
+    it("does not bind a same-title session of another fleet's directory", async () => {
+      const mockBin = installMockOpencodeApi(tmpDir, [
+        { id: "ses_other_fleet", title: "AO:app-1", directory: "/other/fleet", createdAt: 5 },
+      ]);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeUnmapped();
+
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      await expect(sm.remap("app-1")).rejects.toThrow("mapping is missing");
+      expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBeUndefined();
+    });
+
+    it("refuses two candidates in the same directory and lists each one", async () => {
+      const mockBin = installMockOpencodeApi(tmpDir, [
+        { id: "ses_first", title: "AO:app-1", directory: "/tmp", createdAt: 1_700_000_000_000 },
+        { id: "ses_second", title: "AO:app-1", directory: "/tmp", createdAt: 1_700_000_100_000 },
+      ]);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      writeUnmapped();
+
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      const thrown = (await sm.remap("app-1").catch((e: unknown) => e)) as Error;
+      expect(thrown.message).toContain("refusing to pick one");
+      for (const [id, created] of [
+        ["ses_first", 1_700_000_000_000],
+        ["ses_second", 1_700_000_100_000],
+      ] as const) {
+        expect(thrown.message).toContain(
+          `${id}  directory /tmp  created ${new Date(created).toISOString()}`,
+        );
+      }
+      expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBeUndefined();
+    });
   });
 });

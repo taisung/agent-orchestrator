@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { getSessionsDir, getStateRoot } from "../../paths.js";
@@ -19,7 +19,7 @@ import {
   makeHandle,
   type TestContext,
 } from "../test-utils.js";
-import { installMockOpencode } from "./opencode-helpers.js";
+import { installMockOpencodeApi } from "./opencode-helpers.js";
 
 let ctx: TestContext;
 let tmpDir: string;
@@ -328,12 +328,31 @@ describe("restore", () => {
     await expect(sm.restore("nonexistent")).rejects.toThrow("not found");
   });
 
-  it("does not recreate active metadata when archive restore fails validation", async () => {
+  it("does not recreate active metadata when the agent refuses an archive restore", async () => {
+    // The OpenCode plugin refuses a restore without a stored OpenCode session
+    // ID (I-2 A4). Core asks the agent before it copies the archive back, so a
+    // refusal leaves no active record and touches neither the workspace nor
+    // the old runtime.
     const wsPath = join(tmpDir, "ws-app-1");
     mkdirSync(wsPath, { recursive: true });
-    const deleteLogPath = join(tmpDir, "opencode-restore-validation.log");
-    const mockBin = installMockOpencode(tmpDir, "[]", deleteLogPath);
-    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const refusingAgent: Agent = {
+      ...mockAgent,
+      name: "opencode",
+      getRestoreCommand: vi
+        .fn()
+        .mockRejectedValue(
+          new SessionNotRestorableError("app-1", "no stored OpenCode session ID for app-1"),
+        ),
+    };
+    const registryWithRefusal: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return refusingAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
 
     writeMetadata(sessionsDir, "app-1", {
       worktree: wsPath,
@@ -345,10 +364,12 @@ describe("restore", () => {
     });
     deleteMetadata(sessionsDir, "app-1");
 
-    const sm = createSessionManager({ config, registry: mockRegistry });
+    const sm = createSessionManager({ config, registry: registryWithRefusal });
     await expect(sm.restore("app-1")).rejects.toThrow(SessionNotRestorableError);
 
     expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
+    expect(mockRuntime.destroy).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
   });
 
   it("does not recreate active metadata from archive when session is not restorable", async () => {
@@ -372,37 +393,80 @@ describe("restore", () => {
     expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
   });
 
-  it("fails restore with the remap hint when the stored mapping is invalid", async () => {
-    const wsPath = join(tmpDir, "ws-app-restore-invalid-map");
-    mkdirSync(wsPath, { recursive: true });
-    const deleteLogPath = join(tmpDir, "opencode-restore-invalid-remap.log");
-    const mockBin = installMockOpencode(
-      tmpDir,
-      JSON.stringify([
-        {
-          id: "ses_restore_discovered",
-          title: "AO:app-1",
-        },
-      ]),
-      deleteLogPath,
-    );
-    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+  describe("OpenCode session without a stored ID", () => {
+    function refusingRegistry(error: Error): { registry: PluginRegistry; agent: Agent } {
+      const agent: Agent = {
+        ...mockAgent,
+        name: "opencode",
+        getRestoreCommand: vi.fn().mockRejectedValue(error),
+      };
+      const registry: PluginRegistry = {
+        ...mockRegistry,
+        get: vi.fn().mockImplementation((slot: string) => {
+          if (slot === "runtime") return mockRuntime;
+          if (slot === "agent") return agent;
+          if (slot === "workspace") return mockWorkspace;
+          return null;
+        }),
+      };
+      return { registry, agent };
+    }
 
-    writeMetadata(sessionsDir, "app-1", {
-      worktree: wsPath,
-      branch: "feat/TEST-1",
-      status: "killed",
-      project: "my-app",
-      agent: "opencode",
-      opencodeSessionId: "ses bad id",
-      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    function writeUnmappedSession(wsPath: string): void {
+      writeMetadata(sessionsDir, "app-1", {
+        worktree: wsPath,
+        branch: "feat/TEST-1",
+        status: "killed",
+        project: "my-app",
+        agent: "opencode",
+        opencodeSessionId: "ses bad id",
+        runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+      });
+    }
+
+    it("reports the agent's version refusal, not only the missing mapping (M-1)", async () => {
+      // The OpenCode plugin runs its version gate before its "no stored ID"
+      // check. Core must not answer "no stored ID" on its own first.
+      const wsPath = join(tmpDir, "ws-app-restore-refused-binary");
+      mkdirSync(wsPath, { recursive: true });
+      const { registry, agent } = refusingRegistry(
+        new Error("ao needs OpenCode 2.0.29 or later (found 1.18.35)"),
+      );
+      writeUnmappedSession(wsPath);
+
+      const sm = createSessionManager({ config, registry });
+      await expect(sm.restore("app-1")).rejects.toThrow(
+        "ao needs OpenCode 2.0.29 or later (found 1.18.35)",
+      );
+      expect(agent.getRestoreCommand).toHaveBeenCalled();
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
     });
 
-    const sm = createSessionManager({ config, registry: mockRegistry });
-    // I-2 (A4): no title search on restore; an invalid stored ID counts as
-    // no stored ID and fails with the remap hint.
-    await expect(sm.restore("app-1")).rejects.toThrow(/no stored OpenCode session ID.*ao session remap/);
-  }, 15000);
+    it("does not search by title when the agent refuses the restore", async () => {
+      // A same-title session exists in the workspace; a restore must still
+      // not bind it (owner Q7: no title search on restore).
+      const wsPath = join(tmpDir, "ws-app-restore-invalid-map");
+      mkdirSync(wsPath, { recursive: true });
+      const apiLogPath = join(tmpDir, "opencode-restore-api.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_restore_title_match", title: "AO:app-1", directory: wsPath }],
+        { apiLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { registry } = refusingRegistry(
+        new SessionNotRestorableError("app-1", "no stored OpenCode session ID for app-1"),
+      );
+      writeUnmappedSession(wsPath);
+
+      const sm = createSessionManager({ config, registry });
+      await expect(sm.restore("app-1")).rejects.toThrow(SessionNotRestorableError);
+
+      const apiCalls = existsSync(apiLogPath) ? readFileSync(apiLogPath, "utf-8") : "";
+      expect(apiCalls).not.toContain("session.list");
+      expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe("ses bad id");
+    });
+  });
 
   it("uses orchestratorModel when restoring orchestrator sessions", async () => {
     const wsPath = join(tmpDir, "ws-app-orchestrator-restore");
