@@ -90,7 +90,14 @@ Durable progress record for this fork. Dated events only; the current state live
   refused spawn leaves its branch; the lifecycle worker can mark a reserved ID `killed` during the
   10 s probe (seen 1 of 2 runs); the refusal message omits the probe's stderr. Author suite: 1890
   passed, 20 skipped. Reviews `development/reviews/i1_review_r{1,2}_*.md`. Cherry-picked onto
-  `3e161305`; the tree equals the reviewed `39549455` except this file. Not pushed, not rebuilt.
+  `3e161305`; the tree equals the reviewed `39549455` except this file. Not pushed. Rebuilt in place on
+  the owner's word (D-3), 2026-10-15 10:19 EDT, at `57c9ff04`: all 12 packages `Done`; the built
+  plugin's `detect()` returns `true` in 104 ms on OpenCode 2.0.29, and its launch command is the 2.x
+  `opencode api session.create` form (built in Node, no session created). The five `ao lifecycle-worker`
+  processes were restarted on the owner's word at 10:20:25-10:20:38 EDT by exact PID with their old
+  environment and cwd: agent-skills 3544066, this fork 3544115, the Nexus-config `agent-orchestrator`
+  3545801, Nexus 3546224, VSF 3546244; each PID file holds the new PID, and all five still ran after
+  more than two 30 s poll intervals with no new error line in their logs.
 
 ## Decisions
 
