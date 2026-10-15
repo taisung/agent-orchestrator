@@ -3,6 +3,8 @@ import {
   HERDR_RUNTIME_NAME,
   isHerdrProcessRunning,
   setupPathWrapperWorkspace,
+  buildAgentPath,
+  PREFERRED_GH_PATH,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -37,9 +39,6 @@ function normalizePermissionMode(
   }
   return undefined;
 }
-
-/** Shared bin directory for ao shell wrappers (prepended to PATH) */
-const AO_BIN_DIR = join(homedir(), ".ao", "bin");
 
 // =============================================================================
 // Plugin Manifest
@@ -123,7 +122,11 @@ function createGeminiAgent(): Agent {
       }
 
       // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
-      env["PATH"] = `${AO_BIN_DIR}:${process.env["PATH"] ?? "/usr/bin:/bin"}`;
+      // The wrappers strip this directory from PATH before calling the real
+      // binary, so there's no infinite recursion. Use buildAgentPath (lazy
+      // homedir) so HOME mocking in tests and per-spawn HOME works.
+      env["PATH"] = buildAgentPath(process.env["PATH"]);
+      env["GH_PATH"] = PREFERRED_GH_PATH;
 
       return env;
     },

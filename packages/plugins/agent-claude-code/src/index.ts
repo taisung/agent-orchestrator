@@ -6,6 +6,8 @@ import {
   DEFAULT_ACTIVE_WINDOW_MS,
   HERDR_RUNTIME_NAME,
   getHerdrPaneProcesses,
+  buildAgentPath,
+  PREFERRED_GH_PATH,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -714,6 +716,14 @@ function createClaudeCodeAgent(): Agent {
       if (config.issueId) {
         env["AO_ISSUE_ID"] = config.issueId;
       }
+
+      // Prepend ~/.ao/bin to PATH so our gh/git wrappers intercept commands.
+      // The wrappers strip this directory from PATH before calling the real
+      // binary, so there's no infinite recursion. Without this, claude-code
+      // panes never see the wrappers (runtime-tmux re-exports PATH in the
+      // pane, but only when the agent supplies it here).
+      env["PATH"] = buildAgentPath(process.env["PATH"]);
+      env["GH_PATH"] = PREFERRED_GH_PATH;
 
       return env;
     },

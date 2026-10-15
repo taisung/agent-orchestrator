@@ -1613,14 +1613,14 @@ describe("setupWorkspaceHooks", () => {
     expect(gitWriteCall![2]).toEqual({ encoding: "utf-8", mode: 0o755 });
   });
 
-  it("skips wrapper writes when version marker matches", async () => {
-    // First call for version marker — matches current version
-    // Second call for AGENTS.md — file doesn't exist
+  it("repairs wrapper writes when version marker matches but files are missing", async () => {
+    // Marker matches current version but wrapper files are missing —
+    // the install must repair them (old code skipped on marker alone).
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.1");
+        return Promise.resolve("0.2.2");
       }
-      // AGENTS.md read attempt
+      // Wrapper files and AGENTS.md read attempts
       return Promise.reject(new Error("ENOENT"));
     });
 
@@ -1629,7 +1629,7 @@ describe("setupWorkspaceHooks", () => {
       sessionId: "sess-1",
     });
 
-    // Should NOT write any wrappers when version matches (helper, gh, git all skipped)
+    // Must write wrappers when files are missing even though the marker matches.
     const wrapperWrites = mockWriteFile.mock.calls.filter(
       (call: [string, string, object]) =>
         typeof call[0] === "string" &&
@@ -1637,7 +1637,7 @@ describe("setupWorkspaceHooks", () => {
           call[0].includes("/gh.tmp.") ||
           call[0].includes("/git.tmp.")),
     );
-    expect(wrapperWrites).toHaveLength(0);
+    expect(wrapperWrites.length).toBeGreaterThan(0);
   });
 
   it("writes version marker after installing wrappers", async () => {
@@ -1654,7 +1654,7 @@ describe("setupWorkspaceHooks", () => {
         typeof call[0] === "string" && call[0].includes(".ao-version.tmp."),
     );
     expect(versionWriteCall).toBeDefined();
-    expect(versionWriteCall![1]).toBe("0.2.1");
+    expect(versionWriteCall![1]).toBe("0.2.2");
 
     const versionRenameCall = mockRename.mock.calls.find(
       (call: string[]) => typeof call[1] === "string" && call[1].endsWith(".ao-version"),
@@ -1666,7 +1666,7 @@ describe("setupWorkspaceHooks", () => {
     // Version marker matches (skip wrapper install)
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.1");
+        return Promise.resolve("0.2.2");
       }
       return Promise.reject(new Error("ENOENT"));
     });
@@ -1712,7 +1712,7 @@ describe("setupWorkspaceHooks", () => {
   it("writes .ao/AGENTS.md without modifying repo-tracked AGENTS.md", async () => {
     mockReadFile.mockImplementation((path: string) => {
       if (typeof path === "string" && path.endsWith(".ao-version")) {
-        return Promise.resolve("0.2.1");
+        return Promise.resolve("0.2.2");
       }
       return Promise.reject(new Error("ENOENT"));
     });

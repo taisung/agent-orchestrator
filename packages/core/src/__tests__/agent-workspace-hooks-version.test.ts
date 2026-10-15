@@ -10,7 +10,12 @@ vi.mock("node:os", () => ({
   homedir: mockHomedir,
 }));
 
-import { AO_METADATA_HELPER, setupPathWrapperWorkspace } from "../agent-workspace-hooks.js";
+import {
+  AO_METADATA_HELPER,
+  GH_WRAPPER,
+  GIT_WRAPPER,
+  setupPathWrapperWorkspace,
+} from "../agent-workspace-hooks.js";
 
 describe("PATH wrapper version upgrades", () => {
   let testRoot: string;
@@ -43,10 +48,10 @@ describe("PATH wrapper version upgrades", () => {
 
     expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
     expect(readFileSync(helperPath, "utf8")).toContain("local ao_state_root=");
-    expect(readFileSync(markerPath, "utf8")).toBe("0.2.1");
+    expect(readFileSync(markerPath, "utf8")).toBe("0.2.2");
   });
 
-  it("leaves wrapper files untouched when the marker has the current version", async () => {
+  it("repairs wrapper files when the marker is current but files are stale or missing", async () => {
     const helperPath = join(binDir, "ao-metadata-helper.sh");
     const ghPath = join(binDir, "gh");
     const gitPath = join(binDir, "git");
@@ -54,13 +59,33 @@ describe("PATH wrapper version upgrades", () => {
     writeFileSync(helperPath, "current helper sentinel\n");
     writeFileSync(ghPath, "current gh sentinel\n");
     writeFileSync(gitPath, "current git sentinel\n");
-    writeFileSync(markerPath, "0.2.1");
+    writeFileSync(markerPath, "0.2.2");
 
     await setupPathWrapperWorkspace(workspaceDir);
 
-    expect(readFileSync(helperPath, "utf8")).toBe("current helper sentinel\n");
-    expect(readFileSync(ghPath, "utf8")).toBe("current gh sentinel\n");
-    expect(readFileSync(gitPath, "utf8")).toBe("current git sentinel\n");
-    expect(readFileSync(markerPath, "utf8")).toBe("0.2.1");
+    // A matching marker with stale content must be repaired, not left alone.
+    expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
+    expect(readFileSync(ghPath, "utf8")).toBe(GH_WRAPPER);
+    expect(readFileSync(gitPath, "utf8")).toBe(GIT_WRAPPER);
+    expect(readFileSync(markerPath, "utf8")).toBe("0.2.2");
+  });
+
+  it("leaves files untouched when the marker and all files are current", async () => {
+    const helperPath = join(binDir, "ao-metadata-helper.sh");
+    const ghPath = join(binDir, "gh");
+    const gitPath = join(binDir, "git");
+    const markerPath = join(binDir, ".ao-version");
+    writeFileSync(helperPath, AO_METADATA_HELPER);
+    writeFileSync(ghPath, GH_WRAPPER);
+    writeFileSync(gitPath, GIT_WRAPPER);
+    writeFileSync(markerPath, "0.2.2");
+    const mtimeBefore = readFileSync(markerPath, "utf8");
+
+    await setupPathWrapperWorkspace(workspaceDir);
+
+    expect(readFileSync(helperPath, "utf8")).toBe(AO_METADATA_HELPER);
+    expect(readFileSync(ghPath, "utf8")).toBe(GH_WRAPPER);
+    expect(readFileSync(gitPath, "utf8")).toBe(GIT_WRAPPER);
+    expect(readFileSync(markerPath, "utf8")).toBe(mtimeBefore);
   });
 });

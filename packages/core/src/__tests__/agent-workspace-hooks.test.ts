@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import {
   AO_METADATA_HELPER,
+  GH_WRAPPER,
+  GIT_WRAPPER,
   buildAgentPath,
   setupPathWrapperWorkspace,
 } from "../agent-workspace-hooks.js";
@@ -131,17 +133,57 @@ describe("setupPathWrapperWorkspace", () => {
     expect(agentsMdWrites).toHaveLength(1);
   });
 
-  it("skips wrapper rewrite when version matches", async () => {
-    mockReadFile
-      .mockResolvedValueOnce("0.2.1") // version marker matches
-      .mockRejectedValueOnce(new Error("ENOENT")); // AGENTS.md doesn't exist
+  it("skips wrapper rewrite when version matches and files are current", async () => {
+    mockReadFile.mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.endsWith(".ao-version")) return Promise.resolve("0.2.2");
+      if (p.endsWith("ao-metadata-helper.sh")) return Promise.resolve(AO_METADATA_HELPER);
+      if (p.endsWith("/gh")) return Promise.resolve(GH_WRAPPER);
+      if (p.endsWith("/git")) return Promise.resolve(GIT_WRAPPER);
+      return Promise.reject(new Error("ENOENT"));
+    });
 
     await setupPathWrapperWorkspace("/workspace");
 
-    // A current marker suppresses all helper/wrapper rewrites.
+    // A current marker plus current files suppresses all helper/wrapper rewrites.
     const renamedPaths = mockRename.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(renamedPaths.filter((p: string) => p.includes("/gh."))).toHaveLength(0);
     expect(renamedPaths.filter((p: string) => p.includes("/git."))).toHaveLength(0);
+  });
+
+  it("repairs a missing wrapper file when the version marker matches", async () => {
+    mockReadFile.mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.endsWith(".ao-version")) return Promise.resolve("0.2.2");
+      if (p.endsWith("ao-metadata-helper.sh")) return Promise.resolve(AO_METADATA_HELPER);
+      if (p.endsWith("/gh")) return Promise.resolve(GH_WRAPPER);
+      if (p.endsWith("/git")) return Promise.reject(new Error("ENOENT"));
+      return Promise.reject(new Error("ENOENT"));
+    });
+
+    await setupPathWrapperWorkspace("/workspace");
+
+    // Missing git wrapper must be rewritten even though the marker matches.
+    expect(mockRename).toHaveBeenCalled();
+    const renamedTmpPaths = mockRename.mock.calls.map((c: unknown[]) => String(c[0]));
+    const renamedDestPaths = mockRename.mock.calls.map((c: unknown[]) => String(c[1]));
+    const allRenamed = [...renamedTmpPaths, ...renamedDestPaths];
+    expect(allRenamed.some((p: string) => p.includes("/git"))).toBe(true);
+  });
+
+  it("repairs a stale wrapper file when the version marker matches", async () => {
+    mockReadFile.mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.endsWith(".ao-version")) return Promise.resolve("0.2.2");
+      if (p.endsWith("ao-metadata-helper.sh")) return Promise.resolve(AO_METADATA_HELPER);
+      if (p.endsWith("/gh")) return Promise.resolve("# stale gh\n");
+      if (p.endsWith("/git")) return Promise.resolve(GIT_WRAPPER);
+      return Promise.reject(new Error("ENOENT"));
+    });
+
+    await setupPathWrapperWorkspace("/workspace");
+
+    expect(mockRename).toHaveBeenCalled();
   });
 
   it("writes .ao/AGENTS.md with session context", async () => {

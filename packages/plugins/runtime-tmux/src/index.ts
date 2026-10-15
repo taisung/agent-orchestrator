@@ -70,6 +70,19 @@ export function create(): Runtime {
       // Use a temp script for long commands so the pane shows a short
       // invocation instead of a pasted wall of shell.
       try {
+        // tmux 3.4 does not propagate PATH from `-e` (or `set-environment`)
+        // to pane processes: the session environment shows PATH but a direct
+        // `env` in the pane and the login shell both lack it, while other
+        // `-e` vars (AO_SESSION, GH_PATH) do reach the pane. The login shell
+        // preserves PATH when it receives it, so re-export PATH inside the
+        // pane after the shell starts and before the agent launches. Session
+        // env keeps `-e PATH` so `show-environment` still shows the intent.
+        const panePath = config.environment?.["PATH"];
+        if (panePath) {
+          await tmux("send-keys", "-t", sessionName, "-l", `export PATH=${shellEscape(panePath)}`);
+          await sleep(300);
+          await tmux("send-keys", "-t", sessionName, "Enter");
+        }
         if (config.launchCommand.length > 200) {
           const invocation = writeLaunchScript(config.launchCommand);
           await tmux("send-keys", "-t", sessionName, "-l", invocation);

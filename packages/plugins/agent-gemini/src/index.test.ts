@@ -259,6 +259,24 @@ describe("getEnvironment", () => {
     const env = agent.getEnvironment(makeLaunchConfig());
     expect(env["PATH"]).toMatch(/^\/mock\/home\/\.ao\/bin:/);
   });
+
+  it("sets GH_PATH to the preferred gh binary", () => {
+    const env = agent.getEnvironment(makeLaunchConfig());
+    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+  });
+
+  it("deduplicates PATH entries via buildAgentPath", () => {
+    const origPath = process.env["PATH"];
+    process.env["PATH"] = "/mock/home/.ao/bin:/usr/local/bin:/usr/bin:/usr/local/bin";
+    try {
+      const env = agent.getEnvironment(makeLaunchConfig());
+      const entries = (env["PATH"] ?? "").split(":");
+      expect(new Set(entries).size).toBe(entries.length);
+      expect(entries[0]).toBe("/mock/home/.ao/bin");
+    } finally {
+      process.env["PATH"] = origPath;
+    }
+  });
 });
 
 // =========================================================================
@@ -506,17 +524,19 @@ describe("setupWorkspaceHooks", () => {
     expect(writtenFiles.some((f: string) => f.includes("/git.tmp."))).toBe(true);
   });
 
-  it("skips gh/git wrappers when version marker is current", async () => {
+  it("repairs gh/git wrappers when version marker is current but files are missing", async () => {
     mockReadFile.mockImplementation((path: string) => {
-      if (path.includes(".ao-version")) return Promise.resolve("0.2.1");
+      if (path.includes(".ao-version")) return Promise.resolve("0.2.2");
       return Promise.reject(new Error("ENOENT"));
     });
 
     await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
 
+    // A matching marker with missing files must be repaired (tmux panes lose
+    // PATH, but the wrappers themselves must always be present).
     const writtenFiles = mockWriteFile.mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(writtenFiles.some((f: string) => f.includes("/gh.tmp."))).toBe(false);
-    expect(writtenFiles.some((f: string) => f.includes("/git.tmp."))).toBe(false);
+    expect(writtenFiles.some((f: string) => f.includes("/gh.tmp."))).toBe(true);
+    expect(writtenFiles.some((f: string) => f.includes("/git.tmp."))).toBe(true);
   });
 
   it("writes session context to .ao/AGENTS.md without modifying the repository AGENTS.md", async () => {

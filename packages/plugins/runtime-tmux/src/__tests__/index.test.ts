@@ -127,6 +127,56 @@ describe("runtime.create()", () => {
     expect(args).toContain("FOO=bar");
   });
 
+  it("re-exports PATH in the pane because tmux -e PATH does not reach it", async () => {
+    const runtime = create();
+
+    mockTmuxSuccess(); // new-session
+    mockTmuxSuccess(); // export PATH (-l)
+    mockTmuxSuccess(); // export PATH (Enter)
+    mockTmuxSuccess(); // launch command
+
+    await runtime.create({
+      sessionId: "path-session",
+      workspacePath: "/tmp/ws",
+      launchCommand: "bash",
+      environment: { PATH: "/home/u/.ao/bin:/usr/bin:/bin" },
+    });
+
+    // Session env keeps -e PATH so show-environment still shows the intent.
+    const firstCallArgs = mockExecFileCustom.mock.calls[0][1] as string[];
+    expect(firstCallArgs).toContain("PATH=/home/u/.ao/bin:/usr/bin:/bin");
+
+    // Pane gets an explicit export before the launch command.
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      ["send-keys", "-t", "path-session", "-l", "export PATH='/home/u/.ao/bin:/usr/bin:/bin'"],
+      expectedTmuxOptions,
+    );
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      3,
+      "tmux",
+      ["send-keys", "-t", "path-session", "Enter"],
+      expectedTmuxOptions,
+    );
+  });
+
+  it("does not send a PATH export when environment has no PATH", async () => {
+    const runtime = create();
+
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+
+    await runtime.create({
+      sessionId: "nopath-session",
+      workspacePath: "/tmp/ws",
+      launchCommand: "bash",
+      environment: { AO_SESSION: "x" },
+    });
+
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(2);
+  });
+
   it("sends launch command via send-keys", async () => {
     const runtime = create();
 

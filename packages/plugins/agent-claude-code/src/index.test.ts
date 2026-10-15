@@ -264,6 +264,16 @@ describe("getEnvironment", () => {
     const env = agent.getEnvironment(makeLaunchConfig());
     expect(env["AO_ISSUE_ID"]).toBeUndefined();
   });
+
+  it("prepends ~/.ao/bin to PATH for shell wrappers", () => {
+    const env = agent.getEnvironment(makeLaunchConfig());
+    expect(env["PATH"]?.startsWith("/mock/home/.ao/bin:")).toBe(true);
+  });
+
+  it("sets GH_PATH to the preferred gh binary", () => {
+    const env = agent.getEnvironment(makeLaunchConfig());
+    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+  });
 });
 
 // =========================================================================

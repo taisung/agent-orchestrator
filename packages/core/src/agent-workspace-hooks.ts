@@ -32,7 +32,7 @@ function getAoBinDir(): string {
 }
 
 /** Current version of wrapper scripts — bump when scripts change */
-const WRAPPER_VERSION = "0.2.1";
+const WRAPPER_VERSION = "0.2.2";
 
 // =============================================================================
 // PATH Builder
@@ -168,6 +168,10 @@ fi
 
 # Source the metadata helper
 source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
+# No-op when the helper is missing so workers see only the real gh output.
+if ! command -v update_ao_metadata >/dev/null 2>&1; then
+  update_ao_metadata() { return 0; }
+fi
 
 # Only capture output for commands we need to parse (pr/create, pr/merge).
 # All other commands pass through transparently without stream merging.
@@ -231,6 +235,10 @@ fi
 
 # Source the metadata helper
 source "\$ao_bin_dir/ao-metadata-helper.sh" 2>/dev/null || true
+# No-op when the helper is missing so workers see only the real git output.
+if ! command -v update_ao_metadata >/dev/null 2>&1; then
+  update_ao_metadata() { return 0; }
+fi
 
 # Run real git
 "\$real_git" "\$@"
@@ -306,16 +314,41 @@ async function atomicWriteFile(filePath: string, content: string, mode: number):
  * 2. Appends an "Agent Orchestrator" section to the workspace AGENTS.md
  */
 export async function setupPathWrapperWorkspace(workspacePath: string): Promise<void> {
-  // 1. Write shared wrappers to ~/.ao/bin/ (skip if version marker matches)
+  // 1. Write shared wrappers to ~/.ao/bin/.
+  // Skip only when the version marker matches AND every wrapper file exists
+  // with the exact expected content. A matching marker with a missing or
+  // stale file (deleted or hand-edited wrapper) is repaired. tmux panes lose
+  // PATH (runtime-tmux must re-export it) but the wrappers themselves must
+  // always be present once any spawn has run.
   await mkdir(getAoBinDir(), { recursive: true });
 
   const markerPath = join(getAoBinDir(), ".ao-version");
+  const expectedFiles: Array<[string, string]> = [
+    [join(getAoBinDir(), "ao-metadata-helper.sh"), AO_METADATA_HELPER],
+    [join(getAoBinDir(), "gh"), GH_WRAPPER],
+    [join(getAoBinDir(), "git"), GIT_WRAPPER],
+  ];
   let needsUpdate = true;
   try {
     const existing = await readFile(markerPath, "utf-8");
-    if (existing.trim() === WRAPPER_VERSION) needsUpdate = false;
+    if (existing.trim() === WRAPPER_VERSION) {
+      needsUpdate = false;
+      for (const [filePath, expectedContent] of expectedFiles) {
+        try {
+          const current = await readFile(filePath, "utf-8");
+          if (current !== expectedContent) {
+            needsUpdate = true;
+            break;
+          }
+        } catch {
+          // Missing or unreadable file — needs repair
+          needsUpdate = true;
+          break;
+        }
+      }
+    }
   } catch {
-    // File doesn't exist — needs update
+    // Marker doesn't exist — needs update
   }
 
   if (needsUpdate) {
