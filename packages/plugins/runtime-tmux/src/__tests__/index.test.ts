@@ -170,6 +170,36 @@ describe("runtime.create()", () => {
     }
   });
 
+  it("replaces a parent PATH that holds ~/.ao/bin and passes an empty GH_PATH", async () => {
+    // Claude Code launched from a Codex pane: ao's own PATH and GH_PATH hold
+    // the wrappers, and the agent environment removes them.
+    vi.stubEnv("PATH", "/home/u/.ao/bin:/usr/bin:/bin");
+    vi.stubEnv("GH_PATH", "/usr/local/bin/gh");
+    try {
+      const runtime = create();
+      mockTmuxSuccess();
+      mockTmuxSuccess();
+
+      await runtime.create({
+        sessionId: "claude-session",
+        workspacePath: "/tmp/ws",
+        launchCommand: "claude",
+        environment: { PATH: "/usr/bin:/bin", GH_PATH: "" },
+      });
+
+      const [, args, options] = mockExecFileCustom.mock.calls[0] as [
+        string,
+        string[],
+        { env?: NodeJS.ProcessEnv },
+      ];
+      expect(options.env?.["PATH"]).toBe("/usr/bin:/bin");
+      // The session value wins over a GH_PATH in the server environment.
+      expect(args).toContain("GH_PATH=");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("passes a PATH longer than one tty line (4095 bytes) unchanged", async () => {
     const runtime = create();
     const longPath = Array.from({ length: 200 }, (_, i) => `/tmp/long/dir-number-${i}`).join(":");

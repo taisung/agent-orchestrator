@@ -6,6 +6,7 @@ import {
   DEFAULT_ACTIVE_WINDOW_MS,
   HERDR_RUNTIME_NAME,
   getHerdrPaneProcesses,
+  removeAoBinFromPath,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -715,9 +716,23 @@ function createClaudeCodeAgent(): Agent {
         env["AO_ISSUE_ID"] = config.issueId;
       }
 
-      // No PATH and no GH_PATH: Claude Code panes do not use the ~/.ao/bin
-      // gh/git wrappers. The PostToolUse hook (setupWorkspaceHooks) is the
-      // only metadata writer for Claude Code sessions.
+      // Claude Code panes do not use the ~/.ao/bin gh/git wrappers: the
+      // PostToolUse hook (setupWorkspaceHooks) is the only metadata writer.
+      // Leaving PATH out is not enough. The runtime starts the pane with the
+      // PATH of the ao process, and that PATH holds ~/.ao/bin when ao runs in
+      // a Codex, Gemini or OpenCode pane. So PATH is set, without every ao
+      // wrapper directory, only when the inherited PATH holds one; a clean
+      // inherited PATH reaches the pane unchanged.
+      const inheritedPath = process.env["PATH"];
+      if (inheritedPath !== undefined) {
+        const path = removeAoBinFromPath(inheritedPath);
+        if (path !== inheritedPath) env["PATH"] = path;
+      }
+
+      // An empty GH_PATH overrides one from the parent or from the tmux server
+      // environment (the session -e value wins over the global one). gh
+      // ignores an empty GH_PATH.
+      env["GH_PATH"] = "";
 
       return env;
     },

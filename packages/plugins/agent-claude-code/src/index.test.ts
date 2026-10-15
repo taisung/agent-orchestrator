@@ -1,5 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Session, RuntimeHandle, AgentLaunchConfig, WorkspaceHooksConfig } from "@aoagents/ao-core";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  GH_WRAPPER,
+  GIT_WRAPPER,
+  type Session,
+  type RuntimeHandle,
+  type AgentLaunchConfig,
+  type WorkspaceHooksConfig,
+} from "@aoagents/ao-core";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — available inside vi.mock factories
@@ -42,7 +51,10 @@ vi.mock("node:fs/promises", () => ({
   chmod: mockChmod,
 }));
 
-vi.mock("node:fs", () => ({
+// Only existsSync is mocked: core's removeAoBinFromPath and the launch tests
+// below use the real file system.
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: mockExistsSync,
 }));
 
@@ -265,12 +277,124 @@ describe("getEnvironment", () => {
     expect(env["AO_ISSUE_ID"]).toBeUndefined();
   });
 
-  it("sets no PATH and no GH_PATH (the PostToolUse hook is the only metadata writer)", () => {
-    // Claude Code panes keep the PATH of their login shell: no ~/.ao/bin
-    // wrappers, and no PATH that could resolve another `claude` binary.
+  it("sets no PATH when the inherited PATH holds no ao wrapper directory", () => {
+    // A clean inherited PATH reaches the pane unchanged, as before ao had
+    // wrappers: no PATH that could resolve another `claude` binary.
+    vi.stubEnv("PATH", "/usr/bin/::.:relative/.ao/bin:/bin:/usr/bin");
+    try {
+      const env = agent.getEnvironment(makeLaunchConfig());
+      expect(env).not.toHaveProperty("PATH");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sets an empty GH_PATH (the PostToolUse hook is the only metadata writer)", () => {
     const env = agent.getEnvironment(makeLaunchConfig());
-    expect(env).not.toHaveProperty("PATH");
-    expect(env).not.toHaveProperty("GH_PATH");
+    expect(env["GH_PATH"]).toBe("");
+  });
+});
+
+// =========================================================================
+// Launch from a parent whose PATH holds the ao wrappers
+//
+// `ao spawn`, `ao start` or `ao session restore` run in a Codex, Gemini or
+// OpenCode pane inherit that pane's PATH with ~/.ao/bin and its GH_PATH. All
+// three build the launch environment from getEnvironment, and the runtime
+// starts the pane with the launch environment over the parent environment:
+// runtime-tmux runs the tmux client with process.env plus the PATH of the
+// launch environment (tmux gives the pane the client's PATH), and -e values
+// win over the server environment, which this parent can have started. So a
+// real process started that way must find no wrapper.
+// =========================================================================
+describe("launch from a parent whose PATH holds the ao wrappers", () => {
+  const agent = create();
+  const basePath = "/usr/bin:/bin";
+  let root: string;
+  let home: string;
+  let binDir: string;
+
+  function installWrappers(dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "gh"), GH_WRAPPER, { mode: 0o755 });
+    writeFileSync(join(dir, "git"), GIT_WRAPPER, { mode: 0o755 });
+  }
+
+  async function launch(
+    parentEntry: string,
+  ): Promise<{ path: string; ghPath: string; found: string }> {
+    const { spawnSync } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const parentEnv = {
+      ...process.env,
+      PATH: `${parentEntry}:${basePath}`,
+      GH_PATH: join(binDir, "gh"),
+    };
+    vi.stubEnv("PATH", parentEnv.PATH);
+    vi.stubEnv("GH_PATH", parentEnv.GH_PATH);
+    const launchEnv = agent.getEnvironment(makeLaunchConfig());
+    vi.unstubAllEnvs();
+
+    const child = spawnSync(
+      "bash",
+      ["-c", 'printf "%s\\n" "$PATH" "${GH_PATH-unset}"; type -ap git gh'],
+      { env: { ...parentEnv, ...launchEnv }, encoding: "utf8" },
+    );
+    const [path = "", ghPath = "", ...found] = child.stdout.split("\n");
+    return { path, ghPath, found: found.join("\n") };
+  }
+
+  beforeEach(() => {
+    root = mkdtempSync("/tmp/ao-claude-launch-");
+    home = join(root, "home");
+    binDir = join(home, ".ao", "bin");
+    installWrappers(binDir);
+    mockHomedir.mockReturnValue(home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const spellings: Array<[string, () => string]> = [
+    ["this HOME's ~/.ao/bin", () => binDir],
+    ["a trailing slash", () => `${binDir}/`],
+    ["a doubled slash", () => binDir.replace("/.ao/bin", "/.ao//bin")],
+    ["a leading ~", () => "~/.ao/bin"],
+    [
+      "a symlink to it",
+      () => {
+        symlinkSync(binDir, join(root, "aolink"));
+        return join(root, "aolink");
+      },
+    ],
+    [
+      "the wrapper directory of another HOME",
+      () => {
+        installWrappers(join(root, "other-home", ".ao", "bin"));
+        return join(root, "other-home", ".ao", "bin");
+      },
+    ],
+    [
+      "a wrapper copy in another directory",
+      () => {
+        installWrappers(join(root, "copy"));
+        return join(root, "copy");
+      },
+    ],
+    [
+      "a wrapper directory that an install creates later",
+      () => join(root, "new-home", ".ao", "bin"),
+    ],
+  ];
+
+  it.each(spellings)("the pane gets no wrapper and no GH_PATH for %s", async (_, spell) => {
+    const result = await launch(spell());
+    expect(result.path).toBe(basePath);
+    expect(result.ghPath).toBe("");
+    expect(result.found).not.toContain(root);
+    expect(result.found).toMatch(/\/git$/m);
   });
 });
 
