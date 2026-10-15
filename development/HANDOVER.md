@@ -43,7 +43,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-1 | Claude Opus 5.5 | done at `3c1d04c9` | `3c1d04c9` | brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r2.md`; model pinned in its worktree `.claude/settings.local.json`; its branch was moved to `main` (all old commits on `main` by patch) |
 | ao-19 | Claude Opus 5.5 | done at `b21bb304` | `b21bb304` | PATH round 2, four `fix(<scope>)` commits on `4eadc823`; plan check passed; its report D9 is the owner text before the rebuild |
 | ao-23 | GPT-6.1-Sol (Codex) | idle, done, NOT-LAND-SAFE | `b21bb304` | PATH round 2: M-1 a Claude Code pane inherits the wrappers from a parent that has them; m-1, m-2; review `development/reviews/aobin_path_review_r2_sol61.md`; row closed; R7 next step is the owner |
-| ao-24 | GPT-6.1-Sol (Codex) | reviewing I-2 round 2 | `3c1d04c9` | `3b2bb918..3c1d04c9` and the whole `49369f18..3c1d04c9`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r2-sol.md` |
+| ao-24 | GPT-6.1-Sol (Codex) | idle, done, NOT-LAND-SAFE | `3c1d04c9` | I-2 round 2: B-1 overlapping starts with the same title and directory bind and purge the first pane's session; M-1 the shared-ID guard skips a live holder with a terminal status; review `development/reviews/i2_review_r2_sol61.md`; row closed; R7 next step is the owner |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -66,8 +66,8 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-1 and ao-19 (authors) and ao-24 (I-2 round-2
-reviewer) are open; ao-20, ao-21, ao-22 and ao-23 are closed; ao-16,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-1 and ao-19 (authors) are open; ao-20, ao-21,
+ao-22, ao-23 and ao-24 are closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
 author) and ao-15 (PATH author) are open; close them there with `~/agent-skills/scripts/router_log.py

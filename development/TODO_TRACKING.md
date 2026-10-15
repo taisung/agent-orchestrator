@@ -175,6 +175,12 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   "global service read-only, no model turn". The sessions stay in the global store (owner,
   2026-10-15: leave them). Rule for every brief from now: run the integration package with a fake `HOME`, so the
   live block skips. Earlier arcs (I-1, I-6) asked for the same run and are not checked.
+- **The first lifecycle poll can mark a just-spawned session `killed`** (found 2026-10-15 by ao-1, rated
+  major and pre-existing by sol-6-1 in the I-2 round-2 review). The first poll can move a session from
+  `spawning` to `killed` before its pane starts the agent; some return to `working` on the next poll,
+  some stay `killed` with a live pane. Seen on the I-2 build and on `3b2bb918`. A running agent with a
+  terminal status also defeats any guard that reads the status as proof of a dead pane (I-2 round-2
+  M-1). Lifecycle worker follow-up.
 - **A full `pnpm test` in a worker pane leaks into the real state** (found 2026-10-15 by ao-1, I-2 round
   2). Run at 16:46:57Z with the real `HOME` and the worker's `AO_*` variables, it made two more model
   turns on the global OpenCode service (`ses_ebf89d5bcffe2gNXDKbG5frCqF`, `ses_ebf89c1e5ffeFjai3ZvtCwBo5F`,
