@@ -510,7 +510,7 @@ minors, with the correction that each increment brief must use:
 - §3, §5.2, §5.3, §6: the isolated-store measurements cannot be checked again, because that service
   is gone; M-1 to M-5 measure them again.
 
-## 18. The owner's answers to §15 (2026-10-14, about 21:55 EDT)
+## 18. The owner's answers to §15 (2026-10-14, about 22:30 EDT)
 
 - **Q1:** `ao start` installs with `npm install -g @opencode/cli`. If npm `opencode-ai` is installed, it
   adds `--force` and says so.
