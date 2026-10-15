@@ -36,6 +36,22 @@ Durable progress record for this fork. Dated events only; the current state live
 - 2026-09-23 — branches deleted, local and on `fork`: `fix/backport-upstream-activity-metadata`,
   `feat/spawn-model-flag`, `feat/opencode-gemini-plugins`, `fix/397b7dd1-followups-r2-pre-rewrite`.
   Only `main` remains on both sides.
+- `b90ac08f`, `6d204435`, `8ae92e83` (2026-10-14, ao-1, Claude Opus 5.5; dispatched by the agent-skills
+  orchestrator) — the OpenCode plugin starts sessions on OpenCode 2.x as well as 1.x. OpenCode 2.0.29 (on
+  this host from 2026-10-14 16:22 EDT) refuses `opencode run --command`, so every `ao spawn --agent opencode`
+  left a bash pane while `ao spawn` reported success. The pane reads `opencode --version`. On 2.x it creates
+  the session with `opencode api session.create`, reads its model and agent back with `session.get`, and
+  opens the TUI only when they equal the request. A create that fails or gives no usable id stops with
+  exit 1 and no title lookup. Resume and restore change settings with `session.switchModel` and
+  `session.switchAgent`, and exit 1 on a failed switch or readback. The 1.x commands are byte-identical.
+  `detect()` runs `opencode --version`. Blind review by ao-2 (Codex gpt-6.1-sol): round 1 NOT-LAND-SAFE (M-1,
+  m-1), round 2 NOT-LAND-SAFE (B-1, M-2, m-2, all by injected faults), round 3 LAND-SAFE with 0 findings;
+  `development/reviews/ao_opencode2_r{1,2,3}_review_codex_sol61.md`. Plugin tests 148 passed; full suite 1860
+  passed / 20 skipped (author). `main` fast-forwarded `273b62c1..8ae92e83`; the landed tree equals the
+  reviewed tree. **Not pushed and not rebuilt**: the fleets run the old `dist` until the owner rebuilds this
+  checkout. The owner keeps the host on OpenCode 2.x; a later arc drops the 1.x branch, moves `ao send`,
+  activity and cost to `opencode api`, and fixes the `ao start` install (`npm install -g opencode-ai` has no
+  2.x release). That arc is tracked in `~/agent-skills/development/TODO_TRACKING.md`, Known Issues.
 
 ## Decisions
 
