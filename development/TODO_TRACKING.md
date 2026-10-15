@@ -125,6 +125,25 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
+- **A reviewer stopped the host's default tmux server** (2026-10-15 11:41:47 EDT). The I-2 reviewer
+  ao-16 (Sonnet 5.5) ran `TMUX_TMPDIR=/tmp/ao16-sonnet-it tmux new-session -d -s probe && ... &&
+  TMUX_TMPDIR=/tmp/ao16-sonnet-it tmux kill-server` in its own pane shell. That shell had `TMUX` set,
+  and with `TMUX` set and no `-L` or `-S`, tmux uses the socket in `TMUX` and ignores `TMUX_TMPDIR`
+  (checked read-only: `TMUX_TMPDIR=/tmp/socktest-none tmux display-message -p '#{socket_path}'` printed
+  `/tmp/tmux-44402/default`). Every session on the default server ended: this fork's ao-1 and ao-14 to
+  ao-18, both orchestrators, and the other fleets, Nexus included. The brief (line 90) said `tmux -L
+  <unique-name>`. Ruled out: ao-18 ran no tmux command from 11:39 to 11:43; the ao-15 and ao-17
+  OpenCode sessions were idle from 11:23:25 and 11:34:24; the repository tests have no `kill-server`;
+  as-orchestrator ruled out as-64. Not touched: `scripts/fleet_watch.sh` and `tests/test_fleet_watch.sh`
+  of agent-skills. Rule for every brief from now: each tmux command uses `-L <unique-name>` and runs
+  with `TMUX` removed (`env -u TMUX`). Lifecycle workers, the watcher, and the private tmux servers of
+  ao-16 and ao-18 survived. ao-18 was restored at 11:49 and holds at its prompt; ao-16 is not restored.
+- **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
+  claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
+  metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host
+  default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix
+  a worker's model with `/model`: on 2026-10-15 at 11:51 `/model claude-opus-5-5` on ao-18 also rewrote
+  `~/.claude/settings.json` (`"opus"` to `"claude-opus-5-5"`); the orchestrator put back `"opus"` at once.
 - **A rebuild does not reach running lifecycle workers.** Node loads `dist` at process start. On 2026-09-23
   after the rebuild, five `ao lifecycle-worker` processes still ran pre-rebuild code: `Coding-Orchestrator`
   (pid 57829), `Nexus` (60414), `my-project` (1770808), `FleetMonitor` (2303231), `agent-skills` (3054071).
