@@ -105,6 +105,17 @@ Durable progress record for this fork. Dated events only; the current state live
   3545801, Nexus 3546224, VSF 3546244; each PID file holds the new PID, and all five still ran after
   more than two 30 s poll intervals with no new error line in their logs.
 
+- `ebc8e25b` (2026-10-15, ao-20, Muse; on the owner's ask "Clean up any dashboard-related CI") - the
+  onboarding CI test no longer starts or polls the removed dashboard: steps 6 to 10 of
+  `tests/integration/onboarding-test.sh` (dashboard start and API, WebSocket health, terminal page, the
+  kills, two of them `pkill -f`) and the compose `ports` and `shm_size` are gone; steps 1 to 5 are
+  byte-identical. Review: round 1 LAND-SAFE by V4.1 Flash (3 minors) and by Sonnet 5.5 (M-1: the old
+  step 6 ran `ao start --no-orchestrator`, which loads the test config and exits 0, so it was the job's
+  only config-load check and not a dashboard start, a brief error; m-1 the dead `port: 9000`; m-2 dead
+  `packages/web` entries in `eslint.config.js`). Reviews `development/reviews/ci_nodash_review_r1_*.md`.
+  Cherry-picked; the tree equals the reviewed `0a81e224` outside `development/`. Round 2 (M-1, m-1, m-2)
+  dispatched to ao-20. Not pushed. No build: CI files only.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
