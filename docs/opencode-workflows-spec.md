@@ -36,8 +36,10 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 - For `orchestratorSessionStrategy: reuse`:
   - if existing runtime is alive, return existing session without creating a new runtime.
   - if existing runtime is dead and metadata contains `opencodeSessionId`, pass it to launch config for continuation.
+- For `reuse`, the mapping is reused only when `session.get` finds the stored ID. A stored ID that is gone (404) or that `session.get` cannot check is not replaced by a title match.
 - For `delete` strategy:
-  - delete mapped/discovered OpenCode orchestrator sessions (`AO:<prefix>-orchestrator`) before launching new orchestrator.
+  - delete the OpenCode sessions whose IDs AO metadata stores for this orchestrator before launching new orchestrator. There is no title search: an older OpenCode session that no metadata stores is not deleted. An ID that another live AO session of the project stores is kept.
+- For every strategy, when no stored ID is reused, the start waits up to 15 s for the pane to create its OpenCode session and stores its ID (see `ao spawn`).
 - For `ignore` strategy:
   - do not delete old OpenCode sessions; launch fresh runtime.
 
@@ -45,13 +47,16 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 
 - Uses selected agent (default/project/override) and launches OpenCode command from plugin launch config.
 - OpenCode launch behavior:
-  - no mapped id: run with `--title AO:<session>` and then continue via discovered session id.
+  - no mapped id: the pane script creates the session with `opencode api session.create` (title `AO:<session>`, directory = the pane's working directory) and then starts `opencode --session <id>`.
   - mapped id (`agentConfig.opencodeSessionId`): launch directly with `--session <id>`.
+- The pane creates the session only after `runtime.create` returns, so `spawn` waits for it: up to 15 s, one `session.list` search every 500 ms. It stores the ID only when exactly one session has the exact title `AO:<session>`, `location.directory` equal to the workspace (or its real path), and `time.created` at or after the spawn start. Two fleets with the same session prefix give the same title, so the title alone never selects a session.
+- When the wait ends with no match or with more than one match, the spawn still succeeds without a mapping, and the operator gets one line on stderr that names `ao session remap <session>`.
+- Issue reuse (`opencodeIssueSessionStrategy: reuse`) reuses a stored ID of an earlier session of the same issue only when `session.get` finds it. `delete` removes those stored IDs, except an ID that another live AO session stores.
 - Model/subagent/system prompt inputs are forwarded into OpenCode launch command.
 
 ## 4) `ao send`
 
-- Resolves agent by project config; when session metadata indicates OpenCode and mapping missing, core `send()` attempts title-based discovery and persists mapping.
+- Resolves agent by project config. `send()` never searches by title: a session without a stored ID sends without the OpenCode delivery check from `session.get`.
 - Sends message through runtime plugin handle; fails if session/runtime cannot be resolved.
 - Busy detection is plugin-driven (`detectActivity`).
 
@@ -71,27 +76,32 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 
 ## 7) `ao session restore`
 
-- For OpenCode session restore, mapping is required.
-- If mapping missing:
-  - attempt title discovery using longer interactive timeout.
-  - if still missing, fail with non-restorable error (`OpenCode session mapping is missing`).
+- For OpenCode session restore, mapping is required. There is no title search.
+- The plugin's `getRestoreCommand` runs the version gate first, so a refused binary names its version.
+- If mapping missing: fail with `SessionNotRestorableError` that names `ao session remap <session>`.
+- If `session.get` answers 404 for the stored ID: fail with `SessionNotRestorableError` (`the stored OpenCode session <id> is gone`).
+- Core gets the restore command before it destroys the old runtime, so a refused restore keeps the old pane and does not copy an archived record back to active metadata.
 - Restore must recreate runtime with preserved metadata/session fields and keep mapping persisted.
 
 ## 8) `ao session remap`
 
 - Only valid for OpenCode sessions.
+- Works on an active session and on the latest archived record of a killed session, so the remap hint of a refused restore works. On an archived record it also clears `opencodeCleanedAt`, so `cleanup` removes the new ID in its turn.
 - `remap(session, force=false)`:
   - reuse existing mapping if present; otherwise discover and persist.
 - `remap(session, force=true)`:
-  - always re-discover by title and overwrite persisted mapping.
-- If discovery fails, return explicit mapping-missing error.
+  - always re-discover and overwrite persisted mapping.
+- Discovery accepts only the exact title `AO:<session>` with `location.directory` equal to the session's workspace. It follows `cursor.next`, because `search` is a substring and newer sessions such as `AO:<prefix>-10` can push the exact title to a later page.
+- More than one candidate: refuse and print each candidate (ID, directory, created time). Remap never picks one.
+- No candidate: return explicit mapping-missing error.
 
 ## Edge Cases and Expected Outcomes
 
-- OpenCode binary missing: OpenCode-specific operations relying on `opencode session ...` discovery/deletion degrade gracefully where coded (discovery returns none), and explicit operations report mapping/deletion errors when required.
+- OpenCode binary missing or hanging: every `opencode api` call has a bound (10 s; the spawn wait 15 s in total). Spawn and kill still succeed and print one line for the operator. A remove that times out is not retried. Restore and remap report the error.
 - Corrupted `runtimeHandle` metadata: `send` fails with `Corrupted runtime handle`.
 - Existing orchestrator metadata present but runtime dead under `reuse`: restart runtime and pass mapped `opencodeSessionId` when available.
-- Duplicate OpenCode sessions with same AO title: title match drives selection for remap/discovery (no timestamp ranking).
+- Duplicate OpenCode sessions with same AO title: the spawn wait and remap accept only the session's own workspace directory, and the spawn wait only sessions created after the spawn start. More than one remaining candidate is refused; nothing picks by time.
+- `ao session kill --purge-session` interrupts, then removes, the stored ID only. It keeps an ID that another live AO session stores (issue reuse). A failed removal prints one line with the ID; `ao session cleanup` retries it.
 - Archived OpenCode sessions already cleaned: `cleanup` skips duplicate deletion via `opencodeCleanedAt`.
 - Unknown project/agent: fail fast with clear error.
 
