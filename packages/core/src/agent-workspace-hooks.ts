@@ -8,11 +8,13 @@
  * the PATH of their getEnvironment, and runtime-tmux runs the tmux client
  * with that PATH so the pane gets it.
  *
- * Claude Code does not use these wrappers: its getEnvironment sets no PATH,
+ * Claude Code does not use these wrappers: its getEnvironment removes every
+ * ao wrapper directory from the PATH that it inherits (removeAoBinFromPath),
  * and its PostToolUse hook is its only metadata writer.
  */
+import { closeSync, openSync, readSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { writeFile, mkdir, readFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 
@@ -67,6 +69,77 @@ export function buildAgentPath(basePath: string | undefined): string {
   for (const entry of inherited) add(entry);
 
   return ordered.join(":");
+}
+
+/**
+ * The real path of a directory. For a missing directory or a dangling
+ * symlink, the link target or the real path of the nearest existing parent
+ * plus the rest, so a wrapper directory that an install creates later still
+ * matches.
+ */
+function canonicalDir(dir: string, hops = 0): string {
+  const resolved = resolve(dir);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    // Missing, or a symlink whose target is missing.
+  }
+  if (hops < 8) {
+    try {
+      return canonicalDir(resolve(dirname(resolved), readlinkSync(resolved)), hops + 1);
+    } catch {
+      // Not a symlink.
+    }
+  }
+  const parent = dirname(resolved);
+  return parent === resolved ? resolved : join(canonicalDir(parent, hops), basename(resolved));
+}
+
+/** Same header test as ao_is_real_bin in the wrappers: line 2 is "# ao <name> wrapper". */
+function isAoWrapperFile(file: string, name: string): boolean {
+  let fd: number | undefined;
+  try {
+    // A regular file only: opening a FIFO named git would block.
+    if (!statSync(file).isFile()) return false;
+    fd = openSync(file, "r");
+    const head = Buffer.alloc(256);
+    const length = readSync(fd, head, 0, head.length, 0);
+    const secondLine = head.toString("utf8", 0, length).split("\n")[1] ?? "";
+    return secondLine.startsWith(`# ao ${name} wrapper`);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+const isAoBinPath = (dir: string): boolean =>
+  basename(dir) === "bin" && basename(dirname(dir)) === ".ao";
+
+/**
+ * An ao wrapper directory is the install location <some HOME>/.ao/bin, by its
+ * own name or by its real path, whether the wrappers are there yet or not; or
+ * any directory that holds an ao git or gh wrapper (a copy elsewhere).
+ */
+function isAoWrapperDir(entry: string): boolean {
+  const dir = entry === "~" || entry.startsWith("~/") ? join(homedir(), entry.slice(1)) : entry;
+  if (!isAbsolute(dir)) return false;
+  if (isAoBinPath(resolve(dir)) || isAoBinPath(canonicalDir(dir))) return true;
+  return isAoWrapperFile(join(dir, "git"), "git") || isAoWrapperFile(join(dir, "gh"), "gh");
+}
+
+/**
+ * Remove every ao wrapper directory from a PATH value, for an agent whose
+ * panes must not run the wrappers (Claude Code). It matches every spelling of
+ * the directory (a trailing slash, a doubled slash, a symlink, a leading ~),
+ * the wrapper directory of another HOME, and a wrapper copy elsewhere. It
+ * keeps all other entries, in order, and returns the same string when it
+ * removes nothing.
+ */
+export function removeAoBinFromPath(pathValue: string): string {
+  const entries = pathValue.split(":");
+  const kept = entries.filter((entry) => !isAoWrapperDir(entry));
+  return kept.length === entries.length ? pathValue : kept.join(":");
 }
 
 // =============================================================================

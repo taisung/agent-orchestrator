@@ -121,7 +121,10 @@ export {
 export {
   setupPathWrapperWorkspace,
   buildAgentPath,
+  removeAoBinFromPath,
   PREFERRED_GH_PATH,
+  GH_WRAPPER,
+  GIT_WRAPPER,
 } from "./agent-workspace-hooks.js";
 export type { NormalizedOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 

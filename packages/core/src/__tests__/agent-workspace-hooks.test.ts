@@ -17,6 +17,7 @@ import {
   GIT_WRAPPER,
   WRAPPER_VERSION,
   buildAgentPath,
+  removeAoBinFromPath,
   setupPathWrapperWorkspace,
 } from "../agent-workspace-hooks.js";
 
@@ -489,6 +490,97 @@ describe("wrapper recursion guard", () => {
     expect(result.timedOut).toBe(false);
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/^git version /);
+  });
+});
+
+describe("removeAoBinFromPath", () => {
+  let fx: WrapperFixture;
+  const rest = "/usr/bin:/bin";
+
+  beforeEach(() => {
+    fx = makeWrapperFixture();
+  });
+
+  afterEach(() => {
+    rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("returns the same string when the PATH holds no ao wrapper directory", () => {
+    // Empty and relative entries, trailing slashes and duplicates stay as they are.
+    const clean = `/usr/local/bin/::.:relative/.ao/bin:${fx.root}/ao/bin:${fx.root}/.ao/bin2:/usr/bin:/usr/bin`;
+    expect(removeAoBinFromPath(clean)).toBe(clean);
+  });
+
+  it("keeps a directory with a git that is not an ao wrapper", () => {
+    const dir = join(fx.root, "tools");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "git"), "#!/usr/bin/env bash\n# some other git wrapper\n", {
+      mode: 0o755,
+    });
+    expect(removeAoBinFromPath(`${dir}:${rest}`)).toBe(`${dir}:${rest}`);
+  });
+
+  const spellings: Array<[string, (fx: WrapperFixture) => string]> = [
+    ["its own name", (f) => f.binDir],
+    ["a trailing slash", (f) => `${f.binDir}/`],
+    ["a doubled slash", (f) => f.binDir.replace("/.ao/bin", "/.ao//bin")],
+    ["a dot segment", (f) => f.binDir.replace("/.ao/bin", "/.ao/./bin")],
+    [
+      "a symlink to it",
+      (f) => {
+        symlinkSync(f.binDir, join(f.root, "aolink"));
+        return join(f.root, "aolink");
+      },
+    ],
+    [
+      "a symlink to it before the install creates it",
+      (f) => {
+        symlinkSync(join(f.root, "later-home", ".ao", "bin"), join(f.root, "dangling"));
+        return join(f.root, "dangling");
+      },
+    ],
+    [
+      "the wrapper directory of another HOME",
+      (f) => {
+        const other = join(f.root, "other-home", ".ao", "bin");
+        mkdirSync(other, { recursive: true });
+        copyFileSync(join(f.binDir, "git"), join(other, "git"));
+        return other;
+      },
+    ],
+    [
+      "the wrapper directory of a HOME with no install yet",
+      (f) => join(f.root, "new-home", ".ao", "bin"),
+    ],
+    [
+      "a .ao/bin symlink to an empty directory (an install writes through it)",
+      (f) => {
+        mkdirSync(join(f.root, "elsewhere"));
+        mkdirSync(join(f.root, "link-home", ".ao"), { recursive: true });
+        symlinkSync(join(f.root, "elsewhere"), join(f.root, "link-home", ".ao", "bin"));
+        return join(f.root, "link-home", ".ao", "bin");
+      },
+    ],
+    [
+      "a gh wrapper copy in another directory",
+      (f) => {
+        const copy = join(f.root, "copy");
+        mkdirSync(copy);
+        copyFileSync(join(f.binDir, "gh"), join(copy, "gh"));
+        return copy;
+      },
+    ],
+    ["a leading ~ (homedir is /home/testuser)", () => "~/.ao/bin"],
+  ];
+
+  it.each(spellings)("removes a wrapper directory named with %s", (_, spell) => {
+    const entry = spell(fx);
+    expect(removeAoBinFromPath(`${entry}:${rest}`)).toBe(rest);
+  });
+
+  it("removes every wrapper entry and keeps the others in order", () => {
+    const path = `/a:${fx.binDir}:/b:${fx.binDir}/:/c:/home/testuser/.ao/bin`;
+    expect(removeAoBinFromPath(path)).toBe("/a:/b:/c");
   });
 });
 
