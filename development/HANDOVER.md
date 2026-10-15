@@ -20,7 +20,7 @@ runs**: round 1 (`4eadc823`, was `345f1e6e`, ao-15, Muse) failed its Opus 5.5 re
 typed PATH export resolves `claude` to the broken `/usr/local/bin/claude` 1.0.112), M-1 to M-4, 13
 minors. The owner chose M-4 (a), Claude Code keeps its hook only, and a new Opus 5.5 author: ao-19. Both
 round-2 reviews go to sol-6-1. On the owner's word, `main` was pushed to `origin` on 2026-10-15 at
-about 12:30 EDT, a fast-forward from `273b62c1` with this handover commit as the tip: the OpenCode 2.x
+12:42 EDT, a fast-forward `273b62c1..c1771262` (the commit that records it is the tip): the OpenCode 2.x
 plugin fix, I-6, I-1 and the docs. The I-2 and PATH rounds are on worker branches only, not pushed.
 
 **Outage, 2026-10-15 11:41:47 EDT**: ao-16 ran `tmux kill-server` with `TMUX` set, which stopped the
