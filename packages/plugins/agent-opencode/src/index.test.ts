@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
-import type { Session, RuntimeHandle, AgentLaunchConfig } from "@aoagents/ao-core";
+import {
+  SessionNotRestorableError,
+  type Session,
+  type RuntimeHandle,
+  type AgentLaunchConfig,
+} from "@aoagents/ao-core";
 
 const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity, mockGetOpenCodeSession } =
   vi.hoisted(() => ({
@@ -786,26 +791,40 @@ describe("getRestoreCommand", () => {
     expect(cmd).not.toContain("--model");
   });
 
-  it("returns null when no session ID is stored (no title search)", async () => {
-    const cmd = await agent.getRestoreCommand!(
+  it("refuses the restore when no session ID is stored, and names remap (no title search)", async () => {
+    const restore = agent.getRestoreCommand!(
       makeSession({ metadata: {} }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
     );
-    expect(cmd).toBeNull();
+    await expect(restore).rejects.toBeInstanceOf(SessionNotRestorableError);
+    await expect(restore).rejects.toThrow(
+      "no stored OpenCode session ID for test-1; run `ao session remap test-1`",
+    );
     expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
-    // A4: the version probe still runs, so a refused binary reports the
+    // A4: the version probe runs first, so a refused binary reports the
     // version problem instead of only the missing mapping.
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null when the stored session is gone (no title replacement)", async () => {
+  it("refuses the restore when the stored session is gone (m-1, no title replacement)", async () => {
     mockGetOpenCodeSession.mockResolvedValue(null);
-    const cmd = await agent.getRestoreCommand!(
+    const restore = agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_gone" } }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
     );
-    expect(cmd).toBeNull();
+    await expect(restore).rejects.toBeInstanceOf(SessionNotRestorableError);
+    await expect(restore).rejects.toThrow("the stored OpenCode session ses_gone is gone");
     expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_gone");
+  });
+
+  it("does not restore when session.get fails for another reason", async () => {
+    mockGetOpenCodeSession.mockRejectedValue(new Error("opencode api session.get failed: HTTP 500"));
+    await expect(
+      agent.getRestoreCommand!(
+        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+        { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
+      ),
+    ).rejects.toThrow("HTTP 500");
   });
 });
 
@@ -1913,14 +1932,14 @@ describe("version gate on restore", () => {
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it("probes even when it finds no session, so a refused binary names the version", async () => {
-    const restore = await agent.getRestoreCommand!(makeSession({ metadata: {} }), project);
-    expect(restore).toBeNull();
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
-
-    // The caller then falls back to getLaunchCommand, which probes again:
-    // one restore probe, one launch probe.
-    agent.getLaunchCommand(makeLaunchConfig());
-    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+  it("names the version when an old binary meets a session with no stored ID (M-1)", async () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "opencode") return "1.18.35\n";
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const restore = agent.getRestoreCommand!(makeSession({ metadata: {} }), project);
+    await expect(restore).rejects.toThrow("found 1.18.35");
+    await expect(restore).rejects.not.toThrow("no stored OpenCode session ID");
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
   });
 });

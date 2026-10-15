@@ -13,6 +13,7 @@ import {
   getOpenCodeSession,
   HERDR_RUNTIME_NAME,
   isHerdrProcessRunning,
+  SessionNotRestorableError,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -634,21 +635,32 @@ function createOpenCodeAgent(): Agent {
       };
     },
 
-    async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
-      // Rows 5 and 6: `session.get` by the stored ID. No title search on
-      // restore. The version probe runs first even when no ID is stored, so a
-      // refused binary names the version problem (A4, I-1 open minor) instead
-      // of only the missing mapping; core turns the null below into the A4
-      // "no stored ID, run `ao session remap`" error.
+    async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string> {
+      // Rows 5 and 6: resume the stored ID only; no title search on restore
+      // (owner Q7). Core calls this before it changes anything (archive,
+      // workspace, old runtime), so each refusal below keeps the old pane.
+      //
+      // 1. The version gate runs first, so a refused binary names the version
+      //    problem even when no ID is stored (A4, M-1).
       assertSupportedOpenCodeVersion();
       const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
-      if (!storedId) return null;
-      // Verify the stored session still exists. A 404 returns null so the
-      // caller falls back to a fresh launch; a timeout or another error
-      // throws, so a hanging binary fails within the bound (D4) instead of
-      // silently opening a new conversation.
+      if (!storedId) {
+        throw new SessionNotRestorableError(
+          session.id,
+          `no stored OpenCode session ID for ${session.id}; run \`ao session remap ${session.id}\` to find it by its exact title in its workspace`,
+        );
+      }
+      // 2. The stored session must still exist. A 404 refuses (m-1): a fresh
+      //    launch or a resume of the gone ID would open a TUI on the wrong
+      //    conversation. A timeout or another error throws from the helper,
+      //    so a hanging binary fails within its bound.
       const existing = await getOpenCodeSession(storedId);
-      if (!existing) return null;
+      if (!existing) {
+        throw new SessionNotRestorableError(
+          session.id,
+          `the stored OpenCode session ${storedId} is gone (session.get answered 404)`,
+        );
+      }
 
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
       return buildResumeCommand(storedId, { model: agentConfig?.model as string | undefined });
