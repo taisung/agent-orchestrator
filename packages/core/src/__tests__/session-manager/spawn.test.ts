@@ -10,6 +10,7 @@ import type {
   PluginRegistry,
   Runtime,
   Agent,
+  AgentLaunchConfig,
   Workspace,
   Tracker,
 } from "../../types.js";
@@ -1330,6 +1331,48 @@ describe("spawn", () => {
 
       expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
       expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
+    });
+
+    it("cleans up the worktree, metadata and prompt file when the agent refuses the launch", async () => {
+      const worktreePath = join(tmpDir, "orchestrator-ws-refused");
+      (mockWorkspace.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        path: worktreePath,
+        branch: "orchestrator/app-orchestrator-1",
+        sessionId: "app-orchestrator-1",
+        projectId: "my-app",
+      });
+      let promptFileAtLaunch: string | undefined;
+      let promptFileExistedAtLaunch = false;
+      const refusingAgent: Agent = {
+        ...mockAgent,
+        getLaunchCommand: vi.fn().mockImplementation((launchConfig: AgentLaunchConfig) => {
+          promptFileAtLaunch = launchConfig.systemPromptFile;
+          promptFileExistedAtLaunch =
+            promptFileAtLaunch !== undefined && existsSync(promptFileAtLaunch);
+          throw new Error("agent refused the launch");
+        }),
+      };
+      const registryWithRefusal: PluginRegistry = {
+        ...mockRegistry,
+        get: vi.fn().mockImplementation((slot: string) => {
+          if (slot === "runtime") return mockRuntime;
+          if (slot === "agent") return refusingAgent;
+          if (slot === "workspace") return mockWorkspace;
+          return null;
+        }),
+      };
+      const sm = createSessionManager({ config, registry: registryWithRefusal });
+
+      await expect(
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "You are the orchestrator." }),
+      ).rejects.toThrow("agent refused the launch");
+
+      // The prompt file existed when the agent refused, and the cleanup removed it.
+      expect(promptFileExistedAtLaunch).toBe(true);
+      expect(existsSync(promptFileAtLaunch!)).toBe(false);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+      expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
+      expect(mockRuntime.create).not.toHaveBeenCalled();
     });
 
     it("destroys the worktree when post-launch setup fails", async () => {

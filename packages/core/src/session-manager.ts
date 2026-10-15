@@ -1543,8 +1543,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: selection.subagent,
     };
 
-    const launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
-    const environment = plugins.agent.getEnvironment(agentLaunchConfig);
+    // An agent can refuse the launch (for example an unsupported binary version).
+    // Clean up like any later failure, so a refused orchestrator spawn leaves no
+    // worktree, reserved metadata or prompt file behind.
+    let launchCommand: string;
+    let environment: Record<string, string>;
+    try {
+      launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+      environment = plugins.agent.getEnvironment(agentLaunchConfig);
+    } catch (err) {
+      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      throw err;
+    }
 
     // Create runtime — clean up worktree and metadata on failure
     let handle: RuntimeHandle;
