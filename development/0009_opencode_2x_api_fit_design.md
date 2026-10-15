@@ -485,3 +485,27 @@ login (Q4). Each one uses a throwaway session in a throwaway directory and a che
 - `skills/ao-spawn/SKILL.md`: OpenCode is not patient on 2.x (§10).
 - The plugin's `detectActivity` reports an idle 2.x pane as `active` (§5.1); this is not in the
   round-1 audit.
+
+## 17. Review round 1 (added by the orchestrator, 2026-10-14)
+
+Two receipts reviews of `e38a8f1b`, the router's pair for an L2 LOW note: Muse (ao-3) ACCEPT with 14
+spot checks, 13 true and 1 true with a wrong line; DeepSeek V4.1 Flash (ao-4) ACCEPT with 32 spot checks,
+all true. 0 majors. The design is confirmed, so no round 2 runs. The reviews are
+`development/reviews/0009_review_r1_muse.md` and `development/reviews/0009_review_r1_v4flash.md`. The
+minors, with the correction that each increment brief must use:
+
+- §4 row 12: the `detect()` call is `cli/src/lib/detect-agent.ts:36`; `:21` is the `opencode` row of
+  `AGENT_PLUGINS` (both reviewers).
+- §12: several ranges start at the doc comment, not at the symbol (`buildSessionIdCaptureScript` `:82`,
+  `OPENCODE_API_MAJOR` `:228`, `buildLegacySessionOptions` `:269` at `e38a8f1b`). Re-read each range
+  before an increment edits it.
+- §13: M-6 (a 2.x worker with a pointer title and no brief) is an input of I-3 and of the I-7 protocol
+  text. A part of M-6 is measured: on 2026-10-14 both ao-3 and ao-4 found `.agent_task.md` through the
+  pointer title with no `ao send`. The I-7 row also depends on M-1, M-2, M-7 and M-8 (§9).
+- §15: Q5, Q6 and Q9 had no recommendation; Q9 decides the I-1 gate. The owner's answers are recorded
+  below when given.
+- §5.4: the event-name list from the binary has no command; M-3 checks it.
+- §5.2: the counts are of their time (V4.1 Flash, later: 9 of 200 sessions with an `outcome`, all
+  `succeeded`, in 11 `projectID` values).
+- §3, §5.2, §5.3, §6: the isolated-store measurements cannot be checked again, because that service
+  is gone; M-1 to M-5 measure them again.
