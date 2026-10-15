@@ -49,7 +49,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-25 | GPT-6-Astra (Codex) | done at `0080cf87` | `0080cf87` | one `fix(core)` commit: a host-wide launch lock in `/tmp/ao-opencode-launch-<uid>` with a pending marker that has no expiry, and a liveness guard; plan check passed; earlier: owner-named (R3); fixes sol-6-1 B-1 and M-1; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r3.md`; reviewer Opus 5.5 |
 | ao-23 | GPT-6.1-Sol (Codex) | idle, done, NOT-LAND-SAFE | `4affc2e3` | PATH round 3: M-1 relative wrapper entries stay, M-2 symlink plus `..` hides the wrapper directory, m-1 every `*/.ao/bin` is removed; review `development/reviews/aobin_path_review_r3_sol61.md`; row closed; R7 next step is the owner; earlier: brief `~/.cache/agent-skills-haiku55-arc/brief-review-aobin-path-r3-sol.md`; earlier: PATH round 2: M-1 a Claude Code pane inherits the wrappers from a parent that has them; m-1, m-2; review `development/reviews/aobin_path_review_r2_sol61.md`; row closed; R7 next step is the owner |
 | ao-24 | GPT-6.1-Sol (Codex) | idle, done, NOT-LAND-SAFE | `3c1d04c9` | I-2 round 2: B-1 overlapping starts with the same title and directory bind and purge the first pane's session; M-1 the shared-ID guard skips a live holder with a terminal status; review `development/reviews/i2_review_r2_sol61.md`; row closed; R7 next step is the owner |
-| ao-26 | Claude Opus 5.5 | reviewing I-2 round 3 | `0080cf87` | cross-family lens of the astra author; model pinned in its worktree; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r3-opus.md`; asked to judge the pending-marker trade-off closely |
+| ao-26 | Claude Opus 5.5 | idle, done, NOT-LAND-SAFE | `0080cf87` | I-2 round 3: B-1 a failed launch blocks every later worker spawn of the project, M-1 the pending marker has no recovery from evidence, 4 minors; its section "Judgment of the pending-marker trade-off" gives the smallest safe change; review `development/reviews/i2_review_r3_opus.md`; row closed; earlier: cross-family lens of the astra author; model pinned in its worktree; brief `~/.cache/agent-skills-haiku55-arc/brief-review-i2-r3-opus.md`; asked to judge the pending-marker trade-off closely |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -72,7 +72,7 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-19 and ao-25 (authors) and ao-26 (I-2 round-3 reviewer) are open; ao-23 (both rows), ao-1, ao-20, ao-21,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-19 and ao-25 (authors) are open; ao-23 (both rows), ao-26, ao-1, ao-20, ao-21,
 ao-22, ao-23 and ao-24 are closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
