@@ -140,6 +140,12 @@ function namesAoBin(dir: string): boolean {
  * yet or not; or any directory that holds an ao git or gh wrapper (a copy
  * elsewhere). The header test reads the physical directory, the one that a
  * command lookup through this entry reaches.
+ *
+ * Every directory named .ao/bin is reserved for ao, also one that holds
+ * another tool's git and no ao marker. setupPathWrapperWorkspace writes the
+ * wrappers into <HOME>/.ao/bin for the HOME of whichever ao process runs it,
+ * and replaces a git or gh there. What a directory holds at launch time
+ * cannot show that no install will fill it while the pane runs.
  */
 function isAoWrapperDir(dir: string): boolean {
   if (namesAoBin(dir)) return true;
@@ -161,6 +167,9 @@ function isAoWrapperDir(dir: string): boolean {
  * "tools". The shell resolves such an entry against the current directory at
  * each command lookup, so after a cd it can reach a wrapper directory, and a
  * check here cannot know the pane's directory then.
+ *
+ * Every directory named .ao/bin is removed, also one with no ao wrapper: the
+ * name is reserved for ao (see isAoWrapperDir).
  *
  * It keeps all other entries, in order, and returns the same string when it
  * removes nothing.

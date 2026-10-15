@@ -637,6 +637,17 @@ describe("removeAoBinFromPath", () => {
     expect(removeAoBinFromPath(`${entry}:${rest}`)).toBe(rest);
   });
 
+  it("removes a .ao/bin that holds another tool's git and no ao marker: the name is ao's", () => {
+    // An ao install for that HOME would replace this git with the wrapper
+    // while the pane runs, so the directory goes even now.
+    const toolDir = join(fx.root, "not-ao", ".ao", "bin");
+    mkdirSync(toolDir, { recursive: true });
+    writeFileSync(join(toolDir, "git"), "#!/usr/bin/env bash\n# real private git tool\n", {
+      mode: 0o755,
+    });
+    expect(removeAoBinFromPath(`${toolDir}:${rest}`)).toBe(rest);
+  });
+
   it("keeps an entry that names .ao/bin only after a lexical collapse of ..", () => {
     // <root>/.ao/link/../bin is <root>/plain/bin for the kernel: link is
     // followed before "..". That directory is not an ao wrapper directory.
