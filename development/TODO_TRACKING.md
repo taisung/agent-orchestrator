@@ -115,6 +115,11 @@ addendum.
 worktree with `AO_STATE_ROOT` under `/tmp` and an isolated `tmux -L` server. Only the orchestrator rebuilds
 the primary checkout, and only on the owner's word.
 
+**D-4 — no worker reads the OpenCode service password** (owner, 2026-10-15: "Keep the M-3 password
+closed for now"). The event-stream part of M-3 (0010) stays unmeasured, so the Q3 choice in 0009
+section 18 stays open, and I-4 polls with `opencode api`, which adds the auth itself. Recorded as D-34
+in `~/agent-skills/development/TODO_TRACKING.md`.
+
 ## Known Issues
 
 - **A rebuild does not reach running lifecycle workers.** Node loads `dist` at process start. On 2026-09-23
