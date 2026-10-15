@@ -265,14 +265,12 @@ describe("getEnvironment", () => {
     expect(env["AO_ISSUE_ID"]).toBeUndefined();
   });
 
-  it("prepends ~/.ao/bin to PATH for shell wrappers", () => {
+  it("sets no PATH and no GH_PATH (the PostToolUse hook is the only metadata writer)", () => {
+    // Claude Code panes keep the PATH of their login shell: no ~/.ao/bin
+    // wrappers, and no PATH that could resolve another `claude` binary.
     const env = agent.getEnvironment(makeLaunchConfig());
-    expect(env["PATH"]?.startsWith("/mock/home/.ao/bin:")).toBe(true);
-  });
-
-  it("sets GH_PATH to the preferred gh binary", () => {
-    const env = agent.getEnvironment(makeLaunchConfig());
-    expect(env["GH_PATH"]).toBe("/usr/local/bin/gh");
+    expect(env).not.toHaveProperty("PATH");
+    expect(env).not.toHaveProperty("GH_PATH");
   });
 });
 
