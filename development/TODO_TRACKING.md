@@ -21,6 +21,9 @@ Durable progress record for this fork. Dated events only; the current state live
   - Phase 6 — rewrite the `ao-*` skills (in `~/agent-skills`) against the new commands.
   - `0007` §6 conditional decisions 1-4 and 6 (GitHub lifecycle, desktop notifier, Gemini, archive policy,
     historical synthetic roots).
+- 2026-10-14 to 2026-10-15 — the OpenCode 2.x arc (`0009`, `0010`), coordinated by the agent-skills
+  orchestrator: the 2.x plugin fix, I-6 and I-1 landed and live (What Landed). On 2026-10-15 the work
+  moved to this repo's own orchestrator session, with a profile in `~/agent-skills`.
 
 ## What Landed
 
@@ -126,12 +129,20 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   after the rebuild, five `ao lifecycle-worker` processes still ran pre-rebuild code: `Coding-Orchestrator`
   (pid 57829), `Nexus` (60414), `my-project` (1770808), `FleetMonitor` (2303231), `agent-skills` (3054071).
   Restarting them affects live fleets in other projects.
-- **No `ao` project and no profile for this repository.** No `agent-orchestrator.yaml` here, and
-  `~/agent-skills/skills/shared/ao-profiles/` has no profile for it. The handover skill therefore has no
-  `HANDOVER_PUSH`, `TRAILER_POLICY`, or `HANDOVER_SECTIONS` values for this repo.
+- **No `ao` project and no profile for this repository** (closed 2026-10-15). The root
+  `agent-orchestrator.yaml` (gitignored, `.gitignore:61`) holds the project `agent-orchestrator`
+  (prefix `ao`, tmux prefix `60756641ca25`); the OpenCode 2.x arc ran its workers under it from
+  2026-10-14. The owner added `orchestratorWorkspaceMode: project` on 2026-10-15: without it, `ao start`
+  made the orchestrator in a worktree at the old `origin/main` (`ao-orchestrator-2`). The profile is
+  `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`.
+- **A second `agent-orchestrator` entry in `/Data1/NgFEP/Nexus/agent-orchestrator.yaml`**, with the same
+  path and `sessionPrefix: ao`, a different tmux prefix (`6513108c38cb`) and state, its own lifecycle
+  worker, and the `ao start` default rule "Always run tests before pushing." An `ao` call that loads the
+  Nexus config sees a different `ao-N` numbering. Pin `AO_CONFIG_PATH` to this repo's config.
 - **Trailer policy not written down here.** 17 of the 30 commits merged on 2026-09-23 carry
   `Co-Authored-By: Claude`. `~/agent-skills` and Nexus forbid the trailer (owner, 2026-09-17); this repo has no
-  rule.
+  rule. Since 2026-10-14 every brief and every orchestrator commit here carries none (0 of the commits of
+  the OpenCode 2.x arc); the owner has not ruled for this repo.
 - **Orphan stash**: `stash@{0}: WIP on feat/opencode-gemini-plugins: 5e2a783` — that branch no longer exists.
   Not inspected, not dropped.
 - **State root size**: `~/.agent-orchestrator` held 1,275 entries on 2026-09-23. `0007` counted 1,174 historical
