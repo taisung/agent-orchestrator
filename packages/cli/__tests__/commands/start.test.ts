@@ -151,7 +151,16 @@ vi.mock("node:process", async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 import { Command } from "commander";
-import { registerStart, registerStop, createConfigOnly } from "../../src/commands/start.js";
+import {
+  registerStart,
+  registerStop,
+  createConfigOnly,
+  AGENT_INSTALL_OPTIONS,
+  buildOpenCodeInstallArgs,
+  openCodeInstallNotice,
+  isLegacyOpenCodeInstalled,
+  resolveOpenCodeInstall,
+} from "../../src/commands/start.js";
 
 let tmpDir: string;
 let program: Command;
@@ -881,5 +890,131 @@ describe("start command — autoCreateConfig", () => {
     const content = readFileSync(configPath, "utf-8");
     const parsed = parseYaml(content) as { defaults?: { notifiers?: unknown[] } };
     expect(parsed.defaults?.notifiers).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode 2.x install option — `npm install -g @opencode/cli` with --force
+// only when legacy `opencode-ai` owns the `opencode` bin.
+// Detection is read-only (`npm ls -g opencode-ai --depth=0 --json`); every
+// npm call here is mocked, so no test installs or removes a global package.
+// Assertions compare the present/absent runs against each other (relations),
+// not against a copied literal of the install command.
+// ---------------------------------------------------------------------------
+
+describe("start command — OpenCode 2.x install option", () => {
+  function packageArgOf(optionId: string): string | undefined {
+    const option = AGENT_INSTALL_OPTIONS.find((o) => o.id === optionId);
+    // The npm package is the non-flag arg after "install -g".
+    return option?.args.find((a) => !a.startsWith("-") && a !== "install");
+  }
+
+  function mockNpmLsSuccess(stdout: string): void {
+    mockExec.mockResolvedValue({ stdout, stderr: "" });
+  }
+
+  function mockNpmLsFailure(stdout: string | null): void {
+    if (stdout === null) {
+      mockExec.mockRejectedValue(new Error("npm not found"));
+      return;
+    }
+    mockExec.mockRejectedValue(
+      Object.assign(new Error("Command failed: npm ls -g opencode-ai"), {
+        stdout,
+        stderr: "",
+        code: 1,
+      }),
+    );
+  }
+
+  it("names @opencode/cli for OpenCode and leaves other agents unchanged", () => {
+    expect(packageArgOf("opencode")).toBe("@opencode/cli");
+    expect(packageArgOf("opencode")).not.toBe("opencode-ai");
+    expect(packageArgOf("claude-code")).toBe("@anthropic-ai/claude-code");
+    expect(packageArgOf("codex")).toBe("@openai/codex");
+    expect(packageArgOf("gemini")).toBe("@google/gemini-cli");
+  });
+
+  it("adds exactly one trailing flag when legacy is present, and none when absent", () => {
+    const without = buildOpenCodeInstallArgs(false);
+    const withLegacy = buildOpenCodeInstallArgs(true);
+
+    expect(withLegacy.length).toBe(without.length + 1);
+    expect(withLegacy.slice(0, -1)).toEqual(without);
+    expect(without).not.toContain(withLegacy[withLegacy.length - 1]);
+    expect(withLegacy[withLegacy.length - 1]).toBe("--force");
+  });
+
+  it("emits a reasoned notice only when legacy is present", () => {
+    const absentNotice = openCodeInstallNotice(false);
+    const presentNotice = openCodeInstallNotice(true);
+
+    expect(absentNotice).toBeNull();
+    expect(presentNotice).not.toBeNull();
+    expect(presentNotice ?? "").toContain("opencode-ai");
+    expect(presentNotice ?? "").toContain("--force");
+  });
+
+  it("detects legacy present from the read-only npm ls JSON", async () => {
+    mockNpmLsSuccess(
+      JSON.stringify({
+        name: "lib",
+        dependencies: { "opencode-ai": { version: "1.19.0", overridden: false } },
+      }),
+    );
+
+    await expect(isLegacyOpenCodeInstalled()).resolves.toBe(true);
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm",
+      ["ls", "-g", "opencode-ai", "--depth=0", "--json"],
+    );
+  });
+
+  it("detects legacy absent from the read-only npm ls exit-1 shape", async () => {
+    // Real `npm ls -g opencode-ai --depth=0 --json` with nothing installed
+    // exits 1 and still prints `{ "name": "lib" }` on stdout.
+    mockNpmLsFailure('{\n  "name": "lib"\n}\n');
+
+    await expect(isLegacyOpenCodeInstalled()).resolves.toBe(false);
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm",
+      ["ls", "-g", "opencode-ai", "--depth=0", "--json"],
+    );
+  });
+
+  it("treats a failed detection as absent without throwing", async () => {
+    mockNpmLsFailure(null);
+
+    await expect(isLegacyOpenCodeInstalled()).resolves.toBe(false);
+  });
+
+  it("resolves the install plan relationally: present adds the flag and notice, absent adds neither", async () => {
+    mockNpmLsSuccess(
+      JSON.stringify({
+        name: "lib",
+        dependencies: { "opencode-ai": { version: "1.19.0", overridden: false } },
+      }),
+    );
+    const present = await resolveOpenCodeInstall();
+
+    mockNpmLsFailure('{\n  "name": "lib"\n}\n');
+    const absent = await resolveOpenCodeInstall();
+
+    expect(present.args.length).toBe(absent.args.length + 1);
+    expect(present.args.slice(0, -1)).toEqual(absent.args);
+    expect(absent.args).not.toContain(present.args[present.args.length - 1]);
+    expect(absent.notice).toBeNull();
+    expect(present.notice).not.toBeNull();
+  });
+
+  it("resolves a failed detection like the absent case, without throwing", async () => {
+    mockNpmLsFailure(null);
+    const failed = await resolveOpenCodeInstall();
+
+    mockNpmLsFailure('{\n  "name": "lib"\n}\n');
+    const absent = await resolveOpenCodeInstall();
+
+    expect(failed.args).toEqual(absent.args);
+    expect(failed.notice).toBeNull();
   });
 });

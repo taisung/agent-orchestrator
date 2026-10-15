@@ -337,7 +337,72 @@ interface AgentInstallOption {
   args: string[];
 }
 
-const AGENT_INSTALL_OPTIONS: AgentInstallOption[] = [
+export const OPENCODE_NPM_PACKAGE = "@opencode/cli";
+export const LEGACY_OPENCODE_NPM_PACKAGE = "opencode-ai";
+
+function hasLegacyOpenCodePackage(stdout: string): boolean {
+  try {
+    const parsed = JSON.parse(stdout) as { dependencies?: Record<string, unknown> };
+    const deps = parsed.dependencies ?? {};
+    return LEGACY_OPENCODE_NPM_PACKAGE in deps;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read-only check for a globally installed `opencode-ai` package.
+ * Runs `npm ls -g opencode-ai --depth=0 --json` and reports whether the
+ * package is present. Never throws: an unreadable result means "absent",
+ * so a failed detection cannot crash `ao start`.
+ */
+export async function isLegacyOpenCodeInstalled(): Promise<boolean> {
+  try {
+    const result = await exec("npm", [
+      "ls",
+      "-g",
+      LEGACY_OPENCODE_NPM_PACKAGE,
+      "--depth=0",
+      "--json",
+    ]);
+    return hasLegacyOpenCodePackage(result.stdout);
+  } catch (err) {
+    const stdout = (err as { stdout?: unknown }).stdout;
+    if (typeof stdout === "string" && stdout.length > 0) {
+      return hasLegacyOpenCodePackage(stdout);
+    }
+    return false;
+  }
+}
+
+/** Install args for OpenCode 2.x. Adds `--force` when the legacy package owns the `opencode` bin. */
+export function buildOpenCodeInstallArgs(hasLegacy: boolean): string[] {
+  const base = ["install", "-g", OPENCODE_NPM_PACKAGE];
+  return hasLegacy ? [...base, "--force"] : base;
+}
+
+/** One-line reason for `--force`, or null when no flag is needed. */
+export function openCodeInstallNotice(hasLegacy: boolean): string | null {
+  if (!hasLegacy) return null;
+  return (
+    `${LEGACY_OPENCODE_NPM_PACKAGE} is installed globally, ` +
+    `adding --force to replace its opencode bin.`
+  );
+}
+
+/**
+ * Resolve the OpenCode install command with a read-only legacy check.
+ * Returns the npm args and the notice to print (null when no flag).
+ */
+export async function resolveOpenCodeInstall(): Promise<{
+  args: string[];
+  notice: string | null;
+}> {
+  const hasLegacy = await isLegacyOpenCodeInstalled();
+  return { args: buildOpenCodeInstallArgs(hasLegacy), notice: openCodeInstallNotice(hasLegacy) };
+}
+
+export const AGENT_INSTALL_OPTIONS: AgentInstallOption[] = [
   {
     id: "claude-code",
     label: "Claude Code",
@@ -360,7 +425,7 @@ const AGENT_INSTALL_OPTIONS: AgentInstallOption[] = [
     id: "opencode",
     label: "OpenCode",
     cmd: "npm",
-    args: ["install", "-g", "opencode-ai"],
+    args: ["install", "-g", "@opencode/cli"],
   },
 ];
 
@@ -390,7 +455,15 @@ async function promptInstallAgentRuntime(available: DetectedAgent[]): Promise<De
 
   console.log(chalk.dim(`  Installing ${selected.label}...`));
   try {
-    await runInteractiveCommand(selected.cmd, selected.args);
+    if (selected.id === "opencode") {
+      const resolved = await resolveOpenCodeInstall();
+      if (resolved.notice) {
+        console.log(chalk.dim(`  ${resolved.notice}`));
+      }
+      await runInteractiveCommand(selected.cmd, resolved.args);
+    } else {
+      await runInteractiveCommand(selected.cmd, selected.args);
+    }
     const refreshed = await detectAvailableAgents();
     if (refreshed.length > 0) {
       console.log(chalk.green(`  ✓ ${selected.label} installed successfully`));
