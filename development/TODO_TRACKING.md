@@ -148,8 +148,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   11:06:44 to 11:21:01 in `/tmp` and `/tmp/ao-inttest-opencode-*`: two per run, five runs, during the
   work of ao-14 and ao-15 (the two at 11:20-11:21 come after ao-14 finished, so ao-15 ran at least
   those). The briefs asked for that run, so the workers kept their brief; the brief broke the rule
-  "global service read-only, no model turn". The sessions stay in the global store (a remove is a
-  write there). Rule for every brief from now: run the integration package with a fake `HOME`, so the
+  "global service read-only, no model turn". The sessions stay in the global store (owner,
+  2026-10-15: leave them). Rule for every brief from now: run the integration package with a fake `HOME`, so the
   live block skips. Earlier arcs (I-1, I-6) asked for the same run and are not checked.
 - **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session

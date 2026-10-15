@@ -56,8 +56,9 @@ in `watch.pid`, remove `watch.pid`, and start it again with the same options and
 list.
 
 **Lifecycle worker** of this project: PID 3876010 (started 2026-10-15 11:07:17, `AO_CONFIG_PATH` set to
-`CONFIG_PATH`, cwd `REPO_PATH`). PID 3544115 no longer runs. A leaked scratch lifecycle worker from
-ao-5 still runs: PID 3062995 (`/tmp/ao-i1/config`, cwd deleted); the owner has not ruled on its stop.
+`CONFIG_PATH`, cwd `REPO_PATH`). PID 3544115 no longer runs. The leaked scratch lifecycle worker of
+ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
+12:25.
 
 **Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-1 and ao-19 (authors) are open; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
@@ -72,8 +73,8 @@ the round-2 review goes to sol-6-1 (`--agent codex --model gpt-6.1-sol`), Opus a
 **PATH fix round 2**: running - ao-19 (Opus 5.5) - review `development/reviews/aobin_path_review_r1_opus.md`;
 owner M-4 (a): Claude Code keeps its hook only; the round-2 review goes to sol-6-1. The fix touches no
 file of I-2; if it needs `session-manager.ts` or the OpenCode plugin, it reports `partial`.
-**Global OpenCode store**: open - 10 "Greeting request" sessions from the integration live block (TODO
-Known Issues); the owner decides whether they are removed.
+**Global OpenCode store**: closed - the owner keeps the 10 "Greeting request" sessions from the
+integration live block (TODO Known Issues).
 **Restore drops the spawn model**: open - TODO Known Issues - a worker fix in the claude-code
 `getRestoreCommand` and the session metadata (HIGH).
 **Tmux rule in the agent-skills protocol text**: open - the owner decides whether as-orchestrator adds
