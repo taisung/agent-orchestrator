@@ -68,7 +68,6 @@ git config user.name "Test User"
 cat > agent-orchestrator.yaml << 'EOF'
 dataDir: /tmp/ao-test-data
 worktreeDir: /tmp/ao-test-worktrees
-port: 9000
 
 projects:
   test-project:
@@ -86,6 +85,10 @@ if [ ! -f agent-orchestrator.yaml ]; then
     fail_step "Step 5: Config file not found"
 fi
 end_step "Step 5: Configuration validated"
+
+start_step "Step 6: Load configuration with ao"
+ao start --no-orchestrator || fail_step "Step 6: ao start --no-orchestrator failed"
+end_step "Step 6: Configuration loaded by ao"
 
 # Calculate total time
 end_time=$(date +%s)
