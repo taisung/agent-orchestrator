@@ -5,11 +5,12 @@ import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
 import type { Session, RuntimeHandle, AgentLaunchConfig } from "@aoagents/ao-core";
 
-const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity } =
+const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity, mockGetOpenCodeSession } =
   vi.hoisted(() => ({
     mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
     mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
     mockRecordTerminalActivity: vi.fn().mockResolvedValue(undefined),
+    mockGetOpenCodeSession: vi.fn(),
   }));
 
 const mockExecFileAsync = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     appendActivityEntry: mockAppendActivityEntry,
     readLastActivityEntry: mockReadLastActivityEntry,
     recordTerminalActivity: mockRecordTerminalActivity,
+    getOpenCodeSession: (...args: unknown[]) => (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
   };
 });
 
@@ -102,6 +104,9 @@ beforeEach(() => {
     if (cmd === "opencode") return "opencode v2.0.29\n";
     throw new Error(`unexpected command: ${cmd}`);
   });
+  // `session.get` by stored ID (rows 5 and 6). Defaults to 404 (no session);
+  // tests that need a session override per test. No title search.
+  mockGetOpenCodeSession.mockResolvedValue(null);
 });
 
 describe("plugin manifest & exports", () => {
@@ -589,7 +594,7 @@ describe("detectActivity — terminal output classification", () => {
 describe("getActivityState", () => {
   const agent = create();
 
-  function mockOpencodeSessionRows(rows: Array<Record<string, unknown>>) {
+  function mockTmuxRunning() {
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
       if (cmd === "ps") {
@@ -598,22 +603,25 @@ describe("getActivityState", () => {
           stderr: "",
         });
       }
-      if (cmd === "opencode") {
-        return Promise.resolve({
-          stdout: JSON.stringify(rows),
-          stderr: "",
-        });
-      }
       return Promise.reject(new Error("unexpected"));
     });
   }
 
-  function mockOpencodeSessionList(updated: string | number) {
-    mockOpencodeSessionRows([{ id: "ses_abc123", updated }]);
+  function mockOpencodeSessionGet(updated: number | undefined) {
+    mockTmuxRunning();
+    mockGetOpenCodeSession.mockResolvedValue(
+      updated === undefined
+        ? { id: "ses_abc123", time: {} }
+        : { id: "ses_abc123", time: { updated } },
+    );
+  }
+
+  function mockOpencodeSessionList(updated: number) {
+    mockOpencodeSessionGet(updated);
   }
 
   it("returns idle when last activity is older than ready threshold", async () => {
-    mockOpencodeSessionList(new Date(Date.now() - 120_000).toISOString());
+    mockOpencodeSessionList(Date.now() - 120_000);
 
     const state = await agent.getActivityState(
       makeSession({
@@ -627,7 +635,7 @@ describe("getActivityState", () => {
   });
 
   it("returns ready when last activity is between active window and ready threshold", async () => {
-    mockOpencodeSessionList(new Date(Date.now() - 45_000).toISOString());
+    mockOpencodeSessionList(Date.now() - 45_000);
 
     const state = await agent.getActivityState(
       makeSession({
@@ -641,7 +649,7 @@ describe("getActivityState", () => {
   });
 
   it("returns active when last activity is recent", async () => {
-    mockOpencodeSessionList(new Date(Date.now() - 10_000).toISOString());
+    mockOpencodeSessionList(Date.now() - 10_000);
 
     const state = await agent.getActivityState(
       makeSession({
@@ -655,7 +663,7 @@ describe("getActivityState", () => {
   });
 
   it("returns null when matching session has invalid updated timestamp", async () => {
-    mockOpencodeSessionRows([{ id: "ses_abc123", updated: "not-a-date" }]);
+    mockOpencodeSessionGet(undefined);
 
     const state = await agent.getActivityState(
       makeSession({
@@ -668,14 +676,11 @@ describe("getActivityState", () => {
     expect(state).toBeNull();
   });
 
-  it("falls back to AO session title when opencodeSessionId metadata is missing", async () => {
-    mockOpencodeSessionRows([
-      {
-        id: "ses_different",
-        title: "AO:test-1",
-        updated: new Date(Date.now() - 5_000).toISOString(),
-      },
-    ]);
+  it("does not fall back to AO session title when opencodeSessionId metadata is missing", async () => {
+    // I-2 rows 5 and 6: no title search. Without a stored ID the lookup
+    // returns null even though a session with the title exists.
+    mockTmuxRunning();
+    mockGetOpenCodeSession.mockResolvedValue(null);
 
     const state = await agent.getActivityState(
       makeSession({
@@ -685,21 +690,13 @@ describe("getActivityState", () => {
       60_000,
     );
 
-    expect(state?.state).toBe("active");
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+    expect(state).toBeNull();
   });
 
-  it("returns null when opencode session list output is malformed JSON", async () => {
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
-      if (cmd === "ps") {
-        return Promise.resolve({
-          stdout: "  PID TT       ARGS\n  789 ttys003  opencode\n",
-          stderr: "",
-        });
-      }
-      if (cmd === "opencode") return Promise.resolve({ stdout: "not json", stderr: "" });
-      return Promise.reject(new Error("unexpected"));
-    });
+  it("returns null when session.get throws (falls back with no JSONL entry)", async () => {
+    mockTmuxRunning();
+    mockGetOpenCodeSession.mockRejectedValue(new Error("hang"));
 
     const state = await agent.getActivityState(
       makeSession({
@@ -715,19 +712,12 @@ describe("getActivityState", () => {
 describe("getSessionInfo", () => {
   const agent = create();
 
-  function mockOpencodeSessionRows(rows: Array<Record<string, unknown>>) {
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") {
-        return Promise.resolve({ stdout: JSON.stringify(rows), stderr: "" });
-      }
-      return Promise.reject(new Error("unexpected"));
-    });
-  }
-
   it("returns session info when matching session found by metadata ID", async () => {
-    mockOpencodeSessionRows([
-      { id: "ses_abc123", title: "AO:test-1", updated: new Date().toISOString() },
-    ]);
+    mockGetOpenCodeSession.mockResolvedValue({
+      id: "ses_abc123",
+      title: "AO:test-1",
+      time: { updated: Date.now() },
+    });
 
     const info = await agent.getSessionInfo(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
@@ -736,30 +726,28 @@ describe("getSessionInfo", () => {
     expect(info!.agentSessionId).toBe("ses_abc123");
     expect(info!.summary).toBe("AO:test-1");
     expect(info!.summaryIsFallback).toBe(true);
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_abc123");
   });
 
-  it("returns session info when matching session found by title", async () => {
-    mockOpencodeSessionRows([
-      { id: "ses_xyz789", title: "AO:test-1", updated: new Date().toISOString() },
-    ]);
-
+  it("returns null when no stored session ID exists (no title search)", async () => {
     const info = await agent.getSessionInfo(makeSession({ metadata: {} }));
-    expect(info).not.toBeNull();
-    expect(info!.agentSessionId).toBe("ses_xyz789");
+    expect(info).toBeNull();
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
   });
 
-  it("returns null when no matching session", async () => {
-    mockOpencodeSessionRows([
-      { id: "ses_other", title: "AO:different", updated: new Date().toISOString() },
-    ]);
-
-    const info = await agent.getSessionInfo(makeSession({ metadata: {} }));
+  it("returns null when the stored session is gone (404, no title replacement)", async () => {
+    mockGetOpenCodeSession.mockResolvedValue(null);
+    const info = await agent.getSessionInfo(
+      makeSession({ metadata: { opencodeSessionId: "ses_gone" } }),
+    );
     expect(info).toBeNull();
   });
 
   it("returns null when opencode command fails", async () => {
-    mockExecFileAsync.mockRejectedValue(new Error("opencode not found"));
-    const info = await agent.getSessionInfo(makeSession());
+    mockGetOpenCodeSession.mockRejectedValue(new Error("opencode not found"));
+    const info = await agent.getSessionInfo(
+      makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+    );
     expect(info).toBeNull();
   });
 });
@@ -771,14 +759,17 @@ describe("getRestoreCommand", () => {
   const agent = create();
 
   it("returns restore command from metadata session ID", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
     );
     expect(cmd).toBe("opencode --session 'ses_abc123'");
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_abc123");
   });
 
   it("stores the project model through the API instead of a TUI flag", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
       {
@@ -795,31 +786,26 @@ describe("getRestoreCommand", () => {
     expect(cmd).not.toContain("--model");
   });
 
-  it("returns null when no session ID found", async () => {
-    mockExecFileAsync.mockRejectedValue(new Error("opencode not found"));
+  it("returns null when no session ID is stored (no title search)", async () => {
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: {} }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
     );
     expect(cmd).toBeNull();
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+    // A4: the version probe still runs, so a refused binary reports the
+    // version problem instead of only the missing mapping.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to title-based lookup", async () => {
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "opencode") {
-        return Promise.resolve({
-          stdout: JSON.stringify([{ id: "ses_found", title: "AO:test-1" }]),
-          stderr: "",
-        });
-      }
-      return Promise.reject(new Error("unexpected"));
-    });
-
+  it("returns null when the stored session is gone (no title replacement)", async () => {
+    mockGetOpenCodeSession.mockResolvedValue(null);
     const cmd = await agent.getRestoreCommand!(
-      makeSession({ metadata: {} }),
+      makeSession({ metadata: { opencodeSessionId: "ses_gone" } }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
     );
-    expect(cmd).toBe("opencode --session 'ses_found'");
+    expect(cmd).toBeNull();
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_gone");
   });
 });
 
@@ -974,24 +960,11 @@ describe("getActivityState with activity JSONL", () => {
 
   it("falls back to opencode API when activity JSONL is empty", async () => {
     mockReadLastActivityEntry.mockResolvedValueOnce(null);
-    // Mock opencode session list returning recent activity
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
-      if (cmd === "ps") {
-        return Promise.resolve({
-          stdout: "  PID TT       ARGS\n  789 ttys003  opencode\n",
-          stderr: "",
-        });
-      }
-      if (cmd === "opencode") {
-        return Promise.resolve({
-          stdout: JSON.stringify([
-            { id: "ses_abc123", title: "AO:test-1", updated: new Date(Date.now() - 5_000).toISOString() },
-          ]),
-          stderr: "",
-        });
-      }
-      return Promise.reject(new Error("unexpected"));
+    mockTmuxWithProcess("opencode");
+    mockGetOpenCodeSession.mockResolvedValue({
+      id: "ses_abc123",
+      title: "AO:test-1",
+      time: { updated: Date.now() - 5_000 },
     });
 
     const result = await agent.getActivityState(
@@ -1001,23 +974,13 @@ describe("getActivityState with activity JSONL", () => {
     expect(result?.state).toBe("active");
   });
 
-  it("falls back to JSONL entry state when session list fails", async () => {
+  it("falls back to JSONL entry state when session lookup misses", async () => {
     mockTmuxWithProcess("opencode");
     mockReadLastActivityEntry.mockResolvedValueOnce({
       entry: { ts: new Date().toISOString(), state: "active", source: "terminal" },
       modifiedAt: new Date(),
     });
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
-      if (cmd === "ps") {
-        return Promise.resolve({
-          stdout: "  PID TT       ARGS\n  789 ttys003  opencode\n",
-          stderr: "",
-        });
-      }
-      if (cmd === "opencode") return Promise.resolve({ stdout: "[]", stderr: "" });
-      return Promise.reject(new Error("unexpected"));
-    });
+    mockGetOpenCodeSession.mockResolvedValue(null);
 
     const result = await agent.getActivityState(
       makeSession({ runtimeHandle: makeTmuxHandle() }),
@@ -1032,17 +995,7 @@ describe("getActivityState with activity JSONL", () => {
       entry: { ts: new Date(Date.now() - 120_000).toISOString(), state: "active", source: "terminal" },
       modifiedAt: new Date(Date.now() - 120_000),
     });
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
-      if (cmd === "ps") {
-        return Promise.resolve({
-          stdout: "  PID TT       ARGS\n  789 ttys003  opencode\n",
-          stderr: "",
-        });
-      }
-      if (cmd === "opencode") return Promise.resolve({ stdout: "[]", stderr: "" });
-      return Promise.reject(new Error("unexpected"));
-    });
+    mockGetOpenCodeSession.mockResolvedValue(null);
 
     const result = await agent.getActivityState(
       makeSession({ runtimeHandle: makeTmuxHandle() }),
@@ -1051,20 +1004,10 @@ describe("getActivityState with activity JSONL", () => {
     expect(result?.state).toBe("idle");
   });
 
-  it("returns null when both session list and JSONL are unavailable", async () => {
+  it("returns null when both session lookup and JSONL are unavailable", async () => {
     mockTmuxWithProcess("opencode");
     mockReadLastActivityEntry.mockResolvedValueOnce(null);
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
-      if (cmd === "ps") {
-        return Promise.resolve({
-          stdout: "  PID TT       ARGS\n  789 ttys003  opencode\n",
-          stderr: "",
-        });
-      }
-      if (cmd === "opencode") return Promise.resolve({ stdout: "[]", stderr: "" });
-      return Promise.reject(new Error("unexpected"));
-    });
+    mockGetOpenCodeSession.mockResolvedValue(null);
 
     const result = await agent.getActivityState(
       makeSession({ runtimeHandle: makeTmuxHandle() }),
@@ -1672,6 +1615,13 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
   }
 
   async function restoreCommand(projectModel: string): Promise<string> {
+    // The Node-side `session.get` verification reads the fake store through
+    // the mock (the fake binary runs in a child bash, not in this process).
+    mockGetOpenCodeSession.mockResolvedValue({
+      id: existingId,
+      title: existing.title,
+      time: { updated: existing.updated },
+    });
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: existingId } }),
       { ...project, agentConfig: { model: projectModel } },
@@ -1954,6 +1904,7 @@ describe("version gate on restore", () => {
   });
 
   it("runs one probe when it returns a restore command", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
     const cmd = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
       project,
@@ -1962,15 +1913,14 @@ describe("version gate on restore", () => {
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the probe to the launch fallback when it finds no session", async () => {
-    mockExecFileAsync.mockRejectedValue(new Error("opencode not found"));
+  it("probes even when it finds no session, so a refused binary names the version", async () => {
     const restore = await agent.getRestoreCommand!(makeSession({ metadata: {} }), project);
     expect(restore).toBeNull();
-    expect(mockExecFileSync).not.toHaveBeenCalled();
-
-    // The caller then falls back to getLaunchCommand, which probes once:
-    // one restore, one probe.
-    agent.getLaunchCommand(makeLaunchConfig());
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+
+    // The caller then falls back to getLaunchCommand, which probes again:
+    // one restore probe, one launch probe.
+    agent.getLaunchCommand(makeLaunchConfig());
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
   });
 });

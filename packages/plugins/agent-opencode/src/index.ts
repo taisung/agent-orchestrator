@@ -10,6 +10,7 @@ import {
   setupPathWrapperWorkspace,
   PREFERRED_GH_PATH,
   asValidOpenCodeSessionId,
+  getOpenCodeSession,
   HERDR_RUNTIME_NAME,
   isHerdrProcessRunning,
   type Agent,
@@ -23,55 +24,19 @@ import {
   type Session,
   type WorkspaceHooksConfig,
   type OpenCodeAgentConfig,
+  type OpenCodeApiSession,
 } from "@aoagents/ao-core";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-interface OpenCodeSessionListEntry {
-  id: string;
-  title?: string;
-  updated?: string | number;
-}
-
-function parseUpdatedTimestamp(updated: string | number | undefined): Date | null {
-  if (typeof updated === "number") {
-    if (!Number.isFinite(updated)) return null;
-    const date = new Date(updated);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  if (typeof updated !== "string") return null;
-
-  const trimmed = updated.trim();
-  if (trimmed.length === 0) return null;
-
-  if (/^\d+$/.test(trimmed)) {
-    const epochMs = Number(trimmed);
-    if (!Number.isFinite(epochMs)) return null;
-    const date = new Date(epochMs);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  const parsedMs = Date.parse(trimmed);
-  if (!Number.isFinite(parsedMs)) return null;
-  return new Date(parsedMs);
-}
-
-function parseSessionList(raw: string): OpenCodeSessionListEntry[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((item): item is OpenCodeSessionListEntry => {
-    if (!item || typeof item !== "object") return false;
-    const record = item as Record<string, unknown>;
-    return asValidOpenCodeSessionId(record["id"]) !== undefined;
-  });
+/** Last-activity timestamp from a `session.get` record (`time.updated`, ms). */
+function parseApiUpdatedTimestamp(session: OpenCodeApiSession): Date | null {
+  const updated = session.time?.updated;
+  if (typeof updated !== "number" || !Number.isFinite(updated)) return null;
+  const date = new Date(updated);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /**
@@ -401,41 +366,24 @@ function buildResumeCommand(
 }
 
 // =============================================================================
-// Session List Helpers
+// Session Lookup Helper (rows 5 and 6)
 // =============================================================================
 
 /**
- * Query OpenCode's session list and find the matching session for this AO session.
- * Tries metadata `opencodeSessionId` first, then falls back to title matching.
+ * `session.get` by the stored ID (rows 5 and 6). No title search: a session
+ * without a stored ID stays unmapped until `ao session remap`, and a stored
+ * ID that is gone (404) is not replaced by a title match. On timeout or
+ * another error, returns null so activity falls back to JSONL and session
+ * info reports no data; the helper throws with `cause` and this wrapper
+ * treats it as unavailable, never as "does not exist".
  */
 async function findOpenCodeSession(
   session: Session,
-): Promise<OpenCodeSessionListEntry | null> {
+): Promise<OpenCodeApiSession | null> {
+  const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
+  if (!storedId) return null;
   try {
-    const { stdout } = await execFileAsync(
-      "opencode",
-      ["session", "list", "--format", "json"],
-      { timeout: 30_000 },
-    );
-
-    const sessions = parseSessionList(stdout);
-
-    // Prefer exact ID match from metadata
-    if (session.metadata?.opencodeSessionId) {
-      const match = sessions.find((s) => s.id === session.metadata.opencodeSessionId);
-      if (match) return match;
-    }
-
-    // Fallback: title match — pick the most recently updated session
-    // to avoid binding to a stale session when titles collide.
-    const titleMatches = sessions.filter((s) => s.title === `AO:${session.id}`);
-    if (titleMatches.length === 0) return null;
-    if (titleMatches.length === 1) return titleMatches[0]!;
-    return titleMatches.reduce((best, s) => {
-      const bestTs = parseUpdatedTimestamp(best.updated)?.getTime() ?? 0;
-      const sTs = parseUpdatedTimestamp(s.updated)?.getTime() ?? 0;
-      return sTs > bestTs ? s : best;
-    });
+    return await getOpenCodeSession(storedId);
   } catch {
     return null;
   }
@@ -584,10 +532,12 @@ function createOpenCodeAgent(): Agent {
         if (activityState) return activityState;
       }
 
-      // 2. Fallback: query OpenCode's session list API for timestamp-based detection
+      // 2. Fallback: `session.get` by the stored ID for timestamp-based detection.
+      // No title search (rows 5 and 6). A 404, timeout or another error falls
+      // through to the JSONL decay below.
       const targetSession = await findOpenCodeSession(session);
       if (targetSession) {
-        const lastActivity = parseUpdatedTimestamp(targetSession.updated);
+        const lastActivity = parseApiUpdatedTimestamp(targetSession);
 
         if (lastActivity) {
           const ageMs = Math.max(0, Date.now() - lastActivity.getTime());
@@ -685,20 +635,23 @@ function createOpenCodeAgent(): Agent {
     },
 
     async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
-      // Try metadata first, then query OpenCode's session list
-      const sessionId =
-        asValidOpenCodeSessionId(session.metadata?.opencodeSessionId) ??
-        (await findOpenCodeSession(session))?.id ??
-        null;
-
-      // Without a session ID the caller falls back to getLaunchCommand, which
-      // runs the version check itself; check here only when this method returns
-      // a command, so one restore runs one probe.
-      if (!sessionId) return null;
+      // Rows 5 and 6: `session.get` by the stored ID. No title search on
+      // restore. The version probe runs first even when no ID is stored, so a
+      // refused binary names the version problem (A4, I-1 open minor) instead
+      // of only the missing mapping; core turns the null below into the A4
+      // "no stored ID, run `ao session remap`" error.
       assertSupportedOpenCodeVersion();
+      const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
+      if (!storedId) return null;
+      // Verify the stored session still exists. A 404 returns null so the
+      // caller falls back to a fresh launch; a timeout or another error
+      // throws, so a hanging binary fails within the bound (D4) instead of
+      // silently opening a new conversation.
+      const existing = await getOpenCodeSession(storedId);
+      if (!existing) return null;
 
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
-      return buildResumeCommand(sessionId, { model: agentConfig?.model as string | undefined });
+      return buildResumeCommand(storedId, { model: agentConfig?.model as string | undefined });
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
