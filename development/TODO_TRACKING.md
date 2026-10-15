@@ -113,8 +113,18 @@ Durable progress record for this fork. Dated events only; the current state live
   step 6 ran `ao start --no-orchestrator`, which loads the test config and exits 0, so it was the job's
   only config-load check and not a dashboard start, a brief error; m-1 the dead `port: 9000`; m-2 dead
   `packages/web` entries in `eslint.config.js`). Reviews `development/reviews/ci_nodash_review_r1_*.md`.
-  Cherry-picked; the tree equals the reviewed `0a81e224` outside `development/`. Round 2 (M-1, m-1, m-2)
-  dispatched to ao-20. Not pushed. No build: CI files only.
+  Cherry-picked; the tree equals the reviewed `0a81e224` outside `development/`.
+- `c9a7ed93`, `19d99667` (2026-10-15, ao-20, round 2 of the CI cleanup) - the onboarding test gets a
+  synchronous step 6, `ao start --no-orchestrator || fail_step ...`, so the job again checks that the
+  built `ao` loads the test config (the author's audit of that path: one external command, `tmux -V`;
+  no lifecycle worker, server, `gh`, `npm` or install); `port: 9000` is gone; `eslint.config.js` loses
+  the five dead `packages/web`, `.next` and `dist-server` ignores and the Next.js rule block (`pnpm lint`
+  0 errors, 6 warnings before and after). Re-check LAND-SAFE by Sonnet 5.5 (3 minors: the
+  `test-clipboard*` ignores and the `scripts/**/*.js` block are web-terminal leftovers, step 6 has no
+  comment line) and by V4.1 Flash (2 minors: dead web entries in `.eslintignore`, which ESLint 10 no
+  longer reads; a blank heredoc line). Reviews `development/reviews/ci_nodash_review_r2_*.md`.
+  Cherry-picked; the tree equals the reviewed `353ef189` outside `development/`. Not pushed. No build:
+  CI and lint files only. The first CI run on `main` after a push is the live check of step 6.
 
 ## Decisions
 
@@ -165,6 +175,17 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   "global service read-only, no model turn". The sessions stay in the global store (owner,
   2026-10-15: leave them). Rule for every brief from now: run the integration package with a fake `HOME`, so the
   live block skips. Earlier arcs (I-1, I-6) asked for the same run and are not checked.
+- **A full `pnpm test` in a worker pane leaks into the real state** (found 2026-10-15 by ao-1, I-2 round
+  2). Run at 16:46:57Z with the real `HOME` and the worker's `AO_*` variables, it made two more model
+  turns on the global OpenCode service (`ses_ebf89d5bcffe2gNXDKbG5frCqF`, `ses_ebf89c1e5ffeFjai3ZvtCwBo5F`,
+  "Greeting request", 16:47:28Z and 16:47:33Z) and wrote 49 test directories into the real
+  `/home/taisung/.agent-orchestrator`, because the core and CLI tests use `AO_STATE_ROOT` from the
+  environment when it is set. ao-1 also matched an earlier global pair (2026-10-14 23:53:42Z and
+  23:53:44Z) to its I-1 full run. Other test directories were born at 12:41:58, 12:42:44, 12:43:34 and
+  12:50:01 local by another run, not attributed. None of it was removed. Rule for every brief from now:
+  every `pnpm test`, not only the integration package, runs with a fake `HOME` and with every `AO_*`
+  variable removed. A test-isolation fix (tests that ignore an inherited `AO_STATE_ROOT`) is a worker
+  follow-up.
 - **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
   metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host
