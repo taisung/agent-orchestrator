@@ -17,10 +17,12 @@ None for this repository. It has no `ao` project. `git worktree list` shows only
 
 ## Open and Blocked Items
 
-**Lifecycle workers run pre-rebuild code**: open - five `ao lifecycle-worker` processes started before the
-2026-09-23 rebuild (TODO_TRACKING "Known Issues"). Round-2 fixes, for example `AO_STATE_ROOT` passed to the
-lifecycle worker, are not live until they restart - owner decides when to restart, because Nexus and
-Coding-Orchestrator fleets use them.
+**Lifecycle workers run pre-rebuild code**: closed 2026-10-14 21:26 EDT - on the owner's word, after the
+21:11 rebuild with the OpenCode 2.x plugin fix (TODO_TRACKING "What Landed"), the agent-skills orchestrator
+restarted all five running workers by exact PID (agent-skills, agent-orchestrator under this repo's config
+and under the Nexus config, Nexus, VSF), each with its old environment and cwd, and wrote each new PID to its
+`lifecycle-worker.pid`. All five report health `ok` with no failed poll. No worker ran for
+Coding-Orchestrator or fleet-monitor; their PID files are stale and none was started.
 **Project guide does not name HANDOVER.md**: open - `CLAUDE.md` and `AGENTS.md` have no session-start
 instruction - add "read `development/HANDOVER.md` first" to both in one commit (the owner's rule: never add a
 rule to only one of them).
@@ -42,9 +44,8 @@ historical synthetic roots.
      after spawn, a tmux scrape for output, deleting branches by hand. Phase 2 removes the first two.
      `0008` §7 adds `ao spawn --route` as a candidate.
    - Expected outcome: one phase with an exit gate, briefed to a worker per D-3.
-2. **Restart lifecycle workers on the owner's word** - then check `ps -o lstart= -p <pid>` is later than the
-   2026-09-23 build.
-   - Expected outcome: every `ao lifecycle-worker` started after the rebuild.
+2. **Restart lifecycle workers on the owner's word** - done 2026-10-14 21:26 EDT (Open items). After every
+   later rebuild, repeat it: check `ps -o lstart= -p <pid>` is later than the build.
 3. **Fix the guide pointer and the profile** (Open items 2 and 3).
 
 ## First Actions

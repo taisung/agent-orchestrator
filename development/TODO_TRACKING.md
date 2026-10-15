@@ -51,8 +51,8 @@ Durable progress record for this fork. Dated events only; the current state live
   reviewed tree. Not pushed. Rebuilt in place on the owner's word (D-3), 2026-10-14 21:11 EDT: `pnpm install`
   and `pnpm build`, all 12 packages `Done`; `ao --version` 0.2.2. A live `ao spawn --agent opencode` probe from
   the agent-skills config opened the TUI on `AO:as-63` and answered `OK`. On 2.x the TUI submits the launch
-  prompt (1.x did not). `ao lifecycle-worker` processes started before 21:11 run the old plugin until they
-  restart. `ao doctor` prints `FAIL launcher entrypoint is missing`: `scripts/ao-doctor.sh:264` checks
+  prompt (1.x did not). All five running `ao lifecycle-worker` processes were restarted on the owner's word at
+  21:24-21:26 EDT by exact PID with their old environment and cwd; all report health `ok`. `ao doctor` prints `FAIL launcher entrypoint is missing`: `scripts/ao-doctor.sh:264` checks
   `packages/agent-orchestrator/bin/ao.js`, which `4fcdc674` removed; the check is stale, not the build. The
   owner keeps the host on OpenCode 2.x; a later arc drops the 1.x branch, moves `ao send`,
   activity and cost to `opencode api`, and fixes the `ao start` install (`npm install -g opencode-ai` has no
