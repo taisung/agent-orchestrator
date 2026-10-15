@@ -588,3 +588,28 @@ the wrapper write because the marker matched), the primary checkout.
 7. **`worktreeDir`** belongs in the workspace plugin config, not at the top level (§8). Low.
 8. **DeepSeek V4.1 Flash** refused the shell tool twice in one session and cited Code Mode (§7.4).
    A reliability note for the cheap OpenCode lens. Low.
+
+## 15. Review round 1 (added by the orchestrator, 2026-10-14)
+
+Two receipts reviews of `95a1328d`, the router's pair for an L2 LOW note: Muse (ao-11) ACCEPT, 0 majors,
+6 minors, 22 read-only spot checks all true; DeepSeek V4.1 Flash (ao-12) ACCEPT, 0 majors, 7 minors, 20
+spot checks (18 true, 0 false, 2 cannot check). The removed sessions cannot be re-run, so both reviewed by
+receipts and consistency. No round 2 runs. The reviews are `development/reviews/0010_review_r1_muse.md`
+and `development/reviews/0010_review_r1_v4flash.md`. The corrections that each increment brief must use:
+
+- §1 result 2 and §7.3: `time.idle` is written about 6 to 10 ms after the final answer (S1 6 ms, S6 8 ms,
+  S7 10 ms); 18 to 19 ms is the return latency of `session.wait`, a different quantity (both reviews).
+- §1 result 8 and §10: the M-8 poll count is given as 150 and as 152; read the evidence, not the summary.
+- §9 and §13 R4/R5: the failure shape `finish "error"` on the assistant message is shown only by the S4
+  interrupt, not by a provider failure. I-4 must not assume that shape for provider errors (M-7 is open).
+- §13, the I-4 row: the running tool part as evidence comes from M-8 only, not from M-6.
+- §5.5 and §13 I-3: "the readback cannot catch a model that does not exist" rests on one no-provider
+  sample; `outcome "interrupted"` decaying by age like `succeeded` is inferred, not measured.
+- §8 and §1 result 6: the M-6 worker read its wait instruction in the launch prompt (the pointer title),
+  then waited in a shell loop. Another run (ao-6 at about 22:45 EDT) ended its turn instead and needed an
+  `ao send`, so the wait behavior varies by run.
+- §2: the limit of 20 model turns came from the orchestrator's brief.
+- §12: the total cost has no per-session list; give one in later measurement notes.
+- §7.4: the "Code Mode" refusal text is the model's own claim, quoted from a removed session.
+- §14 items 6 to 8 name no owner decision. Item 6 (`status=killed`) goes to I-3, as §13 says.
+
