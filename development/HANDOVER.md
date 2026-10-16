@@ -1,11 +1,20 @@
 # Handover
 
-**Last Updated**: 2026-10-15
-**Latest Code Commit**: 6abab58d (test(agent-opencode): pin the existing-session path in the probe test)
+**Last Updated**: 2026-10-16
+**Latest Code Commit**: 5cbe84b3 (fix(core): limit metadata helper to wrapper keys to block privilege escalation)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
 ## Current Status
+
+**2026-10-16 rollout** (owner: "rebuild now, then push"): option 1 (`5b488fdb`, `25a56f30`) and the m-10
+helper key limit (`5cbe84b3`) are live and pushed. `pnpm build` ran at 07:54 EDT (exit 0). The five
+lifecycle workers were restarted by exact PID at 07:54:55 to 07:55:08 (agent-skills 3432870,
+agent-orchestrator 3433219 for the Nexus config and 3434840 for this config, Nexus 3433850, VSF 3434817).
+`main` was pushed as `19f027c2..c8bccfb2`, and CI, Integration Tests, Security and Onboarding passed. The
+ao-34 spawn at 08:00:42 installed `~/.ao/bin` 0.2.4 (2 `refusing` lines in the helper), and its record
+holds `model=` and `permissions=`. On the owner's word the m-14 note went to `as-orchestrator`, and m-13
+went to ao-34 (Muse) with the fleet watcher on (PID 3473604).
 
 The OpenCode 2.x arc (note `0009`, increments I-0 to I-7) is half done. I-1 (drop 1.x, require 2.0.29)
 and I-6 (`ao start` installs `@opencode/cli`) are on `main` and live: the primary checkout was rebuilt
@@ -70,6 +79,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-31 | Muse (OpenCode 2.x) | idle, done, landed | `0bc46903` | landed as `14bb4670`; row closed; earlier: owner word "delete release.yml" (2026-10-15); python/L0/LOW, receipts only; `package.json` scripts and `.changeset/` stay; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-del-release.md` |
 | ao-32 | Opus 5.5 (Claude Code) | idle, done: m-10 LAND-SAFE | at `63567df0` | 0 B, 1 M (rollout), 2 m, 8 notes; 8.21 USD; review on `main`; row closed; 37% context; review file `helper_keys_review_r1_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-helper-keys-opus.md`; r4: 0 B, 0 M, 2 m; 4.43 USD; review on `main`; row closed; brief `~/.cache/agent-skills-haiku55-arc/brief-review-persist-identity-r4-opus.md`; review file `restore_model_review_r4_opus.md`; r3: 0 B, 1 M, 4 m, 5 notes; 7.61 USD; review on `main`; row closed; brief `~/.cache/agent-skills-haiku55-arc/brief-review-persist-identity-opus.md`; review file `restore_model_review_r3_opus.md`; r2: 0 B, 1 M (test gap), 3 m, 4 notes; review on `main`; 5.16 USD; row closed; reused at 23% context; review file `development/reviews/restore_model_review_r2_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-restore-followups-opus.md`; round 1: 0 B, 0 M, 3 m, 5 notes; review copied to `main`; 5.06 USD; row closed; earlier: model pinned in `.claude/settings.local.json`; review file `development/reviews/restore_model_review_r1_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-restore-model-opus.md` |
 | ao-33 | Muse (OpenCode 2.x) | idle, done, landed | `63567df0` | landed as `5cbe84b3`; row closed; 7 files: the helper takes only `pr`, `status pr_open`, `branch`, refuses others (stderr, exit 1); the Claude hook gets the same limit plus `status merged`; AGENTS.md text changed; `WRAPPER_VERSION` 0.2.4; the real `~/.ao/bin` unchanged; about 0.07 USD; owner "fix m-10"; limit `update_ao_metadata` to `pr`, `status pr_open`, `branch`, change the AGENTS.md text, bump `WRAPPER_VERSION`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-helper-keys.md` |
+| ao-34 | Muse (OpenCode 2.x) | working: m-13 | `c8bccfb2` | owner "fix m-13" (2026-10-16); one core branch-name rule, gates in restore and the worktree plugin, `branch` and `pr` value checks in the helper and the Claude hook, `WRAPPER_VERSION` 0.2.5; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check.md`; router row open; reviewer next: Opus 5.5 |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -127,12 +137,9 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Rebuild, restart and push** on the owner's word: `main` holds `5b488fdb` and `25a56f30` (option 1,
-   LAND-SAFE r3 and r4) and `5cbe84b3` (m-10, LAND-SAFE), not live and not pushed. After `pnpm build`,
-   restart the five lifecycle workers by exact PID (M-3: an old process puts the 0.2.3 helper back), and
-   after the next Codex, Gemini or OpenCode spawn check `~/.ao/bin/.ao-version` = 0.2.4 and
-   `grep -c refusing ~/.ao/bin/ao-metadata-helper.sh` = 2. Open for the owner: the m-13 branch-option fix,
-   and a note to `as-orchestrator` on m-14.
+1. **m-13** (owner, 2026-10-16): ao-34 authors; then a blind review by Opus 5.5 (ao-32); then, on the
+   owner's word, rebuild, restart the five lifecycle workers by exact PID (M-3 again: `WRAPPER_VERSION`
+   0.2.5), check `~/.ao/bin/.ao-version` after the next Codex, Gemini or OpenCode spawn, and push.
 2. **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with `~/agent-skills/scripts/routing.py
    route`; I-3 and I-5 are HIGH by the profile.
 

@@ -224,7 +224,7 @@ Durable progress record for this fork. Dated events only; the current state live
   **LAND-SAFE**, M-2 and m-7 fixed, m-8 partly fixed, 0 B, 0 M. Open cosmetic minors: m-11 (the new Codex
   test repeats `index.test.ts:1285-1305`), m-12 (the test name at `restore-permissions.test.ts:258` says the
   loader "always sets permissionless"). N-15: a Codex worker with a damaged record now waits for approval
-  (`waiting_input`). Not live, not pushed.
+  (`waiting_input`). Live since the rebuild of 2026-10-16 at 07:54 EDT; pushed `19f027c2..c8bccfb2`.
 
 - `5cbe84b3` (2026-10-16, ao-33, Muse; owner "fix m-10") - `fix(core): limit metadata helper to wrapper
   keys to block privilege escalation`, the code of the reviewed `63567df0`. `update_ao_metadata` in
@@ -238,7 +238,12 @@ Durable progress record for this fork. Dated events only; the current state live
   installs the old helper again on its next automatic restore, so after the rebuild restart them, then
   check `cat ~/.ao/bin/.ao-version` (0.2.4, after the next Codex, Gemini or OpenCode spawn or restore) and
   `grep -c refusing ~/.ao/bin/ao-metadata-helper.sh` (2). N-17: an agent with shell access can still write
-  the record file directly. Not live, not pushed.
+  the record file directly. **Live and pushed** (owner, 2026-10-16: "rebuild now, then push"): `pnpm build`
+  at 07:54 EDT (exit 0); the five lifecycle workers restarted by exact PID at 07:54:55 to 07:55:08
+  (agent-skills 3432870, agent-orchestrator 3433219 for the Nexus config and 3434840 for this config,
+  Nexus 3433850, VSF 3434817); pushed `19f027c2..c8bccfb2` (CI, Integration Tests, Security and Onboarding
+  passed). M-3 check passed: the ao-34 spawn at 08:00:42 installed `.ao-version` 0.2.4, and the helper
+  holds 2 `refusing` lines.
 
 ## Decisions
 
@@ -269,10 +274,15 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   no `--`), and git resets the free branch `victim` (live: it lost its own commit, which stays in the
   reflog). The orchestrator process runs that git command, outside the agent sandbox. Suggested fix: refuse
   a `branch` value that `git check-ref-format --branch` refuses or that starts with `-`, in the helper, the
-  hook and restore. The `pr` value has no check either. Worker follow-up, needs the owner's word.
+  hook and restore. The `pr` value has no check either. **In progress** (owner, 2026-10-16: "fix m-13"):
+  author ao-34 (Muse), brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check.md` (one core
+  branch-name rule, gates in restore and the worktree plugin, value checks in the helper and the hook,
+  `WRAPPER_VERSION` 0.2.5); blind review by Opus 5.5 next. Its landing needs one more rebuild and restart
+  (M-3: a 0.2.4 process puts its own helper back).
 - **`~/agent-skills/skills/ao-lifecycle/SKILL.md:854-860` documents the generic `update_ao_metadata <key>
   <value>` call** (helper review m-14). After `5cbe84b3` only `pr`, `status pr_open` and `branch` work, and
-  other calls fail loudly. That text belongs to `as-orchestrator`.
+  other calls fail loudly. That text belongs to `as-orchestrator`. On the owner's word a note went to
+  `as-orchestrator` on 2026-10-16 at about 07:56 EDT.
 
 - **Owner decisions from review r3 of option 1** (2026-10-15, ao-32; decided by the owner on 2026-10-15:
   "keep the default, accept m-9, fix m-10"). The YAML `permissionless` default stays. m-9 is accepted as a
