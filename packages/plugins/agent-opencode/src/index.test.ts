@@ -10,12 +10,13 @@ import {
   type AgentLaunchConfig,
 } from "@aoagents/ao-core";
 
-const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity, mockGetOpenCodeSession } =
+const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity, mockGetOpenCodeSession, mockCallOpenCodeApi } =
   vi.hoisted(() => ({
     mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
     mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
     mockRecordTerminalActivity: vi.fn().mockResolvedValue(undefined),
     mockGetOpenCodeSession: vi.fn(),
+    mockCallOpenCodeApi: vi.fn(),
   }));
 
 const mockExecFileAsync = vi.fn();
@@ -29,6 +30,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     readLastActivityEntry: mockReadLastActivityEntry,
     recordTerminalActivity: mockRecordTerminalActivity,
     getOpenCodeSession: (...args: unknown[]) => (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
+    callOpenCodeApi: (...args: unknown[]) => (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
   };
 });
 
@@ -112,6 +114,15 @@ beforeEach(() => {
   // `session.get` by stored ID (rows 5 and 6). Defaults to 404 (no session);
   // tests that need a session override per test. No title search.
   mockGetOpenCodeSession.mockResolvedValue(null);
+  // I-4 API lists: default to empty (no permission, no form, not active).
+  mockCallOpenCodeApi.mockImplementation((operation: string) => {
+    if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+    if (operation === "session.form.list") return Promise.resolve({ data: [] });
+    if (operation === "session.active") return Promise.resolve({ data: {} });
+    if (operation === "session.message.list")
+      return Promise.resolve({ data: [], cursor: { previous: null, next: null } });
+    return Promise.reject(new Error(`unexpected operation: ${operation}`));
+  });
 });
 
 describe("plugin manifest & exports", () => {
@@ -570,28 +581,43 @@ describe("detectActivity — terminal output classification", () => {
     expect(agent.detectActivity("   \n  ")).toBe("idle");
   });
 
-  it("returns idle when prompt char visible", () => {
-    expect(agent.detectActivity("some output\n> ")).toBe("idle");
-    expect(agent.detectActivity("some output\n$ ")).toBe("idle");
+  it("returns idle for constructed 0009-section-5.1 idle capture fixture", () => {
+    const idleCapture = [
+      "  ┃  Build · Muse Spark 1.3 Contributor OpenCode Go · xhigh",
+      "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+      "  /tmp/ao1s-work:main                    shift+tab agents  ctrl+p commands    /tmp/ao1s-work:main",
+    ].join("\n");
+    expect(agent.detectActivity(idleCapture)).toBe("idle");
   });
 
-  it("returns waiting_input for Y/N confirmation", () => {
-    expect(agent.detectActivity("Apply changes?\n(Y)es/(N)o")).toBe("waiting_input");
+  it("returns active for constructed census running fixture with esc interrupt under border", () => {
+    const running = [
+      "  ┃  Build · model · xhigh",
+      "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+      "  ⬝⬝⬝■■ working  esc interrupt",
+    ].join("\n");
+    expect(agent.detectActivity(running)).toBe("active");
   });
 
-  it("returns waiting_input for approval required", () => {
-    expect(agent.detectActivity("output\napproval required for this action")).toBe("waiting_input");
+  it("returns waiting_input for constructed census permission fixture with triangle marker", () => {
+    const permission = [
+      "△ Permission required",
+      "← Access external directory /tmp/outside",
+      "Allow once   Always allow   Reject",
+    ].join("\n");
+    expect(agent.detectActivity(permission)).toBe("waiting_input");
   });
 
-  it("returns waiting_input for proceed prompt", () => {
-    expect(agent.detectActivity("Do you want to proceed?")).toBe("waiting_input");
+  it("returns waiting_input for constructed census question fixture with select submit hint", () => {
+    const question = [
+      "Questions",
+      "Color preference",
+      "↑↓ select  enter submit  esc dismiss",
+    ].join("\n");
+    expect(agent.detectActivity(question)).toBe("waiting_input");
   });
 
-  it("returns waiting_input for allow prompt", () => {
-    expect(agent.detectActivity("Allow file creation?")).toBe("waiting_input");
-  });
-
-  it("returns active for non-empty terminal output", () => {
+  it("returns active for non-empty terminal output without a positive idle marker", () => {
     expect(agent.detectActivity("opencode is working\n")).toBe("active");
   });
 });
@@ -624,6 +650,44 @@ describe("getActivityState", () => {
   function mockOpencodeSessionList(updated: number) {
     mockOpencodeSessionGet(updated);
   }
+
+  it("returns exited when there is no runtime handle", async () => {
+    const state = await agent.getActivityState(makeSession({ runtimeHandle: null }));
+    expect(state?.state).toBe("exited");
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+    expect(mockCallOpenCodeApi).not.toHaveBeenCalled();
+  });
+
+  it("returns active from the native session.active signal even when time.idle is old", async () => {
+    mockTmuxRunning();
+    const old = Date.now() - 600_000;
+    mockGetOpenCodeSession.mockResolvedValue({
+      id: "ses_abc123",
+      time: { updated: old, idle: old },
+      outcome: "succeeded",
+    });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active")
+        return Promise.resolve({ data: { ses_abc123: { type: "running" } } });
+      return Promise.reject(new Error(`unexpected operation: ${operation}`));
+    });
+
+    const before = Date.now();
+    const state = await agent.getActivityState(
+      makeSession({
+        runtimeHandle: makeTmuxHandle(),
+        metadata: { opencodeSessionId: "ses_abc123" },
+      }),
+      60_000,
+    );
+
+    expect(state?.state).toBe("active");
+    expect(state?.timestamp.getTime()).toBeGreaterThanOrEqual(before - 5_000);
+    expect(mockGetOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(mockCallOpenCodeApi).toHaveBeenCalledTimes(3);
+  });
 
   it("returns idle when last activity is older than ready threshold", async () => {
     mockOpencodeSessionList(Date.now() - 120_000);
@@ -696,6 +760,7 @@ describe("getActivityState", () => {
     );
 
     expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+    expect(mockCallOpenCodeApi).not.toHaveBeenCalled();
     expect(state).toBeNull();
   });
 
@@ -711,6 +776,33 @@ describe("getActivityState", () => {
     );
 
     expect(state).toBeNull();
+  });
+
+  it("does not let a JSONL waiting_input override an API answer with empty lists", async () => {
+    mockTmuxRunning();
+    const old = Date.now() - 120_000;
+    mockGetOpenCodeSession.mockResolvedValue({
+      id: "ses_abc123",
+      time: { updated: old, idle: old },
+      outcome: "succeeded",
+    });
+    mockReadLastActivityEntry.mockResolvedValue({
+      entry: { ts: new Date().toISOString(), state: "waiting_input", source: "terminal" },
+      modifiedAt: new Date(),
+    });
+
+    const state = await agent.getActivityState(
+      makeSession({
+        runtimeHandle: makeTmuxHandle(),
+        metadata: { opencodeSessionId: "ses_abc123" },
+      }),
+      60_000,
+    );
+
+    expect(state?.state).toBe("idle");
+    expect(mockReadLastActivityEntry).not.toHaveBeenCalled();
+    mockReadLastActivityEntry.mockReset();
+    mockReadLastActivityEntry.mockResolvedValue(null);
   });
 });
 
@@ -731,7 +823,7 @@ describe("getSessionInfo", () => {
     expect(info!.agentSessionId).toBe("ses_abc123");
     expect(info!.summary).toBe("AO:test-1");
     expect(info!.summaryIsFallback).toBe(true);
-    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_abc123");
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_abc123", expect.any(Number));
   });
 
   it("returns null when no stored session ID exists (no title search)", async () => {
@@ -1024,7 +1116,6 @@ describe("getActivityState with activity JSONL", () => {
   });
 
   it("falls back to opencode API when activity JSONL is empty", async () => {
-    mockReadLastActivityEntry.mockResolvedValueOnce(null);
     mockTmuxWithProcess("opencode");
     mockGetOpenCodeSession.mockResolvedValue({
       id: "ses_abc123",

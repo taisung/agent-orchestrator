@@ -4,7 +4,6 @@ import {
   shellEscape,
   buildAgentPath,
   readLastActivityEntry,
-  checkActivityLogState,
   getActivityFallbackState,
   recordTerminalActivity,
   setupPathWrapperWorkspace,
@@ -27,18 +26,15 @@ import {
   type OpenCodeAgentConfig,
   type OpenCodeApiSession,
 } from "@aoagents/ao-core";
+import {
+  classifyOpenCodePaneActivity,
+  getApiActivityState,
+  getApiSessionInfo,
+} from "./api-activity.js";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-
-/** Last-activity timestamp from a `session.get` record (`time.updated`, ms). */
-function parseApiUpdatedTimestamp(session: OpenCodeApiSession): Date | null {
-  const updated = session.time?.updated;
-  if (typeof updated !== "number" || !Number.isFinite(updated)) return null;
-  const date = new Date(updated);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
 
 /**
  * Read the session ID from the single JSON document that
@@ -493,22 +489,7 @@ function createOpenCodeAgent(): Agent {
     },
 
     detectActivity(terminalOutput: string): ActivityState {
-      if (!terminalOutput.trim()) return "idle";
-
-      const lines = terminalOutput.trim().split("\n");
-      const lastLine = lines[lines.length - 1]?.trim() ?? "";
-
-      // OpenCode's input prompt — agent is idle
-      if (/^[>$#]\s*$/.test(lastLine)) return "idle";
-
-      // Check the last few lines for permission/confirmation prompts
-      const tail = lines.slice(-5).join("\n");
-      if (/\(Y\)es.*\(N\)o/i.test(tail)) return "waiting_input";
-      if (/approval required/i.test(tail)) return "waiting_input";
-      if (/Do you want to proceed\?/i.test(tail)) return "waiting_input";
-      if (/Allow .+\?/i.test(tail)) return "waiting_input";
-
-      return "active";
+      return classifyOpenCodePaneActivity(terminalOutput);
     },
 
     async getActivityState(
@@ -518,44 +499,39 @@ function createOpenCodeAgent(): Agent {
       const threshold = readyThresholdMs ?? DEFAULT_READY_THRESHOLD_MS;
       const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
 
-      // Check if process is running first
+      // Retained per A5 (I-2 rows 5 and 6): findOpenCodeSession stays
+      // unchanged in this file; the new paths use getOpenCodeSession with
+      // OPENCODE_ACTIVITY_API_TIMEOUT_MS. Referenced so the helper is kept.
+      void findOpenCodeSession;
+
+      // 1. Process check first, unchanged: no runtime handle or not running → exited.
       const exitedAt = new Date();
       if (!session.runtimeHandle) return { state: "exited", timestamp: exitedAt };
       const running = await this.isProcessRunning(session.runtimeHandle);
       if (!running) return { state: "exited", timestamp: exitedAt };
 
-      // 1. Check AO activity JSONL first (written by recordActivity from terminal output).
-      //    This is the only source of waiting_input/blocked states for OpenCode.
-      let activityResult: Awaited<ReturnType<typeof readLastActivityEntry>> = null;
-      if (session.workspacePath) {
-        activityResult = await readLastActivityEntry(session.workspacePath);
-        const activityState = checkActivityLogState(activityResult);
-        if (activityState) return activityState;
-      }
-
-      // 2. Fallback: `session.get` by the stored ID for timestamp-based detection.
-      // No title search (rows 5 and 6). A 404, timeout or another error falls
-      // through to the JSONL decay below.
-      const targetSession = await findOpenCodeSession(session);
-      if (targetSession) {
-        const lastActivity = parseApiUpdatedTimestamp(targetSession);
-
-        if (lastActivity) {
-          const ageMs = Math.max(0, Date.now() - lastActivity.getTime());
-          if (ageMs <= activeWindowMs) {
-            return { state: "active", timestamp: lastActivity };
-          }
-          if (ageMs <= threshold) {
-            return { state: "ready", timestamp: lastActivity };
-          }
-          return { state: "idle", timestamp: lastActivity };
+      // 2. No stored valid opencodeSessionId → make no API call; go to step 7.
+      const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
+      if (storedId) {
+        try {
+          const apiState = await getApiActivityState(storedId, activeWindowMs, threshold);
+          if (apiState) return apiState;
+        } catch {
+          // No API signal; fall through to the JSONL fallback below.
         }
       }
 
-      // 3. Fallback: use JSONL entry with age-based decay when session list is unavailable.
+      // 7. Fallback, required: the AO JSONL is read only here, so a JSONL
+      // waiting_input never overrides an API answer with empty lists. It
+      // surfaces a fresh waiting_input or blocked when the API is unavailable.
+      let activityResult: Awaited<ReturnType<typeof readLastActivityEntry>> = null;
+      if (session.workspacePath) {
+        activityResult = await readLastActivityEntry(session.workspacePath);
+      }
       const fallback = getActivityFallbackState(activityResult, activeWindowMs, threshold);
       if (fallback) return fallback;
 
+      // 8. Null only when there is no data at all.
       return null;
     },
 
@@ -624,15 +600,13 @@ function createOpenCodeAgent(): Agent {
     },
 
     async getSessionInfo(session: Session): Promise<AgentSessionInfo | null> {
-      const targetSession = await findOpenCodeSession(session);
-      if (!targetSession) return null;
-
-      return {
-        summary: targetSession.title ?? null,
-        summaryIsFallback: true,
-        agentSessionId: targetSession.id,
-        // OpenCode doesn't expose token/cost data in session list
-      };
+      const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
+      if (!storedId) return null;
+      try {
+        return await getApiSessionInfo(storedId);
+      } catch {
+        return null;
+      }
     },
 
     async getRestoreCommand(
