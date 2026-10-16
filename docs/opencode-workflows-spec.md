@@ -39,25 +39,31 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 - For `reuse`, the mapping is reused only when `session.get` finds the stored ID. A stored ID that is gone (404) or that `session.get` cannot check is not replaced by a title match.
 - For `delete` strategy:
   - delete the OpenCode sessions whose IDs AO metadata stores for this orchestrator before launching new orchestrator. There is no title search: an older OpenCode session that no metadata stores is not deleted. An ID that another live AO session of the project stores is kept.
-- For every strategy, when no stored ID is reused, the start waits up to 15 s for the pane to create its OpenCode session and stores its ID (see `ao spawn`).
+- For every strategy, when no stored ID is reused, `ao` creates the OpenCode session before the pane starts and stores its ID (see `ao spawn`). A failed gate, model check, create, readback or launch check fails the start: its prompt file, worktree and record are removed, and a session that this start created is removed.
 - For `ignore` strategy:
   - do not delete old OpenCode sessions; launch fresh runtime.
 
 ## 3) `ao spawn`
 
 - Uses selected agent (default/project/override) and launches OpenCode command from plugin launch config.
-- OpenCode launch behavior:
-  - no mapped id: the pane script creates the session with `opencode api session.create` (title `AO:<session>`, directory = the pane's working directory) and then starts `opencode --session <id>`.
-  - mapped id (`agentConfig.opencodeSessionId`): launch directly with `--session <id>`.
-- Fresh starts take a host-wide lock keyed by the real workspace directory and exact title, outside config hashes and state roots. They wait at most 30 s for a competing launch, then refuse before launching another pane. The launch timestamp is recorded only after acquiring the lock; it is held until discovery and metadata persistence finish.
-- The pane creates the session only after `runtime.create` returns, so `spawn` waits for it: up to 15 s, one `session.list` search every 500 ms. It stores the ID only when exactly one session has the exact title `AO:<session>`, `location.directory` equal to the workspace (or its real path), and `time.created` at or after the spawn start. Two fleets with the same session prefix give the same title, so the title alone never selects a session.
-- When the wait ends with no match or with more than one match, the spawn still succeeds without a mapping, and the operator gets one line on stderr that names `ao session remap <session>`.
-- A failed discovery leaves `/tmp/ao-opencode-launch-<uid>/<workspace-title-hash>/pending.json`. Automatic recovery always requires an explicit missing-session answer for the earlier pane from its recorded tmux socket. A live earlier pane keeps its marker even if an old build or manual create produced a matching session. With pane death proven, a single bounded exact-title/real-directory search for `time.created >= startedAt` can settle the marker without an age wait; the next launch timestamp excludes that conversation. If no match is available, recovery also requires an age of at least 25 s (the 15 s discovery window plus one 10 s API bound). An unreachable server, a marker without a handle or socket, and Herdr require manual recovery. Elapsed time alone never clears a marker. Each wait or recovery prints the title and directory.
-- A tmux `new-session` failure occurs before command delivery and clears its marker. A failure that may follow command delivery retains the marker and archives the worker's reserved number, so later workers use a new title/workspace. After runtime creation, including an uncertain delivery failure, the marker records the known handle and, when available, its tmux socket. The failure warning names the marker and its recovery conditions; no runtime plugin change is required.
-- A lock timeout names the blocking directory (including `.lease` for a recovery lease) and its holder PID: wait, or stop that PID first. It gives no removal command for a live holder. Manual marker recovery: stop the launcher, then stop and settle the earlier pane **and any in-flight create request**, then run `rm -r -- '/tmp/ao-opencode-launch-<uid>/<workspace-title-hash>'`, substituting the exact directory printed in the refusal or discovery warning. Those messages include the complete command. Removing only `pending.json` leaves an empty directory; a subsequent start reclaims it after three seconds. Killing only the launcher is insufficient. A removed marker is harmless to a holder that has already persisted its mapping. All colliding launchers must use the protocol for fresh-launch ownership; an older build or manual create can still bypass that exclusion, but cannot settle a live earlier pane's marker.
-- A launcher suspended across its discovery deadline makes one last bounded search on resumption. This can add at most one 10 s API bound. This includes a stall covering an in-flight search whose exit-0 output is lost after its timeout. An ordinary hanging search that exhausts the window is not retried.
+- OpenCode launch behavior: `ao` makes the OpenCode session ready in its own process before the pane starts, in this order:
+  1. the version gate (`opencode --version` must print 2.0.29 or later);
+  2. the model check, when a model is set: `opencode api model.list` must hold an entry with the same `providerID` and `id` (the `id` field, not `modelID`), that is not disabled, and that has the requested variant (`default` always passes). The answer is about 470 KB: an answer cut with exit 0 gets one more try, and a second cut fails the spawn;
+  3. no mapped id: `opencode api session.create` with the title `AO:<session>`, the model, the agent and `location.directory` = the real path of the workspace. Mapped id (`agentConfig.opencodeSessionId`): `session.switchModel` and `session.switchAgent` for the settings that are set, and no create;
+  4. when a model or an agent is set, `session.get` reads them back. A mismatch fails the spawn.
+- Every `opencode api` call of a spawn runs with the pane's environment (the map that core gives `runtime.create`, for example `AO_SESSION` of the new session), not with the environment of the `ao` process.
+- Core writes the OpenCode session ID to the session record before `runtime.create`, so every session that a spawn created has a record. The pane command is exactly `exec opencode --session '<id>'`, plus `--prompt ...` when there is a prompt. It holds no `opencode api` call.
+- Launch check: within 15 s, the pane must run an `opencode` process with `--session <id>` (tmux: the pane TTY and `ps`; Herdr: the pane process list), and the same process must still run 1 s later. A pane that is gone fails the check at once. Then, with a prompt, the spawn reads `session.message.list` for the first `user` message for up to 10 s. Seen: `promptDelivered=true`. Not seen: `promptDelivered=false` and one operator line that names `ao session attach` and `ao send`; the spawn succeeds.
+- Failure paths (exit 1):
+  - the gate, the model check, the create or the readback fails: no pane starts; the workspace and the reserved record are removed. When the readback of a created session fails, that session is removed first.
+  - `runtime.create` or the post-launch setup fails: the created session is removed (interrupt, then remove), then the workspace and the record.
+  - the launch check fails: the runtime is destroyed first, then the created session is removed, then the workspace and the record.
+  - a reused session ID is never removed.
+  - a removal that fails twice prints one line with the `opencode api session.remove` command. A removal that times out is not retried.
+- No title search runs during a spawn or an orchestrator start. The title stays `AO:<session>` for `ao session remap`.
+- The I-2 launch lock and its `pending.json` marker are removed. Old `/tmp/ao-opencode-launch-<uid>/` directories are inert: no build from I-3 on reads or writes them, and an operator can remove them at any time.
 - Issue reuse (`opencodeIssueSessionStrategy: reuse`) reuses a stored ID of an earlier session of the same issue only when `session.get` finds it. `delete` removes those stored IDs, except an ID that another live AO session stores.
-- Model/subagent/system prompt inputs are forwarded into OpenCode launch command.
+- The model and the subagent go into the OpenCode session through the API. The system prompt and the task prompt go into `--prompt`.
 
 ## 4) `ao send`
 
@@ -104,10 +110,10 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 
 ## Edge Cases and Expected Outcomes
 
-- OpenCode binary missing or hanging: every `opencode api` call has a bound (10 s; the spawn wait 15 s in total). Spawn and kill still succeed and print one line for the operator. A remove that times out is not retried. Restore and remap report the error.
+- OpenCode binary missing or hanging: every `opencode api` call has a bound (10 s). A spawn fails with no pane when the gate, the model check or the create cannot finish. The launch check has its own bounds (15 s for the pane, 10 s for the prompt). Kill still succeeds and prints one line for the operator. A remove that times out is not retried. Restore and remap report the error.
 - Corrupted `runtimeHandle` metadata: `send` fails with `Corrupted runtime handle`.
 - Existing orchestrator metadata present but runtime dead under `reuse`: restart runtime and pass mapped `opencodeSessionId` when available.
-- Duplicate OpenCode sessions with same AO title: the spawn wait and remap accept only the session's own workspace directory, and the spawn wait only sessions created after the spawn start. More than one remaining candidate is refused; nothing picks by time.
+- Duplicate OpenCode sessions with same AO title: a spawn does not search by title; it stores the ID that its own create returned. Remap accepts only the session's own workspace directory. More than one remaining candidate is refused; nothing picks by time.
 - `ao session kill --purge-session` interrupts, then removes, the stored ID only. It keeps an ID that another live AO session stores (issue reuse). A failed removal prints one line with the ID; `ao session cleanup` retries it.
 - Archived OpenCode sessions already cleaned: `cleanup` skips duplicate deletion via `opencodeCleanedAt`.
 - Unknown project/agent: fail fast with clear error.
