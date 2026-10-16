@@ -93,6 +93,48 @@ if [[ ! -f "$metadata_file" ]]; then
 fi
 
 # Update a single key in metadata
+# m-13: branch/PR rules, same as core isSafeBranchName/isSafePrUrl.
+hook_is_safe_branch() {
+  local name="$1"
+  [[ -z "$name" ]] && return 1
+  [[ "$name" == "@" || "$name" == "HEAD" ]] && return 1
+  [[ "$name" == -* ]] && return 1
+  [[ "$name" == /* || "$name" == */ ]] && return 1
+  [[ "$name" == *//* ]] && return 1
+  [[ "$name" == *. ]] && return 1
+  case "$name" in
+    *..*) return 1 ;;
+    *~*|*^*|*:*|*\\?*|*\\**|*\\[*|*\\\\*) return 1 ;;
+    *@\\{*) return 1 ;;
+  esac
+  case "$name" in
+    *" "*) return 1 ;;
+  esac
+  if [[ "$name" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  local part rest="$name"
+  while true; do
+    if [[ "$rest" == */* ]]; then
+      part="\${rest%%/*}"
+      rest="\${rest#*/}"
+    else
+      part="$rest"
+      rest=""
+    fi
+    [[ -z "$part" ]] && return 1
+    case "$part" in
+      .*|*.lock) return 1 ;;
+    esac
+    [[ -z "$rest" ]] && break
+  done
+  return 0
+}
+
+hook_is_safe_pr() {
+  [[ "$1" =~ ^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+$ ]]
+}
+
 update_metadata_key() {
   local key="$1"
   local value="$2"
@@ -116,6 +158,21 @@ update_metadata_key() {
       return 1
       ;;
   esac
+
+  # m-13: value checks. A refused value writes nothing, prints one line to
+  # stderr naming the key, and returns non-zero.
+  if [[ "$key" == "branch" ]]; then
+    if ! hook_is_safe_branch "$value"; then
+      echo "metadata-updater: refusing branch value '$value' (not a valid branch name)" >&2
+      return 1
+    fi
+  fi
+  if [[ "$key" == "pr" ]]; then
+    if ! hook_is_safe_pr "$value"; then
+      echo "metadata-updater: refusing pr value '$value' (not a valid PR URL)" >&2
+      return 1
+    fi
+  fi
 
   # Create temp file
   local temp_file="\${metadata_file}.tmp"

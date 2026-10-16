@@ -38,7 +38,7 @@ function getAoBinDir(): string {
 }
 
 /** Current version of wrapper scripts — bump when scripts change */
-export const WRAPPER_VERSION = "0.2.4";
+export const WRAPPER_VERSION = "0.2.5";
 
 // =============================================================================
 // PATH Builder
@@ -199,6 +199,53 @@ export const AO_METADATA_HELPER = `#!/usr/bin/env bash
 # ao-metadata-helper — shared by gh/git wrappers
 # Provides: update_ao_metadata <key> <value> (allowed keys only: pr, status=pr_open, branch)
 
+# m-13: branch rule, same as isSafeBranchName in core (no ref binary call here:
+# this file is sourced by the wrapper named "git" that is first on PATH).
+# Refuses exactly what "check-ref-format --branch" refuses (without the @{N}
+# previous-checkout expansion), plus a leading "-" and the single "@".
+ao_is_safe_branch() {
+  local name="\$1"
+  [[ -z "\$name" ]] && return 1
+  [[ "\$name" == "@" || "\$name" == "HEAD" ]] && return 1
+  [[ "\$name" == -* ]] && return 1
+  [[ "\$name" == /* || "\$name" == */ ]] && return 1
+  [[ "\$name" == *//* ]] && return 1
+  [[ "\$name" == *. ]] && return 1
+  case "\$name" in
+    *..*) return 1 ;;
+    *~*|*^*|*:*|*\\?*|*\\**|*\\[*|*\\\\*) return 1 ;;
+    *@\\{*) return 1 ;;
+  esac
+  # Space and ASCII controls (bytes <= 0x20 and 0x7F); other bytes >= 0x80 pass.
+  case "\$name" in
+    *" "*) return 1 ;;
+  esac
+  if [[ "\$name" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  local part rest="\$name"
+  while true; do
+    if [[ "\$rest" == */* ]]; then
+      part="\${rest%%/*}"
+      rest="\${rest#*/}"
+    else
+      part="\$rest"
+      rest=""
+    fi
+    [[ -z "\$part" ]] && return 1
+    case "\$part" in
+      .*|*.lock) return 1 ;;
+    esac
+    [[ -z "\$rest" ]] && break
+  done
+  return 0
+}
+
+# m-13: pr rule, same as isSafePrUrl in core.
+ao_is_safe_pr() {
+  [[ "\$1" =~ ^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+$ ]]
+}
+
 update_ao_metadata() {
   local key="\$1" value="\$2"
   local ao_dir="\${AO_DATA_DIR:-}"
@@ -258,6 +305,22 @@ update_ao_metadata() {
       return 1
       ;;
   esac
+
+  # m-13: value checks, same rule as core isSafeBranchName/isSafePrUrl. A
+  # refused value writes nothing, prints one line to stderr naming the key,
+  # and returns non-zero. No ref-binary call here (see ao_is_safe_branch).
+  if [[ "\$key" == "branch" ]]; then
+    if ! ao_is_safe_branch "\$value"; then
+      echo "ao-metadata-helper: refusing branch value '\$value' (not a valid branch name)" >&2
+      return 1
+    fi
+  fi
+  if [[ "\$key" == "pr" ]]; then
+    if ! ao_is_safe_pr "\$value"; then
+      echo "ao-metadata-helper: refusing pr value '\$value' (not a valid PR URL)" >&2
+      return 1
+    fi
+  fi
 
   local temp_file="\${metadata_file}.tmp.\$\$"
 

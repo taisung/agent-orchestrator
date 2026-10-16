@@ -146,6 +146,7 @@ export {
   GH_WRAPPER,
   GIT_WRAPPER,
 } from "./agent-workspace-hooks.js";
+export { isSafeBranchName, isSafePrUrl } from "./utils/branch-name.js";
 export type { NormalizedOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 
 export {

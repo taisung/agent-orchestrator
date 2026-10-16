@@ -315,7 +315,7 @@ describe("setupPathWrapperWorkspace", () => {
   });
 
   it("bumps WRAPPER_VERSION so installs rewrite the helper and wrappers", async () => {
-    expect(WRAPPER_VERSION).toBe("0.2.4");
+    expect(WRAPPER_VERSION).toBe("0.2.5");
     expect(AO_METADATA_HELPER).toContain("allowed: pr, status, branch");
   });
 });

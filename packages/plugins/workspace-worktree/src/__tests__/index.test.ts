@@ -184,6 +184,7 @@ describe("workspace.create()", () => {
         "add",
         "-b",
         "feat/TEST-1",
+        "--",
         "/mock-home/.worktrees/myproject/session-1",
         "origin/main",
       ],
@@ -239,6 +240,7 @@ describe("workspace.create()", () => {
         "add",
         "-b",
         "feat/TEST-1",
+        "--",
         "/mock-home/.worktrees/myproject/session-1",
         "refs/heads/main",
       ],
@@ -271,7 +273,7 @@ describe("workspace.create()", () => {
     // Third call: worktree add without -b
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", "/mock-home/.worktrees/myproject/session-1", "origin/main"],
+      ["worktree", "add", "--", "/mock-home/.worktrees/myproject/session-1", "origin/main"],
       { cwd: "/repo/path" },
     );
 
@@ -296,7 +298,7 @@ describe("workspace.create()", () => {
 
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", "/mock-home/.worktrees/myproject/session-1", "refs/heads/main"],
+      ["worktree", "add", "--", "/mock-home/.worktrees/myproject/session-1", "refs/heads/main"],
       { cwd: "/repo/path" },
     );
 
@@ -440,6 +442,7 @@ describe("workspace.create()", () => {
         "add",
         "-b",
         "feat/TEST-1",
+        "--",
         "/mock-home/.worktrees/myproject/session-1",
         "refs/heads/main",
       ],
@@ -467,6 +470,7 @@ describe("workspace.restore()", () => {
         "add",
         "-b",
         "feat/TEST-1",
+        "--",
         "/mock-home/.worktrees/myproject/session-1",
         "origin/feat/TEST-1",
       ],
@@ -494,6 +498,7 @@ describe("workspace.restore()", () => {
         "add",
         "-b",
         "feat/TEST-1",
+        "--",
         "/mock-home/.worktrees/myproject/session-1",
         "refs/heads/main",
       ],
@@ -917,5 +922,67 @@ describe("workspace.postCreate()", () => {
       "/mock-home/my-repo/data",
       "/mock-home/.worktrees/myproject/session-1/data",
     );
+  });
+});
+
+describe("m-13 branch gate", () => {
+  it("create throws for branch=-Bvictim and runs no git", async () => {
+    const ws = create();
+    await expect(ws.create(makeCreateConfig({ branch: "-Bvictim" }))).rejects.toThrow(
+      /not a valid branch name/i,
+    );
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("restore throws for branch=-Bvictim and runs no git", async () => {
+    const ws = create();
+    await expect(
+      ws.restore!(makeCreateConfig({ branch: "-Bvictim" }), "/tmp/wt"),
+    ).rejects.toThrow(/not a valid branch name/i);
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("create ends options with -- before positional args", async () => {
+    const ws = create();
+    mockOriginRemote();
+    mockGitSuccess(""); // rev-parse origin/main
+    mockGitSuccess(""); // worktree add
+    await ws.create(makeCreateConfig());
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      "git",
+      [
+        "worktree",
+        "add",
+        "-b",
+        "feat/TEST-1",
+        "--",
+        "/mock-home/.worktrees/myproject/session-1",
+        "origin/main",
+      ],
+      { cwd: "/repo/path" },
+    );
+  });
+
+  it("restore ends options with -- before positional args", async () => {
+    const ws = create();
+    mockGitSuccess(""); // prune
+    mockOriginRemote();
+    mockGitSuccess(""); // worktree add -- path branch succeeds
+    const info = await ws.restore!(
+      makeCreateConfig(),
+      "/mock-home/.worktrees/myproject/session-1",
+    );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      "git",
+      [
+        "worktree",
+        "add",
+        "--",
+        "/mock-home/.worktrees/myproject/session-1",
+        "feat/TEST-1",
+      ],
+      { cwd: "/repo/path" },
+    );
+    expect(info.branch).toBe("feat/TEST-1");
   });
 });

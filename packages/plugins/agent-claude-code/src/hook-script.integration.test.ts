@@ -321,10 +321,10 @@ describe("hook script: key allowlist", () => {
     writeFileSync(metadataFile, metadataContent);
     const script = [
       `metadata_file=${JSON.stringify(metadataFile)}`,
-      // Evaluate only the function definition, not the hook's top-level
+      // Evaluate only the function definitions, not the hook's top-level
       // code (which reads stdin and exits). An agent that reaches the
       // function must source or copy it the same way.
-      `eval "$(sed -n '/^update_metadata_key/,/^}/p' ${JSON.stringify(hookScriptPath)})"`,
+      `eval "$(sed -n '/^hook_is_safe_branch/,/^}/p;/^hook_is_safe_pr/,/^}/p;/^update_metadata_key/,/^}/p' ${JSON.stringify(hookScriptPath)})"`,
       `update_metadata_key ${JSON.stringify(key)} ${JSON.stringify(value)}`,
     ].join("\n");
     let code = 0;
@@ -369,5 +369,38 @@ describe("hook script: key allowlist", () => {
     expect(stderr.trim().split("\n")).toHaveLength(1);
     expect(stderr).toContain(key);
     expect(metadata).toBe(before);
+  });
+
+  it.each([["-Bvictim"], [""], ["a b"], ["a..b"], ["HEAD"], ["@"], ["a.lock"], ["a/"]])(
+    "refuses branch value %j: writes nothing, names branch, non-zero",
+    (value) => {
+      const before = "status=working\nbranch=main\n";
+      const { code, stderr, metadata } = callUpdateKeyDirectly("branch", value, before);
+      expect(code).not.toBe(0);
+      expect(stderr.trim().split("\n")).toHaveLength(1);
+      expect(stderr).toContain("branch");
+      expect(metadata).toBe(before);
+    },
+  );
+
+  it.each([["notaurl"], [""], ["https://github.com/o/r/issues/1"]])(
+    "refuses pr value %j: writes nothing, names pr, non-zero",
+    (value) => {
+      const before = "status=working\nbranch=main\n";
+      const { code, stderr, metadata } = callUpdateKeyDirectly("pr", value, before);
+      expect(code).not.toBe(0);
+      expect(stderr.trim().split("\n")).toHaveLength(1);
+      expect(stderr).toContain("pr");
+      expect(metadata).toBe(before);
+    },
+  );
+
+  it("hook detections refuse an unsafe branch from the command text", () => {
+    const { metadata } = runHook({
+      command: "git checkout -b -Bvictim",
+      metadataContent: "branch=main\n",
+    });
+    expect(metadata).not.toContain("-Bvictim");
+    expect(metadata).toContain("branch=main");
   });
 });

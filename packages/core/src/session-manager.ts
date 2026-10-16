@@ -91,6 +91,7 @@ import {
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
+import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
 
 const execFileAsync = promisify(execFile);
@@ -137,6 +138,18 @@ function releaseOpenCodeLaunchLock(lock: OpenCodeLaunchLock | undefined, failed:
   } catch (error) {
     if (!failed) throw error;
     warnOperator(`ao: could not release the OpenCode launch lock: ${shortErrorText(error)}`);
+  }
+}
+
+/**
+ * m-13: refuse a stored or external branch that is not safe for git.
+ * The check runs before any `git`/`gh` call; a refusal runs no git.
+ */
+function assertSafeBranchForSession(sessionId: string, branch: string): void {
+  if (!isSafeBranchName(branch)) {
+    throw new Error(
+      `Session ${sessionId}: branch metadata "${branch}" is not valid: not a valid branch name`,
+    );
   }
 }
 
@@ -1258,6 +1271,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       branch = `session/${sessionId}`;
     }
 
+    // m-13: refuse an external branch before any git runs.
+    assertSafeBranchForSession(sessionId, branch);
+
     // Create workspace (if workspace plugin is available)
     let workspacePath = project.path;
     if (plugins.workspace) {
@@ -1668,6 +1684,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       sessionId = identity.sessionId;
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
+
+      // m-13: refuse an unsafe branch before any git runs.
+      assertSafeBranchForSession(sessionId, branch);
 
       if (!plugins.workspace) {
         try {
@@ -2623,6 +2642,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Session ${sessionId} has no workspace to check out PR #${pr.number}`);
     }
 
+    // m-13: refuse an external PR branch before any git runs.
+    assertSafeBranchForSession(sessionId, pr.branch);
+
     const branchChanged = await scm.checkoutPR(pr, workspacePath);
 
     updateMetadata(sessionsDir, sessionId, {
@@ -2899,6 +2921,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (!session.branch) {
         throw new WorkspaceMissingError(workspacePath, "branch metadata is missing");
       }
+      // m-13: refuse a stored branch before any git runs. This covers the
+      // archive restore (fromArchive copies the same stored branch back) and
+      // the restore-before-send path (restoreForDelivery calls restore()).
+      assertSafeBranchForSession(sessionId, session.branch);
       try {
         const wsInfo = await plugins.workspace.restore(
           {

@@ -3,12 +3,13 @@ import { promisify } from "node:util";
 import { existsSync, lstatSync, symlinkSync, rmSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import type {
-  PluginModule,
-  Workspace,
-  WorkspaceCreateConfig,
-  WorkspaceInfo,
-  ProjectConfig,
+import {
+  isSafeBranchName,
+  type PluginModule,
+  type Workspace,
+  type WorkspaceCreateConfig,
+  type WorkspaceInfo,
+  type ProjectConfig,
 } from "@aoagents/ao-core";
 
 /** Timeout for git commands (30 seconds) */
@@ -98,6 +99,10 @@ export function create(config?: Record<string, unknown>): Workspace {
     async create(cfg: WorkspaceCreateConfig): Promise<WorkspaceInfo> {
       assertSafePathSegment(cfg.projectId, "projectId");
       assertSafePathSegment(cfg.sessionId, "sessionId");
+      // m-13: refuse an unsafe branch before the first git call.
+      if (!isSafeBranchName(cfg.branch)) {
+        throw new Error(`Invalid branch "${cfg.branch}": not a valid branch name`);
+      }
 
       const repoPath = expandPath(cfg.project.path);
       const projectWorktreeDir = join(worktreeBaseDir, cfg.projectId);
@@ -120,7 +125,7 @@ export function create(config?: Record<string, unknown>): Workspace {
 
       // Create worktree with a new branch
       try {
-        await git(repoPath, "worktree", "add", "-b", cfg.branch, worktreePath, baseRef);
+        await git(repoPath, "worktree", "add", "-b", cfg.branch, "--", worktreePath, baseRef);
       } catch (err: unknown) {
         // Only retry if the error is "branch already exists"
         const msg = err instanceof Error ? err.message : String(err);
@@ -130,7 +135,9 @@ export function create(config?: Record<string, unknown>): Workspace {
           });
         }
         // Branch already exists — create worktree and check it out
-        await git(repoPath, "worktree", "add", worktreePath, baseRef);
+        // ("--" ends option parsing so a stored branch cannot become a flag;
+        // "checkout" takes no "--": it would treat a valid branch as a path.)
+        await git(repoPath, "worktree", "add", "--", worktreePath, baseRef);
         try {
           await git(worktreePath, "checkout", cfg.branch);
         } catch (checkoutErr: unknown) {
@@ -252,6 +259,11 @@ export function create(config?: Record<string, unknown>): Workspace {
     },
 
     async restore(cfg: WorkspaceCreateConfig, workspacePath: string): Promise<WorkspaceInfo> {
+      // m-13: refuse an unsafe branch before the first git call.
+      if (!isSafeBranchName(cfg.branch)) {
+        throw new Error(`Invalid branch "${cfg.branch}": not a valid branch name`);
+      }
+
       const repoPath = expandPath(cfg.project.path);
 
       // Prune stale worktree entries
@@ -272,8 +284,9 @@ export function create(config?: Record<string, unknown>): Workspace {
       }
 
       // Try to create worktree on the existing branch
+      // ("--" ends option parsing so a stored branch cannot become a flag.)
       try {
-        await git(repoPath, "worktree", "add", workspacePath, cfg.branch);
+        await git(repoPath, "worktree", "add", "--", workspacePath, cfg.branch);
       } catch {
         const baseRef = await resolveBaseRef(repoPath, cfg.project.defaultBranch, {
           branch: cfg.branch,
@@ -282,12 +295,12 @@ export function create(config?: Record<string, unknown>): Workspace {
 
         if (!baseRef.startsWith("origin/")) {
           // No remote available — create from the local default branch
-          await git(repoPath, "worktree", "add", "-b", cfg.branch, workspacePath, baseRef);
+          await git(repoPath, "worktree", "add", "-b", cfg.branch, "--", workspacePath, baseRef);
         } else {
           // Branch might not exist locally — try the remote ref first, then fall back
           // to the local default branch if the remote ref is unavailable.
           try {
-            await git(repoPath, "worktree", "add", "-b", cfg.branch, workspacePath, baseRef);
+            await git(repoPath, "worktree", "add", "-b", cfg.branch, "--", workspacePath, baseRef);
           } catch {
             await git(
               repoPath,
@@ -295,6 +308,7 @@ export function create(config?: Record<string, unknown>): Workspace {
               "add",
               "-b",
               cfg.branch,
+              "--",
               workspacePath,
               `refs/heads/${cfg.project.defaultBranch}`,
             );
