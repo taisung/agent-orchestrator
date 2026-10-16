@@ -28,7 +28,9 @@ Security). `~/.ao/bin/.ao-version` shows 0.2.6 since 12:16:13, so the rollout is
 **Update 2026-10-16 13:10 EDT (priority 2 started):** I-3 author ao-36 (Opus 5.5, reviewer gpt-6.1-sol)
 and I-4 author ao-37 (Muse, reviewers Sonnet 5.5 and V4.1 Flash) work on `15757aae`; details, owner
 decisions and the I-3 landing gate in TODO Known Issues. The watcher (PID 107999) watches ao-36 and ao-37.
-ao-32 (idle, reviewer) and ao-35 (idle, its work landed) still run. The text below is from before these
+ao-32 (idle, reviewer) still runs. ao-35 was killed at 13:21 EDT on the owner's word, after a check that
+`7f34bf4d` is on `main` by patch and that its worktree had no tracked change; its report and brief are in
+`reports/ao-35.*`, and its local branch and its OpenCode session (not purged) remain. The text below is from before these
 updates; its lifecycle PIDs are old.
 
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
