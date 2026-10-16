@@ -24,6 +24,12 @@ import {
 } from "./api-activity.js";
 import {
   REAL_BUSY_LAST3_2031,
+  REAL_DIALOG_FORM1_200_S20,
+  REAL_DIALOG_FORM1_80_S20,
+  REAL_DIALOG_FORM2_200_S20,
+  REAL_DIALOG_FORM2_80_S20,
+  REAL_DIALOG_PERMISSION_200_S20,
+  REAL_DIALOG_PERMISSION_80_S20,
   REAL_IDLE_MUSE_2031,
   REAL_IDLE_V4FLASH_2031,
 } from "./__fixtures__/panes-2.0.31.js";
@@ -162,6 +168,10 @@ describe("getApiActivityState — call shape and parallelism (M3 M33 M4)", () =>
     );
   });
 
+  it("pins the per-call bound below the helper default of 10 s", () => {
+    expect(OPENCODE_ACTIVITY_API_TIMEOUT_MS).toBeLessThan(10_000);
+  });
+
   it("starts all four calls before the first resolves (M4 deferred promises)", async () => {
     const now = Date.now();
     let resolvePermission!: (value: unknown) => void;
@@ -253,6 +263,38 @@ describe("getApiActivityState — blocked and interrupted", () => {
       if (operation === "session.active") return Promise.resolve({ data: {} });
       if (operation === "session.message.list")
         return Promise.reject(new Error("pipe cut with exit 0"));
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("idle");
+    expect(state?.timestamp.getTime()).toBe(idle);
+  });
+
+  it("follows the age rule when message.list answers null in the failed case (M12)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "failed" });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active") return Promise.resolve({ data: {} });
+      if (operation === "session.message.list") return Promise.resolve(null);
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("idle");
+    expect(state?.timestamp.getTime()).toBe(idle);
+  });
+
+  it("follows the age rule when message.list answers a wrong shape in the failed case (M12)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "failed" });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active") return Promise.resolve({ data: {} });
+      if (operation === "session.message.list") return Promise.resolve({ data: "bad" });
       return Promise.reject(new Error(`unexpected: ${operation}`));
     });
 
@@ -526,21 +568,25 @@ describe("classifyOpenCodePaneActivity — real 2.0.31 captures", () => {
     );
   });
 
-  it("gives waiting_input for the constructed census permission dialog shape", () => {
+  it("gives waiting_input for the constructed census permission dialog shape in place", () => {
     const dialog = [
-      "△ Permission required",
-      "← Access external directory /tmp/outside",
-      "Allow once   Always allow   Reject",
-      "…/proj  1.0K · $0.00  ctrl+p commands",
+      "  ┃",
+      "  ┃  △ Permission required",
+      "  ┃    ← Access external directory /tmp/outside",
+      "  ┃",
+      "  ┃   Allow once   Always allow   Reject",
+      "  ┃",
     ].join("\n");
     expect(classifyOpenCodePaneActivity(dialog)).toBe("waiting_input");
   });
 
-  it("gives waiting_input for the constructed census question dialog shape", () => {
+  it("gives waiting_input for the constructed census question dialog shape in place", () => {
     const dialog = [
-      "Questions",
-      "↑↓ select  enter submit  esc dismiss",
-      "…/proj  1.0K · $0.00  ctrl+p commands",
+      "  ┃",
+      "  ┃  Questions",
+      "  ┃",
+      "  ┃  ↑↓ select  enter submit  esc dismiss",
+      "  ┃",
     ].join("\n");
     expect(classifyOpenCodePaneActivity(dialog)).toBe("waiting_input");
   });
@@ -552,5 +598,133 @@ describe("classifyOpenCodePaneActivity — real 2.0.31 captures", () => {
       "  /tmp/ao1s-work:main                    shift+tab agents  ctrl+p commands    /tmp/ao1s-work:main",
     ].join("\n");
     expect(classifyOpenCodePaneActivity(idle)).toBe("idle");
+  });
+});
+
+describe("classifyOpenCodePaneActivity — real dialogs and rules", () => {
+  it.each([
+    REAL_DIALOG_PERMISSION_80_S20,
+    REAL_DIALOG_PERMISSION_200_S20,
+  ])("gives waiting_input for the real permission dialog (%#)", (capture) => {
+    expect(classifyOpenCodePaneActivity(capture)).toBe("waiting_input");
+  });
+
+  it.each([
+    REAL_DIALOG_FORM1_80_S20,
+    REAL_DIALOG_FORM1_200_S20,
+  ])("gives waiting_input for the real one-field form (%#)", (capture) => {
+    expect(classifyOpenCodePaneActivity(capture)).toBe("waiting_input");
+  });
+
+  it.each([
+    REAL_DIALOG_FORM2_80_S20,
+    REAL_DIALOG_FORM2_200_S20,
+  ])("gives waiting_input for the real two-field form with enter confirm (%#)", (capture) => {
+    expect(classifyOpenCodePaneActivity(capture)).toBe("waiting_input");
+  });
+
+  it("gives idle for constructed prose-marker pane: triangle in a real answer line", () => {
+    const prose = "     Report complete — final verification.";
+    expect(REAL_IDLE_MUSE_2031).toContain(prose);
+    expect(
+      classifyOpenCodePaneActivity(
+        REAL_IDLE_MUSE_2031.replace(prose, "     icon: △ Permission required"),
+      ),
+    ).toBe("idle");
+  });
+
+  it("gives idle for constructed prose-marker pane: Allow once and Reject in a real answer line", () => {
+    const prose = "     The review is complete. Summary:";
+    expect(REAL_IDLE_V4FLASH_2031).toContain(prose);
+    expect(
+      classifyOpenCodePaneActivity(
+        REAL_IDLE_V4FLASH_2031.replace(
+          prose,
+          "     Check the line: Allow once   Always allow   Reject",
+        ),
+      ),
+    ).toBe("idle");
+  });
+
+  it("gives idle for constructed prose-marker pane: select and submit in a real answer line", () => {
+    const prose = "     parallel calls plus conditional message list at 5000 ms, JSONL only as fallback, cost with";
+    expect(REAL_IDLE_MUSE_2031).toContain(prose);
+    expect(
+      classifyOpenCodePaneActivity(
+        REAL_IDLE_MUSE_2031.replace(prose, "     Hint row: ↑↓ select  enter submit  esc dismiss"),
+      ),
+    ).toBe("idle");
+  });
+
+  it("gives waiting_input for only the triangle marker in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  △ Permission required\n  ┃")).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("gives waiting_input for only Allow once with Reject in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃   Allow once   Reject\n  ┃")).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("gives waiting_input for only select with submit in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  ↑↓ select  enter submit\n  ┃")).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("gives waiting_input for only select with confirm in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  ⇆ tab  ↑↓ select  enter confirm\n  ┃")).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("gives waiting_input for only select with choose in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  ↑↓ select  enter choose\n  ┃")).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("is not a dialog with only Allow once in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  Allow once\n  ┃")).toBe("active");
+  });
+
+  it("is not a dialog with only Reject in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  Reject\n  ┃")).toBe("active");
+  });
+
+  it("is not a dialog with only select in place", () => {
+    expect(classifyOpenCodePaneActivity("  ┃  ↑↓ select\n  ┃")).toBe("active");
+  });
+
+  it("gives idle for empty capture", () => {
+    expect(classifyOpenCodePaneActivity("")).toBe("idle");
+  });
+
+  it("gives idle for whitespace-only capture", () => {
+    expect(classifyOpenCodePaneActivity("   \n  \n")).toBe("idle");
+  });
+
+  it("gives active for unknown output", () => {
+    expect(classifyOpenCodePaneActivity("hello world\nsome other line")).toBe("active");
+  });
+
+  it("gives active for ctrl+p commands in the transcript with a toast as the last line", () => {
+    const pane = [
+      "  ┃  press ctrl+p commands to open the palette",
+      "  ┃",
+      "Session failed",
+    ].join("\n");
+    expect(classifyOpenCodePaneActivity(pane)).toBe("active");
+  });
+
+  it("gives idle for a dialog marker above the bottom block with a status row last", () => {
+    const pane = [
+      "  ┃  △ Permission required",
+      "  ┃",
+      "  /tmp/proj  shift+tab agents  ctrl+p commands",
+    ].join("\n");
+    expect(classifyOpenCodePaneActivity(pane)).toBe("idle");
   });
 });

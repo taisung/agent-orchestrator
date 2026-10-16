@@ -120,47 +120,69 @@ export function mapSessionCost(record: Record<string, unknown>): CostEstimate | 
 
 /**
  * Classify a 2.x TUI pane from its screen structure (0010 section 11.5,
- * real 2.0.31 captures in `src/__fixtures__/panes-2.0.31.ts`).
+ * real 2.0.31 captures in `src/__fixtures__/panes-2.0.31.ts`, including real
+ * permission and question dialogs raised with `session.permission.create`
+ * and `session.form.create` with no model turn).
  *
  * Exact rules:
- * - Empty capture → `idle`.
- * - Dialog markers count only on lines that are not transcript or input
- *   text: in the real captures, transcript and input lines start with `┃`
- *   after the leading spaces, and dialog lines do not. On such a line,
- *   `△ Permission required` → `waiting_input`; `Allow once` with `Reject`
- *   on the same line → `waiting_input`; `↑↓ select` with `enter submit`
- *   on the same line → `waiting_input`.
- * - Otherwise the status row decides: it is the last non-empty line of the
- *   capture. It holds `esc interrupt` → `active` (checked first: a real busy
- *   status row also holds `ctrl+p commands`); else it holds
- *   `ctrl+p commands` → `idle`. The marker is matched anywhere on the status
- *   row itself (the 0009 section 5.1 idle row carries a trailing directory
- *   after `ctrl+p commands`); transcript and input lines never decide.
- * - Unknown output stays `active`.
+ * - Empty or whitespace-only capture → `idle`.
+ * - The status row is the last non-empty line. It holds `esc interrupt` →
+ *   `active`. Else it holds `ctrl+p commands` → `idle`. The marker is
+ *   matched anywhere on the status row itself (idle rows can carry a
+ *   trailing directory after `ctrl+p commands`); transcript and input lines
+ *   never decide. When the status row exists, dialog markers are never read.
+ * - Only when the last non-empty line is not a status row (a real dialog
+ *   hides it; the last non-empty line is then a bare `┃`): look for dialog
+ *   markers in the bottom block of contiguous `┃` lines, walking from the
+ *   last non-empty line upward and stopping at the first line that does not
+ *   start with `┃` after the leading spaces. Strip the leading spaces and
+ *   `┃` first. Markers: `△ Permission required` at the start of the
+ *   stripped line; `Allow once` with `Reject` on one line; `↑↓ select` with
+ *   `enter submit`, `enter confirm` or `enter choose` on one line (the
+ *   two-field form shows `⇆ tab  ↑↓ select  enter confirm  esc dismiss`).
+ *   Any of them → `waiting_input`. Assistant prose has no `┃` and sits just
+ *   above the input box, so it is never in the block; tool and command
+ *   blocks have `┃` but sit above the dialog block.
+ * - Anything else → `active` (unknown stays `active`).
  *
- * No real permission or question dialog capture exists (those need a model
- * turn); the dialog shapes above come from the 0010 section 11.5 census.
+ * Accepted: a narrow pane (about 40 columns) loses `ctrl+p commands` from
+ * its status row and then reads `active`.
  */
 export function classifyOpenCodePaneActivity(terminalOutput: string): ActivityState {
   if (terminalOutput.trim().length === 0) return "idle";
-  for (const line of terminalOutput.split("\n")) {
-    if (line.trimStart().startsWith("┃")) continue;
-    if (line.includes("△ Permission required")) return "waiting_input";
-    if (line.includes("Allow once") && line.includes("Reject")) return "waiting_input";
-    if (line.includes("↑↓ select") && line.includes("enter submit")) return "waiting_input";
-  }
   const lines = terminalOutput.split("\n");
-  let statusRow: string | null = null;
+  let last: string | null = null;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line !== undefined && line.trim().length > 0) {
-      statusRow = line;
+      last = line;
       break;
     }
   }
-  if (statusRow === null) return "idle";
-  if (statusRow.includes("esc interrupt")) return "active";
-  if (statusRow.includes("ctrl+p commands")) return "idle";
+  if (last === null) return "idle";
+  if (last.includes("esc interrupt")) return "active";
+  if (last.includes("ctrl+p commands")) return "idle";
+  let bottom = lines.length - 1;
+  while (bottom >= 0) {
+    const tail = lines[bottom];
+    if (tail !== undefined && tail.trim().length > 0) break;
+    bottom--;
+  }
+  const block: string[] = [];
+  for (let i = bottom; i >= 0; i--) {
+    const line = lines[i];
+    if (line === undefined || line.trim().length === 0) break;
+    if (!line.trimStart().startsWith("┃")) break;
+    block.push(line);
+  }
+  for (const line of block) {
+    const stripped = line.replace(/^\s*┃\s*/, "");
+    if (stripped.startsWith("△ Permission required")) return "waiting_input";
+    if (stripped.includes("Allow once") && stripped.includes("Reject")) return "waiting_input";
+    if (stripped.includes("↑↓ select") && /enter (submit|confirm|choose)/.test(stripped)) {
+      return "waiting_input";
+    }
+  }
   return "active";
 }
 
