@@ -298,7 +298,15 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
-    shows `active` for its whole length (no cap; a stall rule belongs to I-7).
+    shows `active` for its whole length (no cap; a stall rule belongs to I-7). ao-37 finished `09c77de0`
+    at 13:24 EDT (4 plugin files; full suite 2282 passed, 29 skipped; its mutants fail tests; isolated
+    store 2.0.31, no model turn; cleanup checked by the orchestrator). Blind review r1 dispatched at
+    13:32 EDT (meter `5h 2%`, `wk 34%`): ao-38 (Sonnet 5.5) and ao-39 (V4.1 Flash), worktrees moved to
+    `09c77de0`, brief `~/.cache/agent-skills-haiku55-arc/brief-review-i4-r1.md`, review files
+    `i4_review_r1_{sonnet,v4flash}.md`, a real 2.0.31 idle pane in `i4_real_panes/`, watcher PID 628202.
+    The host OpenCode is now v2.0.31 (the global service restarted at 12:16:17, not by a worker of this
+    fleet); the measurements of 0010 are of 2.0.29. ao-36 saw a non-blocking hook error after a `cd` into
+    a package: `/bin/sh: 1: .claude/metadata-updater.sh: not found` (the Claude hook path is relative).
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
