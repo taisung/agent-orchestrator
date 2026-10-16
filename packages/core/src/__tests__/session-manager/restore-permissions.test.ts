@@ -46,30 +46,18 @@ function registryWith(agent: Agent): PluginRegistry {
   } as PluginRegistry;
 }
 
-type FlagStyle = "claude" | "codex" | "gemini";
-
-// Mirror the retained plugins' permission-to-flag mapping, reading only
-// project.agentConfig (the same field the real getRestoreCommand reads):
-// - claude-code index.ts:879-882 (permissionless|auto-edit -> skip flag)
-// - codex index.ts:294-303 (permissionless -> bypass, auto-edit -> never, suggest -> untrusted)
-// - gemini index.ts:250-255 (permissionless -> --yolo)
-function makePermissionMock(style: FlagStyle): Agent {
+// The per-plugin flag mapping is tested in the plugin packages (M-1); this
+// file keeps one style (claude-code, the default agent) to show the core
+// behaviour: core passes the role-merged agentConfig as the restore project.
+function makePermissionMock(): Agent {
   return {
     ...mockAgent,
     getRestoreCommand: vi.fn().mockImplementation(async (_s, project) => {
       const perms = project.agentConfig?.permissions as string | undefined;
       const model = project.agentConfig?.model as string | undefined;
       const parts: string[] = ["mock-agent", "--resume", "ses-1"];
-      if (style === "claude") {
-        if (perms === "permissionless" || perms === "auto-edit") {
-          parts.push("--dangerously-skip-permissions");
-        }
-      } else if (style === "codex") {
-        if (perms === "permissionless") parts.push("--dangerously-bypass-approvals-and-sandbox");
-        else if (perms === "auto-edit") parts.push("--ask-for-approval", "never");
-        else if (perms === "suggest") parts.push("--ask-for-approval", "untrusted");
-      } else {
-        if (perms === "permissionless") parts.push("--yolo");
+      if (perms === "permissionless" || perms === "auto-edit") {
+        parts.push("--dangerously-skip-permissions");
       }
       if (model) parts.push("--model", model);
       return parts.join(" ");
@@ -126,34 +114,26 @@ async function restoreCommand(agent: Agent, sessionId: string): Promise<string> 
   return createCall.launchCommand as string;
 }
 
-const styles: FlagStyle[] = ["claude", "codex", "gemini"];
-
-describe.each(styles)("restore permissions (N-2) [%s]", (style) => {
+describe("restore permissions (N-2)", () => {
   it("case (a): shared permissionless + worker default restores without the flag", async () => {
     config = configWithPermissions("permissionless", "default");
-    writeWorkerSession(`ws-perm-a-${style}`);
-    const cmd = await restoreCommand(makePermissionMock(style), "app-1");
-    if (style === "claude") expect(cmd).not.toContain("--dangerously-skip-permissions");
-    if (style === "codex") expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
-    if (style === "gemini") expect(cmd).not.toContain("--yolo");
+    writeWorkerSession("ws-perm-a-claude");
+    const cmd = await restoreCommand(makePermissionMock(), "app-1");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
   });
 
   it("case (b): orchestrator with shared default restores with the flag", async () => {
     config = configWithPermissions("default", undefined);
-    writeOrchestratorSession(`ws-perm-b-${style}`);
-    const cmd = await restoreCommand(makePermissionMock(style), "app-orchestrator");
-    if (style === "claude") expect(cmd).toContain("--dangerously-skip-permissions");
-    if (style === "codex") expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
-    if (style === "gemini") expect(cmd).toContain("--yolo");
+    writeOrchestratorSession("ws-perm-b-claude");
+    const cmd = await restoreCommand(makePermissionMock(), "app-orchestrator");
+    expect(cmd).toContain("--dangerously-skip-permissions");
   });
 
   it("shared and role agree (both permissionless) restores with the flag", async () => {
     config = configWithPermissions("permissionless", "permissionless");
-    writeWorkerSession(`ws-perm-agree-${style}`);
-    const cmd = await restoreCommand(makePermissionMock(style), "app-1");
-    if (style === "claude") expect(cmd).toContain("--dangerously-skip-permissions");
-    if (style === "codex") expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
-    if (style === "gemini") expect(cmd).toContain("--yolo");
+    writeWorkerSession("ws-perm-agree-claude");
+    const cmd = await restoreCommand(makePermissionMock(), "app-1");
+    expect(cmd).toContain("--dangerously-skip-permissions");
   });
 });
 

@@ -1180,4 +1180,43 @@ describe("getRestoreCommand", () => {
     );
     expect(cmd).toContain("--model 'config-model'");
   });
+
+  it("gives no skip flag when permissions is default", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { permissions: "default" } }) as never,
+    );
+    expect(cmd).toContain("--resume 'abc123-def456'");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("gives the skip flag when permissions is permissionless", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { permissions: "permissionless" } }) as never,
+    );
+    expect(cmd).toContain("--dangerously-skip-permissions");
+  });
+
+  it("gives the skip flag when permissions is auto-edit", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { permissions: "auto-edit" } }) as never,
+    );
+    expect(cmd).toContain("--dangerously-skip-permissions");
+  });
+
+  it("gives no skip flag when no permissions key is set", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(makeSession(), makeProject() as never);
+    expect(cmd).toContain("--resume 'abc123-def456'");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
+  });
 });

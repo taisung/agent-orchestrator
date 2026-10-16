@@ -358,6 +358,9 @@ export interface Agent {
   /**
    * Optional: get a launch command that resumes a previous session.
    * Returns null if no previous session is found (caller falls back to getLaunchCommand).
+   * Core passes `project` with `agentConfig` set to the role-merged launch config of this
+   * session (the spawn's model and permission mode); read the model and the permission
+   * mode only from there.
    * @param effectiveModel - the resolved model for this session (persisted spawn
    *   --model override, else the config model). Plugins must prefer it over
    *   `project.agentConfig.model` so a spawn override survives a restore.
