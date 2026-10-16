@@ -245,6 +245,18 @@ Durable progress record for this fork. Dated events only; the current state live
   passed). M-3 check passed: the ao-34 spawn at 08:00:42 installed `.ao-version` 0.2.4, and the helper
   holds 2 `refusing` lines.
 
+- `0ec55a64` (2026-10-16, ao-34, Muse; owner "fix m-13") - `fix(core): validate stored branch names before
+  git to block option injection`, the code of the reviewed `bb81cf7a` (same `packages/` tree). One core rule
+  `isSafeBranchName` (git `check-ref-format --branch` without the `@{-N}` expansion, plus a leading `-` and
+  the name `@` refused) and `isSafePrUrl`; gates before any `git` call at spawn, orchestrator spawn,
+  `claim-pr` and restore, and in the worktree plugin `create` and `restore` (plus `--` in 5
+  `git worktree add` calls); `branch` and `pr` value checks in the helper and the Claude hook;
+  `WRAPPER_VERSION` 0.2.5. Blind review by Opus 5.5 (ao-32,
+  `development/reviews/branch_check_review_r1_opus.md`): **LAND-SAFE**, m-13 fixed (live: restore refuses
+  `-Bvictim` and other option values, `victim` keeps its commit, the base resets it), 0 B, 0 M, 3 m, 9
+  notes. **Rollout condition (M-3 again):** until the five lifecycle workers restart on the new build, their
+  restore path has no gate, and their installs write the 0.2.4 helper over 0.2.5. Not live, not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -268,6 +280,18 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
+- **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`), open, small worker
+  follow-ups: **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
+  free-text branch `feat/x.lock`) leaves an empty reserved session record, shown as `[spawning]` in
+  `ao session ls`; the gate at `session-manager.ts:1275` throws before the `try` whose `catch` deletes the
+  reservation. **m-16** the bash copies of the rule use `[[:cntrl:]]`, which in a UTF-8 locale also matches
+  34 non-ASCII code points (U+0080 to U+009F, U+2028, U+2029) that git and the TypeScript rule accept; the
+  wrapper then does not record such a real branch (exit code unchanged). **m-17** the hook `pr` end
+  anchor has no test (mutant survives). Notes: N-27 the new error texts print the stored value raw (an
+  escape sequence reaches the terminal; suggest `JSON.stringify`); N-28 core still reads `pr` with the
+  unanchored `parsePrFromUrl` and does not compare it with `project.repo` (read-only effect); N-29 a
+  refused value ends the Claude hook with exit 1 and no JSON (a non-blocking hook error).
+
 - **A worker's direct `node` script wrote into the real state root** (2026-10-16, ao-34, m-13 D2). The
   brief said to use a scratch `AO_STATE_ROOT` and never to write a real session record, but the script
   called the session manager without it and left `~/.agent-orchestrator/e91fe6412cc5-repo/sessions/demo-2`
@@ -276,7 +300,7 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   and removed the three paths by literal path. Briefs now ask for an empty
   `find ~/.agent-orchestrator -maxdepth 1 -newer <marker>` at the end.
 
-- **A stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
+- **Fixed by `0ec55a64`, not live yet: a stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
   m-13; old, the same on the base). The helper and the Claude hook check only the key, so `branch=-Bvictim`
   is stored; restore runs `git worktree add <path> -Bvictim` (`packages/plugins/workspace-worktree/src/index.ts:276`,
   no `--`), and git resets the free branch `victim` (live: it lost its own commit, which stays in the
