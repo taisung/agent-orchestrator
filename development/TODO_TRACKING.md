@@ -307,6 +307,19 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     The host OpenCode is now v2.0.31 (the global service restarted at 12:16:17, not by a worker of this
     fleet); the measurements of 0010 are of 2.0.29. ao-36 saw a non-blocking hook error after a `cd` into
     a package: `/bin/sh: 1: .claude/metadata-updater.sh: not found` (the Claude hook path is relative).
+    **Review r1** (`development/reviews/i4_review_r1_{sonnet,v4flash}.md`): Sonnet NOT-LAND-SAFE (B-1,
+    M-1, m-1 to m-5, N-1 to N-4; 6.75 USD), V4.1 Flash LAND-SAFE with M-1 and M-2 (0.10 USD). Both found
+    the same defect: the pane classifier matches its markers anywhere in the capture, so unsent input-box
+    text flips an idle pane to `active` or `waiting_input` (live on 2.0.31; then `ao send` refuses to
+    send). Both found the same test gaps (permission before `session.active`, parallel calls, failed
+    message read; Sonnet: 14 of 36 mutants live, among them another ID in `session.active`). Schemas
+    used by I-4 are byte-identical in 2.0.29 and 2.0.31. **Round 2** dispatched to ao-37 at 14:05 EDT:
+    brief `brief-aofork-i4-r2.md` (status-row classifier, the test gaps, `message.list` with
+    `type=user order=desc limit=1`, remove `findOpenCodeSession`, N-1 to N-3); real 2.0.31 panes in
+    `i4_real_panes/`; the same two lenses re-check. **Kept out of round 2:** m-1 Sonnet (9 `opencode api`
+    processes per session and poll, not 4; a shared `session.active` per tick needs a core change);
+    m-5 (an API `blocked` never decays; one `stuck` and one notification, no loop; owner to decide);
+    m-4 Sonnet (the `ao send` delivery check can now fail on a fast reply; for I-5); N-4 (a 1.x pane).
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
