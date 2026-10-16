@@ -61,9 +61,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-27 | GPT-6-Astra (Codex) | idle, done, NOT-LAND-SAFE | `ece9372e` | I-2 round 4 author; 82% of its context used; row closed; round 5 went to ao-28; earlier: one `fix(core)` commit: markers clear on evidence (a finished create since `startedAt`, or a dead pane on its recorded tmux socket after 25 s), a pre-delivery runtime failure clears the marker, an uncertain one archives the worker as `killed`; plan check passed; earlier: owner chose round 4 by astra on 2026-10-15 (R3); a new session because ao-25 was at 92% context; spec is the ao-26 smallest-safe-change list plus m-1 to m-4; the brief warns that a lock root chosen from `XDG_RUNTIME_DIR` would split the lock between launchers; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r4.md`; re-check ao-26 |
 | ao-28 | GPT-6-Astra (Codex) | idle, done, landed | `bfa5af45` | I-2 landed as `f63b5b99..6d2e8262`; row closed; earlier: one `fix(core)` commit: both recovery rules need an explicit tmux negative for the recorded earlier pane; live-holder timeout text with the PID and no `rm`; `ENOENT`-tolerant `complete` and `release`; plan check passed; earlier: owner chose round 5 by astra with a stop rule on 2026-10-15: if the re-check finds only cases that need a non-protocol creator or a contrived host state, record them as known limits and land; fixes ao-26 r4 M-2 (rule 1 only when the earlier pane is gone), M-3 (live-holder text, `ENOENT` tolerance), m-5 to m-7; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r5.md`; re-check ao-26 |
 | ao-29 | Muse (OpenCode 2.x) | killed, replaced | `aa3609e0` | first spawn on the new build (0.2.3 wrappers installed, own `opencodeSessionId` stored, `~/.ao/bin` first on PATH); the spawn prompt made it poll 2 min for the brief, which came later; its record was `killed` by the first-poll race, so a send would have restored it, maybe on the default model; killed with no work, row closed |
-| ao-30 | Muse (OpenCode 2.x) | authoring the restore follow-ups (N-2, m-1 to m-3) | from `972f13ef` | reused at 19% context; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-restore-followups.md`; earlier: landed the restore model fix as `854690c3`; one code commit on top of the docs commits `09d70a7c..4da4a340`: `model=` stored at spawn, `resolveSelectionForSession` passes it for a worker, `getRestoreCommand(session, project, effectiveModel?)` in all four plugins; its report: live check on a fake `claude` keeps `--model claude-sonnet-5-5` through restore, and `main` loses it; about 0.10 USD (OpenCode record) |
+| ao-30 | Muse (OpenCode 2.x) | idle, done, in review | `6088fc6b` | one commit, 5 files: core passes the role-merged `agentConfig` of the restore launch config as the project argument of `getRestoreCommand` (no interface change), plus m-1 to m-3; about 0.18 USD in total (OpenCode record); reused at 19% context; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-restore-followups.md`; earlier: landed the restore model fix as `854690c3`; one code commit on top of the docs commits `09d70a7c..4da4a340`: `model=` stored at spawn, `resolveSelectionForSession` passes it for a worker, `getRestoreCommand(session, project, effectiveModel?)` in all four plugins; its report: live check on a fake `claude` keeps `--model claude-sonnet-5-5` through restore, and `main` loses it; about 0.10 USD (OpenCode record) |
 | ao-31 | Muse (OpenCode 2.x) | idle, done, landed | `0bc46903` | landed as `14bb4670`; row closed; earlier: owner word "delete release.yml" (2026-10-15); python/L0/LOW, receipts only; `package.json` scripts and `.changeset/` stay; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-del-release.md` |
-| ao-32 | Opus 5.5 (Claude Code) | idle, done: LAND-SAFE | at `781a3a6e` | 0 B, 0 M, 3 m, 5 notes; review copied to `main`; 5.06 USD; row closed; earlier: model pinned in `.claude/settings.local.json`; review file `development/reviews/restore_model_review_r1_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-restore-model-opus.md` |
+| ao-32 | Opus 5.5 (Claude Code) | blind review r2 of the restore follow-ups | at `6088fc6b` | reused at 23% context; review file `development/reviews/restore_model_review_r2_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-restore-followups-opus.md`; round 1: 0 B, 0 M, 3 m, 5 notes; review copied to `main`; 5.06 USD; row closed; earlier: model pinned in `.claude/settings.local.json`; review file `development/reviews/restore_model_review_r1_opus.md`; brief `~/.cache/agent-skills-haiku55-arc/brief-review-restore-model-opus.md` |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -74,7 +74,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-18 | Claude Opus 5.5 | idle, done | `345f1e6e` | the PATH lens, verdict recorded, row closed; kill it when the fix lands |
 | ao-orchestrator | Claude Opus 5.5 | this session, started 11:42:10 by the owner after the outage, in the primary checkout on `main` | `main` | the transcript of the session before the outage is `~/.claude/projects/-home-taisung-local-agent-orchestrator/ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` |
 
-**Watcher**: PID 3644939, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
+**Watcher**: PID 3734709, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
 -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
 ao-30@... ao-32@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with `AO_CONFIG_PATH` set to
 `CONFIG_PATH`. It survived the outage (it is not in tmux). To add or remove a worker, stop it by the PID
@@ -86,7 +86,7 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-30 (author, follow-ups) is open; ao-19, ao-23 (three rows), ao-25, ao-26 (three rows), ao-27, ao-28, ao-1, ao-20, ao-21,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-30 (author) and ao-32 (reviewer r2) are open; ao-19, ao-23 (three rows), ao-25, ao-26 (three rows), ao-27, ao-28, ao-1, ao-20, ao-21,
 ao-22, ao-23 and ao-24 are closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
@@ -121,7 +121,7 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Review and land the restore follow-ups** - ao-30 authors them from `972f13ef`: N-2 (restore takes
+1. **Review and land the restore follow-ups** - ao-30 authored `6088fc6b` from `972f13ef`; ao-32 reviews it: N-2 (restore takes
    the permission mode from the raw shared config, so a worker whose role config says `default` under a
    shared `permissionless` restores WITH `--dangerously-skip-permissions`, and an orchestrator restores
    without it), plus m-1 to m-3. Then a blind review by Opus 5.5 (ao-32 can be reused at 22% context).
