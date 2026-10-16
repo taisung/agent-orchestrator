@@ -791,6 +791,34 @@ describe("getRestoreCommand", () => {
     expect(cmd).not.toContain("--model");
   });
 
+  it("prefers the effective (persisted spawn) model over the config model", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+      {
+        name: "proj",
+        repo: "o/r",
+        path: "/p",
+        defaultBranch: "main",
+        sessionPrefix: "p",
+        agentConfig: { model: "opencode-go/config-model" },
+      },
+      "opencode-go/spawn-model-X",
+    );
+    expect(cmd).toContain("spawn-model-X");
+    expect(cmd).not.toContain("config-model");
+  });
+
+  it("uses the effective model when the config has none", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+      { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
+      "opencode-go/spawn-model-X",
+    );
+    expect(cmd).toContain("spawn-model-X");
+  });
+
   it("refuses the restore when no session ID is stored, and names remap (no title search)", async () => {
     const restore = agent.getRestoreCommand!(
       makeSession({ metadata: {} }),

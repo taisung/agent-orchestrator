@@ -854,7 +854,11 @@ function createClaudeCodeAgent(): Agent {
       };
     },
 
-    async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
+    async getRestoreCommand(
+      session: Session,
+      project: ProjectConfig,
+      effectiveModel?: string,
+    ): Promise<string | null> {
       if (!session.workspacePath) return null;
 
       // Find Claude's project directory for this workspace
@@ -877,8 +881,13 @@ function createClaudeCodeAgent(): Agent {
         parts.push("--dangerously-skip-permissions");
       }
 
-      if (project.agentConfig?.model) {
-        parts.push("--model", shellEscape(project.agentConfig.model as string));
+      // C-04: prefer the persisted spawn --model override (passed as
+      // effectiveModel) over the live config so a restore keeps the spawn
+      // model even when the config changed after the spawn.
+      const model =
+        effectiveModel ?? (project.agentConfig?.model as string | undefined);
+      if (model) {
+        parts.push("--model", shellEscape(model));
       }
 
       return parts.join(" ");

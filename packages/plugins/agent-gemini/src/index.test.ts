@@ -455,6 +455,19 @@ describe("getRestoreCommand", () => {
     const cmd = await agent.getRestoreCommand!(makeSession(), project);
     expect(cmd).toBe("gemini --yolo -m 'gemini-2.5-pro' -r latest");
   });
+
+  it("prefers the effective (persisted spawn) model over the config model", async () => {
+    mockReaddir.mockResolvedValue(["project-1"]);
+    const project = makeProjectConfig({ agentConfig: { model: "config-model" } });
+    const cmd = await agent.getRestoreCommand!(makeSession(), project, "spawn-model-X");
+    expect(cmd).toBe("gemini -m 'spawn-model-X' -r latest");
+  });
+
+  it("uses the effective model when the config has none", async () => {
+    mockReaddir.mockResolvedValue(["project-1"]);
+    const cmd = await agent.getRestoreCommand!(makeSession(), makeProjectConfig(), "spawn-model-X");
+    expect(cmd).toBe("gemini -m 'spawn-model-X' -r latest");
+  });
 });
 
 // =========================================================================

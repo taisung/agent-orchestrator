@@ -358,8 +358,16 @@ export interface Agent {
   /**
    * Optional: get a launch command that resumes a previous session.
    * Returns null if no previous session is found (caller falls back to getLaunchCommand).
+   * @param effectiveModel - the resolved model for this session (persisted spawn
+   *   --model override, else the config model). Plugins must prefer it over
+   *   `project.agentConfig.model` so a spawn override survives a restore.
+   *   It is optional for backward compatibility with direct two-arg callers.
    */
-  getRestoreCommand?(session: Session, project: ProjectConfig): Promise<string | null>;
+  getRestoreCommand?(
+    session: Session,
+    project: ProjectConfig,
+    effectiveModel?: string,
+  ): Promise<string | null>;
 
   /** Optional: run setup after agent is launched (e.g. configure MCP servers) */
   postLaunchSetup?(session: Session): Promise<void>;
@@ -1388,6 +1396,7 @@ export interface SessionMetadata {
   summary?: string;
   project?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
+  model?: string; // Spawn --model override (C-04) — persisted for restore
   createdAt?: string;
   runtimeHandle?: string;
   restoredAt?: string;

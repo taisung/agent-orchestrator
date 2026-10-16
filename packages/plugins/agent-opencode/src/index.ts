@@ -635,7 +635,11 @@ function createOpenCodeAgent(): Agent {
       };
     },
 
-    async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string> {
+    async getRestoreCommand(
+      session: Session,
+      project: ProjectConfig,
+      effectiveModel?: string,
+    ): Promise<string> {
       // Rows 5 and 6: resume the stored ID only; no title search on restore
       // (owner Q7). Core calls this before it changes anything (archive,
       // workspace, old runtime), so each refusal below keeps the old pane.
@@ -663,7 +667,12 @@ function createOpenCodeAgent(): Agent {
       }
 
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
-      return buildResumeCommand(storedId, { model: agentConfig?.model as string | undefined });
+      // C-04: prefer the persisted spawn --model override (effectiveModel)
+      // over the live config. Only the model flag changes here; the launch
+      // lock, marker, discovery wait and holder guard (I-2) are untouched.
+      return buildResumeCommand(storedId, {
+        model: effectiveModel ?? (agentConfig?.model as string | undefined),
+      });
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {

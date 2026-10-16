@@ -1373,6 +1373,46 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("-c model_reasoning_effort=high");
   });
 
+  it("prefers the effective (persisted spawn) model over config and session models", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const session = makeSession({ workspacePath: "/workspace/test" });
+    const cmd = await agent.getRestoreCommand!(
+      session,
+      makeProjectConfig({ agentConfig: { model: "config-model" } }),
+      "spawn-model-X",
+    );
+
+    expect(cmd).toContain("--model 'spawn-model-X'");
+    expect(cmd).not.toContain("config-model");
+    expect(cmd).not.toContain("gpt-4o");
+  });
+
+  it("uses the effective model when config and session models are absent", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const session = makeSession({ workspacePath: "/workspace/test" });
+    const cmd = await agent.getRestoreCommand!(session, makeProjectConfig(), "spawn-model-X");
+
+    expect(cmd).toContain("--model 'spawn-model-X'");
+  });
+
   it("handles unreadable session files gracefully", async () => {
     mockReaddir.mockResolvedValue(["sess.jsonl"]);
     // open() finds matching session_meta for cwd check

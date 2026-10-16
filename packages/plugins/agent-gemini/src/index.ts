@@ -233,7 +233,11 @@ function createGeminiAgent(): Agent {
       return null;
     },
 
-    async getRestoreCommand(_session: Session, project: ProjectConfig): Promise<string | null> {
+    async getRestoreCommand(
+      _session: Session,
+      project: ProjectConfig,
+      effectiveModel?: string,
+    ): Promise<string | null> {
       // Check if any Gemini session exists before returning a restore command.
       // Without this guard, `gemini -r latest` would fail when no prior session
       // exists, and the caller couldn't fall back to getLaunchCommand.
@@ -250,7 +254,9 @@ function createGeminiAgent(): Agent {
         parts.push("--yolo");
       }
 
-      const model = project.agentConfig?.model as string | undefined;
+      // C-04: prefer the persisted spawn --model override (effectiveModel)
+      // over the live config so a restore keeps the spawn model.
+      const model = effectiveModel ?? (project.agentConfig?.model as string | undefined);
       if (model) {
         parts.push("-m", shellEscape(model));
       }

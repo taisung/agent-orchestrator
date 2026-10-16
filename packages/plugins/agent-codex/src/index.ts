@@ -627,7 +627,11 @@ function createCodexAgent(): Agent {
       };
     },
 
-    async getRestoreCommand(session: Session, project: ProjectConfig): Promise<string | null> {
+    async getRestoreCommand(
+      session: Session,
+      project: ProjectConfig,
+      effectiveModel?: string,
+    ): Promise<string | null> {
       if (!session.workspacePath) return null;
 
       // Find the Codex session file for this workspace
@@ -647,8 +651,17 @@ function createCodexAgent(): Agent {
       appendNoUpdateCheckFlag(parts);
 
       appendApprovalFlags(parts, project.agentConfig?.permissions);
-      const effectiveModel = (project.agentConfig?.model ?? data.model) as string | undefined;
-      appendModelFlags(parts, effectiveModel ?? undefined);
+      // C-04: order is persisted spawn --model (via effectiveModel, which is
+      // persisted ?? config) first, then the live config, then Codex's own
+      // recorded model. The persisted override is explicit user intent at
+      // spawn and must survive a later config change; the config stays ahead
+      // of data.model to match the pre-fix order (config ?? data.model) and
+      // to keep all four plugins consistent; data.model is the fallback when
+      // neither is set.
+      const modelToUse = (effectiveModel ??
+        project.agentConfig?.model ??
+        data.model) as string | undefined;
+      appendModelFlags(parts, modelToUse ?? undefined);
 
       // Positional threadId goes last, after all flags
       parts.push(shellEscape(data.threadId));

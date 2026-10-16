@@ -1129,3 +1129,55 @@ describe("isProcessRunning — herdr runtime", () => {
     expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
   });
 });
+
+// =========================================================================
+// getRestoreCommand — persisted spawn model (C-04)
+// =========================================================================
+describe("getRestoreCommand", () => {
+  const agent = create();
+
+  function makeProject(overrides: Record<string, unknown> = {}) {
+    return {
+      name: "proj",
+      repo: "o/r",
+      path: "/p",
+      defaultBranch: "main",
+      sessionPrefix: "p",
+      ...overrides,
+    };
+  }
+
+  it("prefers the effective (persisted spawn) model over the config model", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { model: "config-model" } }) as never,
+      "spawn-model-X",
+    );
+    expect(cmd).toContain("--model 'spawn-model-X'");
+    expect(cmd).not.toContain("config-model");
+    expect(cmd).toContain("--resume 'abc123-def456'");
+  });
+
+  it("uses the effective model when the config has none", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject() as never,
+      "spawn-model-X",
+    );
+    expect(cmd).toContain("--model 'spawn-model-X'");
+  });
+
+  it("falls back to the config model when no effective model is given", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const cmd = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { model: "config-model" } }) as never,
+    );
+    expect(cmd).toContain("--model 'config-model'");
+  });
+});

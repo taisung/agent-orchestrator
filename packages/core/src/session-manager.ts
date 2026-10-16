@@ -1001,16 +1001,26 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     sessionId: string,
     metadata: Record<string, string>,
   ) {
+    const role = resolveSessionRole(
+      sessionId,
+      metadata,
+      project.sessionPrefix,
+      Object.values(config.projects).map((p) => p.sessionPrefix),
+    );
+    // C-04: a worker spawned with --model keeps it via the persisted
+    // `model=` metadata key. It wins over the config (spawnModelOverride is
+    // first in the worker rule). Orchestrators never persist a model
+    // (OrchestratorSpawnConfig has no model), and the orchestrator rule has
+    // no spawn override, so a stray `model=` key is ignored for them.
+    const persistedModel = metadata["model"];
     return resolveAgentSelection({
-      role: resolveSessionRole(
-        sessionId,
-        metadata,
-        project.sessionPrefix,
-        Object.values(config.projects).map((p) => p.sessionPrefix),
-      ),
+      role,
       project,
       defaults: config.defaults,
       persistedAgent: metadata["agent"],
+      ...(role === "worker" && typeof persistedModel === "string" && persistedModel.length > 0
+        ? { spawnModelOverride: persistedModel }
+        : {}),
     });
   }
 
@@ -1402,6 +1412,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let setupFailed = false;
     try {
       await launchLock?.recordRuntime(handle);
+      // C-04: persist the spawn --model override so later operations
+      // (restore, send's restore-for-delivery) reuse it before the config.
+      // Only `ao spawn` supplies a model (batch-spawn has no --model flag).
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,
@@ -1410,6 +1423,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         issue: spawnConfig.issueId,
         project: spawnConfig.projectId,
         agent: selection.agentName, // Persist agent name for lifecycle manager
+        model:
+          typeof spawnConfig.model === "string" && spawnConfig.model.length > 0
+            ? spawnConfig.model
+            : undefined,
         createdAt: new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: reusedOpenCodeSessionId,
@@ -2813,7 +2830,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     if (plugins.agent.getRestoreCommand) {
-      const restoreCmd = await plugins.agent.getRestoreCommand(session, project);
+      const restoreCmd = await plugins.agent.getRestoreCommand(session, project, selection.model);
       launchCommand = restoreCmd ?? plugins.agent.getLaunchCommand(agentLaunchConfig);
     } else {
       launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
@@ -2822,6 +2839,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
     if (fromArchive) {
+      // C-04: keep the persisted spawn model when copying the archive back.
       writeMetadata(sessionsDir, sessionId, {
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
@@ -2835,6 +2853,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         summary: raw["summary"],
         project: raw["project"],
         agent: raw["agent"],
+        model: raw["model"],
         createdAt: raw["createdAt"],
         runtimeHandle: raw["runtimeHandle"],
         opencodeSessionId: raw["opencodeSessionId"],
