@@ -21,6 +21,7 @@ import {
   unlinkSync,
   realpathSync,
 } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -161,6 +162,99 @@ function launchHasPrompt(launchConfig: AgentLaunchConfig): boolean {
 }
 
 /**
+ * B-1: record keys that name the `ao` process of a launch in progress. A
+ * spawn with `prepareAgentSession` writes them before that hook runs (with
+ * a reused agent session ID), keeps them through `confirmLaunch`, and then
+ * removes them; a failed launch deletes the whole record. While that process
+ * runs, the shared-ID guard counts the record as a live holder, also before
+ * its pane exists. The rule does not read `status`, which the lifecycle's
+ * first poll can overwrite with `killed`.
+ */
+const LAUNCH_PID_KEY = "launchPid";
+const LAUNCH_PID_START_KEY = "launchPidStart";
+
+/** The update that removes the launch keys. */
+const CLEARED_LAUNCH_CLAIM: Record<string, string> = {
+  [LAUNCH_PID_KEY]: "",
+  [LAUNCH_PID_START_KEY]: "",
+};
+
+/**
+ * The start time of process `pid`, so that a reused PID does not count:
+ * field 22 of `/proc/<pid>/stat` (clock ticks since boot). Without `/proc`,
+ * the text of `ps -o lstart=`. Null when the process does not exist or is a
+ * zombie.
+ */
+async function processStartToken(pid: number): Promise<string | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  if (existsSync("/proc/self/stat")) {
+    try {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf-8");
+      // Field 2 (the command name) can hold spaces and parentheses.
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (fields[0] === "Z" || fields[0] === "X") return null;
+      const start = fields[19];
+      return start && /^\d+$/.test(start) ? `stat:${start}` : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      timeout: 1_500,
+    });
+    const start = stdout.trim();
+    return start ? `ps:${start}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The launch keys of this `ao` process, or null when its start time cannot be read. */
+async function currentLaunchClaim(): Promise<Record<string, string> | null> {
+  const start = await processStartToken(process.pid);
+  return start ? { [LAUNCH_PID_KEY]: String(process.pid), [LAUNCH_PID_START_KEY]: start } : null;
+}
+
+/**
+ * Write the launch keys of this `ao` process into the reserved record, with
+ * the reused agent session ID when there is one. Without a readable start
+ * time the launch goes on unprotected, as before B-1, and the operator gets
+ * one line that says so.
+ */
+async function claimLaunch(
+  sessionsDir: string,
+  sessionId: SessionId,
+  reusedAgentSessionId: string | undefined,
+): Promise<void> {
+  const claim = await currentLaunchClaim();
+  if (!claim) {
+    warnOperator(
+      `ao: could not read the start time of ao process ${process.pid}; another ao command can take the launch of ${sessionId} for a dead session until its pane runs.`,
+    );
+  }
+  updateMetadata(sessionsDir, sessionId, {
+    ...claim,
+    ...(reusedAgentSessionId ? { opencodeSessionId: reusedAgentSessionId } : {}),
+  });
+}
+
+/**
+ * The PID of the `ao` process that still launches this record: the recorded
+ * PID runs and has the recorded start time. Null when the record has no
+ * launch keys, when that process is gone (a crashed launcher does not
+ * protect its ID), or when the PID now names another process.
+ */
+async function liveLaunchOwner(raw: Record<string, string>): Promise<number | null> {
+  const pidText = raw[LAUNCH_PID_KEY];
+  const recordedStart = raw[LAUNCH_PID_START_KEY];
+  if (!pidText || !recordedStart || !/^\d+$/.test(pidText)) return null;
+  const pid = Number(pidText);
+  const start = await processStartToken(pid);
+  return start !== null && start === recordedStart ? pid : null;
+}
+
+/**
  * m-13: refuse a stored or external branch that is not safe for git.
  * The check runs before any `git`/`gh` call; a refusal runs no git.
  */
@@ -197,7 +291,10 @@ function describeOpenCodeCandidate(session: OpenCodeApiSession): string {
   return `${session.id}  directory ${session.location?.directory ?? "unknown"}  created ${createdText}`;
 }
 
-async function deleteOpenCodeSession(sessionId: string): Promise<void> {
+async function deleteOpenCodeSession(
+  sessionId: string,
+  env?: Record<string, string>,
+): Promise<void> {
   const validatedSessionId = asValidOpenCodeSessionId(sessionId);
   if (!validatedSessionId) return;
   // Rows 9 and 21: `session.remove` by ID. A 404 (already removed) is success.
@@ -212,7 +309,7 @@ async function deleteOpenCodeSession(sessionId: string): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     try {
-      await removeOpenCodeSession(validatedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
+      await removeOpenCodeSession(validatedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS, env);
       return;
     } catch (err) {
       lastError = err;
@@ -689,6 +786,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     raw: Record<string, string>,
   ): Promise<string | undefined> {
     const unknown = `session ${id} may still use it (liveness could not be checked)`;
+    // B-1: a launch in progress publishes the ID before its pane exists, so
+    // a missing pane is no evidence of death while its `ao` process runs.
+    const launcher = await liveLaunchOwner(raw);
+    if (launcher !== null) {
+      return `the launch of session ${id} by ao process ${launcher} is in progress`;
+    }
     const handle = raw["runtimeHandle"]
       ? safeJsonParse<RuntimeHandle>(raw["runtimeHandle"])
       : raw["tmuxName"]
@@ -754,11 +857,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     project: ProjectConfig;
     criteria: { issueId?: string; sessionId?: string };
     strategy: "reuse" | "delete" | "ignore";
+    /** m-1: the environment of the pane that the spawn starts. */
+    env?: Record<string, string>;
   }): Promise<string | undefined> {
     // Row 24: reuse by the stored ID only, no title discovery (owner Q7).
     // The orchestrator `delete` strategy deletes stored IDs only, too; an
     // older OpenCode session that no metadata stores is not found by title.
-    const { sessionsDir, project, criteria, strategy } = options;
+    const { sessionsDir, project, criteria, strategy, env } = options;
     if (strategy === "ignore") return undefined;
 
     const candidateIds = findOpenCodeSessionIds(sessionsDir, criteria);
@@ -778,7 +883,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ) {
           continue;
         }
-        await deleteOpenCodeSession(openCodeSessionId);
+        await deleteOpenCodeSession(openCodeSessionId, env);
       }
       return undefined;
     }
@@ -789,7 +894,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // service does not block the spawn; the spawn proceeds without reuse.
     for (const openCodeSessionId of [...new Set(candidateIds)]) {
       try {
-        const existing = await getOpenCodeSession(openCodeSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
+        const existing = await getOpenCodeSession(
+          openCodeSessionId,
+          OPENCODE_DISCOVERY_TIMEOUT_MS,
+          env,
+        );
         if (existing) return openCodeSessionId;
       } catch {
         continue;
@@ -1276,33 +1385,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       siblings: spawnConfig.siblings,
     });
 
-    // Get agent launch config and create runtime — clean up workspace on failure
-    const opencodeIssueSessionStrategy = project.opencodeIssueSessionStrategy ?? "reuse";
-    const reusedOpenCodeSessionId =
-      plugins.agent.name === "opencode" && spawnConfig.issueId
-        ? await resolveOpenCodeSessionReuse({
-            sessionsDir,
-            project,
-            criteria: { issueId: spawnConfig.issueId },
-            strategy: opencodeIssueSessionStrategy,
-          })
-        : undefined;
-    const agentLaunchConfig = {
-      sessionId,
-      projectConfig: {
-        ...project,
-        agentConfig: {
-          ...selection.agentConfig,
-          ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}),
-        },
-      },
-      issueId: spawnConfig.issueId,
-      prompt: composedPrompt,
-      permissions: selection.permissions,
-      model: selection.model,
-      subagent: spawnConfig.subagent ?? selection.subagent,
-    };
-
     // The environment of the pane: the agent environment plus this session's
     // own AO_* values. It is built before the launch, so the agent session
     // can be prepared with exactly this environment (I-3).
@@ -1318,17 +1400,60 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       AO_STATE_ROOT: getStateRoot(),
     });
 
+    // Get agent launch config and create runtime — clean up workspace on failure
+    const baseLaunchConfig: AgentLaunchConfig = {
+      sessionId,
+      projectConfig: { ...project, agentConfig: { ...selection.agentConfig } },
+      issueId: spawnConfig.issueId,
+      prompt: composedPrompt,
+      permissions: selection.permissions,
+      model: selection.model,
+      subagent: spawnConfig.subagent ?? selection.subagent,
+    };
+    // m-1: an agent that prepares its session gets the pane environment
+    // before the reuse resolver, so every spawn API call (the resolver's
+    // too) runs with the environment of the pane.
+    const preparedEnvironment = plugins.agent.prepareAgentSession
+      ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
+      : undefined;
+    const opencodeIssueSessionStrategy = project.opencodeIssueSessionStrategy ?? "reuse";
+    const reusedOpenCodeSessionId =
+      plugins.agent.name === "opencode" && spawnConfig.issueId
+        ? await resolveOpenCodeSessionReuse({
+            sessionsDir,
+            project,
+            criteria: { issueId: spawnConfig.issueId },
+            strategy: opencodeIssueSessionStrategy,
+            env: preparedEnvironment,
+          })
+        : undefined;
+    const agentLaunchConfig: AgentLaunchConfig = {
+      ...baseLaunchConfig,
+      projectConfig: {
+        ...project,
+        agentConfig: {
+          ...selection.agentConfig,
+          ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}),
+        },
+      },
+    };
+
     let prepared: PreparedAgentSession | undefined;
     let preparedCreatedAt: string | undefined;
     let handle: RuntimeHandle;
     try {
       let launchCommand: string;
       let environment: Record<string, string>;
-      if (plugins.agent.prepareAgentSession) {
+      if (plugins.agent.prepareAgentSession && preparedEnvironment) {
+        environment = preparedEnvironment;
+        // B-1: name this `ao` process as the owner of the launch before the
+        // record names an agent session (the reused one now, a created one
+        // after the prepare), so the shared-ID guard does not take the
+        // record for a dead holder while its pane does not exist yet.
+        await claimLaunch(sessionsDir, sessionId, reusedOpenCodeSessionId);
         // I-3: the agent makes its own session ready before the pane starts
         // (OpenCode: model check, then create or the switch of a reused
         // session, then readback). A throw fails the spawn here: no pane.
-        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
         prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
           workspacePath,
           environment,
@@ -1414,7 +1539,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // Later operations reuse both before the config. Only `ao spawn`
       // supplies a model (batch-spawn has no --model flag); the mode comes
       // from the config.
-      writeMetadata(sessionsDir, sessionId, {
+      const launchedRecord = {
         worktree: workspacePath,
         branch,
         status: "spawning",
@@ -1427,7 +1552,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         createdAt: preparedCreatedAt ?? new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
-      });
+      };
+      if (prepared) {
+        // B-1: merge, so the launch keys stay until `confirmLaunch` proves
+        // that the pane runs the agent on its session.
+        updateMetadata(sessionsDir, sessionId, launchedRecord);
+      } else {
+        writeMetadata(sessionsDir, sessionId, launchedRecord);
+      }
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -1443,7 +1575,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         });
       }
 
-      if (Object.keys(session.metadata || {}).length > 0) {
+      if (prepared) {
+        // B-1: the launch is confirmed; from now on the pane rule applies.
+        updateMetadata(sessionsDir, sessionId, { ...session.metadata, ...CLEARED_LAUNCH_CLAIM });
+      } else if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
     } catch (err) {
@@ -1733,48 +1868,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    let reusableOpenCodeSessionId: string | undefined;
-    try {
-      reusableOpenCodeSessionId =
-        plugins.agent.name === "opencode" && orchestratorSessionStrategy === "reuse"
-          ? await resolveOpenCodeSessionReuse({
-              sessionsDir,
-              project,
-              criteria: { sessionId },
-              strategy: "reuse",
-            })
-          : undefined;
-      if (plugins.agent.name === "opencode" && orchestratorSessionStrategy === "delete") {
-        await resolveOpenCodeSessionReuse({
-          sessionsDir,
-          project,
-          criteria: { sessionId },
-          strategy: "delete",
-        });
-      }
-    } catch (err) {
-      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
-      throw err;
-    }
-
-    // Get agent launch config — uses systemPromptFile, no issue/tracker interaction.
-    // Orchestrator ALWAYS gets permissionless mode — it must run ao CLI commands autonomously.
-    const agentLaunchConfig = {
-      sessionId,
-      projectConfig: {
-        ...project,
-        agentConfig: {
-          ...selection.agentConfig,
-          permissions: "permissionless" as const,
-          ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
-        },
-      },
-      permissions: "permissionless" as const,
-      model: selection.model,
-      systemPromptFile,
-      subagent: selection.subagent,
-    };
-
     // The environment of the pane, as for a worker spawn (I-3).
     const paneEnvironment = (agentEnvironment: Record<string, string>): Record<string, string> => ({
       ...agentEnvironment,
@@ -1788,6 +1881,62 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       AO_STATE_ROOT: getStateRoot(),
     });
 
+    // Get agent launch config — uses systemPromptFile, no issue/tracker interaction.
+    // Orchestrator ALWAYS gets permissionless mode — it must run ao CLI commands autonomously.
+    const baseLaunchConfig: AgentLaunchConfig = {
+      sessionId,
+      projectConfig: {
+        ...project,
+        agentConfig: { ...selection.agentConfig, permissions: "permissionless" as const },
+      },
+      permissions: "permissionless" as const,
+      model: selection.model,
+      systemPromptFile,
+      subagent: selection.subagent,
+    };
+    // m-1: the pane environment before the resolver, as for a worker spawn.
+    const preparedEnvironment = plugins.agent.prepareAgentSession
+      ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
+      : undefined;
+
+    let reusableOpenCodeSessionId: string | undefined;
+    try {
+      reusableOpenCodeSessionId =
+        plugins.agent.name === "opencode" && orchestratorSessionStrategy === "reuse"
+          ? await resolveOpenCodeSessionReuse({
+              sessionsDir,
+              project,
+              criteria: { sessionId },
+              strategy: "reuse",
+              env: preparedEnvironment,
+            })
+          : undefined;
+      if (plugins.agent.name === "opencode" && orchestratorSessionStrategy === "delete") {
+        await resolveOpenCodeSessionReuse({
+          sessionsDir,
+          project,
+          criteria: { sessionId },
+          strategy: "delete",
+          env: preparedEnvironment,
+        });
+      }
+    } catch (err) {
+      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      throw err;
+    }
+
+    const agentLaunchConfig: AgentLaunchConfig = {
+      ...baseLaunchConfig,
+      projectConfig: {
+        ...project,
+        agentConfig: {
+          ...selection.agentConfig,
+          permissions: "permissionless" as const,
+          ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
+        },
+      },
+    };
+
     // An agent can refuse the launch (for example an unsupported binary version,
     // or a model that OpenCode does not list). Clean up like any later failure,
     // so a refused orchestrator spawn leaves no worktree, reserved metadata or
@@ -1797,9 +1946,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let launchCommand: string;
     let environment: Record<string, string>;
     try {
-      if (plugins.agent.prepareAgentSession) {
-        // I-3: the same create, store and check as a worker spawn.
-        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+      if (plugins.agent.prepareAgentSession && preparedEnvironment) {
+        // I-3: the same claim, create, store and check as a worker spawn.
+        environment = preparedEnvironment;
+        await claimLaunch(sessionsDir, sessionId, reusableOpenCodeSessionId);
         prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
           workspacePath,
           environment,
@@ -1865,7 +2015,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     try {
-      writeMetadata(sessionsDir, sessionId, {
+      const launchedRecord = {
         worktree: workspacePath,
         branch,
         status: "working",
@@ -1876,7 +2026,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         createdAt: preparedCreatedAt ?? new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
-      });
+      };
+      if (prepared) {
+        // B-1: merge, so the launch keys stay until the launch is confirmed.
+        updateMetadata(sessionsDir, sessionId, launchedRecord);
+      } else {
+        writeMetadata(sessionsDir, sessionId, launchedRecord);
+      }
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -1895,7 +2051,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
 
-      if (Object.keys(session.metadata || {}).length > 0) {
+      if (prepared) {
+        // B-1: the launch is confirmed; from now on the pane rule applies.
+        updateMetadata(sessionsDir, sessionId, { ...session.metadata, ...CLEARED_LAUNCH_CLAIM });
+      } else if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
     } catch (err) {
@@ -2134,6 +2293,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
 
         if (isCleanupProtectedSession(project, session.id, session.metadata)) {
+          pushSkipped(session.projectId, session.id);
+          continue;
+        }
+
+        // B-1: a session whose launch is still in progress has no pane yet;
+        // that is no reason to kill it or to remove its agent session.
+        if ((await liveLaunchOwner(session.metadata)) !== null) {
           pushSkipped(session.projectId, session.id);
           continue;
         }
