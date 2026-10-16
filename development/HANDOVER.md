@@ -22,9 +22,14 @@ rows are closed. On the owner's word (2026-10-16: build, restart, push; m-18 sta
 checkout was rebuilt at 12:12 EDT (dist `WRAPPER_VERSION` 0.2.6), the five lifecycle workers were restarted
 by exact PID at 12:13 EDT, and `main` was pushed. **New lifecycle PIDs:** agent-skills 3215891,
 agent-orchestrator 3215991 (Nexus config) and 3216178 (this config), Nexus 3216043, VSF 3216103. No other
-resident `ao` process ran. **Still open:** `cat ~/.ao/bin/.ao-version` shows 0.2.5 until the next Codex,
-Gemini or OpenCode spawn; check that it shows 0.2.6 then. The watcher (PID 1710074) watches ao-32. The text
-below is from before this update; its lifecycle PIDs are old.
+resident `ao` process ran. CI on `15757aae` passed (CI, Integration Tests, Onboarding Integration Test,
+Security). `~/.ao/bin/.ao-version` shows 0.2.6 since 12:16:13, so the rollout is complete.
+
+**Update 2026-10-16 13:10 EDT (priority 2 started):** I-3 author ao-36 (Opus 5.5, reviewer gpt-6.1-sol)
+and I-4 author ao-37 (Muse, reviewers Sonnet 5.5 and V4.1 Flash) work on `15757aae`; details, owner
+decisions and the I-3 landing gate in TODO Known Issues. The watcher (PID 107999) watches ao-36 and ao-37.
+ao-32 (idle, reviewer) and ao-35 (idle, its work landed) still run. The text below is from before these
+updates; its lifecycle PIDs are old.
 
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
 finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch

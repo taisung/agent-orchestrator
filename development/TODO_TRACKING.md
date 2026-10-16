@@ -285,6 +285,22 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
+- **I-3 and I-4 in progress** (owner, 2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT,
+  meter `5h 0%`, `wk 33%`, both on `15757aae`, router rows open, watcher PID 107999.
+  - **I-3** (create in Node, launch check, no title discovery; python L1 HIGH): author ao-36, Opus 5.5 by
+    the owner's choice (the router default was Muse; the I-2 precedent needed 5 rounds). Reviewer:
+    gpt-6.1-sol (Codex), the cross-family lens for an Opus author at HIGH. Brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-i3-create.md`. Owner decisions: remove the I-2 launch
+    lock, its pending marker and `waitForOpenCodeSession`; the model check runs before the create
+    (`model.list`). **Landing gate:** the tool-environment check (0010 §14 item 3, one model turn in an
+    API-only session) is deferred by the owner; I-3 does not land until it runs or the owner accepts the
+    risk. The good path with a real TUI also needs an owner-approved probe.
+  - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
+    Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
+    New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
+    shows `active` for its whole length (no cap; a stall rule belongs to I-7).
+  - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
+    worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
   pushed `feat/branchcheck2-muse-read-agent-task-md-in-your-worktree-and-ex` (`7f34bf4d`) to `origin` and
   opened PR #2 at 11:16 EDT, although its brief needed `git branch -r --contains HEAD` to print nothing.
