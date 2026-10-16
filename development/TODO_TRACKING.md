@@ -204,7 +204,8 @@ Durable progress record for this fork. Dated events only; the current state live
   mutants of the review now fail 2 tests each), one JSDoc sentence in `types.ts`, and one core mock style.
   The orchestrator re-ran the tests under a fake `HOME`: claude-code 174 of 174, the core restore files 13
   of 13, typecheck exit 0. **Live** since the owner's rebuild on 2026-10-15 at 22:39 EDT and the
-  lifecycle-worker restarts at 22:39:55 to 22:40:08.
+  lifecycle-worker restarts at 22:39:55 to 22:40:08. Pushed at 22:40 EDT (`9b77bdac..d013e400`): CI,
+  Integration Tests, Security and Onboarding passed.
 
 ## Decisions
 
