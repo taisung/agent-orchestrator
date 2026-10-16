@@ -356,7 +356,11 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     N-6 (a pane of about 40 columns reads `active`). Costs: Sonnet 5.95 USD, Flash 0.074 USD. **Round 3**
     dispatched to ao-37 at 14:53 EDT: brief `brief-aofork-i4-r3.md` (the measured rule, real dialog
     fixtures made by the author through the API in an isolated store, per-rule tests); watcher PID
-    2299056.
+    2299056. ao-37 finished round 3 as `296b21b1` (one commit, 3 files: the measured rule, six real
+    dialog captures at 80x24 and 200x50 as fixtures, per-rule tests, the bound pinned, M12 killed;
+    plugin 226 tests; cleanup checked by the orchestrator). **Re-check r3** dispatched at 15:06 EDT to
+    ao-38 and ao-39 (brief `brief-review-i4-r3.md`, review files `i4_review_r3_{sonnet,v4flash}.md`),
+    watcher PID 3273642.
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
