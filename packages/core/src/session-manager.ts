@@ -1271,13 +1271,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       branch = `session/${sessionId}`;
     }
 
-    // m-13: refuse an external branch before any git runs.
-    assertSafeBranchForSession(sessionId, branch);
-
     // Create workspace (if workspace plugin is available)
     let workspacePath = project.path;
     if (plugins.workspace) {
       try {
+        // m-13: refuse an external branch before any git runs. Inside the
+        // try so a refusal deletes the reservation via the catch below.
+        assertSafeBranchForSession(sessionId, branch);
+
         const wsInfo = await plugins.workspace.create({
           projectId: spawnConfig.projectId,
           project,
@@ -1685,21 +1686,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
 
-      // m-13: refuse an unsafe branch before any git runs.
-      assertSafeBranchForSession(sessionId, branch);
-
-      if (!plugins.workspace) {
-        try {
-          deleteMetadata(sessionsDir, sessionId, false);
-        } catch {
-          /* best effort */
-        }
-        throw new Error(
-          `spawnOrchestrator requires a workspace plugin but none is configured for project '${orchestratorConfig.projectId}'`,
-        );
-      }
-
       try {
+        // m-13: refuse an unsafe branch before any git runs. Inside the
+        // try so a refusal deletes the reservation via the catch below,
+        // the same order as the worker spawn path.
+        assertSafeBranchForSession(sessionId, branch);
+
+        if (!plugins.workspace) {
+          throw new Error(
+            `spawnOrchestrator requires a workspace plugin but none is configured for project '${orchestratorConfig.projectId}'`,
+          );
+        }
+
         const wsInfo = await plugins.workspace.create({
           projectId: orchestratorConfig.projectId,
           project,

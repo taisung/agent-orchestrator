@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import { writeMetadata } from "../../metadata.js";
+import { listMetadata, readMetadataRaw, writeMetadata } from "../../metadata.js";
 import type { Workspace } from "../../types.js";
 import {
   setupTestContext,
@@ -82,6 +82,49 @@ describe("m-13 spawn branch gate", () => {
       sm.spawn({ projectId: "my-app", branch: "-Bvictim", prompt: "hi" }),
     ).rejects.toThrow(/branch metadata.*is not valid/i);
     expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
+  });
+
+  // m-15: a spawn that the branch gate refuses must not leave its reserved
+  // session record. Count the records before and after.
+  it("m-15 refused spawn leaves no session record", async () => {
+    const before = listMetadata(ctx.sessionsDir).length;
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+    await expect(
+      sm.spawn({ projectId: "my-app", branch: "-Bvictim", prompt: "hi" }),
+    ).rejects.toThrow(/branch metadata.*is not valid/i);
+    const after = listMetadata(ctx.sessionsDir).length;
+    expect(after).toBe(before);
+    expect(readMetadataRaw(ctx.sessionsDir, "app-1")).toBeNull();
+    expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
+  });
+
+  // m-15: the orchestrator spawn gate has the same order as the worker
+  // spawn path: a refusal deletes the reservation. The isolated orchestrator
+  // branch orchestrator/<prefix>-orchestrator-<n> always passes with a
+  // schema-valid prefix ([a-zA-Z0-9_-]+), so force the gate to refuse by
+  // mocking the rule for this test only.
+  it("m-15 refused orchestrator spawn leaves no session record", async () => {
+    const branchNameModule = await import("../../utils/branch-name.js");
+    const real = branchNameModule.isSafeBranchName;
+    const spy = vi
+      .spyOn(branchNameModule, "isSafeBranchName")
+      .mockImplementation((name: string) =>
+        name.startsWith("orchestrator/") ? false : real(name),
+      );
+    try {
+      const before = listMetadata(ctx.sessionsDir).length;
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+      await expect(sm.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
+        /branch metadata.*is not valid/i,
+      );
+      const after = listMetadata(ctx.sessionsDir).length;
+      expect(after).toBe(before);
+      expect(readMetadataRaw(ctx.sessionsDir, "app-orchestrator-1")).toBeNull();
+      expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
+      expect(readdirSync(ctx.sessionsDir)).not.toContain("app-orchestrator-1");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

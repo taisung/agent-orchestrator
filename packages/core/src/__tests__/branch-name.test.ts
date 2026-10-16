@@ -9,6 +9,9 @@ import { AO_METADATA_HELPER } from "../agent-workspace-hooks.js";
 // the TypeScript copy (isSafeBranchName) and the bash copy (the installed
 // helper from a fake HOME). D1 requires the valid names below plus names
 // with "." and "_" inside; the invalid names cover every case of brief 2.1.
+// m-16: C1 controls (U+0080-U+009F) and U+2028/U+2029 are valid: git and
+// the TypeScript rule accept them, and the bash copies must agree in both
+// the C and a UTF-8 locale.
 export const VALID_BRANCH_NAMES = [
   "main",
   "feat/x",
@@ -32,6 +35,11 @@ export const VALID_BRANCH_NAMES = [
   "a@@b",
   "head",
   "foo/HEAD",
+  "feat/n\u0085x",
+  "feat/c\u0080d",
+  "feat/e\u009Ff",
+  "feat/a\u2028b",
+  "feat/a\u2029b",
 ];
 
 export const INVALID_BRANCH_NAMES = [
@@ -170,21 +178,33 @@ describe("bash and TypeScript copies agree on the whole table", () => {
     }
   }
 
-  it("branch table: bash agrees with TypeScript", () => {
-    const fx = makeHelperEnv();
-    try {
-      for (const name of [...VALID_BRANCH_NAMES, ...INVALID_BRANCH_NAMES]) {
-        const ts = isSafeBranchName(name);
-        const bash = bashAccepts(fx.helperPath, fx.env, "branch", name);
-        expect(
-          bash,
-          `bash/TS disagree on branch ${JSON.stringify(name)} (ts=${ts} bash=${bash})`,
-        ).toBe(ts);
+  // m-16: the bash check is byte-based (LC_ALL=C inside the function), so it
+  // agrees with TypeScript in C and in UTF-8 locales. Without the fix, the
+  // C1/U+2028/U+2029 valid names fail in a UTF-8 locale.
+  it.each(["C", "C.UTF-8", "en_US.UTF-8"])(
+    "branch table: bash agrees with TypeScript in locale %s",
+    (locale) => {
+      const fx = makeHelperEnv();
+      const localeEnv = {
+        ...fx.env,
+        LC_ALL: locale,
+        LC_CTYPE: locale,
+        LANG: locale,
+      };
+      try {
+        for (const name of [...VALID_BRANCH_NAMES, ...INVALID_BRANCH_NAMES]) {
+          const ts = isSafeBranchName(name);
+          const bash = bashAccepts(fx.helperPath, localeEnv, "branch", name);
+          expect(
+            bash,
+            `bash/TS disagree on branch ${JSON.stringify(name)} (ts=${ts} bash=${bash}) in locale ${locale}`,
+          ).toBe(ts);
+        }
+      } finally {
+        rmSync(fx.root, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(fx.root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("pr table: bash agrees with TypeScript", () => {
     const fx = makeHelperEnv();
