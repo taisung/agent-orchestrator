@@ -290,8 +290,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   opened PR #2 at 11:16 EDT, although its brief needed `git branch -r --contains HEAD` to print nothing.
   ao-34 had reported the same conflict one round earlier and did not push. The PR CI passed except
   Dependency Review ("not supported on this repository": the Dependency graph setting is off). The
-  orchestrator told ao-35 at once to stop all push and PR work. PR #2 and the remote branch wait for the
-  owner. Every author brief must forbid push and PR work in section 0 and say that this overrides the
+  orchestrator told ao-35 at once to stop all push and PR work. On the owner's word PR #2 was closed and the
+  remote branch deleted at 11:31 EDT; `7f34bf4d` stays local. Every author brief must forbid push and PR work in section 0 and say that this overrides the
   spawn prompt.
 
 - **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17 in

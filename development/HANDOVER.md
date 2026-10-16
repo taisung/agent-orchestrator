@@ -20,8 +20,9 @@ finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a loc
 rule, the hook `pr` anchor tests, `WRAPPER_VERSION` 0.2.6; core 948 and claude-code 208 tests pass, its three
 mutants fail tests, nothing written in the real state root, about 0.12 USD). It is **not reviewed, not on
 `main`**. Against its brief, ao-35 pushed its branch and opened **PR #2** at 11:16 EDT (TODO Known Issues).
-It stopped on the orchestrator's order, and it did not push again: the remote branch and PR #2 hold only
-`7f34bf4d`. The PR CI passed except Dependency Review, which fails on a repository setting.
+It stopped on the orchestrator's order and did not push again. On the owner's word PR #2 was closed and the
+remote branch was deleted at 11:31 EDT; `7f34bf4d` stays in the local branch and the ao-35 worktree. The PR
+CI passed except Dependency Review, which fails on a repository setting.
 
 The OpenCode 2.x arc (note `0009` §13): I-1, I-2, I-6 and the `~/.ao/bin` PATH fix are on `main` and live.
 I-3, I-4 and I-5 remain. Until 2026-10-15 `as-orchestrator` coordinated this work; it keeps I-7 (the
@@ -34,7 +35,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 
 | Session | Model | State | Branch tip | Disposition |
 | --- | --- | --- | --- | --- |
-| ao-35 | Muse (OpenCode 2.x) | idle, done, not reviewed | `7f34bf4d` (also on `origin`, PR #2) | m-15 to m-17 author; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`; report `.agent_report.md` (section "Push and PR 2" says why it pushed); router row open; keep until the review and the PR #2 decision |
+| ao-35 | Muse (OpenCode 2.x) | idle, done, not reviewed | `7f34bf4d` (local only; PR #2 closed, remote branch deleted) | m-15 to m-17 author; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`; report `.agent_report.md` (section "Push and PR 2" says why it pushed); router row open; keep until the review; do not run `ao session cleanup` before then: its record still names the closed PR #2, so cleanup can kill it (the local branch would stay) |
 | ao-32 | Opus 5.5 (Claude Code) | idle, done | `bb81cf7a` | the reviewer of the whole series (r1 to r4, helper keys, branch check); model pinned in `.claude/settings.local.json`; costs: 5.06, 5.16, 7.61, 4.43, 8.21, 8.84 USD; reuse it for the m-15 to m-17 review |
 | ao-orchestrator | Opus 5.5 (Claude Code) | this session, in the primary checkout on `main` | `main` | transcripts: `~/.claude/projects/-home-taisung-local-agent-orchestrator/6e2c2229-0d62-4ce3-8428-c32ba7097a7a.jsonl` (this one) and `ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` (before the 2026-10-15 outage) |
 
@@ -59,9 +60,8 @@ fleet's session; leave it.
 
 ## Open and Blocked Items
 
-**PR #2 and its remote branch**: open - owner decision - ao-35 pushed against its brief. Options: close
-PR #2 and delete `origin/feat/branchcheck2-muse-read-agent-task-md-in-your-worktree-and-ex`, or keep both
-until the review. The orchestrator never deletes a remote branch without the owner's word.
+**PR #2**: closed - on the owner's word at 11:31 EDT, PR #2 was closed with a comment and the remote branch
+was deleted; the work stays local for the review.
 **Dependency Review on PRs**: open - owner decision - it fails because the repository's Dependency graph
 setting is off. Turn the setting on, or let a worker remove the job.
 **Author brief template**: open - section 0 must forbid push and PR work and say that this overrides the
@@ -111,8 +111,8 @@ hint; I-1: the refusal message omits the probe's stderr, a refused spawn leaves 
    commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status`, then
    `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-35/.agent_report.md` and
-   `gh pr view 2 -R taisung/agent-orchestrator --json state,commits`.
-3. Ask the owner about PR #2 if the answer is not in this file, then start priority 1.
+   `git -C /home/taisung/.worktrees/agent-orchestrator/ao-35 log --oneline -1` (expect `7f34bf4d`).
+3. Start priority 1.
 
 ## Key Files
 
@@ -146,8 +146,7 @@ After a `WRAPPER_VERSION` bump this restart is required, because an old process 
 the new one (M-3).
 
 The metadata-hardening series is live up to m-13 (0.2.5). The m-15 to m-17 round by ao-35 (`7f34bf4d`)
-waits for a blind review by ao-32 (Opus 5.5), and PR #2, which ao-35 opened against its brief, waits for
-the owner. Your first action is First Actions 1 to 3, then priority 1. After that, I-3 and I-4 of the
+waits for a blind review by ao-32 (Opus 5.5). ao-35 had opened PR #2 against its brief; the owner closed it. Your first action is First Actions 1 to 3, then priority 1. After that, I-3 and I-4 of the
 OpenCode 2.x arc.
 
 Landmines. Place a brief in the same command that spawns the worker: the spawn prompt waits only about 2
