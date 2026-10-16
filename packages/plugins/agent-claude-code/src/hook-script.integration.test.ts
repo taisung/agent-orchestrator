@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -302,5 +302,72 @@ describe("hook script: metadata file updates", () => {
       command: "echo hello",
     });
     expect(stdout.trim()).toBe("{}");
+  });
+});
+
+// =========================================================================
+// Key allowlist (m-10): update_metadata_key refuses privileged keys
+// =========================================================================
+describe("hook script: key allowlist", () => {
+  function callUpdateKeyDirectly(
+    key: string,
+    value: string,
+    metadataContent = "status=working\nbranch=main\n",
+  ): { code: number; stderr: string; metadata: string } {
+    const sessionsDir = join(testDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const sessionId = `allow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const metadataFile = join(sessionsDir, sessionId);
+    writeFileSync(metadataFile, metadataContent);
+    const script = [
+      `metadata_file=${JSON.stringify(metadataFile)}`,
+      // Evaluate only the function definition, not the hook's top-level
+      // code (which reads stdin and exits). An agent that reaches the
+      // function must source or copy it the same way.
+      `eval "$(sed -n '/^update_metadata_key/,/^}/p' ${JSON.stringify(hookScriptPath)})"`,
+      `update_metadata_key ${JSON.stringify(key)} ${JSON.stringify(value)}`,
+    ].join("\n");
+    let code = 0;
+    let stderr = "";
+    try {
+      execFileSync("bash", ["-c", script], {
+        encoding: "utf-8",
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: 5000,
+      });
+    } catch (err: unknown) {
+      const e = err as { status?: number; stderr?: string | Buffer };
+      code = e.status ?? 1;
+      stderr = typeof e.stderr === "string" ? e.stderr : String(e.stderr ?? "");
+    }
+    return { code, stderr, metadata: readFileSync(metadataFile, "utf-8") };
+  }
+
+  it.each([
+    ["pr", "https://github.com/o/r/pull/1"],
+    ["status", "pr_open"],
+    ["status", "merged"],
+    ["branch", "feat/x"],
+  ])("writes allowed %s=%s via direct call", (key, value) => {
+    const { code, metadata } = callUpdateKeyDirectly(key, value);
+    expect(code).toBe(0);
+    expect(metadata).toContain(`${key}=${value}`);
+  });
+
+  it.each([
+    ["permissions", "permissionless"],
+    ["model", "m"],
+    ["role", "orchestrator"],
+    ["agent", "codex"],
+    ["status", "done"],
+    ["status", "working"],
+    ["mystery", "x"],
+  ])("refuses %s=%s: writes nothing, names key on stderr, non-zero", (key, value) => {
+    const before = "status=working\nbranch=main\n";
+    const { code, stderr, metadata } = callUpdateKeyDirectly(key, value, before);
+    expect(code).not.toBe(0);
+    expect(stderr.trim().split("\n")).toHaveLength(1);
+    expect(stderr).toContain(key);
+    expect(metadata).toBe(before);
   });
 });

@@ -38,7 +38,7 @@ function getAoBinDir(): string {
 }
 
 /** Current version of wrapper scripts — bump when scripts change */
-export const WRAPPER_VERSION = "0.2.3";
+export const WRAPPER_VERSION = "0.2.4";
 
 // =============================================================================
 // PATH Builder
@@ -197,7 +197,7 @@ export function removeAoBinFromPath(pathValue: string): string {
  */
 export const AO_METADATA_HELPER = `#!/usr/bin/env bash
 # ao-metadata-helper — shared by gh/git wrappers
-# Provides: update_ao_metadata <key> <value>
+# Provides: update_ao_metadata <key> <value> (allowed keys only: pr, status=pr_open, branch)
 
 update_ao_metadata() {
   local key="\$1" value="\$2"
@@ -237,8 +237,27 @@ update_ao_metadata() {
 
   [[ -f "\$metadata_file" ]] || return 0
 
-  # Validate key — only allow alphanumeric, underscore, hyphen (prevents sed injection)
-  [[ "\$key" =~ ^[a-zA-Z0-9_-]+$ ]] || return 0
+  # Allowlist (m-10): only the keys the wrappers write. The gh wrapper writes
+  # pr <url> and status pr_open on gh pr create; the git wrapper writes
+  # branch <name> on checkout/switch. Core reads permissions/model/role/agent
+  # from the session record for restore, so an agent that writes those keys
+  # would raise its own mode. A refused call writes nothing, prints one line
+  # to stderr naming the refused key, and returns non-zero. The wrappers save
+  # the real binary's exit code before calling this and exit with it, and they
+  # set no errexit, so a refusal can never fail the wrapped gh/git command.
+  case "\$key" in
+    pr|branch) ;;
+    status)
+      if [[ "\$value" != "pr_open" ]]; then
+        echo "ao-metadata-helper: refusing status value '\$value' (only pr_open allowed)" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "ao-metadata-helper: refusing key '\$key' (allowed: pr, status, branch)" >&2
+      return 1
+      ;;
+  esac
 
   local temp_file="\${metadata_file}.tmp.\$\$"
 
@@ -468,11 +487,7 @@ export const AO_AGENTS_MD_SECTION = `
 You are running inside an Agent Orchestrator managed workspace.
 Session metadata is updated automatically via shell wrappers.
 
-If automatic updates fail, you can manually update metadata:
-\`\`\`bash
-~/.ao/bin/ao-metadata-helper.sh  # sourced automatically
-# Then call: update_ao_metadata <key> <value>
-\`\`\`
+The wrappers update the session metadata. Do not edit the session record.
 `;
 /* eslint-enable no-useless-escape */
 

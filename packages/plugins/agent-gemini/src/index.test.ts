@@ -527,7 +527,7 @@ describe("setupWorkspaceHooks", () => {
 
       execFileSync(
         "bash",
-        ["-c", 'source "$1"; update_ao_metadata status updated', "bash", helperPath],
+        ["-c", 'source "$1"; update_ao_metadata status pr_open', "bash", helperPath],
         {
           env: {
             ...process.env,
@@ -538,10 +538,23 @@ describe("setupWorkspaceHooks", () => {
         },
       );
 
-      expect(readFileSync(metadataPath, "utf8")).toBe("status=updated\n");
+      expect(readFileSync(metadataPath, "utf8")).toBe("status=pr_open\n");
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
     }
+  });
+
+  it("installs a helper that refuses privileged keys (m-10)", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    await agent.setupWorkspaceHooks!("/workspace/test", { dataDir: "/data" });
+
+    const helperCall = mockWriteFile.mock.calls.find(
+      (call: unknown[]) =>
+        typeof call[0] === "string" && call[0].includes("ao-metadata-helper.sh.tmp."),
+    );
+    const helperContent = String(helperCall?.[1]);
+    expect(helperContent).toContain("allowed: pr, status, branch");
+    expect(helperContent).toContain('[[ "$value" != "pr_open" ]]');
   });
 
   it("writes gh and git wrappers when version marker is missing", async () => {

@@ -1894,6 +1894,13 @@ describe("shell wrapper content", () => {
       expect(content).toContain("*..*");
     });
 
+    it("limits keys to pr, status=pr_open and branch (m-10)", async () => {
+      const content = await getWrapperContent("ao-metadata-helper.sh");
+      expect(content).toContain("allowed: pr, status, branch");
+      expect(content).toContain('[[ "$value" != "pr_open" ]]');
+      expect(content).toContain("refusing key");
+    });
+
     it("validates ao_dir is an absolute path under expected locations", async () => {
       const content = await getWrapperContent("ao-metadata-helper.sh");
       // Only allows paths under $HOME/.ao/, $HOME/.agent-orchestrator/, or /tmp/

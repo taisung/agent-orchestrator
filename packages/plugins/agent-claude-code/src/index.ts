@@ -97,6 +97,26 @@ update_metadata_key() {
   local key="$1"
   local value="$2"
 
+  # Allowlist (m-10): only the keys this hook itself writes. The hook writes
+  # pr <url> and status pr_open on gh pr create, branch <name> on checkout/
+  # switch, and status merged on gh pr merge. Any other key (permissions,
+  # model, role, agent, …) is refused: write nothing, print one line to
+  # stderr naming the refused key, return non-zero. The hook's own callers
+  # use only allowed keys, so normal detections still write.
+  case "$key" in
+    pr|branch) ;;
+    status)
+      if [[ "$value" != "pr_open" && "$value" != "merged" ]]; then
+        echo "metadata-updater: refusing status value '$value' (allowed: pr_open, merged)" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "metadata-updater: refusing key '$key' (allowed: pr, status, branch)" >&2
+      return 1
+      ;;
+  esac
+
   # Create temp file
   local temp_file="\${metadata_file}.tmp"
 

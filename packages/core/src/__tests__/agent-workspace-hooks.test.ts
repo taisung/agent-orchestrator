@@ -97,7 +97,7 @@ describe("AO_METADATA_HELPER", () => {
             "bash",
             helperPath,
             "status",
-            "updated",
+            "pr_open",
           ],
           {
             env: {
@@ -111,7 +111,7 @@ describe("AO_METADATA_HELPER", () => {
       };
 
       runHelper(sessionsDir);
-      expect(readFileSync(metadataPath, "utf8")).toBe("status=updated\n");
+      expect(readFileSync(metadataPath, "utf8")).toBe("status=pr_open\n");
 
       runHelper(outsideSessionsDir);
       expect(readFileSync(outsideMetadataPath, "utf8")).toBe("status=working\n");
@@ -119,6 +119,105 @@ describe("AO_METADATA_HELPER", () => {
       rmSync(stateRoot, { recursive: true, force: true });
       rmSync(outsideRoot, { recursive: true, force: true });
     }
+  });
+
+  describe("key allowlist (m-10)", () => {
+    function runHelperOnce(
+      helperPath: string,
+      env: NodeJS.ProcessEnv,
+      key: string,
+      value: string,
+    ): { code: number; stderr: string } {
+      try {
+        const stderr = execFileSync(
+          "bash",
+          ["-c", 'source "$1"; update_ao_metadata "$2" "$3"', "bash", helperPath, key, value],
+          { env, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] },
+        );
+        void stderr;
+        return { code: 0, stderr: "" };
+      } catch (err: unknown) {
+        const e = err as { status?: number; stderr?: string | Buffer };
+        const stderr = typeof e.stderr === "string" ? e.stderr : String(e.stderr ?? "");
+        return { code: e.status ?? 1, stderr };
+      }
+    }
+
+    function makeHelperEnv(): {
+      stateRoot: string;
+      sessionsDir: string;
+      helperPath: string;
+      record: string;
+      baseEnv: NodeJS.ProcessEnv;
+    } {
+      const stateRoot = mkdtempSync("/tmp/ao-helper-allow-");
+      const sessionsDir = join(stateRoot, "sessions");
+      const helperPath = join(stateRoot, "ao-metadata-helper.sh");
+      const record = join(sessionsDir, "app-1");
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(helperPath, AO_METADATA_HELPER);
+      const baseEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        AO_STATE_ROOT: stateRoot,
+        AO_DATA_DIR: sessionsDir,
+        AO_SESSION: "app-1",
+      };
+      return { stateRoot, sessionsDir, helperPath, record, baseEnv };
+    }
+
+    it.each([
+      ["pr", "https://github.com/o/r/pull/42"],
+      ["status", "pr_open"],
+      ["branch", "feat/worker-x"],
+    ])("writes allowed key %s=%s", (key, value) => {
+      const fx = makeHelperEnv();
+      try {
+        writeFileSync(fx.record, "status=working\n");
+        const result = runHelperOnce(fx.helperPath, fx.baseEnv, key, value);
+        expect(result.code).toBe(0);
+        expect(readFileSync(fx.record, "utf8")).toContain(`${key}=${value}`);
+      } finally {
+        rmSync(fx.stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ["permissions", "permissionless"],
+      ["model", "model-X"],
+      ["role", "orchestrator"],
+      ["agent", "claude-code"],
+      ["status", "merged"],
+      ["status", "done"],
+      ["unknownkey", "x"],
+    ])("refuses %s=%s: writes nothing, names the key on stderr, non-zero exit", (key, value) => {
+      const fx = makeHelperEnv();
+      try {
+        writeFileSync(fx.record, "status=working\nbranch=main\n");
+        const before = readFileSync(fx.record, "utf8");
+        const result = runHelperOnce(fx.helperPath, fx.baseEnv, key, value);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr.trim().split("\n")).toHaveLength(1);
+        expect(result.stderr).toContain(key);
+        expect(readFileSync(fx.record, "utf8")).toBe(before);
+      } finally {
+        rmSync(fx.stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses the review reproducer: permissions and role writes change nothing", () => {
+      const fx = makeHelperEnv();
+      try {
+        writeFileSync(fx.record, "permissions=default\nrole=worker\nstatus=working\n");
+        const before = readFileSync(fx.record, "utf8");
+        expect(runHelperOnce(fx.helperPath, fx.baseEnv, "permissions", "permissionless").code).not.toBe(
+          0,
+        );
+        expect(runHelperOnce(fx.helperPath, fx.baseEnv, "role", "orchestrator").code).not.toBe(0);
+        expect(readFileSync(fx.record, "utf8")).toBe(before);
+      } finally {
+        rmSync(fx.stateRoot, { recursive: true, force: true });
+      }
+    });
   });
 });
 
@@ -205,6 +304,19 @@ describe("setupPathWrapperWorkspace", () => {
     );
     expect(agentsMdWrites).toHaveLength(1);
     expect(String(agentsMdWrites[0][1])).toContain("Agent Orchestrator");
+  });
+
+  it("AGENTS.md has no generic update call and says wrappers own the record", async () => {
+    const { AO_AGENTS_MD_SECTION } = await import("../agent-workspace-hooks.js");
+    expect(AO_AGENTS_MD_SECTION).not.toContain("update_ao_metadata <key>");
+    expect(AO_AGENTS_MD_SECTION).not.toContain("<value>");
+    expect(AO_AGENTS_MD_SECTION).toContain("wrappers update the session metadata");
+    expect(AO_AGENTS_MD_SECTION).toContain("Do not edit the session record");
+  });
+
+  it("bumps WRAPPER_VERSION so installs rewrite the helper and wrappers", async () => {
+    expect(WRAPPER_VERSION).toBe("0.2.4");
+    expect(AO_METADATA_HELPER).toContain("allowed: pr, status, branch");
   });
 });
 
@@ -742,5 +854,30 @@ describe("GH_WRAPPER", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("fake-gh progress: pr create --fill\n");
     expect(fx.readKey("pr")).toBeUndefined();
+  });
+
+  it("a refused helper call can never fail the wrapped gh: wrappers save exit code, set no errexit", async () => {
+    // The wrappers call only allowed keys (pr, status pr_open), so they never
+    // hit the refusal path. Even if the helper refused, the wrapper saves the
+    // real binary's exit code first and exits with it, with no `set -e`.
+    expect(GH_WRAPPER).not.toMatch(/set\s+-e/);
+    expect(GH_WRAPPER).toContain("PIPESTATUS[0]");
+    expect(GH_WRAPPER).toContain("exit $exit_code");
+    // Live: a helper that refuses everything still leaves gh's output and exit code intact.
+    writeFileSync(
+      join(fx.binDir, "ao-metadata-helper.sh"),
+      '#!/usr/bin/env bash\nupdate_ao_metadata() { echo "ao-metadata-helper: refusing key \'$1\'" >&2; return 1; }\n',
+      { mode: 0o755 },
+    );
+    const result = await gh(["pr", "create", "--title", "t"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe(`${prUrl}\n`);
+    expect(fx.readKey("pr")).toBeUndefined();
+  });
+
+  it("a refused helper call can never fail the wrapped git", async () => {
+    expect(GIT_WRAPPER).not.toMatch(/set\s+-e/);
+    expect(GIT_WRAPPER).toContain("exit_code=$?");
+    expect(GIT_WRAPPER).toContain("exit $exit_code");
   });
 });

@@ -946,6 +946,17 @@ describe("METADATA_UPDATER_SCRIPT content", () => {
       /"\$clean_command"\s*=~\s*\^gh\[.*merge/,
     );
   });
+
+  it("limits update_metadata_key to the keys the hook writes (m-10)", () => {
+    expect(METADATA_UPDATER_SCRIPT).toContain("allowed: pr, status, branch");
+    expect(METADATA_UPDATER_SCRIPT).toContain('update_metadata_key "pr"');
+    expect(METADATA_UPDATER_SCRIPT).toContain('update_metadata_key "status" "pr_open"');
+    expect(METADATA_UPDATER_SCRIPT).toContain('update_metadata_key "branch"');
+  });
+
+  it("refuses privileged status values in update_metadata_key", () => {
+    expect(METADATA_UPDATER_SCRIPT).toMatch(/pr_open.*merged|merged.*pr_open/);
+  });
 });
 
 // =========================================================================
