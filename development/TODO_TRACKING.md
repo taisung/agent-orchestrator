@@ -217,7 +217,14 @@ Durable progress record for this fork. Dated events only; the current state live
   1 M, 4 m, 5 notes; live on Claude Code and Codex in both directions, on the archive and active paths.
   M-2 (no test guards the archive copy-back of `permissions=`), m-7 (the fail-safe `default` is not the
   strictest mode for Codex: `suggest` adds `--ask-for-approval untrusted`) and m-8 (comments describe a
-  "no mode" case that a YAML config never has) went to ao-30 as option-1 round 2. Not live, not pushed.
+  "no mode" case that a YAML config never has) are closed by `25a56f30` (`fix(core): fail safe to suggest for
+  a malformed stored mode`, ao-30): a damaged stored mode now gives `suggest`, which is byte-identical to
+  `default` for Claude Code, Gemini and OpenCode and adds `--ask-for-approval untrusted` for Codex; the
+  "no mode" value stays `default`. Re-check r4 by Opus 5.5 (`restore_model_review_r4_opus.md`):
+  **LAND-SAFE**, M-2 and m-7 fixed, m-8 partly fixed, 0 B, 0 M. Open cosmetic minors: m-11 (the new Codex
+  test repeats `index.test.ts:1285-1305`), m-12 (the test name at `restore-permissions.test.ts:258` says the
+  loader "always sets permissionless"). N-15: a Codex worker with a damaged record now waits for approval
+  (`waiting_input`). Not live, not pushed.
 
 ## Decisions
 
