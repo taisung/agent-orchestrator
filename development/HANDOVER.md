@@ -55,6 +55,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-28 | GPT-6-Astra (Codex) | idle, done, landed | `bfa5af45` | I-2 landed as `f63b5b99..6d2e8262`; row closed; earlier: one `fix(core)` commit: both recovery rules need an explicit tmux negative for the recorded earlier pane; live-holder timeout text with the PID and no `rm`; `ENOENT`-tolerant `complete` and `release`; plan check passed; earlier: owner chose round 5 by astra with a stop rule on 2026-10-15: if the re-check finds only cases that need a non-protocol creator or a contrived host state, record them as known limits and land; fixes ao-26 r4 M-2 (rule 1 only when the earlier pane is gone), M-3 (live-holder text, `ENOENT` tolerance), m-5 to m-7; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i2-r5.md`; re-check ao-26 |
 | ao-29 | Muse (OpenCode 2.x) | killed, replaced | `aa3609e0` | first spawn on the new build (0.2.3 wrappers installed, own `opencodeSessionId` stored, `~/.ao/bin` first on PATH); the spawn prompt made it poll 2 min for the brief, which came later; its record was `killed` by the first-poll race, so a send would have restored it, maybe on the default model; killed with no work, row closed |
 | ao-30 | Muse (OpenCode 2.x) | authoring the restore model fix | from `c831caff` | the brief was placed in the second that the spawn returned; record `working`, own `opencodeSessionId` stored; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-restore-model.md` |
+| ao-31 | Muse (OpenCode 2.x) | deleting `.github/workflows/release.yml` | from `c831caff` | owner word "delete release.yml" (2026-10-15); python/L0/LOW, receipts only; `package.json` scripts and `.changeset/` stay; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-del-release.md` |
 | ao-20 | Muse (OpenCode 2.x) | idle, done, landed | `353ef189` | round 1 landed as `ebc8e25b`; round 2 restores a synchronous config-load step 6, deletes `port: 9000`, and removes the dead `packages/web` entries of `eslint.config.js`; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-ci-nodash-r2.md` |
 | ao-21 | Claude Sonnet 5.5 | idle, done, LAND-SAFE | `353ef189` | lens 1 of 2; round 1 LAND-SAFE (M-1, m-1, m-2); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-sonnet.md` |
 | ao-22 | V4.1 Flash (OpenCode 2.x) | idle, done, LAND-SAFE | `353ef189` | lens 2 of 2; round 1 LAND-SAFE (3 minors); brief `~/.cache/agent-skills-haiku55-arc/brief-review-ci-nodash-r2-v4flash.md` |
@@ -65,9 +66,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees i
 | ao-18 | Claude Opus 5.5 | idle, done | `345f1e6e` | the PATH lens, verdict recorded, row closed; kill it when the fix lands |
 | ao-orchestrator | Claude Opus 5.5 | this session, started 11:42:10 by the owner after the outage, in the primary checkout on `main` | `main` | the transcript of the session before the outage is `~/.claude/projects/-home-taisung-local-agent-orchestrator/ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` |
 
-**Watcher**: PID 2604512, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
+**Watcher**: PID 2807114, `~/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator
 -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
-ao-30@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with `AO_CONFIG_PATH` set to
+ao-30@... ao-31@...`, state `~/.cache/fleet_watch/ao-opencode2-2026-10-14/`, run with `AO_CONFIG_PATH` set to
 `CONFIG_PATH`. It survived the outage (it is not in tmux). To add or remove a worker, stop it by the PID
 in `watch.pid`, remove `watch.pid`, and start it again with the same options and the new `--preseed`
 list.
@@ -77,7 +78,7 @@ list.
 ao-5 (PID 3062995, `/tmp/ao-i1/config`, cwd deleted) was stopped by exact PID on the owner's word at
 12:25.
 
-**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-30 (author) is open; ao-19, ao-23 (three rows), ao-25, ao-26 (three rows), ao-27, ao-28, ao-1, ao-20, ao-21,
+**Router rows**: in this fork's log (profile `ROUTER_LOG`), ao-30 and ao-31 (authors) are open; ao-19, ao-23 (three rows), ao-25, ao-26 (three rows), ao-27, ao-28, ao-1, ao-20, ao-21,
 ao-22, ao-23 and ao-24 are closed; ao-16,
 ao-17 and ao-18 (reviewers) are closed.
 In the agent-skills log (`~/agent-skills/development/artifacts/model_router_log/log.csv`), ao-14 (I-2
@@ -116,8 +117,8 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
    `~/.cache/agent-skills-haiku55-arc/brief-aofork-restore-model.md`, python/L1/HIGH); then a blind Opus 5.5
    review. A worker whose record says `killed` while its pane runs must not get an `ao send` (a send
    restores a `killed` session first); place a brief in the second that the spawn returns.
-2. **Decide the Release workflow** (owner) - on the 19:44 push CI, Integration Tests, Security and
-   Onboarding passed (Onboarding for the first time since 2026-07-13); Release still fails on `ENEEDAUTH`.
+2. **Land the Release workflow removal** - the owner chose to delete `release.yml`; ao-31 does it. Check
+   the receipts (only that file deleted), cherry-pick, and push on the owner's word.
 3. **Fix the restore model** (HIGH), then **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with
    `~/agent-skills/scripts/routing.py route`; I-3 and I-5 are HIGH by the profile.
 
