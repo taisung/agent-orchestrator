@@ -21,7 +21,10 @@ restarted by exact PID at 19:43:19 to 19:43:32 (agent-skills 2210537, agent-orch
 Nexus config and 2212230 for this config, Nexus 2210642, VSF 2210682). A module check of the new build
 under a fake `HOME`: Codex `PATH` starts with `~/.ao/bin`; Claude Code removes both wrapper spellings and
 `.` and sets an empty `GH_PATH`. The host's `~/.ao/bin` still holds 0.2.1 until the next spawn installs
-0.2.3. **The restore model fix landed and is live**: `854690c3` (LAND-SAFE by Opus 5.5 ao-32), with the
+0.2.3. **CI is green with no Release run**: on the push of 2026-10-15 at 21:10 EDT (`c831caff..972f13ef`), CI,
+Integration Tests, Security and Onboarding passed, and no Release run started. A worker whose record
+says `killed` while its pane runs must not get an `ao send` (a send restores a `killed` session first);
+place a brief in the second that the spawn returns. **The restore model fix landed and is live**: `854690c3` (LAND-SAFE by Opus 5.5 ao-32), with the
 Release workflow removal `14bb4670`. On the owner's word the primary checkout was rebuilt on 2026-10-15
 at 21:09 EDT (`pnpm build`, exit 0, 12 Done, no dependency change), and the five lifecycle workers were
 restarted by exact PID at 21:09:24 to 21:09:37 (agent-skills 3423773, agent-orchestrator 3424589 for the
@@ -118,15 +121,12 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Read the CI of the 21:1x push** - the Release workflow must no longer run. A worker whose record
-   says `killed` while its pane runs must not get an `ao send` (a send restores a `killed` session
-   first); place a brief in the second that the spawn returns.
-2. **Review and land the restore follow-ups** - ao-30 authors them from `972f13ef`: N-2 (restore takes
+1. **Review and land the restore follow-ups** - ao-30 authors them from `972f13ef`: N-2 (restore takes
    the permission mode from the raw shared config, so a worker whose role config says `default` under a
    shared `permissionless` restores WITH `--dangerously-skip-permissions`, and an orchestrator restores
    without it), plus m-1 to m-3. Then a blind review by Opus 5.5 (ao-32 can be reused at 22% context).
    N-1 stays an owner decision.
-3. **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with `~/agent-skills/scripts/routing.py
+2. **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with `~/agent-skills/scripts/routing.py
    route`; I-3 and I-5 are HIGH by the profile.
 
 ## First Actions

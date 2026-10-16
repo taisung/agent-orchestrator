@@ -169,7 +169,7 @@ Durable progress record for this fork. Dated events only; the current state live
   `@aoagents` packages. Receipts checked by the orchestrator (python/L0/LOW): only that file deleted, the
   five other workflows parse. Kept on purpose: the `release` and `version-packages` scripts in
   `package.json` (`:23-24`, `pnpm -r build && changeset publish` can still be run by hand) and `.changeset/`.
-  Not pushed.
+  Pushed at 21:10 EDT: the push started no Release run.
 
 - `854690c3` (2026-10-15, ao-30, Muse; owner word "go ahead with the restore model fix") - `fix(core):
   keep the spawn --model through restore`, the code of the reviewed `781a3a6e`. `ao spawn --model X` now
@@ -185,7 +185,9 @@ Durable progress record for this fork. Dated events only; the current state live
   lines are not in Prettier style (CI has no format check); m-3 one restore-before-send assertion checks
   a literal of its own mock. **Live** since the owner's rebuild of the primary checkout on 2026-10-15 at
   21:09 EDT and the lifecycle-worker restarts at 21:09:24 to 21:09:37. Sessions spawned before the rebuild have no `model=` line and still restore
-  on the config model (N-3): add the line to the session file by hand before such a restore. Not pushed.
+  on the config model (N-3): add the line to the session file by hand before such a restore. Pushed at
+  21:10 EDT (`c831caff..972f13ef`, with `14bb4670`): CI, Integration Tests, Security and Onboarding passed,
+  and no Release run started.
 
 ## Decisions
 
