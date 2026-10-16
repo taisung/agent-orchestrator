@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
+import type * as FsPromises from "node:fs/promises";
 import {
   OpenCodeApiIncompleteAnswerError,
   OpenCodeApiTimeoutError,
@@ -33,9 +34,11 @@ const {
   mockSwitchOpenCodeSessionModel,
   mockSwitchOpenCodeSessionAgent,
   mockHasOpenCodeUserMessage,
+  mockGetNewestOpenCodeUserMessage,
   mockInterruptOpenCodeSession,
   mockRemoveOpenCodeSession,
   mockGetHerdrPaneProcesses,
+  procCmdlines,
 } = vi.hoisted(() => ({
   mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
   mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
@@ -47,9 +50,12 @@ const {
   mockSwitchOpenCodeSessionModel: vi.fn(),
   mockSwitchOpenCodeSessionAgent: vi.fn(),
   mockHasOpenCodeUserMessage: vi.fn(),
+  mockGetNewestOpenCodeUserMessage: vi.fn(),
   mockInterruptOpenCodeSession: vi.fn(),
   mockRemoveOpenCodeSession: vi.fn(),
   mockGetHerdrPaneProcesses: vi.fn(),
+  /** The argument vectors that `/proc/<pid>/cmdline` gives, by PID (M-1). */
+  procCmdlines: new Map<number, string[]>(),
 }));
 
 const mockExecFileAsync = vi.fn();
@@ -70,6 +76,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     switchOpenCodeSessionModel: mockSwitchOpenCodeSessionModel,
     switchOpenCodeSessionAgent: mockSwitchOpenCodeSessionAgent,
     hasOpenCodeUserMessage: mockHasOpenCodeUserMessage,
+    getNewestOpenCodeUserMessage: mockGetNewestOpenCodeUserMessage,
     interruptOpenCodeSession: mockInterruptOpenCodeSession,
     removeOpenCodeSession: mockRemoveOpenCodeSession,
     getHerdrPaneProcesses: mockGetHerdrPaneProcesses,
@@ -90,6 +97,19 @@ vi.mock("node:child_process", () => ({
   },
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
+
+// The launch check reads `/proc/<pid>/cmdline` (M-1); every other path is the real file.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  const readFile = async (path: unknown, ...rest: unknown[]): Promise<unknown> => {
+    const match = /^\/proc\/(\d+)\/cmdline$/.exec(String(path));
+    if (!match) return (actual.readFile as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+    const argv = procCmdlines.get(Number(match[1]));
+    if (!argv) throw Object.assign(new Error(`ENOENT: ${String(path)}`), { code: "ENOENT" });
+    return `${argv.join("\0")}\0`;
+  };
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
 
 import { create, detect, manifest, default as defaultExport } from "./index.js";
 
@@ -170,6 +190,8 @@ beforeEach(() => {
   mockSwitchOpenCodeSessionModel.mockResolvedValue(undefined);
   mockSwitchOpenCodeSessionAgent.mockResolvedValue(undefined);
   mockHasOpenCodeUserMessage.mockResolvedValue(false);
+  mockGetNewestOpenCodeUserMessage.mockResolvedValue(null);
+  procCmdlines.clear();
   mockInterruptOpenCodeSession.mockResolvedValue(undefined);
   mockRemoveOpenCodeSession.mockResolvedValue(undefined);
   mockGetHerdrPaneProcesses.mockResolvedValue([]);
@@ -1674,13 +1696,33 @@ describe("prepareAgentSession (I-3)", () => {
       expect(prepared.created).toBe(false);
     });
 
-    it("runs no API call without a model or agent", async () => {
+    it("runs no switch and no readback without a model or agent, only the prompt baseline read", async () => {
       const prepared = await reuse();
 
       expect(mockSwitchOpenCodeSessionModel).not.toHaveBeenCalled();
       expect(mockSwitchOpenCodeSessionAgent).not.toHaveBeenCalled();
       expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+      expect(mockGetNewestOpenCodeUserMessage).toHaveBeenCalledWith("ses_old", { env });
       expect(prepared.created).toBe(false);
+    });
+
+    it("reads the prompt baseline after the switches and the readback (M-2)", async () => {
+      const order: string[] = [];
+      readbackStores({ ...museRef }, "plan");
+      mockSwitchOpenCodeSessionModel.mockImplementation(async () => {
+        order.push("switchModel");
+      });
+      mockGetNewestOpenCodeUserMessage.mockImplementation(async () => {
+        order.push("baseline");
+        return { id: "msg_old", created: 1_000 };
+      });
+      await reuse({ model: "opencode-go/muse-spark-1.3-contributor#xhigh", subagent: "plan" });
+      expect(order).toEqual(["switchModel", "baseline"]);
+    });
+
+    it("does not fail the spawn when the baseline read fails", async () => {
+      mockGetNewestOpenCodeUserMessage.mockRejectedValue(new Error("HTTP 500"));
+      await expect(reuse()).resolves.toMatchObject({ created: false });
     });
 
     it("never removes the reused session: not on a readback mismatch, not on discard", async () => {
@@ -1708,6 +1750,11 @@ describe("prepareAgentSession (I-3)", () => {
   });
 
   describe("discard of a created session", () => {
+    it("reads no prompt baseline for a session that it created", async () => {
+      await prepare();
+      expect(mockGetNewestOpenCodeUserMessage).not.toHaveBeenCalled();
+    });
+
     it("interrupts, then removes, with the pane environment, and only once", async () => {
       const order: string[] = [];
       mockInterruptOpenCodeSession.mockImplementation(async () => {
@@ -1781,58 +1828,131 @@ describe("confirmLaunch (I-3)", () => {
     return makeSession({ id: "sess-1", runtimeHandle: makeTmuxHandle("abc-sess-1") });
   }
 
-  /** The pane TTY is pts/7; `psLines` gives the ps rows of each call in turn (the last one repeats). */
-  function paneProcesses(...psLines: string[][]) {
+  function herdrSession(): Session {
+    return makeSession({
+      id: "sess-1",
+      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
+    });
+  }
+
+  /** One pane process: its PID, its TTY, and the argv that `/proc/<pid>/cmdline` gives. */
+  type PaneRow = [pid: number, tty: string, argv: string[]];
+
+  /**
+   * The pane TTY is pts/7; `calls` gives the `ps` rows of each call in turn
+   * (the last one repeats). `ps` prints only the PID and the TTY; the argv
+   * comes from `/proc`.
+   */
+  function paneProcesses(...calls: PaneRow[][]) {
     let call = 0;
+    for (const rows of calls) {
+      for (const [pid, , argv] of rows) procCmdlines.set(pid, argv);
+    }
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "tmux") {
         expect(args).toEqual(["list-panes", "-t", "abc-sess-1", "-F", "#{pane_tty}"]);
         return Promise.resolve({ stdout: "/dev/pts/7\n", stderr: "" });
       }
       if (cmd === "ps") {
-        const rows = psLines[Math.min(call++, psLines.length - 1)]!;
-        return Promise.resolve({ stdout: `  PID TT       ARGS\n${rows.join("\n")}\n`, stderr: "" });
+        const rows = calls[Math.min(call++, calls.length - 1)]!;
+        const lines = rows.map(([pid, tty]) => `${String(pid).padStart(7)} ${tty}`);
+        return Promise.resolve({ stdout: `${lines.join("\n")}\n`, stderr: "" });
       }
       return Promise.reject(new Error(`unexpected ${cmd}`));
     });
   }
+
+  /** The herdr pane's foreground processes; their argv comes from `/proc`. */
+  function herdrProcesses(...rows: Array<[pid: number, argv: string[]]>) {
+    for (const [pid, argv] of rows) procCmdlines.set(pid, argv);
+    mockGetHerdrPaneProcesses.mockResolvedValue(
+      rows.map(([pid, argv]) => ({
+        pid,
+        name: argv[0]!.split("/").pop()!,
+        cmdline: argv.join(" "),
+      })),
+    );
+  }
+
+  const OPENS = "the pane of sess-1 did not run OpenCode on session ses_made within 0.4 s";
 
   beforeEach(() => {
     mockExecFileAsync.mockReset();
   });
 
   it("confirms when the pane runs opencode on the session and the process stays", async () => {
-    paneProcesses(["  4242 pts/7    node /usr/lib/node_modules/.bin/opencode --session ses_made"]);
+    paneProcesses([[4242, "pts/7", ["/home/u/.opencode/bin/opencode", "--session", "ses_made"]]]);
     const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick);
 
     expect(result).toEqual({});
     expect(mockHasOpenCodeUserMessage).not.toHaveBeenCalled();
     const psCall = mockExecFileAsync.mock.calls.find((call: unknown[]) => call[0] === "ps");
-    expect(psCall?.[1]).toEqual(["-ww", "-eo", "pid,tty,args"]);
+    expect(psCall?.[1]).toEqual(["-eo", "pid=,tty="]);
   });
 
   it("matches --session=<id> and the .opencode binary name", async () => {
     paneProcesses([
-      "  4242 pts/7    /home/u/.opencode/bin/.opencode --session=ses_made --prompt x",
+      [4242, "pts/7", ["/home/u/.opencode/bin/.opencode", "--session=ses_made", "--prompt", "x"]],
     ]);
     await expect(
       agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
     ).resolves.toEqual({});
   });
 
+  it.each([
+    ["node", ["node", "/usr/lib/node_modules/opencode-ai/bin/opencode", "--session", "ses_made"]],
+    [
+      "node with its options",
+      ["/usr/bin/node", "--no-warnings", "/x/bin/.opencode", "--session=ses_made"],
+    ],
+    ["bun", ["/home/u/.bun/bin/bun", "/x/opencode", "--prompt", "Go", "--session", "ses_made"]],
+  ])("accepts the wrapper row %s on tmux (M-1)", async (_name, argv) => {
+    paneProcesses([[4242, "pts/7", argv]]);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).resolves.toEqual({});
+  });
+
+  it.each([
+    // The review's row: a shell whose -c text only names OpenCode.
+    ["a shell -c text", ["/bin/bash", "-c", "sleep 60 opencode --session ses_made"]],
+    ["a shell script named opencode", ["/bin/sh", "/tmp/bin/opencode", "--session", "ses_made"]],
+    ["node with inline code", ["node", "-e", "1", "/x/opencode", "--session", "ses_made"]],
+    ["node on another script", ["node", "/x/server.js", "/x/opencode", "--session", "ses_made"]],
+    ["the ID only in the prompt text", ["opencode", "--prompt", "use --session ses_made"]],
+    ["--session after --", ["opencode", "--", "--session", "ses_made"]],
+    ["a binary that only ends in opencode", ["/x/not-opencode", "--session", "ses_made"]],
+  ])("rejects %s on tmux (M-1)", async (_name, argv) => {
+    paneProcesses([[4242, "pts/7", argv]]);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).rejects.toThrow(OPENS);
+  });
+
+  it("does not count a pane process whose /proc entry is gone", async () => {
+    paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made"]]]);
+    procCmdlines.delete(4242);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).rejects.toThrow(OPENS);
+  });
+
   it("does not count opencode on another session or in another pane", async () => {
     paneProcesses([
-      "  4242 pts/7    opencode --session ses_other",
-      "  4243 pts/9    opencode --session ses_made",
-      "  4244 pts/7    bash",
+      [4242, "pts/7", ["opencode", "--session", "ses_other"]],
+      [4243, "pts/9", ["opencode", "--session", "ses_made"]],
+      [4244, "pts/7", ["bash"]],
     ]);
     await expect(
       agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
-    ).rejects.toThrow("the pane of sess-1 did not run OpenCode on session ses_made within 0.4 s");
+    ).rejects.toThrow(OPENS);
   });
 
   it("does not count a process that exits at once", async () => {
-    paneProcesses(["  4242 pts/7    opencode --session ses_made"], ["  4244 pts/7    bash"]);
+    paneProcesses(
+      [[4242, "pts/7", ["opencode", "--session", "ses_made"]]],
+      [[4244, "pts/7", ["bash"]]],
+    );
     await expect(
       agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
     ).rejects.toThrow("did not run OpenCode on session ses_made");
@@ -1841,9 +1961,9 @@ describe("confirmLaunch (I-3)", () => {
   it("does not count a process that exits before the settle time", async () => {
     // A 2 s bound gives a 500 ms settle time: two sightings 250 ms apart are too short.
     paneProcesses(
-      ["  4242 pts/7    opencode --session ses_made"],
-      ["  4242 pts/7    opencode --session ses_made"],
-      ["  4244 pts/7    bash"],
+      [[4242, "pts/7", ["opencode", "--session", "ses_made"]]],
+      [[4242, "pts/7", ["opencode", "--session", "ses_made"]]],
+      [[4244, "pts/7", ["bash"]]],
     );
     await expect(
       agent.confirmLaunch!(tmuxSession(), await preparedSession(), { ...quick, timeoutMs: 2_000 }),
@@ -1872,7 +1992,7 @@ describe("confirmLaunch (I-3)", () => {
   });
 
   it("gives promptDelivered true when the session shows a user message, with the pane environment", async () => {
-    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+    paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
     mockHasOpenCodeUserMessage.mockResolvedValueOnce(false).mockResolvedValue(true);
 
     const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
@@ -1886,10 +2006,12 @@ describe("confirmLaunch (I-3)", () => {
       "ses_made",
       expect.objectContaining({ env }),
     );
+    // A created session has no baseline: any user message counts.
+    expect(mockHasOpenCodeUserMessage.mock.calls[0]![1]).not.toHaveProperty("after");
   });
 
   it("counts a failed read as not seen yet", async () => {
-    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+    paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
     mockHasOpenCodeUserMessage.mockRejectedValueOnce(new Error("HTTP 500")).mockResolvedValue(true);
 
     const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
@@ -1901,7 +2023,7 @@ describe("confirmLaunch (I-3)", () => {
   });
 
   it("gives promptDelivered false when no user message shows within the bound", async () => {
-    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+    paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
 
     const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
       ...quick,
@@ -1911,33 +2033,122 @@ describe("confirmLaunch (I-3)", () => {
     expect(mockHasOpenCodeUserMessage).toHaveBeenCalled();
   });
 
-  it("reads the herdr pane processes on the herdr runtime", async () => {
-    mockGetHerdrPaneProcesses.mockResolvedValue([
-      { pid: 77, name: "opencode", cmdline: "opencode --session ses_made" },
-    ]);
-    const session = makeSession({
-      id: "sess-1",
-      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
+  describe("a reused session with older user messages (M-2)", () => {
+    /** The session's user messages, newest last, as the service would list them. */
+    let messages: Array<{ id: string; created: number }>;
+
+    beforeEach(() => {
+      messages = [{ id: "msg_old", created: 1_000 }];
+      // The service side of the two helpers: the newest message, and the
+      // comparison of core's `hasOpenCodeUserMessage` with `after`.
+      mockGetNewestOpenCodeUserMessage.mockImplementation(async () => messages.at(-1) ?? null);
+      mockHasOpenCodeUserMessage.mockImplementation(
+        async (_id: string, options: { after?: { id: string; created: number } }) => {
+          const newest = messages.at(-1);
+          if (!options.after) return newest !== undefined;
+          return (
+            !!newest && newest.id !== options.after.id && newest.created >= options.after.created
+          );
+        },
+      );
+      paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_old", "--prompt", "Go"]]]);
     });
 
-    await expect(agent.confirmLaunch!(session, await preparedSession(), quick)).resolves.toEqual(
-      {},
-    );
+    async function reusedSession(): Promise<PreparedAgentSession> {
+      return agent.prepareAgentSession!(
+        makeLaunchConfig({
+          projectConfig: {
+            name: "my-project",
+            repo: "owner/repo",
+            path: "/workspace/repo",
+            defaultBranch: "main",
+            sessionPrefix: "my",
+            agentConfig: { opencodeSessionId: "ses_old" },
+          },
+        }),
+        { workspacePath: tmpdir(), environment: env },
+      );
+    }
+
+    const withPrompt = { ...quick, promptExpected: true, promptTimeoutMs: 1_200 };
+
+    it("gives promptDelivered false when only the old message exists", async () => {
+      const prepared = await reusedSession();
+      const result = await agent.confirmLaunch!(tmuxSession(), prepared, withPrompt);
+
+      expect(result).toEqual({ promptDelivered: false });
+      expect(mockGetNewestOpenCodeUserMessage).toHaveBeenCalledWith("ses_old", { env });
+      expect(mockHasOpenCodeUserMessage).toHaveBeenCalledWith(
+        "ses_old",
+        expect.objectContaining({ env, after: { id: "msg_old", created: 1_000 } }),
+      );
+    });
+
+    it("gives promptDelivered true when a newer message arrives after the pane starts", async () => {
+      const prepared = await reusedSession();
+      // The TUI submits the launch prompt after the baseline read.
+      messages.push({ id: "msg_new", created: 2_000 });
+      const result = await agent.confirmLaunch!(tmuxSession(), prepared, withPrompt);
+
+      expect(result).toEqual({ promptDelivered: true });
+    });
+
+    it("counts any message when the reused session had none", async () => {
+      messages = [];
+      const prepared = await reusedSession();
+      messages.push({ id: "msg_first", created: 3_000 });
+      const result = await agent.confirmLaunch!(tmuxSession(), prepared, withPrompt);
+
+      expect(result).toEqual({ promptDelivered: true });
+      expect(mockHasOpenCodeUserMessage.mock.calls[0]![1]).not.toHaveProperty("after");
+    });
+
+    it("gives promptDelivered false at once when the baseline read failed", async () => {
+      mockGetNewestOpenCodeUserMessage.mockRejectedValue(new Error("HTTP 500"));
+      const prepared = await reusedSession();
+      messages.push({ id: "msg_new", created: 2_000 });
+      const result = await agent.confirmLaunch!(tmuxSession(), prepared, withPrompt);
+
+      expect(result).toEqual({ promptDelivered: false });
+      expect(mockHasOpenCodeUserMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reads the herdr pane processes on the herdr runtime", async () => {
+    herdrProcesses([77, ["/home/u/.opencode/bin/opencode", "--session", "ses_made"]]);
+
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).resolves.toEqual({});
     expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
     expect(mockExecFileAsync).not.toHaveBeenCalled();
   });
 
-  it("fails when the herdr pane never runs opencode on the session", async () => {
-    mockGetHerdrPaneProcesses.mockResolvedValue([
-      { pid: 77, name: "opencode", cmdline: "opencode --session ses_other" },
-    ]);
-    const session = makeSession({
-      id: "sess-1",
-      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
-    });
-    await expect(agent.confirmLaunch!(session, await preparedSession(), quick)).rejects.toThrow(
-      "did not run OpenCode on session ses_made",
+  it("accepts a node wrapper row on herdr (M-1)", async () => {
+    herdrProcesses(
+      [76, ["/bin/zsh"]],
+      [77, ["node", "/usr/lib/node_modules/opencode-ai/bin/.opencode", "--session", "ses_made"]],
     );
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).resolves.toEqual({});
+  });
+
+  it("rejects the shell row on herdr, also when herdr's flat text looks like opencode (M-1)", async () => {
+    procCmdlines.set(77, ["/bin/bash", "-c", "sleep 60 opencode --session ses_made"]);
+    mockGetHerdrPaneProcesses.mockResolvedValue([
+      { pid: 77, name: "opencode", cmdline: "opencode --session ses_made" },
+    ]);
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).rejects.toThrow(OPENS);
+  });
+
+  it("fails when the herdr pane never runs opencode on the session", async () => {
+    herdrProcesses([77, ["opencode", "--session", "ses_other"]]);
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).rejects.toThrow("did not run OpenCode on session ses_made");
   });
 
   it("fails closed on a runtime that it cannot check", async () => {

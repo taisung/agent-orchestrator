@@ -16,6 +16,7 @@ import {
   switchOpenCodeSessionModel,
   switchOpenCodeSessionAgent,
   hasOpenCodeUserMessage,
+  getNewestOpenCodeUserMessage,
   interruptOpenCodeSession,
   removeOpenCodeSession,
   OpenCodeApiTimeoutError,
@@ -41,6 +42,7 @@ import {
   type OpenCodeAgentConfig,
   type OpenCodeApiSession,
   type OpenCodeModelRef,
+  type OpenCodeUserMessageMark,
 } from "@aoagents/ao-core";
 import {
   classifyOpenCodePaneActivity,
@@ -49,6 +51,8 @@ import {
 } from "./api-activity.js";
 import { execFile, execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -355,10 +359,25 @@ const PANE_POLL_MS = 250;
 const PROMPT_POLL_MS = 500;
 
 /**
- * The environment of each prepared session (the map that core passes to
- * `runtime.create`), for the calls of `confirmLaunch` and `discard`.
+ * What the launch prompt check compares with (M-2). A session that this spawn
+ * created starts with no `user` message, so any one counts (`none`). A reused
+ * session can hold older ones: only a message newer than the newest one
+ * before the pane started counts (`mark`). When that read failed, no message
+ * can prove the delivery (`unknown`).
  */
-const preparedEnvironments = new WeakMap<PreparedAgentSession, Record<string, string>>();
+type PromptBaseline =
+  | { kind: "none" }
+  | { kind: "mark"; mark: OpenCodeUserMessageMark }
+  | { kind: "unknown"; reason: string };
+
+/** The state of a prepared session that `confirmLaunch` and `discard` need. */
+interface PreparedState {
+  /** The map that core passes to `runtime.create`. */
+  env: Record<string, string>;
+  promptBaseline: PromptBaseline;
+}
+
+const preparedStates = new WeakMap<PreparedAgentSession, PreparedState>();
 
 /** The error text on one line, for an operator line. */
 function oneLine(err: unknown): string {
@@ -449,6 +468,7 @@ function preparedOpenCodeSession(
   sessionId: string,
   created: boolean,
   env: Record<string, string>,
+  promptBaseline: PromptBaseline,
 ): PreparedAgentSession {
   let discarded = false;
   const prepared: PreparedAgentSession = {
@@ -478,25 +498,104 @@ function preparedOpenCodeSession(
       );
     },
   };
-  preparedEnvironments.set(prepared, env);
+  preparedStates.set(prepared, { env, promptBaseline });
   return prepared;
 }
 
 /**
- * True when a command line runs OpenCode on `sessionId`: a token that is the
- * `opencode` binary (also `.opencode`), and after it `--session <id>` or
- * `--session=<id>`. The prompt cannot hold a new session's ID, because core
- * builds the prompt before the session exists.
+ * M-2: the newest `user` message of a reused session, read before the pane
+ * starts. A failed read gives `unknown`: the spawn goes on, and the launch
+ * prompt check then reports `promptDelivered: false`.
  */
-function commandOpensSession(commandLine: string, sessionId: string): boolean {
-  const tokens = commandLine.trim().split(/\s+/);
-  const binary = tokens.findIndex((token) => /(?:^|\/)\.?opencode$/.test(token));
-  if (binary < 0) return false;
-  for (let i = binary + 1; i < tokens.length; i++) {
-    if (tokens[i] === `--session=${sessionId}`) return true;
-    if (tokens[i] === "--session" && tokens[i + 1] === sessionId) return true;
+async function readPromptBaseline(
+  sessionId: string,
+  env: Record<string, string>,
+): Promise<PromptBaseline> {
+  try {
+    const mark = await getNewestOpenCodeUserMessage(sessionId, { env });
+    return mark ? { kind: "mark", mark } : { kind: "none" };
+  } catch (err) {
+    return { kind: "unknown", reason: oneLine(err) };
+  }
+}
+
+/** The file names of the OpenCode executable (the npm package installs `.opencode`). */
+const OPENCODE_EXECUTABLE_NAMES = new Set(["opencode", ".opencode"]);
+
+/** Interpreters that can run the OpenCode script as their script argument. */
+const SCRIPT_INTERPRETER_NAMES = new Set(["node", "bun"]);
+
+/** Interpreter options that run inline code: such a process has no script argument. */
+const INLINE_CODE_OPTIONS = new Set(["-e", "--eval", "-p", "--print"]);
+
+/**
+ * M-1: true when the argument vector of a process (from `/proc/<pid>/cmdline`,
+ * so the argument boundaries are exact) runs OpenCode on `sessionId`.
+ * argv[0] must have the file name `opencode` or `.opencode` (any directory),
+ * or be `node` or `bun` whose script argument has such a file name. Then
+ * `--session <id>` or `--session=<id>` must be one of the options of that
+ * OpenCode process (before a `--`). A shell whose `-c` text names OpenCode
+ * is argv[0] `bash` with one text argument, so it does not count.
+ */
+function argvOpensSession(argv: readonly string[], sessionId: string): boolean {
+  const program = argv[0];
+  if (!program) return false;
+  let optionsStart: number;
+  if (OPENCODE_EXECUTABLE_NAMES.has(basename(program))) {
+    optionsStart = 1;
+  } else if (SCRIPT_INTERPRETER_NAMES.has(basename(program))) {
+    let script = -1;
+    for (let i = 1; i < argv.length; i++) {
+      const arg = argv[i] ?? "";
+      if (INLINE_CODE_OPTIONS.has(arg) || /^--(?:eval|print)=/.test(arg)) return false;
+      if (arg.startsWith("-")) continue;
+      script = i;
+      break;
+    }
+    if (script < 0 || !OPENCODE_EXECUTABLE_NAMES.has(basename(argv[script] ?? ""))) return false;
+    optionsStart = script + 1;
+  } else {
+    return false;
+  }
+  for (let i = optionsStart; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") return false;
+    if (arg === `--session=${sessionId}`) return true;
+    if (arg === "--session" && argv[i + 1] === sessionId) return true;
   }
   return false;
+}
+
+/**
+ * The argument vector of process `pid` from `/proc/<pid>/cmdline` (NUL
+ * separated), or null when it cannot be read: the process is gone, it is a
+ * zombie (empty file), or the host has no `/proc`. Such a process does not
+ * count as OpenCode, so the launch check never passes on a guess.
+ */
+async function readProcessArgv(pid: number): Promise<string[] | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  let raw: string;
+  try {
+    raw = await readFile(`/proc/${pid}/cmdline`, "utf-8");
+  } catch {
+    return null;
+  }
+  if (raw.length === 0) return null;
+  const argv = raw.split("\0");
+  if (argv[argv.length - 1] === "") argv.pop();
+  return argv.length > 0 ? argv : null;
+}
+
+/** The first PID in `pids` whose process runs OpenCode on `sessionId`, or null. */
+async function findOpenCodeProcess(
+  pids: readonly number[],
+  sessionId: string,
+): Promise<number | null> {
+  for (const pid of pids) {
+    const argv = await readProcessArgv(pid);
+    if (argv && argvOpensSession(argv, sessionId)) return pid;
+  }
+  return null;
 }
 
 /** The pane is gone: tmux answered that its session, window or server does not exist. */
@@ -504,8 +603,10 @@ class PaneGoneError extends Error {}
 
 /**
  * The PID of the pane process that runs OpenCode on `sessionId`, or null.
- * Throws `PaneGoneError` when tmux says that the pane is gone; any other
- * failure counts as "not yet".
+ * The runtime gives the PIDs of the pane (herdr: its foreground processes;
+ * tmux: the processes on the pane TTY), and `/proc` gives their exact
+ * argument vectors (M-1). Throws `PaneGoneError` when tmux says that the
+ * pane is gone; any other failure counts as "not yet".
  */
 async function findPaneOpenCodeProcess(
   handle: RuntimeHandle,
@@ -513,8 +614,10 @@ async function findPaneOpenCodeProcess(
 ): Promise<number | null> {
   if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
     const processes = await getHerdrPaneProcesses(handle.id);
-    const match = processes.find((proc) => commandOpensSession(proc.cmdline, sessionId));
-    return match ? match.pid : null;
+    return findOpenCodeProcess(
+      processes.map((proc) => proc.pid),
+      sessionId,
+    );
   }
   if (handle.runtimeName === "tmux" && handle.id) {
     let ttyOut: string;
@@ -540,18 +643,17 @@ async function findPaneOpenCodeProcess(
         .filter(Boolean),
     );
     if (ttys.size === 0) return null;
-    const { stdout: psOut } = await execFileAsync("ps", ["-ww", "-eo", "pid,tty,args"], {
+    const { stdout: psOut } = await execFileAsync("ps", ["-eo", "pid=,tty="], {
       timeout: 5_000,
     });
+    const panePids: number[] = [];
     for (const line of psOut.split("\n")) {
-      const cols = line.trimStart().split(/\s+/);
-      if (cols.length < 3 || !ttys.has(cols[1] ?? "")) continue;
-      if (commandOpensSession(cols.slice(2).join(" "), sessionId)) {
-        const pid = Number(cols[0]);
-        return Number.isSafeInteger(pid) ? pid : null;
-      }
+      const cols = line.trim().split(/\s+/);
+      if (cols.length !== 2 || !ttys.has(cols[1] ?? "")) continue;
+      const pid = Number(cols[0]);
+      if (Number.isSafeInteger(pid)) panePids.push(pid);
     }
-    return null;
+    return findOpenCodeProcess(panePids, sessionId);
   }
   throw new Error(
     `cannot check the OpenCode launch on runtime ${handle.runtimeName}: only tmux and herdr panes can be checked`,
@@ -607,15 +709,19 @@ async function waitForPaneOnSession(
 }
 
 /**
- * Wait for the first `user` message of the session: the TUI submitted the
- * launch prompt (as-63: 1.5 s after the TUI started). A failed read counts as
- * "not seen yet". Returns false when the bound ends first.
+ * Wait for a `user` message of the session that the baseline does not
+ * already hold: the TUI submitted the launch prompt (as-63: 1.5 s after the
+ * TUI started). A failed read counts as "not seen yet". Returns false when
+ * the bound ends first, and at once when the baseline is unknown (M-2).
  */
 async function waitForUserMessage(
   sessionId: string,
   timeoutMs: number,
-  env: Record<string, string> | undefined,
+  state: PreparedState | undefined,
 ): Promise<boolean> {
+  const baseline = state?.promptBaseline ?? { kind: "none" };
+  if (baseline.kind === "unknown") return false;
+  const env = state?.env;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const remainingMs = deadline - Date.now();
@@ -623,6 +729,7 @@ async function waitForUserMessage(
       if (
         await hasOpenCodeUserMessage(sessionId, {
           ...(env ? { env } : {}),
+          ...(baseline.kind === "mark" ? { after: baseline.mark } : {}),
           timeoutMs: Math.max(1, Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs)),
         })
       ) {
@@ -695,6 +802,10 @@ function createOpenCodeAgent(): Agent {
       config: AgentLaunchConfig,
       context: AgentSessionPrepareContext,
     ): Promise<PreparedAgentSession> {
+      // m-1: the version probe keeps the PATH of the `ao` process, not the
+      // pane's: it is the same gate as `detect()` and restore use, and the
+      // pane PATH only puts `~/.ao/bin` (the gh and git wrappers) first.
+      // Every `opencode api` call below runs with the pane environment.
       assertSupportedOpenCodeVersion();
       const env = context.environment;
       const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
@@ -714,7 +825,9 @@ function createOpenCodeAgent(): Agent {
         if (modelRef) await switchOpenCodeSessionModel(reusedId, modelRef, { env });
         if (agent) await switchOpenCodeSessionAgent(reusedId, agent, { env });
         if (modelRef || agent) await assertStoredSettings(reusedId, modelRef, agent, env);
-        return preparedOpenCodeSession(reusedId, false, env);
+        // M-2: the session already holds the prompts of earlier spawns.
+        const promptBaseline = await readPromptBaseline(reusedId, env);
+        return preparedOpenCodeSession(reusedId, false, env, promptBaseline);
       }
 
       let directory: string;
@@ -734,7 +847,7 @@ function createOpenCodeAgent(): Agent {
         },
         { env },
       );
-      const prepared = preparedOpenCodeSession(created.id, true, env);
+      const prepared = preparedOpenCodeSession(created.id, true, env, { kind: "none" });
       if (modelRef || agent) {
         // The service can store other settings than the request.
         try {
@@ -750,9 +863,11 @@ function createOpenCodeAgent(): Agent {
     /**
      * I-3 (0009 section 11 steps 2 and 3): the pane must run an `opencode`
      * process on the prepared session ID within `timeoutMs`; else this throws
-     * and core fails the spawn. With a prompt, it then waits for the first
-     * `user` message of the session: seen gives `promptDelivered: true`, not
-     * seen within `promptTimeoutMs` gives `false` (the spawn still succeeds).
+     * and core fails the spawn. With a prompt, it then waits for a `user`
+     * message of the session (for a reused session, one newer than the
+     * newest one before the pane started): seen gives `promptDelivered:
+     * true`, not seen within `promptTimeoutMs` gives `false` (the spawn
+     * still succeeds).
      */
     async confirmLaunch(
       session: Session,
@@ -770,7 +885,7 @@ function createOpenCodeAgent(): Agent {
       const delivered = await waitForUserMessage(
         sessionId,
         options.promptTimeoutMs,
-        preparedEnvironments.get(prepared),
+        preparedStates.get(prepared),
       );
       return { promptDelivered: delivered };
     },
@@ -939,8 +1054,9 @@ function createOpenCodeAgent(): Agent {
 
       const agentConfig = project.agentConfig as OpenCodeAgentConfig | undefined;
       // C-04: prefer the persisted spawn --model override (effectiveModel)
-      // over the live config. Only the model flag changes here; the launch
-      // lock, marker, discovery wait and holder guard (I-2) are untouched.
+      // over the live config. Only the model flag changes here. Restore has
+      // no I-3 prepare or launch check: the resume command sets the stored
+      // session's model in the pane, then opens the TUI on that session.
       return buildResumeCommand(storedId, {
         model: effectiveModel ?? (agentConfig?.model as string | undefined),
       });
