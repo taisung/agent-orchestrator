@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import { readMetadataRaw, updateMetadata, writeMetadata } from "../../metadata.js";
+import { deleteMetadata, readMetadataRaw, updateMetadata, writeMetadata } from "../../metadata.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -255,7 +255,7 @@ describe("stored spawn identity (owner option 1)", () => {
     expect(createCall.launchCommand).not.toContain("permissionless");
   });
 
-  it("spawn with no mode stores default, so a later permissionless edit adds no flag", async () => {
+  it("a config object with no mode stores default (the YAML loader always sets permissionless)", async () => {
     const wsPath = join(tmpDir, "ws-spawn-no-mode");
     mkdirSync(wsPath, { recursive: true });
     vi.mocked(ctx.mockWorkspace.create).mockResolvedValue({
@@ -285,7 +285,7 @@ describe("stored spawn identity (owner option 1)", () => {
   });
 
   it.each(["", "bogus", "PERMISSIONLESS", "skip!"])(
-    "malformed stored permissions %j restores with the most restrictive mode",
+    "malformed stored permissions %j resolves to suggest",
     async (stored) => {
       const wsPath = join(tmpDir, "ws-malformed");
       mkdirSync(wsPath, { recursive: true });
@@ -301,8 +301,17 @@ describe("stored spawn identity (owner option 1)", () => {
       expect(readFileSync(join(sessionsDir, "app-1"), "utf-8")).toContain("permissions=");
 
       config = configWithPermissions("permissionless", "permissionless");
-      const cmd = await restoreCommand(makePermissionMock(), "app-1");
-      expect(cmd).not.toContain("--dangerously-skip-permissions");
+      const seen: Array<unknown> = [];
+      const agentWithRestore: Agent = {
+        ...mockAgent,
+        getRestoreCommand: vi.fn().mockImplementation(async (_s, project) => {
+          seen.push(project.agentConfig?.permissions);
+          return "mock-agent --resume";
+        }),
+      };
+      const sm = createSessionManager({ config, registry: registryWith(agentWithRestore) });
+      await sm.restore("app-1");
+      expect(seen).toEqual(["suggest"]);
     },
   );
 
@@ -398,5 +407,42 @@ describe("stored spawn identity (owner option 1)", () => {
     const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(createCall.launchCommand).toContain("--perms default");
     expect(createCall.launchCommand).toContain("--model model-A");
+  });
+
+  it("kill (archive) + restore + restore keeps the stored default mode", async () => {
+    const wsPath = join(tmpDir, "ws-arch");
+    mkdirSync(wsPath, { recursive: true });
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      permissions: "default",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    deleteMetadata(sessionsDir, "app-1"); // archive, as `ao session kill` does
+    config = configWithPermissions("permissionless", "permissionless");
+    const agent: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi
+        .fn()
+        .mockImplementation(async (_s, p) => `mock --resume --perms ${p.agentConfig?.permissions}`),
+    };
+    const sm = createSessionManager({ config, registry: registryWith(agent) });
+    await sm.restore("app-1");
+    const storedAfterArchiveRestore = readMetadataRaw(sessionsDir, "app-1")?.["permissions"];
+    updateMetadata(sessionsDir, "app-1", { status: "killed" });
+    vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+    await sm.restore("app-1");
+    const calls = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls;
+    expect({
+      first: calls[0]![0].launchCommand,
+      storedAfterArchiveRestore,
+      second: calls.at(-1)![0].launchCommand,
+    }).toEqual({
+      first: "mock --resume --perms default",
+      storedAfterArchiveRestore: "default",
+      second: "mock --resume --perms default",
+    });
   });
 });

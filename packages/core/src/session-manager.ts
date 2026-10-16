@@ -1422,10 +1422,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       await launchLock?.recordRuntime(handle);
       // Stored spawn identity: every worker persists its effective model
       // (selection.model, which is the explicit --model when given) and its
-      // effective permission mode ("default" when no mode is configured, so
-      // that a later config edit cannot add one). Later operations reuse
-      // both before the config. Only `ao spawn` supplies a model
-      // (batch-spawn has no --model flag); the mode comes from the config.
+      // effective permission mode ("default" when the config object sets no
+      // mode — the YAML loader always sets one, its default is
+      // `permissionless` — so that a later config edit cannot add one).
+      // Later operations reuse both before the config. Only `ao spawn`
+      // supplies a model (batch-spawn has no --model flag); the mode comes
+      // from the config.
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,

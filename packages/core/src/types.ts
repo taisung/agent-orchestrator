@@ -1400,7 +1400,8 @@ export interface SessionMetadata {
   project?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
   model?: string; // Spawn --model override (C-04) — persisted for restore
-  permissions?: string; // Spawn permission mode (effective, "default" when unset) — persisted for restore
+  permissions?: string; // Spawn permission mode (effective; "default" when the config object
+  // sets no mode — the YAML loader always sets one, default `permissionless`) — persisted for restore
   createdAt?: string;
   runtimeHandle?: string;
   restoredAt?: string;

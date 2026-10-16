@@ -86,11 +86,13 @@ export function resolveAgentSelection(params: {
   const permissions =
     role === "worker" && persistedPermissionsOverride !== undefined
       ? // Stored spawn mode wins over the current config. Empty, unknown or
-        // malformed values can never escalate: they resolve to "default"
-        // (no permissive flag in any plugin), never back to the config,
+        // malformed values can never escalate: they resolve to "suggest",
+        // the most restrictive mode (for Codex it adds
+        // --ask-for-approval untrusted; for Claude Code, Gemini and OpenCode
+        // it gives the same command as "default"), never back to the config,
         // which could be permissionless. A missing key (undefined) keeps the
         // legacy behaviour below (current config).
-        (normalizeAgentPermissionMode(persistedPermissionsOverride) ?? "default")
+        (normalizeAgentPermissionMode(persistedPermissionsOverride) ?? "suggest")
       : normalizeAgentPermissionMode(
           typeof agentConfig.permissions === "string" ? agentConfig.permissions : undefined,
         );

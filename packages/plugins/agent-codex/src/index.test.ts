@@ -1304,6 +1304,29 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("--ask-for-approval untrusted");
   });
 
+  it("maps a stored suggest mode to --ask-for-approval untrusted on restore", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const session = makeSession({ workspacePath: "/workspace/test" });
+    const cmd = await agent.getRestoreCommand!(
+      session,
+      makeProjectConfig({
+        agentConfig: { permissions: "suggest" },
+      }),
+    );
+
+    expect(cmd).toContain("--ask-for-approval untrusted");
+    expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
   it("places flags before positional threadId in resume command", async () => {
     const content = jsonl(
       { type: "session_meta", cwd: "/workspace/test", model: "o3-mini" },
