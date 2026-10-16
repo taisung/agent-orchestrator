@@ -189,6 +189,18 @@ Durable progress record for this fork. Dated events only; the current state live
   21:10 EDT (`c831caff..972f13ef`, with `14bb4670`): CI, Integration Tests, Security and Onboarding passed,
   and no Release run started.
 
+- `458786e6` (2026-10-15, ao-30, Muse; owner word "go ahead with the restore follow-ups") - `fix(core): use
+  the spawn permission mode on restore`, the code of the reviewed `6088fc6b`. Restore passed the raw
+  project config to `getRestoreCommand`, so (a) a worker with `worker.agentConfig.permissions: default`
+  under a shared `permissionless` restored WITH `--dangerously-skip-permissions` (Claude Code; also the
+  Codex approval flags and Gemini `--yolo`), and (b) an orchestrator restored without its forced
+  `permissionless` mode. Core now passes the role-merged `agentConfig` of the restore launch config (no
+  interface change). Also m-1 (role-model test), m-2 (format of the new hunks), m-3 (the mock assertion).
+  Blind review r2 by Opus 5.5 (ao-32, `development/reviews/restore_model_review_r2_opus.md`): **LAND-SAFE**,
+  N-2 and m-1 to m-3 fixed, 0 B, 1 M, 3 m, 4 notes; cases (a) and (b) shown live against the base for
+  Claude Code, Codex and Gemini. M-1 (no test guards the Claude Code restore flag: two mutants survive),
+  m-4 (JSDoc) and m-5 (copied mapping) went to ao-30 as round 3. Not live, not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -212,13 +224,23 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
-- **Restore follow-ups from the review of `854690c3`** (2026-10-15, ao-32). N-1, an owner decision: a
+- **Workers leave `ao spawn` lifecycle workers running** (2026-10-15, review r2 N-6). `ao spawn` starts a
+  detached `ao lifecycle-worker`; ao-30's live runs left four (2919552, 2953478, 3670285, 3674356), with
+  their scratch HOME and state removed and a PATH that reaches the real `/usr/bin/tmux` and `/usr/bin/gh`.
+  The orchestrator checked and stopped them by exact PID at 21:58. Briefs now say: stop the PID in
+  `<state root>/<hash>-<project>/lifecycle-worker.pid` before the tmux server, and quote an empty
+  process list. Protocol text for as-orchestrator.
+
+- **Restore follow-ups from the reviews of `854690c3` and `458786e6`** (2026-10-15, ao-32). N-2 is fixed by
+  `458786e6`. m-6 (r2), an owner decision of the same class as N-1: the permission mode is not stored at
+  spawn, so a config edit after the spawn changes it on restore (live: `worker` changed to
+  `permissionless` after the spawn, and the restore added the skip flag). N-1, an owner decision: a
   session spawned without `--model` still restores on the config model of restore time, also when Codex
   recorded another one; to close it, store the effective model of every worker at spawn, but then a
   config edit no longer reaches existing sessions. N-2, worker follow-up: the restore commands read
   `permissions` from the raw `project.agentConfig`, not from the role-merged selection that spawn uses
   (`agent-claude-code/src/index.ts:879`, `agent-codex/src/index.ts:653`, `agent-gemini/src/index.ts:251`).
-  N-5: an external agent plugin with the two-argument `getRestoreCommand` still type-checks and keeps the
+  N-7: the third argument now always equals `project.agentConfig.model`. N-5: an external agent plugin with the two-argument `getRestoreCommand` still type-checks and keeps the
   config model. Process note N-4: ao-30 used `git stash` for its base check, and the stash stack is
   shared by all worktrees; the stack still holds only the old `feat/opencode-gemini-plugins` entry.
 
