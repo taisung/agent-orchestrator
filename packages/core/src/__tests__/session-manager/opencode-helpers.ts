@@ -1,6 +1,5 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RuntimeCreateConfig, RuntimeHandle } from "../../types.js";
 
 export interface MockApiSession {
   id: string;
@@ -10,6 +9,11 @@ export interface MockApiSession {
   createdAt?: number;
   /** `location.directory`; the record has no `location` when absent. */
   directory?: string;
+  /** The stored model; `session.create` stores variant `default` when none is given. */
+  model?: { providerID: string; id: string; variant?: string };
+  agent?: string;
+  /** How many `user` messages `session.message.list` shows. */
+  userMessages?: number;
 }
 
 export interface MockApiOptions {
@@ -23,12 +27,22 @@ export interface MockApiOptions {
   /** The `interrupted` value that `session.interrupt` answers (default false). */
   interrupted?: boolean;
   binName?: string;
+  /** One JSON line per call: `{op, env}` with every `AO_*` variable and PATH. */
+  envLogPath?: string;
+  /** The `data` of `model.list` (Model.Info entries). */
+  models?: unknown[];
+  /** `model.list` cuts its answer this many times (exit 0, incomplete JSON). */
+  cutModelListTimes?: number;
+  /** `session.create` stores this model instead of the requested one. */
+  createStoresModel?: { providerID: string; id: string; variant?: string };
 }
 
 /**
  * Install a mock `opencode` that speaks the 2.x API used by I-2
- * (`opencode api session.get/list/remove/interrupt`), with the answer shapes
- * of the real 2.0.29 binary (measured on an isolated store):
+ * (`opencode api session.get/list/remove/interrupt`) and the spawn calls of
+ * I-3 (`model.list`, `session.create`, `session.switchModel`,
+ * `session.switchAgent`, `session.message.list`), with the answer shapes of
+ * the real 2.0.29 binary (measured on an isolated store):
  * - `session.get`/`remove`/`interrupt` answer 404 for an unknown ID
  *   (stdout `{"_tag":"SessionNotFoundError",...}`, stderr 404, exit 1).
  * - `session.list` filters `search` as a substring of the title and
@@ -44,6 +58,9 @@ export interface MockApiOptions {
  * - `apiLogPath` gets one JSON argv line per call, written before any delay.
  * - `apiDelaySeconds` blocks the mock process itself (no `sleep` child), so a
  *   timeout kill leaves no orphan process.
+ * - `session.create` stores the body (title, `location.directory`, model with
+ *   variant `default` when none is given, agent) as `ses_created_<n>`;
+ *   `envLogPath` gets the `AO_*` variables and PATH of every call.
  *
  * The mock reads its config (sessions, logs, delay) from `config.json` next to
  * the script on every call, so a test can add a session while a spawn runs
@@ -66,6 +83,11 @@ export function installMockOpencodeApi(
     apiDelaySeconds: options?.apiDelaySeconds ?? 0,
     failOperations: options?.failOperations ?? [],
     interrupted: options?.interrupted ?? false,
+    envLogPath: options?.envLogPath ?? null,
+    models: options?.models ?? [],
+    cutModelListTimes: options?.cutModelListTimes ?? 0,
+    createStoresModel: options?.createStoresModel ?? null,
+    createCount: 0,
   });
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -76,6 +98,13 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 const sessions = config.sessions || [];
 if (config.apiLogPath) {
   fs.appendFileSync(config.apiLogPath, JSON.stringify(argv) + "\\n");
+}
+if (config.envLogPath) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("AO_") || key === "PATH") env[key] = value;
+  }
+  fs.appendFileSync(config.envLogPath, JSON.stringify({ op: argv[1], env }) + "\\n");
 }
 if (config.apiDelaySeconds > 0) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, config.apiDelaySeconds * 1000);
@@ -95,7 +124,12 @@ const apiRecord = (s) => ({
   title: s.title,
   time: { created: created(s), ...(s.updatedAt !== undefined ? { updated: s.updatedAt } : {}) },
   ...(s.directory !== undefined ? { location: { directory: s.directory } } : {}),
+  ...(s.model !== undefined ? { model: s.model } : {}),
+  ...(s.agent !== undefined ? { agent: s.agent } : {}),
 });
+let body;
+const dataIndex = argv.indexOf("-d");
+if (dataIndex !== -1) body = JSON.parse(argv[dataIndex + 1]);
 const notFound = (id) => {
   process.stdout.write(JSON.stringify({ _tag: "SessionNotFoundError", sessionID: id, message: "Session not found: " + id }) + "\\n");
   process.stderr.write("HTTP 404 Not Found\\n");
@@ -131,6 +165,51 @@ if (op === "session.list") {
     ? { next: Buffer.from(JSON.stringify({ offset: offset + page.length })).toString("base64url") }
     : {};
   process.stdout.write(JSON.stringify({ data: page.map(apiRecord), cursor }) + "\\n");
+  process.exit(0);
+}
+if (op === "model.list") {
+  if ((config.cutModelListTimes || 0) > 0) {
+    writeConfig({ ...config, cutModelListTimes: config.cutModelListTimes - 1 });
+    process.stdout.write(JSON.stringify({ data: config.models }).slice(0, 20));
+    process.exit(0);
+  }
+  process.stdout.write(JSON.stringify({ location: { directory: "/" }, data: config.models || [] }) + "\\n");
+  process.exit(0);
+}
+if (op === "session.create") {
+  const count = (config.createCount || 0) + 1;
+  const stored = config.createStoresModel || (body && body.model) || undefined;
+  const session = {
+    id: "ses_created_" + count,
+    title: body && body.title,
+    directory: body && body.location && body.location.directory,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ...(stored ? { model: { ...stored, variant: stored.variant || "default" } } : {}),
+    ...(body && body.agent ? { agent: body.agent } : {}),
+  };
+  writeConfig({ ...config, createCount: count, sessions: [...sessions, session] });
+  process.stdout.write(JSON.stringify({ data: apiRecord(session) }) + "\\n");
+  process.exit(0);
+}
+if (op === "session.switchModel" || op === "session.switchAgent") {
+  const found = sessions.find((s) => s.id === params.sessionID);
+  if (!found) notFound(params.sessionID);
+  const changed = op === "session.switchModel"
+    ? { ...found, model: { ...body.model, variant: body.model.variant || "default" } }
+    : { ...found, agent: body.agent };
+  writeConfig({ ...config, sessions: sessions.map((s) => (s.id === found.id ? changed : s)) });
+  process.stdout.write("{}\\n");
+  process.exit(0);
+}
+if (op === "session.message.list") {
+  const found = sessions.find((s) => s.id === params.sessionID);
+  if (!found) notFound(params.sessionID);
+  const count = found.userMessages || 0;
+  const data = params.type === "user" && count > 0
+    ? [{ id: "msg_user_1", type: "user", text: "launch prompt", time: { created: Date.now() } }]
+    : [];
+  process.stdout.write(JSON.stringify({ data, cursor: {} }) + "\\n");
   process.exit(0);
 }
 if (op === "session.remove") {
@@ -185,29 +264,29 @@ export function addMockApiSession(binDir: string, session: MockApiSession): void
   writeMockConfig(binDir, { ...config, sessions: [...sessions, session] });
 }
 
-/**
- * A `Runtime.create` double that behaves like the real pane script since
- * `b90ac08f`: the OpenCode session `AO:<id>` is created only after `create`
- * returns, in the workspace directory, `delayMs` later. The ID is
- * `ses_pane_<id>`.
- */
-export function paneCreatesOpenCodeSession(
-  binDir: string,
-  options?: { delayMs?: number },
-): (config: RuntimeCreateConfig) => Promise<RuntimeHandle> {
-  return async (config: RuntimeCreateConfig) => {
-    const aoSessionId = config.environment["AO_SESSION"] ?? config.sessionId;
-    setTimeout(() => {
-      addMockApiSession(binDir, {
-        id: `ses_pane_${aoSessionId}`,
-        title: `AO:${aoSessionId}`,
-        directory: config.workspacePath,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-    }, options?.delayMs ?? 0);
-    return { id: config.sessionId, runtimeName: "mock", data: {} };
-  };
+/** The lines of an `envLogPath` log. */
+export function readMockApiEnvLog(
+  envLogPath: string,
+): Array<{ op: string; env: Record<string, string> }> {
+  return readFileSync(envLogPath, "utf-8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as { op: string; env: Record<string, string> });
+}
+
+/** Give a mock session `count` user messages, as a TUI that submitted its prompt would. */
+export function setMockApiUserMessages(binDir: string, sessionId: string, count: number): void {
+  const config = JSON.parse(readFileSync(join(binDir, "config.json"), "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  const sessions = (config["sessions"] as MockApiSession[] | undefined) ?? [];
+  writeMockConfig(binDir, {
+    ...config,
+    sessions: sessions.map((session) =>
+      session.id === sessionId ? { ...session, userMessages: count } : session,
+    ),
+  });
 }
 
 function cliJsonToApiSessions(sessionListJson: string): MockApiSession[] {

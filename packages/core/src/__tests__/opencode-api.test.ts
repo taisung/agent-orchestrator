@@ -32,15 +32,22 @@ import {
   getOpenCodeSession,
   listOpenCodeSessionsByTitle,
   findOpenCodeSessionsByTitle,
-  waitForOpenCodeSession,
   removeOpenCodeSession,
   interruptOpenCodeSession,
+  listOpenCodeModels,
+  findOpenCodeModelProblem,
+  createOpenCodeSession,
+  switchOpenCodeSessionModel,
+  switchOpenCodeSessionAgent,
+  hasOpenCodeUserMessage,
   OPENCODE_SESSION_LIST_MAX_PAGES,
   OpenCodeApiTimeoutError,
+  OpenCodeApiIncompleteAnswerError,
+  type OpenCodeApiModel,
 } from "../opencode-api.js";
 import {
   installMockOpencodeApi,
-  addMockApiSession,
+  readMockApiEnvLog,
   type MockApiSession,
 } from "./session-manager/opencode-helpers.js";
 
@@ -333,197 +340,339 @@ describe("with a real child process (fake opencode on PATH)", () => {
     const sessions = await findOpenCodeSessionsByTitle({ title: "AO:z-1", directories: ["/w"] });
     expect(sessions.map((s) => s.id)).toEqual(["ses_z0"]);
   });
+});
 
-  describe("waitForOpenCodeSession", () => {
-    it("finds the session that the pane creates while the wait runs", async () => {
-      const binDir = useMock([]);
-      const startedAt = Date.now();
-      setTimeout(() => {
-        addMockApiSession(binDir, {
-          id: "ses_pane",
-          title: "AO:w-1",
-          directory: "/w/w-1",
-          createdAt: Date.now(),
-        });
-      }, 300);
-      const result = await waitForOpenCodeSession(
-        { title: "AO:w-1", directories: ["/w/w-1"], createdAtOrAfter: startedAt },
-        5_000,
-        100,
-      );
-      expect(result).toMatchObject({ status: "found", session: { id: "ses_pane" } });
-      expect(Date.now() - startedAt).toBeLessThan(5_000);
+/**
+ * The two fleet pins as the global 2.0.31 service lists them in `model.list`
+ * (measured read-only on 2026-10-16; `settings`, `headers`, `capabilities`,
+ * `cost`, `time` and `limit` left out). The check must accept both.
+ */
+const FLEET_PIN_MODELS: OpenCodeApiModel[] = [
+  {
+    id: "muse-spark-1.3-contributor",
+    modelID: "muse-spark-1.3-contributor",
+    providerID: "opencode-go",
+    family: "muse",
+    name: "Muse Spark 1.3 Contributor",
+    variants: [{ id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+    status: "active",
+    enabled: true,
+  },
+  {
+    id: "deepseek-v4.1-flash",
+    modelID: "deepseek-v4.1-flash",
+    providerID: "opencode-go",
+    family: "deepseek-flash",
+    name: "DeepSeek V4.1 Flash",
+    variants: [{ id: "low" }, { id: "high" }, { id: "max" }],
+    status: "active",
+    enabled: true,
+  },
+];
+
+/** A measured 2.0.31 entry whose `id` differs from its `modelID`. */
+const FAST_VARIANT_MODEL: OpenCodeApiModel = {
+  id: "gpt-6.1-sol-fast",
+  modelID: "gpt-6.1-sol",
+  providerID: "openai",
+  variants: [],
+  status: "active",
+  enabled: true,
+};
+
+describe("the session environment of a spawn call (env)", () => {
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of ["AO_SESSION", "AO_CALLER_TYPE", "AO_ISSUE_ID", "AO_TEST_ONLY_OUTER"]) {
+      saved[key] = process.env[key];
+    }
+    // The `ao` process of an orchestrator carries the orchestrator's values.
+    process.env["AO_SESSION"] = "orch-1";
+    process.env["AO_CALLER_TYPE"] = "orchestrator";
+    process.env["AO_ISSUE_ID"] = "orchestrator-issue";
+    process.env["AO_TEST_ONLY_OUTER"] = "leak";
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = value;
+    }
+  });
+
+  it("runs the child with the session map and none of the ao process AO_* values", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: '{"data":{"id":"ses_1"}}', stderr: "" });
+    await getOpenCodeSession("ses_1", undefined, {
+      AO_SESSION: "app-7",
+      AO_CALLER_TYPE: "agent",
+      PATH: "/home/u/.ao/bin:/usr/bin",
     });
+    const env = (mockExecFileAsync.mock.calls[0]![2] as { env?: NodeJS.ProcessEnv }).env;
+    expect(env).toBeDefined();
+    expect(env!["AO_SESSION"]).toBe("app-7");
+    expect(env!["AO_CALLER_TYPE"]).toBe("agent");
+    expect(env!["PATH"]).toBe("/home/u/.ao/bin:/usr/bin");
+    expect(env!["AO_ISSUE_ID"]).toBeUndefined();
+    expect(env!["AO_TEST_ONLY_OUTER"]).toBeUndefined();
+    // Variables other than AO_* stay, so the CLI still finds its store.
+    expect(env!["HOME"]).toBe(process.env["HOME"]);
+  });
 
-    it("ignores the same title in another directory and an older session, until the window ends", async () => {
-      const startedAt = Date.now();
-      useMock([
-        {
-          id: "ses_other_fleet",
-          title: "AO:w-2",
-          directory: "/other/w-2",
-          createdAt: startedAt + 1,
-        },
-        { id: "ses_older", title: "AO:w-2", directory: "/w/w-2", createdAt: startedAt - 1 },
-      ]);
-      const result = await waitForOpenCodeSession(
-        { title: "AO:w-2", directories: ["/w/w-2"], createdAtOrAfter: startedAt },
-        1_000,
-        200,
-      );
-      expect(result.status).toBe("not-found");
-      const elapsedMs = Date.now() - startedAt;
-      expect(elapsedMs).toBeGreaterThanOrEqual(1_000);
-      expect(elapsedMs).toBeLessThan(3_000);
+  it("passes no env option without a map, so other callers keep process.env", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: '{"data":{"id":"ses_1"}}', stderr: "" });
+    await getOpenCodeSession("ses_1");
+    expect((mockExecFileAsync.mock.calls[0]![2] as { env?: unknown }).env).toBeUndefined();
+  });
+
+  it("gives the map to every spawn call", async () => {
+    const env = { AO_SESSION: "app-7" };
+    mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
+      if (args[1] === "model.list") return { stdout: '{"data":[]}', stderr: "" };
+      if (args[1] === "session.create") return { stdout: '{"data":{"id":"ses_new"}}', stderr: "" };
+      if (args[1] === "session.message.list") return { stdout: '{"data":[]}', stderr: "" };
+      return { stdout: "{}", stderr: "" };
     });
+    await listOpenCodeModels({ env });
+    await createOpenCodeSession({ title: "AO:app-7", location: { directory: "/w" } }, { env });
+    await switchOpenCodeSessionModel("ses_new", { providerID: "p", id: "m" }, { env });
+    await switchOpenCodeSessionAgent("ses_new", "build", { env });
+    await hasOpenCodeUserMessage("ses_new", { env });
+    await interruptOpenCodeSession("ses_new", undefined, env);
+    await removeOpenCodeSession("ses_new", undefined, env);
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(7);
+    for (const call of mockExecFileAsync.mock.calls) {
+      const childEnv = (call[2] as { env?: NodeJS.ProcessEnv }).env;
+      expect(childEnv?.["AO_SESSION"]).toBe("app-7");
+      expect(childEnv?.["AO_CALLER_TYPE"]).toBeUndefined();
+    }
+  });
+});
 
-    it("reports two matches as ambiguous and picks none", async () => {
-      const startedAt = Date.now();
-      useMock([
-        { id: "ses_a", title: "AO:w-3", directory: "/w", createdAt: startedAt + 1 },
-        { id: "ses_b", title: "AO:w-3", directory: "/w", createdAt: startedAt + 2 },
-      ]);
-      const result = await waitForOpenCodeSession(
-        { title: "AO:w-3", directories: ["/w"], createdAtOrAfter: startedAt },
-        1_000,
-        200,
-      );
-      expect(result.status).toBe("ambiguous");
-      if (result.status === "ambiguous") {
-        expect(result.sessions.map((s) => s.id).sort()).toEqual(["ses_a", "ses_b"]);
-      }
-    });
+describe("listOpenCodeModels", () => {
+  const full = JSON.stringify({ location: { directory: "/w" }, data: FLEET_PIN_MODELS });
 
-    it("makes a final bounded search after suspension across the poll deadline", async () => {
-      vi.useFakeTimers();
-      try {
-        const startedAt = Date.now();
-        mockExecFileAsync.mockResolvedValueOnce(listAnswer([])).mockResolvedValueOnce(
-          listAnswer([
-            {
-              id: "ses_during_stall",
-              title: "AO:stall",
-              location: { directory: "/w" },
-              time: { created: startedAt + 50 },
-            },
-          ]),
-        );
-        const waiting = waitForOpenCodeSession(
-          { title: "AO:stall", directories: ["/w"], createdAtOrAfter: startedAt },
-          100,
-          20,
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        vi.setSystemTime(startedAt + 1_000);
-        await vi.advanceTimersByTimeAsync(20);
-        expect(await waiting).toMatchObject({
-          status: "found",
-          session: { id: "ses_during_stall" },
-        });
-        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
-        expect(mockExecFileAsync.mock.calls[1][2].timeout).toBeGreaterThan(0);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+  it("asks once more after an answer cut with exit 0, so one cut does not fail a spawn", async () => {
+    mockExecFileAsync
+      .mockResolvedValueOnce({ stdout: full.slice(0, 100), stderr: "" })
+      .mockResolvedValueOnce({ stdout: full, stderr: "" });
+    const models = await listOpenCodeModels();
+    expect(models.map((m) => m.id)).toEqual(["muse-spark-1.3-contributor", "deepseek-v4.1-flash"]);
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+  });
 
-    it("rechecks a successful empty result buffered before suspension", async () => {
-      vi.useFakeTimers();
-      try {
-        const startedAt = Date.now();
-        mockExecFileAsync
-          .mockImplementationOnce(async () => {
-            vi.setSystemTime(startedAt + 1_000);
-            return listAnswer([]);
-          })
-          .mockResolvedValueOnce(
-            listAnswer([
-              {
-                id: "ses_buffered",
-                title: "AO:stall",
-                location: { directory: "/w" },
-                time: { created: startedAt + 50 },
-              },
-            ]),
-          );
-        expect(
-          await waitForOpenCodeSession({ title: "AO:stall", directories: ["/w"] }, 100, 20),
-        ).toMatchObject({ status: "found", session: { id: "ses_buffered" } });
-        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+  it("also asks again after an empty exit-0 answer", async () => {
+    mockExecFileAsync
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: full, stderr: "" });
+    await expect(listOpenCodeModels()).resolves.toHaveLength(2);
+  });
 
-    it.each(["empty exit 0", "overdue timeout"])(
-      "makes one final search after suspension during a search: %s",
-      async (failure) => {
-        vi.useFakeTimers();
-        try {
-          const startedAt = Date.now();
-          mockExecFileAsync
-            .mockImplementationOnce(async () => {
-              // Empty output just after its search bound, or a timeout whose
-              // callback was delayed by more than another whole search bound.
-              vi.setSystemTime(startedAt + (failure === "empty exit 0" ? 150 : 1_000));
-              if (failure === "empty exit 0") return { stdout: "", stderr: "" };
-              throw execError("killed", "", "", { killed: true, signal: "SIGTERM" });
-            })
-            .mockResolvedValueOnce(
-              listAnswer([
-                {
-                  id: "ses_inflight_stall",
-                  title: "AO:stall",
-                  location: { directory: "/w" },
-                  time: { created: startedAt + 50 },
-                },
-              ]),
-            );
-          expect(
-            await waitForOpenCodeSession({ title: "AO:stall", directories: ["/w"] }, 100, 20),
-          ).toMatchObject({ status: "found", session: { id: "ses_inflight_stall" } });
-          expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
-        } finally {
-          vi.useRealTimers();
-        }
-      },
+  it("throws the incomplete-answer error after a second cut", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: full.slice(0, 50), stderr: "" });
+    await expect(listOpenCodeModels()).rejects.toBeInstanceOf(OpenCodeApiIncompleteAnswerError);
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not ask again after another failure", async () => {
+    mockExecFileAsync.mockRejectedValue(execError("boom", "", "HTTP 500", { code: 1 }));
+    await expect(listOpenCodeModels()).rejects.toThrow(/model.list failed/);
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an answer without a data array", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: '{"models":[]}', stderr: "" });
+    await expect(listOpenCodeModels()).rejects.toThrow(/without data array/);
+  });
+});
+
+describe("findOpenCodeModelProblem", () => {
+  const models = [...FLEET_PIN_MODELS, FAST_VARIANT_MODEL];
+
+  it.each([
+    ["opencode-go", "muse-spark-1.3-contributor", undefined],
+    ["opencode-go", "muse-spark-1.3-contributor", "xhigh"],
+    ["opencode-go", "deepseek-v4.1-flash", undefined],
+    ["opencode-go", "deepseek-v4.1-flash", "max"],
+    ["opencode-go", "deepseek-v4.1-flash", "default"],
+  ])("accepts the fleet pin %s/%s variant %s", (providerID, id, variant) => {
+    expect(
+      findOpenCodeModelProblem(models, { providerID, id, ...(variant ? { variant } : {}) }),
+    ).toBeNull();
+  });
+
+  it("refuses a model that the list does not have (the 0010 no-route sample)", () => {
+    expect(findOpenCodeModelProblem(models, { providerID: "ao1m-none", id: "none" })).toBe(
+      "model.list has no model ao1m-none/none",
     );
+  });
 
-    it("does not retry a failed final search after suspension", async () => {
-      vi.useFakeTimers();
-      try {
-        const startedAt = Date.now();
-        mockExecFileAsync.mockImplementation(async () => {
-          vi.setSystemTime(Date.now() + 60_000);
-          return { stdout: "", stderr: "" };
-        });
-        const result = await waitForOpenCodeSession(
-          { title: "AO:stall", directories: ["/w"] },
-          100,
-          20,
-        );
-        expect(result.status).toBe("not-found");
-        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
-        expect(Date.now()).toBeGreaterThan(startedAt);
-      } finally {
-        vi.useRealTimers();
-      }
+  it("refuses a model whose provider differs", () => {
+    expect(
+      findOpenCodeModelProblem(models, { providerID: "opencode", id: "deepseek-v4.1-flash" }),
+    ).toContain("has no model");
+  });
+
+  it("matches the create id against Model.Info id, not modelID", () => {
+    expect(
+      findOpenCodeModelProblem(models, { providerID: "openai", id: "gpt-6.1-sol-fast" }),
+    ).toBeNull();
+    expect(findOpenCodeModelProblem(models, { providerID: "openai", id: "gpt-6.1-sol" })).toContain(
+      "has no model",
+    );
+  });
+
+  it("refuses a model that is not enabled", () => {
+    const disabled = [{ ...FLEET_PIN_MODELS[0]!, enabled: false }];
+    expect(
+      findOpenCodeModelProblem(disabled, {
+        providerID: "opencode-go",
+        id: "muse-spark-1.3-contributor",
+      }),
+    ).toContain("is not enabled");
+  });
+
+  it("refuses a variant that the model does not list", () => {
+    expect(
+      findOpenCodeModelProblem(models, {
+        providerID: "opencode-go",
+        id: "deepseek-v4.1-flash",
+        variant: "xhigh",
+      }),
+    ).toBe("model opencode-go/deepseek-v4.1-flash has no variant xhigh");
+  });
+});
+
+describe("createOpenCodeSession", () => {
+  it("sends the body with -d and returns the new session", async () => {
+    mockExecFileAsync.mockResolvedValue({
+      stdout: '{"data":{"id":"ses_new","title":"AO:app-1"}}',
+      stderr: "",
     });
+    const body = {
+      title: "AO:app-1",
+      model: { providerID: "opencode-go", id: "deepseek-v4.1-flash" },
+      agent: "build",
+      location: { directory: "/real/ws" },
+    };
+    const session = await createOpenCodeSession(body);
+    expect(session.id).toBe("ses_new");
+    const args = mockExecFileAsync.mock.calls[0]![1] as string[];
+    expect(args.slice(0, 2)).toEqual(["api", "session.create"]);
+    expect(JSON.parse(args[args.indexOf("-d") + 1]!)).toEqual(body);
+  });
 
-    it("ends within its window when the binary hangs", async () => {
-      useMock([], { apiDelaySeconds: 5 });
-      const startedAt = Date.now();
-      const result = await waitForOpenCodeSession(
-        { title: "AO:w-4", directories: ["/w"], createdAtOrAfter: startedAt },
-        1_000,
-        200,
+  it.each([['{"data":{}}'], ['{"data":{"id":"not-a-session"}}'], ['{"error":"x"}']])(
+    "throws when the answer holds no usable session ID: %s",
+    async (stdout) => {
+      mockExecFileAsync.mockResolvedValue({ stdout, stderr: "" });
+      await expect(
+        createOpenCodeSession({ title: "AO:app-1", location: { directory: "/w" } }),
+      ).rejects.toThrow(/no usable session ID/);
+    },
+  );
+
+  it("throws a failed create with cause", async () => {
+    const cause = execError("boom", "", "HTTP 500", { code: 1 });
+    mockExecFileAsync.mockRejectedValue(cause);
+    const thrown = (await createOpenCodeSession({
+      title: "AO:app-1",
+      location: { directory: "/w" },
+    }).catch((e: unknown) => e)) as Error;
+    expect(thrown.message).toContain("session.create failed");
+    expect(thrown.cause).toBe(cause);
+  });
+});
+
+describe("switchOpenCodeSessionModel and switchOpenCodeSessionAgent", () => {
+  it("send the sessionID param and the body", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: "{}", stderr: "" });
+    await switchOpenCodeSessionModel("ses_1", { providerID: "p", id: "m", variant: "high" });
+    await switchOpenCodeSessionAgent("ses_1", "build");
+    const [modelCall, agentCall] = mockExecFileAsync.mock.calls as [unknown[], unknown[]];
+    expect((modelCall[1] as string[])[1]).toBe("session.switchModel");
+    expect(paramsOf(modelCall)["sessionID"]).toBe("ses_1");
+    const modelArgs = modelCall[1] as string[];
+    expect(JSON.parse(modelArgs[modelArgs.indexOf("-d") + 1]!)).toEqual({
+      model: { providerID: "p", id: "m", variant: "high" },
+    });
+    const agentArgs = agentCall[1] as string[];
+    expect(agentArgs[1]).toBe("session.switchAgent");
+    expect(JSON.parse(agentArgs[agentArgs.indexOf("-d") + 1]!)).toEqual({ agent: "build" });
+  });
+
+  it("throw on a 404: a reused session that is gone gets no TUI", async () => {
+    mockExecFileAsync.mockRejectedValue(
+      execError("HTTP 404", '{"_tag":"SessionNotFoundError"}', "HTTP 404 Not Found", { code: 1 }),
+    );
+    await expect(
+      switchOpenCodeSessionModel("ses_gone", { providerID: "p", id: "m" }),
+    ).rejects.toThrow(/does not exist/);
+    await expect(switchOpenCodeSessionAgent("ses_gone", "build")).rejects.toThrow(/does not exist/);
+  });
+});
+
+describe("hasOpenCodeUserMessage", () => {
+  it("asks for one user message and answers true when one exists", async () => {
+    mockExecFileAsync.mockResolvedValue({
+      stdout: JSON.stringify({
+        data: [{ id: "msg_1", type: "user", text: "Go", time: { created: 1 } }],
+        cursor: {},
+      }),
+      stderr: "",
+    });
+    await expect(hasOpenCodeUserMessage("ses_1")).resolves.toBe(true);
+    const call = mockExecFileAsync.mock.calls[0]!;
+    expect((call[1] as string[])[1]).toBe("session.message.list");
+    expect(paramsOf(call)).toEqual({ sessionID: "ses_1", type: "user", limit: "1" });
+  });
+
+  it("answers false for no message, another type and a 404", async () => {
+    mockExecFileAsync.mockResolvedValueOnce({ stdout: '{"data":[],"cursor":{}}', stderr: "" });
+    await expect(hasOpenCodeUserMessage("ses_1")).resolves.toBe(false);
+    mockExecFileAsync.mockResolvedValueOnce({
+      stdout: '{"data":[{"id":"m","type":"assistant"}],"cursor":{}}',
+      stderr: "",
+    });
+    await expect(hasOpenCodeUserMessage("ses_1")).resolves.toBe(false);
+    mockExecFileAsync.mockRejectedValueOnce(
+      execError("HTTP 404", '{"_tag":"SessionNotFoundError"}', "HTTP 404 Not Found", { code: 1 }),
+    );
+    await expect(hasOpenCodeUserMessage("ses_gone")).resolves.toBe(false);
+  });
+});
+
+describe("spawn calls with a real child process (fake opencode on PATH)", () => {
+  let tmpDir: string;
+  const originalPath = process.env["PATH"];
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "ao-opencode-api-spawn-"));
+    mockExecFileAsync.mockImplementation((...args: unknown[]) => realExecFile.current!(...args));
+  });
+
+  afterEach(() => {
+    process.env["PATH"] = originalPath;
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates the session and the child sees the session map, not the ao process AO_* values", async () => {
+    const envLogPath = join(tmpDir, "env.log");
+    const binDir = installMockOpencodeApi(tmpDir, [], { envLogPath });
+    const savedSession = process.env["AO_SESSION"];
+    process.env["AO_SESSION"] = "orch-1";
+    try {
+      const session = await createOpenCodeSession(
+        { title: "AO:app-3", location: { directory: "/w" } },
+        { env: { AO_SESSION: "app-3", PATH: `${binDir}:${originalPath ?? ""}` } },
       );
-      const elapsedMs = Date.now() - startedAt;
-      expect(result.status).toBe("not-found");
-      if (result.status === "not-found") {
-        expect(String(result.lastError)).toContain("within");
-      }
-      expect(elapsedMs).toBeLessThan(2_500);
-    });
+      expect(session.id).toMatch(/^ses_created_/);
+    } finally {
+      if (savedSession === undefined) delete process.env["AO_SESSION"];
+      else process.env["AO_SESSION"] = savedSession;
+    }
+    const [entry] = readMockApiEnvLog(envLogPath);
+    expect(entry?.op).toBe("session.create");
+    expect(entry?.env["AO_SESSION"]).toBe("app-3");
   });
 });

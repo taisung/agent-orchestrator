@@ -10,20 +10,37 @@ import {
   PREFERRED_GH_PATH,
   asValidOpenCodeSessionId,
   getOpenCodeSession,
+  createOpenCodeSession,
+  listOpenCodeModels,
+  findOpenCodeModelProblem,
+  switchOpenCodeSessionModel,
+  switchOpenCodeSessionAgent,
+  hasOpenCodeUserMessage,
+  interruptOpenCodeSession,
+  removeOpenCodeSession,
+  OpenCodeApiTimeoutError,
+  OPENCODE_API_TIMEOUT_MS,
   HERDR_RUNTIME_NAME,
+  getHerdrPaneProcesses,
   isHerdrProcessRunning,
   SessionNotRestorableError,
   type Agent,
   type AgentSessionInfo,
   type AgentLaunchConfig,
+  type AgentLaunchConfirmation,
+  type AgentLaunchConfirmOptions,
+  type AgentSessionPrepareContext,
   type ActivityDetection,
   type ActivityState,
   type PluginModule,
+  type PreparedAgentSession,
   type ProjectConfig,
   type RuntimeHandle,
   type Session,
   type WorkspaceHooksConfig,
   type OpenCodeAgentConfig,
+  type OpenCodeApiSession,
+  type OpenCodeModelRef,
 } from "@aoagents/ao-core";
 import {
   classifyOpenCodePaneActivity,
@@ -31,45 +48,11 @@ import {
   getApiSessionInfo,
 } from "./api-activity.js";
 import { execFile, execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-
-/**
- * Read the session ID from the single JSON document that
- * `opencode api session.create` prints (`{"data":{"id":"ses_..."}}`).
- * On anything else, echo the response to stderr so the pane shows the API error.
- */
-function buildApiSessionIdCaptureScript(): string {
-  const script = `
-let input = '';
-process.stdin.on('data', c => input += c).on('end', () => {
-  let sid;
-  try { sid = JSON.parse(input).data.id; } catch {}
-  if (typeof sid === 'string' && /^ses_[A-Za-z0-9_-]+$/.test(sid)) {
-    process.stdout.write(sid);
-    process.exit(0);
-  }
-  process.stderr.write(input);
-  process.exit(1);
-});
-  `.trim();
-  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
-}
-
-/**
- * Add the pane's working directory to a `session.create` body. The 2.x background
- * service otherwise files the session under its own directory, where
- * `opencode session list` run from the worktree cannot see it.
- */
-function buildApiSessionBodyScript(): string {
-  const script = `
-const body = JSON.parse(process.argv[1]);
-body.location = { directory: process.cwd() };
-process.stdout.write(JSON.stringify(body));
-  `.trim();
-  return script.replace(/\n/g, " ").replace(/\s+/g, " ");
-}
 
 /**
  * Compare the session that `opencode api session.get` prints with the requested
@@ -251,12 +234,6 @@ function assertSupportedOpenCodeVersion(): void {
   throw new Error(`ao needs OpenCode ${OPENCODE_MIN_VERSION_TEXT} or later (${check.reason})`);
 }
 
-interface OpenCodeModelRef {
-  providerID: string;
-  id: string;
-  variant?: string;
-}
-
 /** Split `provider/model[#variant]` (the CLI `--model` form) into the 2.x API model reference. */
 function toOpenCodeModelRef(model: string): OpenCodeModelRef | undefined {
   const slash = model.indexOf("/");
@@ -271,8 +248,11 @@ function toOpenCodeModelRef(model: string): OpenCodeModelRef | undefined {
  * never runs OpenCode with settings other than the requested ones.
  */
 function invalidModelCommand(model: string): string {
-  const message = `OpenCode ${OPENCODE_MIN_VERSION.major}.x needs the model as provider/model[#variant], got: ${model}`;
-  return `echo ${shellEscape(message)} >&2; exit 1`;
+  return `echo ${shellEscape(invalidModelMessage(model))} >&2; exit 1`;
+}
+
+function invalidModelMessage(model: string): string {
+  return `OpenCode ${OPENCODE_MIN_VERSION.major}.x needs the model as provider/model[#variant], got: ${model}`;
 }
 
 /** `sessionWord` is the shell word that expands to the session ID. */
@@ -362,6 +342,302 @@ function buildResumeCommand(
 }
 
 // =============================================================================
+// Session Preparation and Launch Check (I-3)
+// =============================================================================
+
+/** The pane must hold the matching process this long before the launch counts. */
+const LAUNCH_SETTLE_MS = 1_000;
+
+/** Pause between two pane process checks. */
+const PANE_POLL_MS = 250;
+
+/** Pause between two reads of the session's `user` messages. */
+const PROMPT_POLL_MS = 500;
+
+/**
+ * The environment of each prepared session (the map that core passes to
+ * `runtime.create`), for the calls of `confirmLaunch` and `discard`.
+ */
+const preparedEnvironments = new WeakMap<PreparedAgentSession, Record<string, string>>();
+
+/** The error text on one line, for an operator line. */
+function oneLine(err: unknown): string {
+  const text = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
+/** The prompt shell word of the launch command, or undefined when there is no prompt. */
+function buildPromptValue(config: AgentLaunchConfig): string | undefined {
+  if (config.prompt) {
+    if (config.systemPromptFile) {
+      return `"$(cat ${shellEscape(config.systemPromptFile)}; printf '\\n\\n'; printf %s ${shellEscape(config.prompt)})"`;
+    }
+    if (config.systemPrompt) {
+      return shellEscape(`${config.systemPrompt}\n\n${config.prompt}`);
+    }
+    return shellEscape(config.prompt);
+  }
+  if (config.systemPromptFile) {
+    return `"$(cat ${shellEscape(config.systemPromptFile)})"`;
+  }
+  if (config.systemPrompt) {
+    return shellEscape(config.systemPrompt);
+  }
+  return undefined;
+}
+
+/**
+ * Compare the stored session with the requested model and agent. Returns null
+ * when they match, else the stored values. 2.x stores a model without a
+ * variant as variant `default`.
+ */
+function storedSettingsMismatch(
+  stored: OpenCodeApiSession,
+  modelRef: OpenCodeModelRef | undefined,
+  agent: string | undefined,
+): string | null {
+  const variant = (model: { variant?: string }) => model.variant || "default";
+  const modelOk =
+    !modelRef ||
+    (!!stored.model &&
+      stored.model.providerID === modelRef.providerID &&
+      stored.model.id === modelRef.id &&
+      variant(stored.model) === variant(modelRef));
+  const agentOk = !agent || stored.agent === agent;
+  if (modelOk && agentOk) return null;
+  return `OpenCode stored agent ${JSON.stringify(stored.agent)} and model ${JSON.stringify(stored.model)}`;
+}
+
+/** Read the session back and throw when the stored model or agent differs from the request. */
+async function assertStoredSettings(
+  sessionId: string,
+  modelRef: OpenCodeModelRef | undefined,
+  agent: string | undefined,
+  env: Record<string, string>,
+): Promise<void> {
+  const stored = await getOpenCodeSession(sessionId, undefined, env);
+  if (!stored) {
+    throw new Error(
+      `failed to set the OpenCode model or agent for ${sessionId}: session.get answered 404`,
+    );
+  }
+  const mismatch = storedSettingsMismatch(stored, modelRef, agent);
+  if (mismatch) {
+    throw new Error(`failed to set the OpenCode model or agent for ${sessionId}: ${mismatch}`);
+  }
+}
+
+/** The model check before any create or switch (0010 sections 5.3 and 11.4). */
+async function assertOpenCodeModelAvailable(
+  model: string,
+  modelRef: OpenCodeModelRef,
+  env: Record<string, string>,
+): Promise<void> {
+  const models = await listOpenCodeModels({ env });
+  const problem = findOpenCodeModelProblem(models, modelRef);
+  if (problem) {
+    throw new Error(`OpenCode cannot run the model ${model}: ${problem}`);
+  }
+}
+
+/**
+ * The prepared session. `discard` removes the session only when this spawn
+ * created it: it interrupts a turn that the pane may have started, then
+ * removes the session. It never throws; a failure gets one operator line.
+ */
+function preparedOpenCodeSession(
+  sessionId: string,
+  created: boolean,
+  env: Record<string, string>,
+): PreparedAgentSession {
+  let discarded = false;
+  const prepared: PreparedAgentSession = {
+    metadata: { opencodeSessionId: sessionId },
+    agentConfig: { opencodeSessionId: sessionId },
+    created,
+    async discard() {
+      if (!created || discarded) return;
+      discarded = true;
+      try {
+        await interruptOpenCodeSession(sessionId, OPENCODE_API_TIMEOUT_MS, env);
+      } catch {
+        // Best effort: the remove runs even when the interrupt fails.
+      }
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await removeOpenCodeSession(sessionId, OPENCODE_API_TIMEOUT_MS, env);
+          return;
+        } catch (err) {
+          lastError = err;
+          if (err instanceof OpenCodeApiTimeoutError) break;
+        }
+      }
+      process.stderr.write(
+        `ao: could not remove the OpenCode session ${sessionId} that this spawn created (${oneLine(lastError)}); remove it with \`opencode api session.remove --param sessionID=${sessionId}\`.\n`,
+      );
+    },
+  };
+  preparedEnvironments.set(prepared, env);
+  return prepared;
+}
+
+/**
+ * True when a command line runs OpenCode on `sessionId`: a token that is the
+ * `opencode` binary (also `.opencode`), and after it `--session <id>` or
+ * `--session=<id>`. The prompt cannot hold a new session's ID, because core
+ * builds the prompt before the session exists.
+ */
+function commandOpensSession(commandLine: string, sessionId: string): boolean {
+  const tokens = commandLine.trim().split(/\s+/);
+  const binary = tokens.findIndex((token) => /(?:^|\/)\.?opencode$/.test(token));
+  if (binary < 0) return false;
+  for (let i = binary + 1; i < tokens.length; i++) {
+    if (tokens[i] === `--session=${sessionId}`) return true;
+    if (tokens[i] === "--session" && tokens[i + 1] === sessionId) return true;
+  }
+  return false;
+}
+
+/** The pane is gone: tmux answered that its session, window or server does not exist. */
+class PaneGoneError extends Error {}
+
+/**
+ * The PID of the pane process that runs OpenCode on `sessionId`, or null.
+ * Throws `PaneGoneError` when tmux says that the pane is gone; any other
+ * failure counts as "not yet".
+ */
+async function findPaneOpenCodeProcess(
+  handle: RuntimeHandle,
+  sessionId: string,
+): Promise<number | null> {
+  if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+    const processes = await getHerdrPaneProcesses(handle.id);
+    const match = processes.find((proc) => commandOpensSession(proc.cmdline, sessionId));
+    return match ? match.pid : null;
+  }
+  if (handle.runtimeName === "tmux" && handle.id) {
+    let ttyOut: string;
+    try {
+      ({ stdout: ttyOut } = await execFileAsync(
+        "tmux",
+        ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+        { timeout: 5_000 },
+      ));
+    } catch (err) {
+      const stderr = String((err as { stderr?: unknown }).stderr ?? "");
+      if (
+        /can't find (?:session|window|pane)|no server running|error connecting to/i.test(stderr)
+      ) {
+        throw new PaneGoneError(stderr.trim(), { cause: err });
+      }
+      return null;
+    }
+    const ttys = new Set(
+      ttyOut
+        .split("\n")
+        .map((tty) => tty.trim().replace(/^\/dev\//, ""))
+        .filter(Boolean),
+    );
+    if (ttys.size === 0) return null;
+    const { stdout: psOut } = await execFileAsync("ps", ["-ww", "-eo", "pid,tty,args"], {
+      timeout: 5_000,
+    });
+    for (const line of psOut.split("\n")) {
+      const cols = line.trimStart().split(/\s+/);
+      if (cols.length < 3 || !ttys.has(cols[1] ?? "")) continue;
+      if (commandOpensSession(cols.slice(2).join(" "), sessionId)) {
+        const pid = Number(cols[0]);
+        return Number.isSafeInteger(pid) ? pid : null;
+      }
+    }
+    return null;
+  }
+  throw new Error(
+    `cannot check the OpenCode launch on runtime ${handle.runtimeName}: only tmux and herdr panes can be checked`,
+  );
+}
+
+/**
+ * Wait until the pane runs OpenCode on `sessionId` (0009 section 11 step 2).
+ * The same process must still run `settleMs` after it was first seen, so a
+ * process that exits at once (a failed TUI start) does not count. Throws when
+ * the pane is gone, or when the bound ends first.
+ */
+async function waitForPaneOnSession(
+  session: Session,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<void> {
+  const handle = session.runtimeHandle;
+  if (!handle) {
+    throw new Error(`cannot check the OpenCode launch of ${session.id}: no runtime handle`);
+  }
+  const settleMs = Math.min(LAUNCH_SETTLE_MS, Math.floor(timeoutMs / 4));
+  const deadline = Date.now() + timeoutMs;
+  let candidate: { pid: number; since: number } | undefined;
+  for (;;) {
+    let pid: number | null;
+    try {
+      pid = await findPaneOpenCodeProcess(handle, sessionId);
+    } catch (err) {
+      if (err instanceof PaneGoneError) {
+        throw new Error(
+          `the pane of ${session.id} is gone; OpenCode did not stay open on session ${sessionId} (${oneLine(err)})`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+    const now = Date.now();
+    if (pid === null) {
+      candidate = undefined;
+    } else if (candidate?.pid !== pid) {
+      candidate = { pid, since: now };
+    } else if (now - candidate.since >= settleMs) {
+      return;
+    }
+    if (now >= deadline) {
+      throw new Error(
+        `the pane of ${session.id} did not run OpenCode on session ${sessionId} within ${timeoutMs / 1000} s`,
+      );
+    }
+    await sleep(Math.min(PANE_POLL_MS, Math.max(1, deadline - now)));
+  }
+}
+
+/**
+ * Wait for the first `user` message of the session: the TUI submitted the
+ * launch prompt (as-63: 1.5 s after the TUI started). A failed read counts as
+ * "not seen yet". Returns false when the bound ends first.
+ */
+async function waitForUserMessage(
+  sessionId: string,
+  timeoutMs: number,
+  env: Record<string, string> | undefined,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - Date.now();
+    try {
+      if (
+        await hasOpenCodeUserMessage(sessionId, {
+          ...(env ? { env } : {}),
+          timeoutMs: Math.max(1, Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs)),
+        })
+      ) {
+        return true;
+      }
+    } catch {
+      // Not seen yet; the next read tries again within the bound.
+    }
+    const leftMs = deadline - Date.now();
+    if (leftMs <= 0) return false;
+    await sleep(Math.min(PROMPT_POLL_MS, leftMs));
+  }
+}
+
+// =============================================================================
 // Plugin Manifest
 // =============================================================================
 
@@ -382,70 +658,121 @@ function createOpenCodeAgent(): Agent {
     name: "opencode",
     processName: "opencode",
 
+    /**
+     * I-3: the session exists before the pane starts (`prepareAgentSession`
+     * created or switched it, and core passes its ID in `agentConfig`). The
+     * pane only opens the TUI on it: no `opencode api` call runs in the pane.
+     * Without an ID this throws, because there is no pane-side create.
+     */
     getLaunchCommand(config: AgentLaunchConfig): string {
-      assertSupportedOpenCodeVersion();
-      const existingSessionId = asValidOpenCodeSessionId(
+      const sessionId = asValidOpenCodeSessionId(
         (config.projectConfig.agentConfig as OpenCodeAgentConfig | undefined)?.opencodeSessionId,
       );
+      if (!sessionId) {
+        throw new Error(
+          `no OpenCode session ID for ${config.sessionId}: prepareAgentSession must create the session before the launch command`,
+        );
+      }
+      const promptValue = buildPromptValue(config);
+      return [
+        "exec",
+        "opencode",
+        "--session",
+        shellEscape(sessionId),
+        ...(promptValue ? ["--prompt", promptValue] : []),
+      ].join(" ");
+    },
 
-      let promptValue: string | undefined;
-      if (config.prompt) {
-        if (config.systemPromptFile) {
-          promptValue = `"$(cat ${shellEscape(config.systemPromptFile)}; printf '\\n\\n'; printf %s ${shellEscape(config.prompt)})"`;
-        } else if (config.systemPrompt) {
-          promptValue = shellEscape(`${config.systemPrompt}\n\n${config.prompt}`);
-        } else {
-          promptValue = shellEscape(config.prompt);
-        }
-      } else if (config.systemPromptFile) {
-        promptValue = `"$(cat ${shellEscape(config.systemPromptFile)})"`;
-      } else if (config.systemPrompt) {
-        promptValue = shellEscape(config.systemPrompt);
+    /**
+     * I-3 (0009 section 11): make the OpenCode session ready in Node before
+     * the pane starts, in this order: the version gate, the model check, then
+     * `session.create` (or, for a reused ID, `session.switchModel` and
+     * `session.switchAgent`), then the `session.get` readback. Every
+     * `opencode api` call runs with the pane's environment. A throw fails the
+     * spawn; a session that this call created is removed before the throw.
+     */
+    async prepareAgentSession(
+      config: AgentLaunchConfig,
+      context: AgentSessionPrepareContext,
+    ): Promise<PreparedAgentSession> {
+      assertSupportedOpenCodeVersion();
+      const env = context.environment;
+      const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
+      if (config.model && !modelRef) throw new Error(invalidModelMessage(config.model));
+      const agent = config.subagent;
+
+      if (config.model && modelRef) {
+        await assertOpenCodeModelAvailable(config.model, modelRef, env);
       }
 
-      if (existingSessionId) {
-        return buildResumeCommand(existingSessionId, {
-          promptValue,
-          model: config.model,
-          agent: config.subagent,
+      // Row 4 in Node: a reused session gets the requested settings, and it
+      // is never removed (`created: false`).
+      const reusedId = asValidOpenCodeSessionId(
+        (config.projectConfig.agentConfig as OpenCodeAgentConfig | undefined)?.opencodeSessionId,
+      );
+      if (reusedId) {
+        if (modelRef) await switchOpenCodeSessionModel(reusedId, modelRef, { env });
+        if (agent) await switchOpenCodeSessionAgent(reusedId, agent, { env });
+        if (modelRef || agent) await assertStoredSettings(reusedId, modelRef, agent, env);
+        return preparedOpenCodeSession(reusedId, false, env);
+      }
+
+      let directory: string;
+      try {
+        directory = realpathSync(context.workspacePath);
+      } catch (err) {
+        throw new Error(`cannot resolve the OpenCode workspace ${context.workspacePath}`, {
+          cause: err,
         });
       }
-
-      const title = `AO:${config.sessionId}`;
-      const promptOptions = promptValue ? ["--prompt", promptValue] : [];
-      const tuiCommand = ["exec", "opencode", "--session", '"$SES_ID"', ...promptOptions].join(" ");
-      const missingSessionError = shellEscape(
-        `failed to discover OpenCode session ID for AO:${config.sessionId}`,
+      const created = await createOpenCodeSession(
+        {
+          title: `AO:${config.sessionId}`,
+          ...(modelRef ? { model: modelRef } : {}),
+          ...(agent ? { agent } : {}),
+          location: { directory },
+        },
+        { env },
       );
-      const openTuiOrFail = (command: string) =>
-        `[ -n "$SES_ID" ] && ${command}; echo ${missingSessionError} >&2; exit 1`;
+      const prepared = preparedOpenCodeSession(created.id, true, env);
+      if (modelRef || agent) {
+        // The service can store other settings than the request.
+        try {
+          await assertStoredSettings(created.id, modelRef, agent, env);
+        } catch (err) {
+          await prepared.discard();
+          throw err;
+        }
+      }
+      return prepared;
+    },
 
-      // The API makes the titled session with its model and agent, without a model turn.
-      const modelRef = config.model ? toOpenCodeModelRef(config.model) : undefined;
-      const createBody = JSON.stringify({
-        title,
-        ...(modelRef ? { model: modelRef } : {}),
-        ...(config.subagent ? { agent: config.subagent } : {}),
-      });
-      // The TUI opens only on the ID that this create returned. There is no title
-      // lookup: a session with the title can be an older one from an earlier AO session
-      // with the same ID, and its conversation belongs to another task. Thus a failed
-      // create, or a create without a usable ID in its output, stops the command.
-      const apiCreate = `if OC_CREATE=$(opencode api session.create -d "$(node -e ${shellEscape(buildApiSessionBodyScript())} ${shellEscape(createBody)})"); then SES_ID=$(printf '%s\\n' "$OC_CREATE" | node -e ${shellEscape(buildApiSessionIdCaptureScript())}) || { echo ${missingSessionError} >&2; exit 1; }; else [ -z "$OC_CREATE" ] || printf '%s\\n' "$OC_CREATE" >&2; echo ${shellEscape(`failed to create the OpenCode session ${title}`)} >&2; exit 1; fi`;
-      // The service can store other settings than the request, so the command reads the
-      // new session back and checks only the requested model and agent.
-      const settingsCheck =
-        modelRef || config.subagent
-          ? [
-              `${buildApiSettingsReadback('"sessionID=$SES_ID"', modelRef, config.subagent)} || { ${settingsFailureCommand('"$SES_ID"')}; }`,
-            ]
-          : [];
-      const apiCommand =
-        config.model && !modelRef
-          ? invalidModelCommand(config.model)
-          : [apiCreate, ...settingsCheck, openTuiOrFail(tuiCommand)].join("; ");
-
-      return apiCommand;
+    /**
+     * I-3 (0009 section 11 steps 2 and 3): the pane must run an `opencode`
+     * process on the prepared session ID within `timeoutMs`; else this throws
+     * and core fails the spawn. With a prompt, it then waits for the first
+     * `user` message of the session: seen gives `promptDelivered: true`, not
+     * seen within `promptTimeoutMs` gives `false` (the spawn still succeeds).
+     */
+    async confirmLaunch(
+      session: Session,
+      prepared: PreparedAgentSession,
+      options: AgentLaunchConfirmOptions,
+    ): Promise<AgentLaunchConfirmation> {
+      const sessionId = asValidOpenCodeSessionId(prepared.metadata["opencodeSessionId"]);
+      if (!sessionId) {
+        throw new Error(
+          `cannot check the OpenCode launch of ${session.id}: no prepared session ID`,
+        );
+      }
+      await waitForPaneOnSession(session, sessionId, options.timeoutMs);
+      if (!options.promptExpected) return {};
+      const delivered = await waitForUserMessage(
+        sessionId,
+        options.promptTimeoutMs,
+        preparedEnvironments.get(prepared),
+      );
+      return { promptDelivered: delivered };
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {

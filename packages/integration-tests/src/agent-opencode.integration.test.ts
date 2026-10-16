@@ -12,9 +12,9 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ActivityDetection, AgentSessionInfo } from "@aoagents/ao-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -178,41 +178,67 @@ describe.skipIf(!canRun)("agent-opencode (integration)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fake `opencode` binaries for the version gate
+// Fake `opencode` binaries for the version gate and the session create
 // ---------------------------------------------------------------------------
 
 /**
- * Write a fake `opencode` that prints `output` (no single quotes) to a new
- * directory and return the directory. The plugin runs `opencode --version`
- * before it builds a launch command, so the tests below put a fake first on
- * PATH and do not depend on the host's OpenCode (CI installs none).
+ * Write a fake `opencode` to a new directory and return the directory. It
+ * prints `version` for `--version`, answers `opencode api session.create` and
+ * `session.get` like 2.0.29, and appends each call (argv and AO_SESSION) to
+ * `calls.jsonl` in the directory. I-3 runs the version gate and the create in
+ * Node before the pane starts, so the tests below put this fake on PATH and
+ * do not depend on the host's OpenCode (CI installs none).
  */
-async function writeFakeOpencode(output: string): Promise<string> {
+async function writeFakeOpencode(version: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "ao-inttest-opencode-fake-"));
-  await writeFile(join(dir, "opencode"), `#!/bin/sh\nprintf '%s\\n' '${output}'\n`, {
-    mode: 0o755,
-  });
+  const log = join(dir, "calls.jsonl");
+  const store = join(dir, "sessions.json");
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, aoSession: process.env.AO_SESSION ?? null }) + "\\n");
+if (argv[0] === "--version") { process.stdout.write(${JSON.stringify(version)} + "\\n"); process.exit(0); }
+let sessions = {};
+try { sessions = JSON.parse(fs.readFileSync(${JSON.stringify(store)}, "utf-8")); } catch {}
+if (argv[0] === "api" && argv[1] === "session.create") {
+  const body = JSON.parse(argv[argv.indexOf("-d") + 1]);
+  const session = { id: "ses_inttest1", title: body.title, directory: body.location.directory };
+  if (body.model) session.model = { ...body.model, variant: body.model.variant || "default" };
+  if (body.agent) session.agent = body.agent;
+  sessions[session.id] = session;
+  fs.writeFileSync(${JSON.stringify(store)}, JSON.stringify(sessions));
+  process.stdout.write(JSON.stringify({ data: session }) + "\\n");
+  process.exit(0);
+}
+if (argv[0] === "api" && argv[1] === "session.get") {
+  const id = argv[argv.indexOf("--param") + 1].replace(/^sessionID=/, "");
+  if (!sessions[id]) { process.stdout.write(JSON.stringify({ _tag: "SessionNotFoundError" })); process.exit(1); }
+  process.stdout.write(JSON.stringify({ data: sessions[id] }) + "\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected call\\n");
+process.exit(2);
+`;
+  await writeFile(join(dir, "opencode"), script, { mode: 0o755 });
   return dir;
 }
 
+async function readFakeCalls(
+  dir: string,
+): Promise<Array<{ argv: string[]; aoSession: string | null }>> {
+  const text = await readFile(join(dir, "calls.jsonl"), "utf-8").catch(() => "");
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { argv: string[]; aoSession: string | null });
+}
+
 // ---------------------------------------------------------------------------
-// Launch command tests (a fake opencode 2.0.29 on PATH; no host OpenCode needed)
+// Launch command tests: a pure string on the prepared session ID (I-3)
 // ---------------------------------------------------------------------------
 
 describe("getLaunchCommand (integration)", () => {
   const agent = opencodePlugin.create();
-  const originalPath = process.env.PATH;
-  let fakeDir: string;
-
-  beforeAll(async () => {
-    fakeDir = await writeFakeOpencode("opencode v2.0.29");
-    process.env.PATH = `${fakeDir}${delimiter}${originalPath ?? ""}`;
-  });
-
-  afterAll(async () => {
-    process.env.PATH = originalPath;
-    await rm(fakeDir, { recursive: true, force: true });
-  });
 
   const baseConfig = {
     sessionId: "test-1",
@@ -222,178 +248,73 @@ describe("getLaunchCommand (integration)", () => {
       path: "/workspace",
       defaultBranch: "main",
       sessionPrefix: "test",
+      agentConfig: { opencodeSessionId: "ses_abc123" },
     },
   };
 
-  it("generates correct command with subagent", () => {
+  it("opens the TUI on the prepared session with the prompt, and no flags for the stored settings", () => {
     const cmd = agent.getLaunchCommand({
       ...baseConfig,
       subagent: "sisyphus",
+      model: "opencode-go/muse-spark-1.3-contributor",
       prompt: "fix the bug",
     });
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("'fix the bug'");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix the bug'");
-    expect(cmd).not.toContain("--agent");
+    expect(cmd).toBe("exec opencode --session 'ses_abc123' --prompt 'fix the bug'");
   });
 
-  it("generates correct command with systemPrompt", () => {
+  it("joins systemPrompt and the task prompt", () => {
     const cmd = agent.getLaunchCommand({
       ...baseConfig,
       systemPrompt: "You are an orchestrator",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain(
-      `exec opencode --session "$SES_ID" --prompt 'You are an orchestrator
+    expect(cmd).toBe(`exec opencode --session 'ses_abc123' --prompt 'You are an orchestrator
 
-do the task'`,
-    );
+do the task'`);
   });
 
-  it("generates correct command with systemPromptFile", () => {
+  it("reads systemPromptFile in the pane, before the task prompt", () => {
     const cmd = agent.getLaunchCommand({
       ...baseConfig,
       systemPromptFile: "/tmp/orchestrator-prompt.md",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator-prompt.md'; printf '\\n\\n'; printf %s 'do the task')\"",
+    expect(cmd).toBe(
+      "exec opencode --session 'ses_abc123' --prompt \"$(cat '/tmp/orchestrator-prompt.md'; printf '\\n\\n'; printf %s 'do the task')\"",
     );
   });
 
-  it("generates correct command with model override", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      model: "opencode-go/muse-spark-1.3-contributor",
-      prompt: "do the task",
-    });
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain('"id":"muse-spark-1.3-contributor"');
-    expect(cmd).not.toContain("--model");
-  });
-
-  it("combines subagent + systemPrompt + model + prompt", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      subagent: "oracle",
-      systemPrompt: "You are an expert",
-      model: "opencode-go/gpt-5.2",
-      prompt: "review this code",
-    });
-    expect(cmd).toContain('"agent":"oracle"');
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'You are an expert\n\nreview this code'",
+  it("escapes single quotes in a prompt and in a prompt file path", () => {
+    expect(agent.getLaunchCommand({ ...baseConfig, systemPrompt: "it's important" })).toBe(
+      "exec opencode --session 'ses_abc123' --prompt 'it'\\''s important'",
     );
-    expect(cmd).not.toContain("--model");
-    expect(cmd).not.toContain("--agent");
-  });
-
-  it("systemPromptFile takes precedence over systemPrompt", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      systemPrompt: "direct prompt",
-      systemPromptFile: "/tmp/file-prompt.md",
-    });
-    expect(cmd).toContain("\"$(cat '/tmp/file-prompt.md')\"");
-    expect(cmd).not.toContain("direct prompt");
-  });
-
-  it("uses prompt with systemPromptFile for orchestrator-style launch", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      sessionId: "test-orchestrator",
-      permissions: "permissionless",
-      systemPromptFile: "/tmp/orchestrator-prompt.md",
-    });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"title":"AO:test-orchestrator"');
-    expect(cmd).toContain(
-      'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/orchestrator-prompt.md\')"',
+    expect(agent.getLaunchCommand({ ...baseConfig, systemPromptFile: "/tmp/it's-prompt.md" })).toBe(
+      "exec opencode --session 'ses_abc123' --prompt \"$(cat '/tmp/it'\\''s-prompt.md')\"",
     );
   });
 
-  it("escapes single quotes in systemPrompt", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      systemPrompt: "it's important",
-    });
-    expect(cmd).toContain("'it'\\''s important'");
+  it("omits --prompt for an empty prompt", () => {
+    expect(agent.getLaunchCommand({ ...baseConfig, prompt: "" })).toBe(
+      "exec opencode --session 'ses_abc123'",
+    );
   });
 
-  it("escapes path with single quotes in systemPromptFile", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      systemPromptFile: "/tmp/it's-prompt.md",
-    });
-    expect(cmd).toContain("\"$(cat '/tmp/it'\\''s-prompt.md')\"");
-  });
-
-  it("handles prompt with special shell characters", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      prompt: "fix  and `backtick` and 'quote'",
-    });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("fix  and `backtick`");
-    expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt');
-  });
-
-  it("handles empty prompt", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      prompt: "",
-    });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain('"title":"AO:test-1"');
-    expect(cmd).not.toContain("--prompt");
-  });
-
-  it("handles prompt with newlines", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      prompt: "line1\nline2",
-    });
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt \'line1');
-  });
-
-  it("uses API create launch for fresh sessions", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      prompt: "start work",
-    });
-    expect(cmd).toContain('"title":"AO:test-1"');
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'start work'");
-    expect(cmd).toContain('exec opencode --session "$SES_ID"');
-  });
-
-  it("uses --session when existing OpenCode session id is provided", () => {
-    const cmd = agent.getLaunchCommand({
-      ...baseConfig,
-      projectConfig: {
-        ...baseConfig.projectConfig,
-        agentConfig: {
-          opencodeSessionId: "ses_abc123",
-        },
-      },
-      prompt: "continue",
-    });
-    expect(cmd).toBe("opencode --session 'ses_abc123' --prompt 'continue'");
+  it("throws without a prepared session ID", () => {
+    expect(() =>
+      agent.getLaunchCommand({
+        ...baseConfig,
+        projectConfig: { ...baseConfig.projectConfig, agentConfig: {} },
+        prompt: "start",
+      }),
+    ).toThrow("prepareAgentSession must create the session before the launch command");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Version gate through a real child process (fake binaries on PATH)
+// Version gate and session create through real child processes (fake binary)
 // ---------------------------------------------------------------------------
 
-describe("version gate (integration)", () => {
+describe("prepareAgentSession with the version gate (integration)", () => {
   const agent = opencodePlugin.create();
   const originalPath = process.env.PATH;
   const dirs: string[] = [];
@@ -406,12 +327,14 @@ describe("version gate (integration)", () => {
       defaultBranch: "main",
       sessionPrefix: "test",
     },
+    subagent: "plan",
     prompt: "start",
   };
 
-  async function onlyOnPath(dir: string): Promise<void> {
+  async function onlyOnPath(dir: string): Promise<string> {
     dirs.push(dir);
     process.env.PATH = dir;
+    return dir;
   }
 
   afterEach(() => {
@@ -422,23 +345,49 @@ describe("version gate (integration)", () => {
     for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   });
 
-  it("accepts opencode v2.0.29: the launch command is built and detect() finds it", async () => {
-    await onlyOnPath(await writeFakeOpencode("opencode v2.0.29"));
-    expect(agent.getLaunchCommand(config)).toContain("opencode api session.create");
+  it("accepts opencode v2.0.29: it creates the session with the pane environment, and detect() finds it", async () => {
+    const dir = await onlyOnPath(await writeFakeOpencode("opencode v2.0.29"));
+    const workspace = await mkdtemp(join(tmpdir(), "ao-inttest-opencode-ws-"));
+    dirs.push(workspace);
+
+    const prepared = await agent.prepareAgentSession!(config, {
+      workspacePath: workspace,
+      environment: { AO_SESSION: "gate-1", PATH: dir },
+    });
+
+    expect(prepared.metadata).toEqual({ opencodeSessionId: "ses_inttest1" });
+    expect(prepared.created).toBe(true);
+    const calls = await readFakeCalls(dir);
+    expect(calls.map((call) => call.argv.slice(0, 2))).toEqual([
+      ["--version"],
+      ["api", "session.create"],
+      ["api", "session.get"],
+    ]);
+    const body = JSON.parse(calls[1]!.argv[3]!) as Record<string, unknown>;
+    expect(body).toEqual({
+      title: "AO:gate-1",
+      agent: "plan",
+      location: { directory: await realpath(workspace) },
+    });
+    // The API calls run with the session's own AO_SESSION, not the outer one.
+    expect(calls.slice(1).map((call) => call.aoSession)).toEqual(["gate-1", "gate-1"]);
     expect(opencodePlugin.detect!()).toBe(true);
   });
 
-  it("refuses 1.18.35 before any command is built, and detect() hides it", async () => {
-    await onlyOnPath(await writeFakeOpencode("1.18.35"));
-    expect(() => agent.getLaunchCommand(config)).toThrow(
-      "ao needs OpenCode 2.0.29 or later (found 1.18.35)",
-    );
+  it("refuses 1.18.35 before any API call, and detect() hides it", async () => {
+    const dir = await onlyOnPath(await writeFakeOpencode("1.18.35"));
+    await expect(
+      agent.prepareAgentSession!(config, { workspacePath: tmpdir(), environment: { PATH: dir } }),
+    ).rejects.toThrow("ao needs OpenCode 2.0.29 or later (found 1.18.35)");
+    expect((await readFakeCalls(dir)).map((call) => call.argv[0])).toEqual(["--version"]);
     expect(opencodePlugin.detect!()).toBe(false);
   });
 
   it("refuses a host with no opencode on PATH and says so", async () => {
-    await onlyOnPath(await mkdtemp(join(tmpdir(), "ao-inttest-opencode-empty-")));
-    expect(() => agent.getLaunchCommand(config)).toThrow("not found on PATH");
+    const dir = await onlyOnPath(await mkdtemp(join(tmpdir(), "ao-inttest-opencode-empty-")));
+    await expect(
+      agent.prepareAgentSession!(config, { workspacePath: tmpdir(), environment: { PATH: dir } }),
+    ).rejects.toThrow("not found on PATH");
     expect(opencodePlugin.detect!()).toBe(false);
   });
 });

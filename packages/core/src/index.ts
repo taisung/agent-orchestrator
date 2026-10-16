@@ -114,16 +114,25 @@ export {
   getOpenCodeSession,
   listOpenCodeSessionsByTitle,
   findOpenCodeSessionsByTitle,
-  waitForOpenCodeSession,
   removeOpenCodeSession,
   interruptOpenCodeSession,
+  listOpenCodeModels,
+  findOpenCodeModelProblem,
+  createOpenCodeSession,
+  switchOpenCodeSessionModel,
+  switchOpenCodeSessionAgent,
+  hasOpenCodeUserMessage,
   OpenCodeApiTimeoutError,
+  OpenCodeApiIncompleteAnswerError,
 } from "./opencode-api.js";
 export type {
   OpenCodeApiSession,
   OpenCodeApiOptions,
   OpenCodeSessionMatch,
-  OpenCodeSessionWaitResult,
+  OpenCodeApiModel,
+  OpenCodeModelRef,
+  OpenCodeSessionCreateBody,
+  OpenCodeSpawnCallOptions,
 } from "./opencode-api.js";
 export { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 

@@ -1,23 +1,56 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
 import {
+  OpenCodeApiIncompleteAnswerError,
+  OpenCodeApiTimeoutError,
   SessionNotRestorableError,
   type Session,
   type RuntimeHandle,
   type AgentLaunchConfig,
+  type OpenCodeApiModel,
+  type PreparedAgentSession,
 } from "@aoagents/ao-core";
 
-const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity, mockGetOpenCodeSession, mockCallOpenCodeApi } =
-  vi.hoisted(() => ({
-    mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
-    mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
-    mockRecordTerminalActivity: vi.fn().mockResolvedValue(undefined),
-    mockGetOpenCodeSession: vi.fn(),
-    mockCallOpenCodeApi: vi.fn(),
-  }));
+const {
+  mockAppendActivityEntry,
+  mockReadLastActivityEntry,
+  mockRecordTerminalActivity,
+  mockGetOpenCodeSession,
+  mockCallOpenCodeApi,
+  mockCreateOpenCodeSession,
+  mockListOpenCodeModels,
+  mockSwitchOpenCodeSessionModel,
+  mockSwitchOpenCodeSessionAgent,
+  mockHasOpenCodeUserMessage,
+  mockInterruptOpenCodeSession,
+  mockRemoveOpenCodeSession,
+  mockGetHerdrPaneProcesses,
+} = vi.hoisted(() => ({
+  mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
+  mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
+  mockRecordTerminalActivity: vi.fn().mockResolvedValue(undefined),
+  mockGetOpenCodeSession: vi.fn(),
+  mockCallOpenCodeApi: vi.fn(),
+  mockCreateOpenCodeSession: vi.fn(),
+  mockListOpenCodeModels: vi.fn(),
+  mockSwitchOpenCodeSessionModel: vi.fn(),
+  mockSwitchOpenCodeSessionAgent: vi.fn(),
+  mockHasOpenCodeUserMessage: vi.fn(),
+  mockInterruptOpenCodeSession: vi.fn(),
+  mockRemoveOpenCodeSession: vi.fn(),
+  mockGetHerdrPaneProcesses: vi.fn(),
+}));
 
 const mockExecFileAsync = vi.fn();
 const mockExecFileSync = vi.fn();
@@ -31,6 +64,15 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     recordTerminalActivity: mockRecordTerminalActivity,
     getOpenCodeSession: (...args: unknown[]) => (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
     callOpenCodeApi: (...args: unknown[]) => (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
+    // The I-3 session calls of prepareAgentSession, discard and confirmLaunch.
+    createOpenCodeSession: mockCreateOpenCodeSession,
+    listOpenCodeModels: mockListOpenCodeModels,
+    switchOpenCodeSessionModel: mockSwitchOpenCodeSessionModel,
+    switchOpenCodeSessionAgent: mockSwitchOpenCodeSessionAgent,
+    hasOpenCodeUserMessage: mockHasOpenCodeUserMessage,
+    interruptOpenCodeSession: mockInterruptOpenCodeSession,
+    removeOpenCodeSession: mockRemoveOpenCodeSession,
+    getHerdrPaneProcesses: mockGetHerdrPaneProcesses,
   };
 });
 
@@ -123,7 +165,42 @@ beforeEach(() => {
       return Promise.resolve({ data: [], cursor: { previous: null, next: null } });
     return Promise.reject(new Error(`unexpected operation: ${operation}`));
   });
+  mockCreateOpenCodeSession.mockResolvedValue({ id: "ses_made", title: "AO:sess-1" });
+  mockListOpenCodeModels.mockResolvedValue(FLEET_PIN_MODELS);
+  mockSwitchOpenCodeSessionModel.mockResolvedValue(undefined);
+  mockSwitchOpenCodeSessionAgent.mockResolvedValue(undefined);
+  mockHasOpenCodeUserMessage.mockResolvedValue(false);
+  mockInterruptOpenCodeSession.mockResolvedValue(undefined);
+  mockRemoveOpenCodeSession.mockResolvedValue(undefined);
+  mockGetHerdrPaneProcesses.mockResolvedValue([]);
 });
+
+/**
+ * The two fleet pins as `opencode api model.list` printed them on 2.0.31
+ * (0010 section 11.4): the model check matches `providerID` and `id`.
+ */
+const FLEET_PIN_MODELS: OpenCodeApiModel[] = [
+  {
+    id: "muse-spark-1.3-contributor",
+    modelID: "muse-spark-1.3-contributor",
+    providerID: "opencode-go",
+    family: "muse",
+    name: "Muse Spark 1.3 Contributor",
+    variants: [{ id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+    status: "active",
+    enabled: true,
+  },
+  {
+    id: "deepseek-v4.1-flash",
+    modelID: "deepseek-v4.1-flash",
+    providerID: "opencode-go",
+    family: "deepseek-flash",
+    name: "DeepSeek V4.1 Flash",
+    variants: [{ id: "low" }, { id: "high" }, { id: "max" }],
+    status: "active",
+    enabled: true,
+  },
+];
 
 describe("plugin manifest & exports", () => {
   it("has correct manifest", () => {
@@ -151,299 +228,129 @@ describe("plugin manifest & exports", () => {
 describe("getLaunchCommand", () => {
   const agent = create();
   const model = "opencode-go/muse-spark-1.3-contributor";
+  const id = "ses_prepared";
 
-  it("generates a base command that makes the session through the API", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain('"title":"AO:sess-1"');
+  /** A launch config that carries the ID that prepareAgentSession made (I-3). */
+  function prepared(overrides: Partial<AgentLaunchConfig> = {}): AgentLaunchConfig {
+    const base = makeLaunchConfig(overrides);
+    return {
+      ...base,
+      projectConfig: {
+        ...base.projectConfig,
+        agentConfig: { ...base.projectConfig.agentConfig, opencodeSessionId: id },
+      },
+    };
+  }
+
+  it("returns exactly exec opencode --session '<id>' without a prompt", () => {
+    expect(agent.getLaunchCommand(prepared())).toBe("exec opencode --session 'ses_prepared'");
   });
 
-  it("holds no version probe: the Node gate refuses old binaries before the pane starts", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model, prompt: "Go" }));
-    expect(cmd).not.toContain("OC_MAJOR");
-    expect(cmd).not.toContain("opencode --version");
+  it("returns exactly exec opencode --session '<id>' --prompt '<prompt>' with a prompt", () => {
+    expect(agent.getLaunchCommand(prepared({ prompt: "Fix it" }))).toBe(
+      "exec opencode --session 'ses_prepared' --prompt 'Fix it'",
+    );
   });
 
-  it("makes the titled session without run --command or a title lookup", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model, prompt: "Go" }));
-    expect(cmd).not.toContain("run --format json");
-    expect(cmd).not.toContain("--command");
-    expect(cmd).not.toContain("opencode session list");
+  it("throws without a session ID: there is no pane-side create", () => {
+    expect(() => agent.getLaunchCommand(makeLaunchConfig({ prompt: "Go" }))).toThrow(
+      "no OpenCode session ID for sess-1: prepareAgentSession must create the session",
+    );
   });
 
-  it("uses --prompt with shell-escaped prompt", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Fix it" }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Fix it'");
+  it("holds no opencode api call, no title lookup and no version probe", () => {
+    const cmd = agent.getLaunchCommand(prepared({ model, subagent: "plan", prompt: "Go" }));
+    expect(cmd).not.toContain("opencode api");
+    expect(cmd).not.toContain("session list");
+    expect(cmd).not.toContain("--version");
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
-  it("stores the model in the API body and passes no --model to the TUI", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ model }));
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain('"id":"muse-spark-1.3-contributor"');
-    expect(cmd).not.toContain("--model");
-  });
-
-  it("combines prompt and model", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Go", model }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Go'");
-    expect(cmd).not.toContain("--model");
+  it("passes no --model or --agent to the TUI: the session holds them", () => {
+    const cmd = agent.getLaunchCommand(prepared({ model, subagent: "sisyphus", prompt: "Go" }));
+    expect(cmd).toBe("exec opencode --session 'ses_prepared' --prompt 'Go'");
   });
 
   it("escapes single quotes in prompt (POSIX shell escaping)", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "it's broken" }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'it'\\''s broken'");
-  });
-
-  it("omits optional flags when not provided", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).not.toContain("--model");
-    expect(cmd).not.toContain("--agent");
-    expect(cmd).not.toContain('"agent"');
-  });
-
-  it("stores the agent in the API body when subagent is provided", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ subagent: "sisyphus" }));
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).not.toContain("--agent");
-  });
-
-  it("generates command with agent and prompt", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ subagent: "sisyphus", prompt: "fix bug" }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix bug'");
-    expect(cmd).not.toContain("--agent");
-  });
-
-  it("generates command with agent, model, and prompt", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ subagent: "sisyphus", model, prompt: "fix the bug" }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix the bug'");
-    expect(cmd).not.toContain("--agent");
-    expect(cmd).not.toContain("--model");
-  });
-
-  it("shell-escapes sessionId in the discovery failure message", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ sessionId: "sess-1; rm -rf /" }));
-
-    expect(cmd).toContain(
-      "echo 'failed to discover OpenCode session ID for AO:sess-1; rm -rf /' >&2",
+    expect(agent.getLaunchCommand(prepared({ prompt: "it's broken" }))).toBe(
+      "exec opencode --session 'ses_prepared' --prompt 'it'\\''s broken'",
     );
   });
 
-  it("keeps the open-or-fail shape shell-valid on one line", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig());
-
-    expect(cmd).toContain('[ -n "$SES_ID" ] && exec opencode');
-    expect(cmd).not.toContain("then;");
-  });
-
-  it("works with different agent names: oracle", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ subagent: "oracle", prompt: "review code" }),
+  it("generates command with systemPrompt", () => {
+    expect(agent.getLaunchCommand(prepared({ systemPrompt: "You are an orchestrator" }))).toBe(
+      "exec opencode --session 'ses_prepared' --prompt 'You are an orchestrator'",
     );
-    expect(cmd).toContain('"agent":"oracle"');
-    expect(cmd).toContain("'review code'");
-    expect(cmd).not.toContain("--agent");
-  });
-
-  it("works with different agent names: librarian", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ subagent: "librarian", prompt: "find usages" }),
-    );
-    expect(cmd).toContain('"agent":"librarian"');
-    expect(cmd).toContain("'find usages'");
-    expect(cmd).not.toContain("--agent");
-  });
-
-  it("backward compatible: no agent key when subagent not provided", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "fix it" }));
-    expect(cmd).not.toContain('"agent"');
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'fix it'");
-  });
-
-  it("combines model and prompt without agent (backward compatible)", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Go", model }));
-    expect(cmd).not.toContain('"agent"');
-    expect(cmd).toContain('"providerID":"opencode-go"');
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'Go'");
-    expect(cmd).not.toContain("--model");
-  });
-
-  it("uses API create when systemPrompt is provided", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ systemPrompt: "You are an orchestrator" }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'You are an orchestrator'");
   });
 
   it("generates command with systemPrompt and task prompt", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ systemPrompt: "You are an orchestrator", prompt: "do the task" }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain(
-      `exec opencode --session "$SES_ID" --prompt 'You are an orchestrator
+    expect(
+      agent.getLaunchCommand(
+        prepared({ systemPrompt: "You are an orchestrator", prompt: "do the task" }),
+      ),
+    ).toBe(`exec opencode --session 'ses_prepared' --prompt 'You are an orchestrator
 
-do the task'`,
-    );
+do the task'`);
   });
 
   it("escapes single quotes in systemPrompt", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ systemPrompt: "it's important" }));
-    expect(cmd).toContain("exec opencode --session \"$SES_ID\" --prompt 'it'\\''s important'");
-  });
-
-  it("handles very long systemPrompt", () => {
-    const longPrompt = "A".repeat(500);
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ systemPrompt: longPrompt }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd.length).toBeGreaterThan(500);
+    expect(agent.getLaunchCommand(prepared({ systemPrompt: "it's important" }))).toBe(
+      "exec opencode --session 'ses_prepared' --prompt 'it'\\''s important'",
+    );
   });
 
   it("generates command with systemPromptFile via shell substitution", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ systemPromptFile: "/tmp/prompt.md" }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/prompt.md\')"');
+    expect(agent.getLaunchCommand(prepared({ systemPromptFile: "/tmp/prompt.md" }))).toBe(
+      `exec opencode --session 'ses_prepared' --prompt "$(cat '/tmp/prompt.md')"`,
+    );
   });
 
   it("escapes path in systemPromptFile", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ systemPromptFile: "/tmp/it's-prompt.md" }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/it'\\''s-prompt.md')\"",
+    expect(agent.getLaunchCommand(prepared({ systemPromptFile: "/tmp/it's-prompt.md" }))).toBe(
+      `exec opencode --session 'ses_prepared' --prompt "$(cat '/tmp/it'\\''s-prompt.md')"`,
     );
   });
 
   it("systemPromptFile takes precedence over systemPrompt", () => {
     const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({
-        systemPrompt: "direct prompt",
-        systemPromptFile: "/tmp/file-prompt.md",
-      }),
+      prepared({ systemPrompt: "direct prompt", systemPromptFile: "/tmp/file-prompt.md" }),
     );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain(
-      'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/file-prompt.md\')"',
-    );
-    expect(cmd).not.toContain("direct prompt");
-  });
-
-  it("combines systemPromptFile with subagent and prompt", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({
-        systemPromptFile: "/tmp/orchestrator.md",
-        subagent: "sisyphus",
-        prompt: "fix the bug",
-      }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\"",
-    );
-    expect(cmd).not.toContain("--agent");
-    expect(cmd).toContain(
-      "$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')",
+    expect(cmd).toBe(
+      `exec opencode --session 'ses_prepared' --prompt "$(cat '/tmp/file-prompt.md')"`,
     );
   });
 
-  it("generates orchestrator-style systemPromptFile launch", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({
-        sessionId: "my-orchestrator",
-        permissions: "permissionless",
-        systemPromptFile: "/tmp/orchestrator.md",
-      }),
-    );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"title":"AO:my-orchestrator"');
-    expect(cmd).toContain(
-      'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/orchestrator.md\')"',
+  it("combines systemPromptFile with the task prompt", () => {
+    expect(
+      agent.getLaunchCommand(
+        prepared({ systemPromptFile: "/tmp/orchestrator.md", prompt: "fix the bug" }),
+      ),
+    ).toBe(
+      "exec opencode --session 'ses_prepared' --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\"",
     );
   });
 
-  it("combines systemPromptFile with subagent and prompt - shell escape", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({
-        systemPromptFile: "/tmp/orchestrator.md",
-        subagent: "sisyphus",
-        prompt: "fix the bug",
-      }),
+  it.each([
+    ["special characters", "fix $PATH/to/file and `rm -rf /unquoted/path`"],
+    ["newlines", "line1\nline2\nline3"],
+    ["backticks", "use `backticks` and $vars`"],
+    ["dollar signs", "cost is $100"],
+    ["double quotes", 'say "hello" and "goodbye"'],
+    ["unicode characters", "fix bug in café.js file"],
+    ["semicolons", "line1; line2; line3"],
+  ])("keeps a prompt with %s inside one single-quoted word", (_label, prompt) => {
+    expect(agent.getLaunchCommand(prepared({ prompt }))).toBe(
+      `exec opencode --session 'ses_prepared' --prompt '${prompt}'`,
     );
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('"agent":"sisyphus"');
-    expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')\"",
-    );
-    expect(cmd).toContain(
-      "$(cat '/tmp/orchestrator.md'; printf '\\n\\n'; printf %s 'fix the bug')",
-    );
-  });
-
-  it("handles prompt with special characters", () => {
-    const cmd = agent.getLaunchCommand(
-      makeLaunchConfig({ prompt: "fix $PATH/to/file and `rm -rf /unquoted/path`" }),
-    );
-    expect(cmd).toContain("'fix $PATH/to/file and `rm -rf /unquoted/path`");
-  });
-
-  it("handles prompt with newlines", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "line1\nline2\nline3" }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain("'line1");
-  });
-
-  it("handles prompt with backticks", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "use `backticks` and $vars`" }));
-    expect(cmd).toContain("'use `backticks` and $vars`");
-  });
-
-  it("handles prompt with dollar signs", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "cost is $100" }));
-    expect(cmd).toContain("'cost is $100'");
-  });
-
-  it("handles prompt with double quotes", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: 'say "hello" and "goodbye"' }));
-    expect(cmd).toContain('\'say "hello" and "goodbye"\'');
-  });
-
-  it("handles prompt with unicode characters", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "fix bug in café.js file" }));
-    expect(cmd).toContain("'fix bug in café.js file'");
-  });
-
-  it("handles prompt with semicolons", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "line1; line2; line3" }));
-    expect(cmd).toContain("'line1; line2; line3");
   });
 
   it("handles empty prompt", () => {
-    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "" }));
-    expect(cmd).toContain("opencode api session.create");
-    expect(cmd).toContain('exec opencode --session "$SES_ID"');
-    expect(cmd).toContain('"title":"AO:sess-1"');
-    expect(cmd).not.toContain("--prompt");
+    expect(agent.getLaunchCommand(prepared({ prompt: "" }))).toBe(
+      "exec opencode --session 'ses_prepared'",
+    );
   });
 
-  it("uses existing session id", () => {
+  it("uses the reused session ID in the same way", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({
         projectConfig: {
@@ -457,32 +364,7 @@ do the task'`,
         prompt: "continue",
       }),
     );
-
-    expect(cmd).toBe("opencode --session 'ses_abc123' --prompt 'continue'");
-  });
-
-  it("runs the version probe in Node and puts none in the pane command", () => {
-    const fresh = agent.getLaunchCommand(makeLaunchConfig());
-    const existing = agent.getLaunchCommand(
-      makeLaunchConfig({
-        projectConfig: {
-          name: "my-project",
-          repo: "owner/repo",
-          path: "/workspace/repo",
-          defaultBranch: "main",
-          sessionPrefix: "my",
-          agentConfig: { opencodeSessionId: "ses_abc123" },
-        },
-      }),
-    );
-
-    // The second command takes the existing-session path, not session.create.
-    expect(fresh).toContain("opencode api session.create");
-    expect(existing).toBe("opencode --session 'ses_abc123'");
-    // One Node-side probe per command, and no probe text in either pane command.
-    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
-    expect(fresh).not.toContain("--version");
-    expect(existing).not.toContain("--version");
+    expect(cmd).toBe("exec opencode --session 'ses_abc123' --prompt 'continue'");
   });
 });
 
@@ -870,7 +752,18 @@ describe("getRestoreCommand", () => {
 
   it("restore with stored default reads no mode, like a launch with no mode", async () => {
     mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
-    const launch = agent.getLaunchCommand(makeLaunchConfig());
+    const launch = agent.getLaunchCommand(
+      makeLaunchConfig({
+        projectConfig: {
+          name: "proj",
+          repo: "o/r",
+          path: "/p",
+          defaultBranch: "main",
+          sessionPrefix: "p",
+          agentConfig: { opencodeSessionId: "ses_abc123" },
+        },
+      }),
+    );
     const restore = await agent.getRestoreCommand!(
       makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
       {
@@ -965,28 +858,27 @@ describe("getEnvironment PATH", () => {
 });
 
 describe("invalid session ID rejection", () => {
-  it("does not include --session for invalid opencodeSessionId in launch command", () => {
+  it("refuses an invalid opencodeSessionId instead of building a launch command", () => {
     const agent = create();
 
     const invalidIds = ["invalid", "SES_uppercase", "ses_", "ses spaces here", "", "ses-123"];
 
     for (const invalidId of invalidIds) {
-      const cmd = agent.getLaunchCommand(
-        makeLaunchConfig({
-          projectConfig: {
-            name: "my-project",
-            repo: "owner/repo",
-            path: "/workspace/repo",
-            defaultBranch: "main",
-            sessionPrefix: "my",
-            agentConfig: { opencodeSessionId: invalidId },
-          },
-          prompt: "continue",
-        }),
-      );
-
-      expect(cmd).not.toContain(`--session '${invalidId}'`);
-      expect(cmd).toContain("opencode api session.create");
+      expect(() =>
+        agent.getLaunchCommand(
+          makeLaunchConfig({
+            projectConfig: {
+              name: "my-project",
+              repo: "owner/repo",
+              path: "/workspace/repo",
+              defaultBranch: "main",
+              sessionPrefix: "my",
+              agentConfig: { opencodeSessionId: invalidId },
+            },
+            prompt: "continue",
+          }),
+        ),
+      ).toThrow("no OpenCode session ID");
     }
   });
 
@@ -1420,288 +1312,64 @@ function expectSettings(
   else expect(stored!.agent).toEqual(before?.agent);
 }
 
-describe("launch command against the OpenCode 2.x CLI", () => {
+describe("launch command against the OpenCode 2.x CLI (I-3)", () => {
   const agent = create();
   const model = "opencode-go/muse-spark-1.3-contributor";
   const subagent = "plan";
-  const prompt = "Reply with OK";
 
-  it("opens the TUI on the created session", () => {
-    const config = makeLaunchConfig({ model, subagent, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      sessionId: "ses_gen",
-    });
+  function preparedConfig(overrides: Partial<AgentLaunchConfig> = {}): AgentLaunchConfig {
+    const base = makeLaunchConfig(overrides);
+    return {
+      ...base,
+      projectConfig: {
+        ...base.projectConfig,
+        agentConfig: { ...base.projectConfig.agentConfig, opencodeSessionId: "ses_prepared" },
+      },
+    };
+  }
+
+  it("opens the TUI on the prepared session and runs no opencode api call in the pane", () => {
+    const prompt = "Reply with OK";
+    const run = runAgainstFakeCli(
+      agent.getLaunchCommand(preparedConfig({ model, subagent, prompt })),
+      {},
+    );
 
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(run.tuiCalls).toHaveLength(1);
-    const tui = run.tuiCalls[0]!;
-    expect(flagValue(tui, "--session")).toBe("ses_gen");
-    expect(flagValue(tui, "--prompt")).toBe(prompt);
-  });
-
-  it("makes the titled session through the API, with no TUI model flags", () => {
-    const config = makeLaunchConfig({ model, subagent, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {});
-
-    expect(run.runCalls).toHaveLength(0);
-    const [create] = run.apiCalls;
-    expect(create?.[1]).toBe("session.create");
-    const body = JSON.parse(flagValue(create!, "-d")!);
-    expect(body.title).toBe(`AO:${config.sessionId}`);
-    expect(modelRefToCli(body.model)).toBe(model);
-    expect(body.agent).toBe(subagent);
-    expect(body.location).toEqual({ directory: realpathSync(workDir) });
-    expect(flagValue(run.tuiCalls[0]!, "--model")).toBeUndefined();
-    expect(flagValue(run.tuiCalls[0]!, "--agent")).toBeUndefined();
-  });
-
-  it("reads the created session back, then opens the TUI on it with the requested settings", () => {
-    const variantModel = `${model}#xhigh`;
-    const config = makeLaunchConfig({ model: variantModel, subagent, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      sessionId: "ses_gen",
-    });
-
-    expect(run.status).toBe(0);
-    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe("ses_gen");
-    expect(run.tuiSession?.title).toBe(`AO:${config.sessionId}`);
-    expect(run.tuiSession?.directory).toBe(realpathSync(workDir));
-    expectSettings(run.tuiSession, { model: variantModel, agent: subagent });
-    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
-    expect(flagValue(run.apiCalls[1]!, "--param")).toBe("sessionID=ses_gen");
-    expect(run.listCalls).toHaveLength(0);
-  });
-
-  it("keeps the model variant in the API model reference", () => {
-    const variantModel = `${model}#xhigh`;
-    const command = agent.getLaunchCommand(makeLaunchConfig({ model: variantModel }));
-    const run = runAgainstFakeCli(command, {});
-
-    const body = JSON.parse(flagValue(run.apiCalls[0]!, "-d")!);
-    expect(modelRefToCli(body.model)).toBe(variantModel);
-    expect(body.model.variant).toBeDefined();
-  });
-
-  it("stops with an error when the create returns no session ID", () => {
-    const config = makeLaunchConfig({ model, prompt });
-    const run = runAgainstFakeCli(agent.getLaunchCommand(config), {
-      createOutput: "",
-    });
-
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain(
-      `failed to discover OpenCode session ID for AO:${config.sessionId}`,
-    );
-    expect(run.tuiCalls).toHaveLength(0);
-  });
-
-  it("stops before it makes a session when the model has no provider", () => {
-    const providerless = "muse-spark-1.3-contributor";
-    const command = agent.getLaunchCommand(makeLaunchConfig({ model: providerless }));
-    const run = runAgainstFakeCli(command, {});
-
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain(providerless);
     expect(run.apiCalls).toHaveLength(0);
-    expect(run.tuiCalls).toHaveLength(0);
+    expect(run.listCalls).toHaveLength(0);
+    expect(run.tuiCalls).toEqual([["--session", "ses_prepared", "--prompt", prompt]]);
   });
-});
-
-describe("2.x launch when session.create fails or returns no session ID", () => {
-  const agent = create();
-  const config = makeLaunchConfig({ prompt: "Reply with OK" });
-  const title = `AO:${config.sessionId}`;
-  const request = { model: "opencode-go/muse-spark-1.3-contributor#xhigh", agent: "plan" };
-  // An older session with the same AO title, other settings and another task's conversation.
-  const older = {
-    id: "ses_older",
-    title,
-    updated: 1,
-    model: { providerID: "opencode", id: "big-pickle", variant: "default" },
-    agent: "build",
-    conversation: "ANOTHER_TASK",
-  };
-  const { id: _olderId, ...olderStored } = older;
-  const settingCases = [
-    { label: "model and agent", model: request.model, agent: request.agent },
-    { label: "model only", model: request.model },
-    { label: "agent only", agent: request.agent },
-    { label: "no model and no agent" },
-  ];
-
-  function launch(settings: { model?: string; agent?: string }): string {
-    return agent.getLaunchCommand({ ...config, model: settings.model, subagent: settings.agent });
-  }
-
-  it.each(settingCases)(
-    "a failed create does not open the older session with the same title ($label)",
-    (settings) => {
-      const run = runAgainstFakeCli(launch(settings), {
-        apiFail: ["session.create"],
-        list: [older],
-      });
-
-      expect(run.status).toBe(1);
-      expect(run.tuiCalls).toHaveLength(0);
-      expect(run.stderr).toContain("HTTP 500 Internal Server Error");
-      expect(run.stderr).toContain(`failed to create the OpenCode session ${title}`);
-      expect(run.apiOperations).toEqual(["session.create"]);
-      expect(run.listCalls).toHaveLength(0);
-      expect(run.store[older.id]).toEqual(olderStored);
-    },
-  );
-
-  it("a failed create without a session with the title stops with status 1", () => {
-    const run = runAgainstFakeCli(launch(request), {
-      apiFail: ["session.create"],
-    });
-
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain(`failed to create the OpenCode session ${title}`);
-    expect(run.store).toEqual({});
-  });
-
-  // Exit 0 does not show that a session with the title came from this create.
-  const unusableOutputs = [
-    { label: "empty output", output: "" },
-    { label: "malformed ID", output: JSON.stringify({ data: { id: "bad id" } }) },
-    { label: "ID without the ses_ prefix", output: JSON.stringify({ data: { id: "session-1" } }) },
-    { label: "output that is not JSON", output: "not json" },
-  ];
-
-  it.each(unusableOutputs)(
-    "a create that exits 0 with $label stops without a title lookup",
-    ({ output }) => {
-      const newer = { ...older, id: "ses_newer", updated: 2 };
-      const { id: _newerId, ...newerStored } = newer;
-      const run = runAgainstFakeCli(launch(request), {
-        createOutput: output,
-        list: [older, newer],
-      });
-
-      expect(run.status).toBe(1);
-      expect(run.tuiCalls).toHaveLength(0);
-      expect(run.stderr).toContain(`failed to discover OpenCode session ID for ${title}`);
-      expect(run.apiOperations).toEqual(["session.create"]);
-      expect(run.listCalls).toHaveLength(0);
-      expect(run.store).toEqual({ [older.id]: olderStored, [newer.id]: newerStored });
-    },
-  );
-
-  it.each(settingCases)(
-    "a create that exits 0 without output stops without a title lookup ($label)",
-    (settings) => {
-      const run = runAgainstFakeCli(launch(settings), {
-        createOutput: "",
-        list: [older],
-      });
-
-      expect(run.status).toBe(1);
-      expect(run.tuiCalls).toHaveLength(0);
-      expect(run.listCalls).toHaveLength(0);
-      expect(run.store[older.id]).toEqual(olderStored);
-    },
-  );
-});
-
-describe("2.x launch checks the settings that session.create stored", () => {
-  const agent = create();
-  const config = makeLaunchConfig({ prompt: "Reply with OK" });
-  const created = "ses_created";
-  const request = { model: "opencode-go/muse-spark-1.3-contributor#xhigh", agent: "plan" };
-  const otherModel = { providerID: "opencode", id: "big-pickle", variant: "default" };
-  const otherAgent = "build";
-
-  function launch(settings: { model?: string; agent?: string }): string {
-    return agent.getLaunchCommand({ ...config, model: settings.model, subagent: settings.agent });
-  }
 
   it.each([
-    { label: "another agent", createStores: { agent: otherAgent } },
-    { label: "another model", createStores: { model: otherModel } },
-  ])("stops with status 1 and no TUI when the service stores $label", ({ createStores }) => {
-    const run = runAgainstFakeCli(launch(request), {
-      sessionId: created,
-      createStores,
-    });
+    ["quotes and shell characters", 'it\'s $HOME and `date`; "x" \\ end'],
+    ["newlines", "line1\nline2\n\nline4"],
+  ])("gives the TUI the exact prompt with %s", (_label, prompt) => {
+    const run = runAgainstFakeCli(agent.getLaunchCommand(preparedConfig({ prompt })), {});
 
-    expect(run.store[created]).toBeDefined();
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
-    expect(run.stderr).toContain(
-      `OpenCode stored agent ${JSON.stringify(run.store[created]!.agent)}`,
+    expect(run.status).toBe(0);
+    expect(run.tuiCalls).toEqual([["--session", "ses_prepared", "--prompt", prompt]]);
+  });
+
+  it("gives the TUI the prompt file and the task prompt", () => {
+    const promptFile = join(fakeRoot, "orchestrator prompt's.md");
+    writeFileSync(promptFile, "You are the orchestrator.");
+    const run = runAgainstFakeCli(
+      agent.getLaunchCommand(preparedConfig({ systemPromptFile: promptFile, prompt: "Go" })),
+      {},
     );
-    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${created}`);
-  });
-
-  it("stops when the stored variant differs from a request without a variant", () => {
-    const { providerID, id } = otherModel;
-    const run = runAgainstFakeCli(launch({ model: modelRefToCli({ providerID, id }) }), {
-      sessionId: created,
-      createStores: { model: { providerID, id, variant: "xhigh" } },
-    });
-
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-  });
-
-  it.each([
-    { label: "session.get fails", options: { apiFail: ["session.get"] } },
-    { label: "session.get prints the session and exits 1", options: { getExit: 1 } },
-  ])("stops with status 1 and no TUI when $label", ({ options }) => {
-    const run = runAgainstFakeCli(launch(request), {
-      sessionId: created,
-      ...options,
-    });
-
-    expectSettings(run.store[created], request);
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${created}`);
-  });
-
-  it.each([
-    {
-      label: "only the model",
-      settings: { model: request.model },
-      createStores: { agent: otherAgent },
-    },
-    {
-      label: "only the agent",
-      settings: { agent: request.agent },
-      createStores: { model: otherModel },
-    },
-  ])("checks $label when only that is requested", ({ settings, createStores }) => {
-    const run = runAgainstFakeCli(launch(settings), {
-      sessionId: created,
-      createStores,
-    });
 
     expect(run.status).toBe(0);
-    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe(created);
-    expectSettings(run.tuiSession, settings, createStores);
-    expect(run.apiOperations).toEqual(["session.create", "session.get"]);
-  });
-
-  it("runs no readback when no model and no agent were requested", () => {
-    const run = runAgainstFakeCli(launch({}), {
-      sessionId: created,
-      createStores: { model: otherModel, agent: otherAgent },
-    });
-
-    expect(run.status).toBe(0);
-    expect(flagValue(run.tuiCalls[0]!, "--session")).toBe(created);
-    expect(run.apiOperations).toEqual(["session.create"]);
+    expect(run.tuiCalls).toEqual([
+      ["--session", "ses_prepared", "--prompt", "You are the orchestrator.\n\nGo"],
+    ]);
   });
 });
 
-describe("existing-session and restore commands against the OpenCode 2.x CLI", () => {
+describe("restore commands against the OpenCode 2.x CLI", () => {
   const agent = create();
   const model = "opencode-go/glm-5.3#xhigh";
-  const subagent = "plan";
   const existingId = "ses_existing";
   // The existing session holds other settings than the request, as 2.0.29 stores them.
   const existing = {
@@ -1719,14 +1387,6 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
     sessionPrefix: "p",
   };
 
-  function reuseConfig(overrides: Partial<AgentLaunchConfig> = {}): AgentLaunchConfig {
-    return makeLaunchConfig({
-      projectConfig: { ...project, agentConfig: { opencodeSessionId: existingId } },
-      prompt: "continue",
-      ...overrides,
-    });
-  }
-
   async function restoreCommand(projectModel: string): Promise<string> {
     // The Node-side `session.get` verification reads the fake store through
     // the mock (the fake binary runs in a child bash, not in this process).
@@ -1742,37 +1402,8 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
     return cmd!;
   }
 
-  it("resumes without a model or agent through the same plain command", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig()), {});
-
-    expect(run.status).toBe(0);
-    expect(run.apiCalls).toHaveLength(0);
-    expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
-  });
-
-  it("stores the model and agent on the session, then opens the TUI without them", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
-      list: [existing],
-    });
-
-    expect(run.status).toBe(0);
-    expect(run.apiOperations).toEqual([
-      "session.switchModel",
-      "session.switchAgent",
-      "session.get",
-    ]);
-    for (const call of run.apiCalls) {
-      expect(flagValue(call, "--param")).toBe(`sessionID=${existingId}`);
-    }
-    expect(run.tuiCalls).toEqual([["--session", existingId, "--prompt", "continue"]]);
-    expectSettings(run.tuiSession, { model, agent: subagent });
-  });
-
-  it.each([
-    { label: "resume", command: async () => agent.getLaunchCommand(reuseConfig({ model })) },
-    { label: "restore", command: () => restoreCommand(model) },
-  ])("$label stops with status 1 and no TUI when session.switchModel fails", async (c) => {
-    const run = runAgainstFakeCli(await c.command(), {
+  it("restore stops with status 1 and no TUI when session.switchModel fails", async () => {
+    const run = runAgainstFakeCli(await restoreCommand(model), {
       list: [existing],
       apiFail: ["session.switchModel"],
     });
@@ -1783,36 +1414,11 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
     expect(run.store[existingId]?.model).toEqual(existing.model);
   });
 
-  it("resume stops with status 1 and no TUI when the session does not exist", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {});
-
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain("HTTP 404 Not Found");
-  });
-
-  it("resume stops with status 1 and no TUI when session.switchAgent fails after the model switch", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
+  it("restore stops with status 1 and no TUI when session.get prints the session and exits 1", async () => {
+    const run = runAgainstFakeCli(await restoreCommand(model), {
       list: [existing],
-      apiFail: ["session.switchAgent"],
+      getExit: 1,
     });
-
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.apiOperations).toEqual(["session.switchModel", "session.switchAgent"]);
-    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
-  });
-
-  it.each([
-    { label: "resume", command: async () => agent.getLaunchCommand(reuseConfig({ model })) },
-    { label: "restore", command: () => restoreCommand(model) },
-  ])(
-    "$label stops with status 1 and no TUI when session.get prints the session and exits 1",
-    async (c) => {
-      const run = runAgainstFakeCli(await c.command(), {
-        list: [existing],
-        getExit: 1,
-      });
 
       expectSettings(run.store[existingId], { model, agent: existing.agent });
       expect(run.status).toBe(1);
@@ -1822,30 +1428,11 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
     },
   );
 
-  it("resume stops with status 1 and no TUI when the readback differs from the request", () => {
-    const run = runAgainstFakeCli(agent.getLaunchCommand(reuseConfig({ model, subagent })), {
+  it("restore stops with status 1 before any API call when the model has no provider", async () => {
+    const providerless = "glm-5.3";
+    const run = runAgainstFakeCli(await restoreCommand(providerless), {
       list: [existing],
-      apiIgnore: ["session.switchAgent"],
     });
-
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain(JSON.stringify(existing.agent));
-  });
-
-  it.each([
-    {
-      label: "resume",
-      command: async (m: string) => agent.getLaunchCommand(reuseConfig({ model: m, subagent })),
-    },
-    { label: "restore", command: (m: string) => restoreCommand(m) },
-  ])(
-    "$label stops with status 1 before any API call when the model has no provider",
-    async (c) => {
-      const providerless = "glm-5.3";
-      const run = runAgainstFakeCli(await c.command(providerless), {
-        list: [existing],
-      });
 
       expect(run.status).toBe(1);
       expect(run.apiCalls).toHaveLength(0);
@@ -1866,6 +1453,495 @@ describe("existing-session and restore commands against the OpenCode 2.x CLI", (
   });
 });
 
+// =========================================================================
+// I-3: the session is made in Node before the pane starts
+// =========================================================================
+describe("prepareAgentSession (I-3)", () => {
+  const agent = create();
+  const env = {
+    AO_SESSION: "sess-1",
+    AO_CALLER_TYPE: "agent",
+    PATH: "/fake-home/.ao/bin:/usr/bin",
+  };
+  const museRef = { providerID: "opencode-go", id: "muse-spark-1.3-contributor", variant: "xhigh" };
+  let root: string;
+  let workspace: string;
+  let workspaceLink: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "ao-opencode-prepare-"));
+    workspace = join(root, "ws");
+    mkdirSync(workspace);
+    workspaceLink = join(root, "ws-link");
+    symlinkSync(workspace, workspaceLink);
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** session.get answers with what the request stored. */
+  function readbackStores(model?: Record<string, string>, agentName?: string) {
+    mockGetOpenCodeSession.mockImplementation(async (id: string) => ({
+      id,
+      title: "AO:sess-1",
+      ...(model ? { model } : {}),
+      ...(agentName ? { agent: agentName } : {}),
+    }));
+  }
+
+  function prepare(overrides: Partial<AgentLaunchConfig> = {}, workspacePath = workspaceLink) {
+    return agent.prepareAgentSession!(makeLaunchConfig(overrides), {
+      workspacePath,
+      environment: env,
+    });
+  }
+
+  it("runs the version gate, the model check, the create and the readback in this order", async () => {
+    const order: string[] = [];
+    mockExecFileSync.mockImplementation(() => {
+      order.push("version");
+      return "opencode v2.0.31\n";
+    });
+    mockListOpenCodeModels.mockImplementation(async () => {
+      order.push("model.list");
+      return FLEET_PIN_MODELS;
+    });
+    mockCreateOpenCodeSession.mockImplementation(async () => {
+      order.push("session.create");
+      return { id: "ses_made", title: "AO:sess-1" };
+    });
+    mockGetOpenCodeSession.mockImplementation(async (id: string) => {
+      order.push("session.get");
+      return { id, title: "AO:sess-1", model: { ...museRef }, agent: "plan" };
+    });
+
+    const prepared = await prepare({
+      model: "opencode-go/muse-spark-1.3-contributor#xhigh",
+      subagent: "plan",
+    });
+
+    expect(order).toEqual(["version", "model.list", "session.create", "session.get"]);
+    expect(mockCreateOpenCodeSession).toHaveBeenCalledWith(
+      {
+        title: "AO:sess-1",
+        model: museRef,
+        agent: "plan",
+        // The real path: OpenCode stores the directory that it is given.
+        location: { directory: realpathSync(workspace) },
+      },
+      { env },
+    );
+    expect(prepared.metadata).toEqual({ opencodeSessionId: "ses_made" });
+    expect(prepared.agentConfig).toEqual({ opencodeSessionId: "ses_made" });
+    expect(prepared.created).toBe(true);
+  });
+
+  it("runs every opencode api call with the pane environment", async () => {
+    readbackStores({ ...museRef }, "plan");
+    await prepare({ model: "opencode-go/muse-spark-1.3-contributor#xhigh", subagent: "plan" });
+
+    expect(mockListOpenCodeModels).toHaveBeenCalledWith({ env });
+    expect(mockCreateOpenCodeSession.mock.calls[0]![1]).toEqual({ env });
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_made", undefined, env);
+  });
+
+  it.each([
+    ["opencode-go/muse-spark-1.3-contributor#xhigh", "xhigh"],
+    ["opencode-go/deepseek-v4.1-flash", "default"],
+  ])("accepts the fleet pin %s", async (model, variant) => {
+    const [providerID, rest] = model.split("/") as [string, string];
+    const id = rest.split("#")[0]!;
+    readbackStores({ providerID, id, variant });
+
+    const prepared = await prepare({ model });
+
+    expect(prepared.metadata["opencodeSessionId"]).toBe("ses_made");
+  });
+
+  it("refuses a model that model.list does not have, before any create", async () => {
+    await expect(prepare({ model: "ao1m-none/none" })).rejects.toThrow(
+      "OpenCode cannot run the model ao1m-none/none: model.list has no model ao1m-none/none",
+    );
+    expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+    expect(mockSwitchOpenCodeSessionModel).not.toHaveBeenCalled();
+  });
+
+  it("refuses a variant that the model does not have, before any create", async () => {
+    await expect(prepare({ model: "opencode-go/deepseek-v4.1-flash#xhigh" })).rejects.toThrow(
+      "has no variant xhigh",
+    );
+    expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses a model without a provider before any API call", async () => {
+    await expect(prepare({ model: "glm-5.3" })).rejects.toThrow("glm-5.3");
+    expect(mockListOpenCodeModels).not.toHaveBeenCalled();
+    expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("fails the spawn when model.list cannot answer, and makes no session", async () => {
+    mockListOpenCodeModels.mockRejectedValue(
+      new OpenCodeApiIncompleteAnswerError("opencode api model.list printed an incomplete answer"),
+    );
+    await expect(prepare({ model: "opencode-go/deepseek-v4.1-flash" })).rejects.toThrow(
+      "incomplete answer",
+    );
+    expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("skips the model check and the readback without a model or agent", async () => {
+    const prepared = await prepare();
+
+    expect(mockListOpenCodeModels).not.toHaveBeenCalled();
+    expect(mockCreateOpenCodeSession).toHaveBeenCalledWith(
+      { title: "AO:sess-1", location: { directory: realpathSync(workspace) } },
+      { env },
+    );
+    expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+    expect(prepared.created).toBe(true);
+  });
+
+  it("makes no session when the workspace path cannot be resolved", async () => {
+    await expect(prepare({}, join(workspace, "missing"))).rejects.toThrow(
+      "cannot resolve the OpenCode workspace",
+    );
+    expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("removes nothing when the create fails", async () => {
+    mockCreateOpenCodeSession.mockRejectedValue(
+      new Error("opencode api session.create failed: HTTP 500"),
+    );
+    await expect(prepare()).rejects.toThrow("HTTP 500");
+    expect(mockRemoveOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another agent", { ...museRef }, "build"],
+    ["another model", { providerID: "opencode", id: "big-pickle", variant: "default" }, "plan"],
+    ["another variant", { ...museRef, variant: "low" }, "plan"],
+  ])(
+    "removes the created session and throws when the readback shows %s",
+    async (_label, model, agentName) => {
+      readbackStores(model, agentName);
+      await expect(
+        prepare({ model: "opencode-go/muse-spark-1.3-contributor#xhigh", subagent: "plan" }),
+      ).rejects.toThrow("failed to set the OpenCode model or agent for ses_made");
+      expect(mockInterruptOpenCodeSession).toHaveBeenCalledWith(
+        "ses_made",
+        expect.any(Number),
+        env,
+      );
+      expect(mockRemoveOpenCodeSession).toHaveBeenCalledWith("ses_made", expect.any(Number), env);
+    },
+  );
+
+  it("removes the created session when the readback answers 404", async () => {
+    mockGetOpenCodeSession.mockResolvedValue(null);
+    await expect(prepare({ subagent: "plan" })).rejects.toThrow("session.get answered 404");
+    expect(mockRemoveOpenCodeSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a reused session ID", () => {
+    function reuse(overrides: Partial<AgentLaunchConfig> = {}) {
+      return prepare({
+        projectConfig: {
+          name: "my-project",
+          repo: "owner/repo",
+          path: "/workspace/repo",
+          defaultBranch: "main",
+          sessionPrefix: "my",
+          agentConfig: { opencodeSessionId: "ses_old" },
+        },
+        ...overrides,
+      });
+    }
+
+    it("switches the model and agent, reads them back, and makes no session", async () => {
+      readbackStores({ ...museRef }, "plan");
+      const prepared = await reuse({
+        model: "opencode-go/muse-spark-1.3-contributor#xhigh",
+        subagent: "plan",
+      });
+
+      expect(mockListOpenCodeModels).toHaveBeenCalledTimes(1);
+      expect(mockSwitchOpenCodeSessionModel).toHaveBeenCalledWith("ses_old", museRef, { env });
+      expect(mockSwitchOpenCodeSessionAgent).toHaveBeenCalledWith("ses_old", "plan", { env });
+      expect(mockGetOpenCodeSession).toHaveBeenCalledWith("ses_old", undefined, env);
+      expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+      expect(prepared.metadata).toEqual({ opencodeSessionId: "ses_old" });
+      expect(prepared.created).toBe(false);
+    });
+
+    it("runs no API call without a model or agent", async () => {
+      const prepared = await reuse();
+
+      expect(mockSwitchOpenCodeSessionModel).not.toHaveBeenCalled();
+      expect(mockSwitchOpenCodeSessionAgent).not.toHaveBeenCalled();
+      expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+      expect(prepared.created).toBe(false);
+    });
+
+    it("never removes the reused session: not on a readback mismatch, not on discard", async () => {
+      readbackStores({ ...museRef }, "build");
+      await expect(reuse({ subagent: "plan" })).rejects.toThrow(
+        "failed to set the OpenCode model or agent for ses_old",
+      );
+
+      const prepared = await reuse();
+      await prepared.discard();
+
+      expect(mockInterruptOpenCodeSession).not.toHaveBeenCalled();
+      expect(mockRemoveOpenCodeSession).not.toHaveBeenCalled();
+    });
+
+    it("fails when the switch fails, and makes no session", async () => {
+      mockSwitchOpenCodeSessionModel.mockRejectedValue(
+        new Error("opencode api session.switchModel: the session ses_old does not exist"),
+      );
+      await expect(reuse({ model: "opencode-go/deepseek-v4.1-flash" })).rejects.toThrow(
+        "does not exist",
+      );
+      expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("discard of a created session", () => {
+    it("interrupts, then removes, with the pane environment, and only once", async () => {
+      const order: string[] = [];
+      mockInterruptOpenCodeSession.mockImplementation(async () => {
+        order.push("interrupt");
+      });
+      mockRemoveOpenCodeSession.mockImplementation(async () => {
+        order.push("remove");
+      });
+      const prepared = await prepare();
+
+      await prepared.discard();
+      await prepared.discard();
+
+      expect(order).toEqual(["interrupt", "remove"]);
+      expect(mockRemoveOpenCodeSession).toHaveBeenCalledWith("ses_made", expect.any(Number), env);
+    });
+
+    it("removes even when the interrupt fails", async () => {
+      mockInterruptOpenCodeSession.mockRejectedValue(new Error("HTTP 500"));
+      const prepared = await prepare();
+      await prepared.discard();
+      expect(mockRemoveOpenCodeSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("tries the remove twice, then writes one operator line and does not throw", async () => {
+      mockRemoveOpenCodeSession.mockRejectedValue(new Error("HTTP 500 Internal Server Error"));
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const prepared = await prepare();
+        await expect(prepared.discard()).resolves.toBeUndefined();
+
+        expect(mockRemoveOpenCodeSession).toHaveBeenCalledTimes(2);
+        const lines = write.mock.calls.map((call) => String(call[0]));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("could not remove the OpenCode session ses_made");
+        expect(lines[0]).toContain("opencode api session.remove --param sessionID=ses_made");
+      } finally {
+        write.mockRestore();
+      }
+    });
+
+    it("does not try again after a timeout", async () => {
+      mockRemoveOpenCodeSession.mockRejectedValue(
+        new OpenCodeApiTimeoutError("opencode api session.remove timed out"),
+      );
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const prepared = await prepare();
+        await prepared.discard();
+        expect(mockRemoveOpenCodeSession).toHaveBeenCalledTimes(1);
+      } finally {
+        write.mockRestore();
+      }
+    });
+  });
+});
+
+describe("confirmLaunch (I-3)", () => {
+  const agent = create();
+  const env = { AO_SESSION: "sess-1", PATH: "/fake-home/.ao/bin:/usr/bin" };
+  const quick = { timeoutMs: 400, promptExpected: false, promptTimeoutMs: 300 };
+
+  async function preparedSession(): Promise<PreparedAgentSession> {
+    return agent.prepareAgentSession!(makeLaunchConfig(), {
+      workspacePath: tmpdir(),
+      environment: env,
+    });
+  }
+
+  function tmuxSession(): Session {
+    return makeSession({ id: "sess-1", runtimeHandle: makeTmuxHandle("abc-sess-1") });
+  }
+
+  /** The pane TTY is pts/7; `psLines` gives the ps rows of each call in turn (the last one repeats). */
+  function paneProcesses(...psLines: string[][]) {
+    let call = 0;
+    mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "tmux") {
+        expect(args).toEqual(["list-panes", "-t", "abc-sess-1", "-F", "#{pane_tty}"]);
+        return Promise.resolve({ stdout: "/dev/pts/7\n", stderr: "" });
+      }
+      if (cmd === "ps") {
+        const rows = psLines[Math.min(call++, psLines.length - 1)]!;
+        return Promise.resolve({ stdout: `  PID TT       ARGS\n${rows.join("\n")}\n`, stderr: "" });
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+  }
+
+  beforeEach(() => {
+    mockExecFileAsync.mockReset();
+  });
+
+  it("confirms when the pane runs opencode on the session and the process stays", async () => {
+    paneProcesses(["  4242 pts/7    node /usr/lib/node_modules/.bin/opencode --session ses_made"]);
+    const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick);
+
+    expect(result).toEqual({});
+    expect(mockHasOpenCodeUserMessage).not.toHaveBeenCalled();
+    const psCall = mockExecFileAsync.mock.calls.find((call: unknown[]) => call[0] === "ps");
+    expect(psCall?.[1]).toEqual(["-ww", "-eo", "pid,tty,args"]);
+  });
+
+  it("matches --session=<id> and the .opencode binary name", async () => {
+    paneProcesses([
+      "  4242 pts/7    /home/u/.opencode/bin/.opencode --session=ses_made --prompt x",
+    ]);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).resolves.toEqual({});
+  });
+
+  it("does not count opencode on another session or in another pane", async () => {
+    paneProcesses([
+      "  4242 pts/7    opencode --session ses_other",
+      "  4243 pts/9    opencode --session ses_made",
+      "  4244 pts/7    bash",
+    ]);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).rejects.toThrow("the pane of sess-1 did not run OpenCode on session ses_made within 0.4 s");
+  });
+
+  it("does not count a process that exits at once", async () => {
+    paneProcesses(["  4242 pts/7    opencode --session ses_made"], ["  4244 pts/7    bash"]);
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick),
+    ).rejects.toThrow("did not run OpenCode on session ses_made");
+  });
+
+  it("fails at once when the pane is gone", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") {
+        return Promise.reject(
+          Object.assign(new Error("Command failed"), {
+            stderr: "can't find session: abc-sess-1\n",
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+    const started = Date.now();
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
+        ...quick,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow("the pane of sess-1 is gone");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("gives promptDelivered true when the session shows a user message, with the pane environment", async () => {
+    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+    mockHasOpenCodeUserMessage.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
+      ...quick,
+      promptExpected: true,
+      promptTimeoutMs: 3_000,
+    });
+
+    expect(result).toEqual({ promptDelivered: true });
+    expect(mockHasOpenCodeUserMessage).toHaveBeenCalledWith(
+      "ses_made",
+      expect.objectContaining({ env }),
+    );
+  });
+
+  it("counts a failed read as not seen yet", async () => {
+    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+    mockHasOpenCodeUserMessage.mockRejectedValueOnce(new Error("HTTP 500")).mockResolvedValue(true);
+
+    const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
+      ...quick,
+      promptExpected: true,
+      promptTimeoutMs: 3_000,
+    });
+    expect(result).toEqual({ promptDelivered: true });
+  });
+
+  it("gives promptDelivered false when no user message shows within the bound", async () => {
+    paneProcesses(["  4242 pts/7    opencode --session ses_made --prompt Go"]);
+
+    const result = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
+      ...quick,
+      promptExpected: true,
+    });
+    expect(result).toEqual({ promptDelivered: false });
+    expect(mockHasOpenCodeUserMessage).toHaveBeenCalled();
+  });
+
+  it("reads the herdr pane processes on the herdr runtime", async () => {
+    mockGetHerdrPaneProcesses.mockResolvedValue([
+      { pid: 77, name: "opencode", cmdline: "opencode --session ses_made" },
+    ]);
+    const session = makeSession({
+      id: "sess-1",
+      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
+    });
+
+    await expect(agent.confirmLaunch!(session, await preparedSession(), quick)).resolves.toEqual(
+      {},
+    );
+    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("fails when the herdr pane never runs opencode on the session", async () => {
+    mockGetHerdrPaneProcesses.mockResolvedValue([
+      { pid: 77, name: "opencode", cmdline: "opencode --session ses_other" },
+    ]);
+    const session = makeSession({
+      id: "sess-1",
+      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} },
+    });
+    await expect(agent.confirmLaunch!(session, await preparedSession(), quick)).rejects.toThrow(
+      "did not run OpenCode on session ses_made",
+    );
+  });
+
+  it("fails closed on a runtime that it cannot check", async () => {
+    const session = makeSession({ id: "sess-1", runtimeHandle: makeProcessHandle(42) });
+    await expect(agent.confirmLaunch!(session, await preparedSession(), quick)).rejects.toThrow(
+      "cannot check the OpenCode launch on runtime process",
+    );
+  });
+
+  it("fails without a runtime handle", async () => {
+    await expect(
+      agent.confirmLaunch!(makeSession({ runtimeHandle: null }), await preparedSession(), quick),
+    ).rejects.toThrow("no runtime handle");
+  });
+});
+
 describe("version gate", () => {
   const agent = create();
 
@@ -1883,9 +1959,13 @@ describe("version gate", () => {
     });
   }
 
-  function launchError(): Error | undefined {
+  /** The gate runs in prepareAgentSession, before any API call and before the pane (I-3). */
+  async function launchError(): Promise<Error | undefined> {
     try {
-      agent.getLaunchCommand(makeLaunchConfig());
+      await agent.prepareAgentSession!(makeLaunchConfig(), {
+        workspacePath: tmpdir(),
+        environment: {},
+      });
     } catch (err) {
       return err as Error;
     }
@@ -1904,10 +1984,10 @@ describe("version gate", () => {
       label: "a notice line before the version",
     },
     { output: "opencode v2.1.0 (abc123)\n", label: "text after the version" },
-  ])("accepts $label: the launch proceeds and detect() finds it", ({ output }) => {
+  ])("accepts $label: the launch proceeds and detect() finds it", async ({ output }) => {
     versionOutput(output);
-    expect(launchError()).toBeUndefined();
-    expect(agent.getLaunchCommand(makeLaunchConfig())).toContain("opencode api session.create");
+    expect(await launchError()).toBeUndefined();
+    expect(mockCreateOpenCodeSession).toHaveBeenCalledTimes(1);
     expect(detect()).toBe(true);
   });
 
@@ -1920,59 +2000,65 @@ describe("version gate", () => {
     { output: "2.0", label: "a version without a patch" },
     { output: "opencode dev", label: "output without a version number" },
     { output: "built from 2.0.30", label: "a version that does not start the line" },
-  ])("refuses $label ($output): the message names the floor and what it found", ({ output }) => {
-    versionOutput(`${output}\n`);
-    const error = launchError();
-    expect(error).toBeInstanceOf(Error);
-    expect(error!.message).toContain("2.0.29 or later");
-    expect(error!.message).toContain(`found ${output}`);
-    expect(detect()).toBe(false);
-  });
+  ])(
+    "refuses $label ($output): the message names the floor and what it found",
+    async ({ output }) => {
+      versionOutput(`${output}\n`);
+      const error = await launchError();
+      expect(error).toBeInstanceOf(Error);
+      expect(error!.message).toContain("2.0.29 or later");
+      expect(error!.message).toContain(`found ${output}`);
+      // The gate refuses before any API call: no session, no pane.
+      expect(mockListOpenCodeModels).not.toHaveBeenCalled();
+      expect(mockCreateOpenCodeSession).not.toHaveBeenCalled();
+      expect(detect()).toBe(false);
+    },
+  );
 
-  it("refuses empty output and says the probe printed nothing, not that the binary is missing", () => {
+  it("refuses empty output and says the probe printed nothing, not that the binary is missing", async () => {
     versionOutput("\n");
-    const error = launchError();
+    const error = await launchError();
     expect(error!.message).toContain("printed nothing");
     expect(error!.message).not.toContain("not found");
     expect(detect()).toBe(false);
   });
 
-  it("refuses a missing binary and says it is not on PATH", () => {
+  it("refuses a missing binary and says it is not on PATH", async () => {
     probeFails({ code: "ENOENT" });
-    const error = launchError();
+    const error = await launchError();
     expect(error!.message).toContain("2.0.29 or later");
     expect(error!.message).toContain("not found on PATH");
     expect(detect()).toBe(false);
   });
 
-  it("refuses a probe that runs past its bound and says so", () => {
+  it("refuses a probe that runs past its bound and says so", async () => {
     probeFails({ code: "ETIMEDOUT", status: null, signal: "SIGKILL" });
-    const error = launchError();
+    const error = await launchError();
     expect(error!.message).toContain("no answer within");
     expect(detect()).toBe(false);
   });
 
-  it("refuses a failed run even when stdout holds a supported version, and names the status", () => {
+  it("refuses a failed run even when stdout holds a supported version, and names the status", async () => {
     probeFails({ status: 3, signal: null, stdout: "opencode v2.0.29\n" });
-    const error = launchError();
+    const error = await launchError();
     expect(error!.message).toContain("exited with status 3");
     expect(error!.message).toContain("opencode v2.0.29");
     expect(error!.message).not.toContain("not found");
     expect(detect()).toBe(false);
   });
 
-  it("refuses a probe stopped by a signal and names the signal", () => {
+  it("refuses a probe stopped by a signal and names the signal", async () => {
     probeFails({ status: null, signal: "SIGTERM" });
-    expect(launchError()!.message).toContain("stopped by SIGTERM");
+    expect((await launchError())!.message).toContain("stopped by SIGTERM");
   });
 
-  it("refuses a binary that cannot run and names the error code", () => {
+  it("refuses a binary that cannot run and names the error code", async () => {
     probeFails({ code: "EACCES" });
-    expect(launchError()!.message).toContain("EACCES");
+    expect((await launchError())!.message).toContain("EACCES");
   });
 
-  it("bounds the probe and keeps its stderr off the terminal", () => {
-    agent.getLaunchCommand(makeLaunchConfig());
+  it("bounds the probe and keeps its stderr off the terminal", async () => {
+    expect(await launchError()).toBeUndefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
     const [cmd, args, options] = mockExecFileSync.mock.calls[0] as [
       string,
@@ -1985,9 +2071,9 @@ describe("version gate", () => {
     expect(options.stdio?.[2]).toBe("ignore");
   });
 
-  it("keeps the message on one line when the output has several lines", () => {
+  it("keeps the message on one line when the output has several lines", async () => {
     versionOutput("opencode dev\nsecond line\n");
-    const message = launchError()!.message;
+    const message = (await launchError())!.message;
     expect(message).not.toContain("\n");
     expect(message).toContain("opencode dev | second line");
   });

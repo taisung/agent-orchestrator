@@ -50,6 +50,9 @@ import {
   type PluginRegistry,
   type RuntimeHandle,
   type Issue,
+  type AgentLaunchConfig,
+  type AgentLaunchConfirmation,
+  type PreparedAgentSession,
   PR_STATE,
 } from "./types.js";
 import {
@@ -76,18 +79,12 @@ import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
   getOpenCodeSession,
   findOpenCodeSessionsByTitle,
-  waitForOpenCodeSession,
   removeOpenCodeSession,
   interruptOpenCodeSession,
   OpenCodeApiTimeoutError,
   OPENCODE_API_TIMEOUT_MS,
   type OpenCodeApiSession,
 } from "./opencode-api.js";
-import {
-  acquireOpenCodeLaunchLock,
-  OPENCODE_SPAWN_DISCOVERY_WINDOW_MS,
-  type OpenCodeLaunchLock,
-} from "./opencode-launch-lock.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
@@ -99,30 +96,20 @@ const OPENCODE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
 
 /**
- * Pause between two searches of that wait. One search is one `opencode api`
- * process (about 0.14 s and 0.2 s of CPU); a 500 ms pause keeps the wait
- * under half a core and adds at most about 0.5 s after the pane's create.
+ * Bound on `Agent.confirmLaunch`: the pane must run the agent on its prepared
+ * session within it (0009 section 11 step 2).
  */
-const OPENCODE_SPAWN_DISCOVERY_POLL_MS = 500;
+const LAUNCH_CONFIRM_TIMEOUT_MS = 15_000;
+
+/**
+ * Bound on the wait for the launch prompt to reach the agent session. as-63
+ * showed the first `user` message 1.5 s after the TUI started.
+ */
+const LAUNCH_PROMPT_CONFIRM_TIMEOUT_MS = 10_000;
 
 /** One line for the operator on stderr, where the command itself still succeeds. */
 function warnOperator(message: string): void {
   process.stderr.write(`${message}\n`);
-}
-
-/** Only retained-runtime failures known to precede command delivery can discard uncertainty. */
-function failedBeforeCommandDelivery(runtimeName: string, error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const cmd = "cmd" in error && typeof error.cmd === "string" ? error.cmd : "";
-  if (runtimeName === "tmux") return cmd.startsWith("tmux new-session ");
-  // Herdr wraps every pane.run failure; these top-level errors are from workspace.create.
-  if (runtimeName === "herdr")
-    return (
-      /^\S+ workspace create /.test(cmd) ||
-      error.message.startsWith("herdr error ") ||
-      error.message.startsWith("herdr workspace create returned no usable pane")
-    );
-  return false;
 }
 
 /** The error text on one line: an `execFile` message ends with a newline. */
@@ -131,14 +118,46 @@ function shortErrorText(err: unknown): string {
   return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
-/** Release errors must not replace the launch/setup error that caused cleanup. */
-function releaseOpenCodeLaunchLock(lock: OpenCodeLaunchLock | undefined, failed: boolean): void {
+/**
+ * Remove the agent session that this spawn created, on a failed spawn. The
+ * hook never throws by contract; a throw anyway must not replace the error
+ * that caused the cleanup.
+ */
+async function discardPreparedSession(prepared: PreparedAgentSession | undefined): Promise<void> {
+  if (!prepared) return;
   try {
-    lock?.release();
-  } catch (error) {
-    if (!failed) throw error;
-    warnOperator(`ao: could not release the OpenCode launch lock: ${shortErrorText(error)}`);
+    await prepared.discard();
+  } catch (err) {
+    warnOperator(
+      `ao: could not remove the agent session of a failed spawn: ${shortErrorText(err)}`,
+    );
   }
+}
+
+/** The launch config with the values of `prepareAgentSession` in `agentConfig`. */
+function withPreparedAgentConfig(
+  launchConfig: AgentLaunchConfig,
+  prepared: PreparedAgentSession,
+): AgentLaunchConfig {
+  return {
+    ...launchConfig,
+    projectConfig: {
+      ...launchConfig.projectConfig,
+      agentConfig: { ...launchConfig.projectConfig.agentConfig, ...prepared.agentConfig },
+    },
+  };
+}
+
+/** The operator line when `confirmLaunch` did not see the launch prompt arrive. */
+function warnLaunchPromptNotSeen(sessionId: string): void {
+  warnOperator(
+    `ao: ${sessionId} runs, but its launch prompt did not show in the agent session within ${LAUNCH_PROMPT_CONFIRM_TIMEOUT_MS / 1000} s. Check the pane with \`ao session attach ${sessionId}\`, and send the task with \`ao send ${sessionId}\` if the agent waits.`,
+  );
+}
+
+/** True when the launch command gives the agent a prompt. */
+function launchHasPrompt(launchConfig: AgentLaunchConfig): boolean {
+  return Boolean(launchConfig.prompt || launchConfig.systemPromptFile || launchConfig.systemPrompt);
 }
 
 /**
@@ -153,38 +172,11 @@ function assertSafeBranchForSession(sessionId: string, branch: string): void {
   }
 }
 
-async function recordFailedOpenCodeLaunch(
-  lock: OpenCodeLaunchLock | undefined,
-  handle: RuntimeHandle,
-  error: unknown,
-): Promise<void> {
-  if (!lock) return;
-  try {
-    if (failedBeforeCommandDelivery(handle.runtimeName, error)) {
-      lock.cancel();
-    } else if (lock.pending) {
-      // The runtime may already have removed the pane after failed delivery.
-      // Its known name and server still allow a later explicit absence check.
-      await lock.recordRuntime(handle);
-      const recovery =
-        handle.runtimeName === "tmux"
-          ? `A fresh start can recover once the recorded pane is proven gone and ${(OPENCODE_SPAWN_DISCOVERY_WINDOW_MS + OPENCODE_API_TIMEOUT_MS) / 1000} s have elapsed since launch.`
-          : "This runtime requires manual recovery.";
-      warnOperator(`ao: uncertain OpenCode launch ${handle.id}. ${recovery} ${lock.recoveryHint}`);
-    }
-  } catch (cleanupError) {
-    warnOperator(
-      `ao: could not update the failed OpenCode launch marker: ${shortErrorText(cleanupError)}. ${lock.recoveryHint}`,
-    );
-  } finally {
-    releaseOpenCodeLaunchLock(lock, true);
-  }
-}
-
 /**
  * The directories that the OpenCode session of a workspace can carry in
- * `location.directory`. The pane sends `process.cwd()`, which is the real
- * path, so a workspace path behind a symlink is searched under both names.
+ * `location.directory`. A spawn sends the real path of the workspace (the
+ * pane of earlier builds sent `process.cwd()`, also the real path), so a
+ * workspace path behind a symlink is searched under both names.
  */
 function openCodeDirectoriesFor(workspacePath: string): string[] {
   const directories = [resolve(workspacePath)];
@@ -203,56 +195,6 @@ function describeOpenCodeCandidate(session: OpenCodeApiSession): string {
       ? new Date(created).toISOString()
       : "unknown";
   return `${session.id}  directory ${session.location?.directory ?? "unknown"}  created ${createdText}`;
-}
-
-/**
- * Row 23 (until I-3): wait for the pane of a new session to create its
- * OpenCode session, and return the ID to store. A session is accepted only
- * when its title is exactly `AO:<sessionId>`, its `location.directory` is
- * this session's workspace, and it was created at or after `launchStartedAt`
- * while holding the host-wide launch lock. The lock prevents another fleet
- * with the same title and workspace from creating during this window. When the wait ends
- * without one match, the spawn still succeeds, and the operator gets one
- * line that names `ao session remap`.
- */
-async function discoverNewOpenCodeSession(
-  sessionId: string,
-  workspacePath: string,
-  launchStartedAt: number,
-  recoveryHint: string,
-): Promise<string | undefined> {
-  const title = `AO:${sessionId}`;
-  try {
-    const result = await waitForOpenCodeSession(
-      {
-        title,
-        directories: openCodeDirectoriesFor(workspacePath),
-        createdAtOrAfter: launchStartedAt,
-      },
-      OPENCODE_SPAWN_DISCOVERY_WINDOW_MS,
-      OPENCODE_SPAWN_DISCOVERY_POLL_MS,
-    );
-    if (result.status === "found") return result.session.id;
-    if (result.status === "ambiguous") {
-      warnOperator(
-        `ao: ${result.sessions.length} OpenCode sessions titled ${title} in ${workspacePath} were created during this start (${result.sessions.map((s) => s.id).join(", ")}); none is stored for ${sessionId}. Run \`ao session remap ${sessionId}\` to list them. ${recoveryHint}`,
-      );
-      return undefined;
-    }
-    const lastError =
-      result.lastError !== undefined
-        ? ` Last search error: ${shortErrorText(result.lastError)}`
-        : "";
-    warnOperator(
-      `ao: no OpenCode session titled ${title} appeared in ${workspacePath} within ${OPENCODE_SPAWN_DISCOVERY_WINDOW_MS / 1000} s, so ${sessionId} has no stored OpenCode session ID. Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. Further fresh launches need proof that the earlier pane is gone, plus a matching create or an elapsed create window. ${recoveryHint}${lastError}`,
-    );
-    return undefined;
-  } catch (err) {
-    warnOperator(
-      `ao: the search for the OpenCode session of ${sessionId} failed (${shortErrorText(err)}). Run \`ao session remap ${sessionId}\` when its pane shows the OpenCode TUI. ${recoveryHint}`,
-    );
-    return undefined;
-  }
 }
 
 async function deleteOpenCodeSession(sessionId: string): Promise<void> {
@@ -1361,39 +1303,69 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: spawnConfig.subagent ?? selection.subagent,
     };
 
-    let launchLock: OpenCodeLaunchLock | undefined;
-    let launchStartedAt = 0;
+    // The environment of the pane: the agent environment plus this session's
+    // own AO_* values. It is built before the launch, so the agent session
+    // can be prepared with exactly this environment (I-3).
+    const paneEnvironment = (agentEnvironment: Record<string, string>): Record<string, string> => ({
+      ...agentEnvironment,
+      AO_SESSION: sessionId,
+      AO_DATA_DIR: sessionsDir, // Pass sessions directory (not root dataDir)
+      AO_SESSION_NAME: sessionId, // User-facing session name
+      ...(tmuxName && { AO_TMUX_NAME: tmuxName }), // Tmux session name if using new arch
+      AO_CALLER_TYPE: "agent",
+      AO_PROJECT_ID: spawnConfig.projectId,
+      AO_CONFIG_PATH: config.configPath,
+      AO_STATE_ROOT: getStateRoot(),
+    });
+
+    let prepared: PreparedAgentSession | undefined;
+    let preparedCreatedAt: string | undefined;
     let handle: RuntimeHandle;
     try {
-      const launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
-      const environment = plugins.agent.getEnvironment(agentLaunchConfig);
-      if (plugins.agent.name === "opencode" && !reusedOpenCodeSessionId) {
-        launchLock = await acquireOpenCodeLaunchLock(workspacePath, `AO:${sessionId}`);
-        launchStartedAt = await launchLock.start();
+      let launchCommand: string;
+      let environment: Record<string, string>;
+      if (plugins.agent.prepareAgentSession) {
+        // I-3: the agent makes its own session ready before the pane starts
+        // (OpenCode: model check, then create or the switch of a reused
+        // session, then readback). A throw fails the spawn here: no pane.
+        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+        prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
+          workspacePath,
+          environment,
+        });
+        // Store the prepared values before the pane starts, so an `ao spawn`
+        // that dies later leaves a record that names the agent session.
+        preparedCreatedAt = new Date().toISOString();
+        updateMetadata(sessionsDir, sessionId, {
+          worktree: workspacePath,
+          branch,
+          status: "spawning",
+          tmuxName,
+          issue: spawnConfig.issueId,
+          project: spawnConfig.projectId,
+          agent: selection.agentName,
+          model: selection.model,
+          permissions: selection.permissions ?? "default",
+          createdAt: preparedCreatedAt,
+          ...prepared.metadata,
+        });
+        launchCommand = plugins.agent.getLaunchCommand(
+          withPreparedAgentConfig(agentLaunchConfig, prepared),
+        );
+      } else {
+        launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
       }
 
       handle = await plugins.runtime.create({
         sessionId: tmuxName ?? sessionId, // Use tmux name for runtime if available
         workspacePath,
         launchCommand,
-        environment: {
-          ...environment,
-          AO_SESSION: sessionId,
-          AO_DATA_DIR: sessionsDir, // Pass sessions directory (not root dataDir)
-          AO_SESSION_NAME: sessionId, // User-facing session name
-          ...(tmuxName && { AO_TMUX_NAME: tmuxName }), // Tmux session name if using new arch
-          AO_CALLER_TYPE: "agent",
-          AO_PROJECT_ID: spawnConfig.projectId,
-          AO_CONFIG_PATH: config.configPath,
-          AO_STATE_ROOT: getStateRoot(),
-        },
+        environment,
       });
     } catch (err) {
-      await recordFailedOpenCodeLaunch(
-        launchLock,
-        { id: tmuxName ?? sessionId, runtimeName: plugins.runtime.name, data: {} },
-        err,
-      );
+      // Remove only an agent session that this spawn created (never a reused one).
+      await discardPreparedSession(prepared);
       // Clean up workspace and reserved ID if agent config or runtime creation failed
       if (
         plugins.workspace &&
@@ -1406,9 +1378,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
       try {
-        // A marker keeps this number reserved so the next worker gets a different key.
-        if (launchLock?.pending) updateMetadata(sessionsDir, sessionId, { status: "killed" });
-        deleteMetadata(sessionsDir, sessionId, launchLock?.pending ?? false);
+        deleteMetadata(sessionsDir, sessionId, false);
       } catch {
         /* best effort */
       }
@@ -1429,14 +1399,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       agentInfo: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
-      metadata: {
-        ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}),
-      },
+      metadata: prepared
+        ? { ...prepared.metadata }
+        : { ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}) },
     };
 
-    let setupFailed = false;
+    let confirmation: AgentLaunchConfirmation | undefined;
     try {
-      await launchLock?.recordRuntime(handle);
       // Stored spawn identity: every worker persists its effective model
       // (selection.model, which is the explicit --model when given) and its
       // effective permission mode ("default" when the config object sets no
@@ -1455,44 +1424,37 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         agent: selection.agentName, // Persist agent name for lifecycle manager
         model: selection.model,
         permissions: selection.permissions ?? "default",
-        createdAt: new Date().toISOString(),
+        createdAt: preparedCreatedAt ?? new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
-        opencodeSessionId: reusedOpenCodeSessionId,
+        opencodeSessionId: session.metadata["opencodeSessionId"],
       });
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
       }
 
-      if (plugins.agent.name === "opencode" && !session.metadata["opencodeSessionId"]) {
-        // Row 23 (until I-3): wait for the pane to create this session's
-        // OpenCode session and store its ID, for every issue strategy (the
-        // strategy decides about older sessions, not about this one). Never
-        // throws: when the wait ends without one match, the spawn succeeds
-        // without a mapping and the operator gets the `ao session remap` line.
-        const discovered = await discoverNewOpenCodeSession(
-          sessionId,
-          workspacePath,
-          launchStartedAt,
-          launchLock?.recoveryHint ?? "",
-        );
-        if (discovered) {
-          session.metadata["opencodeSessionId"] = discovered;
-        }
+      // I-3: prove that the pane runs the agent on the prepared session. A
+      // throw (dead pane, timeout) fails the spawn and cleans up below.
+      if (prepared && plugins.agent.confirmLaunch) {
+        confirmation = await plugins.agent.confirmLaunch(session, prepared, {
+          timeoutMs: LAUNCH_CONFIRM_TIMEOUT_MS,
+          promptExpected: launchHasPrompt(agentLaunchConfig),
+          promptTimeoutMs: LAUNCH_PROMPT_CONFIRM_TIMEOUT_MS,
+        });
       }
 
       if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
-      if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
-      setupFailed = true;
-      // Clean up runtime and workspace on post-launch failure
+      // Clean up runtime and workspace on post-launch failure. The runtime
+      // goes first, so no pane still uses the agent session that is removed.
       try {
         await plugins.runtime.destroy(handle);
       } catch {
         /* best effort */
       }
+      await discardPreparedSession(prepared);
       if (
         plugins.workspace &&
         shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
@@ -1504,15 +1466,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
       try {
-        // A marker keeps this number reserved so the next worker gets a different key.
-        if (launchLock?.pending) updateMetadata(sessionsDir, sessionId, { status: "killed" });
-        deleteMetadata(sessionsDir, sessionId, launchLock?.pending ?? false);
+        deleteMetadata(sessionsDir, sessionId, false);
       } catch {
         /* best effort */
       }
       throw err;
-    } finally {
-      releaseOpenCodeLaunchLock(launchLock, setupFailed);
     }
 
     // Send initial prompt post-launch for agents that need it (e.g. Claude Code
@@ -1549,6 +1507,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
 
       session.metadata["promptDelivered"] = String(promptDelivered);
+    } else if (confirmation?.promptDelivered !== undefined) {
+      // The agent checked its own session for the prompt (I-3).
+      session.metadata["promptDelivered"] = String(confirmation.promptDelivered);
+      if (!confirmation.promptDelivered) warnLaunchPromptNotSeen(sessionId);
     } else if (agentLaunchConfig.prompt) {
       session.metadata["promptDelivered"] = "true";
     }
@@ -1813,52 +1775,70 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: selection.subagent,
     };
 
-    // An agent can refuse the launch (for example an unsupported binary version).
-    // Clean up like any later failure, so a refused orchestrator spawn leaves no
-    // worktree, reserved metadata or prompt file behind.
+    // The environment of the pane, as for a worker spawn (I-3).
+    const paneEnvironment = (agentEnvironment: Record<string, string>): Record<string, string> => ({
+      ...agentEnvironment,
+      AO_SESSION: sessionId,
+      AO_DATA_DIR: sessionsDir,
+      AO_SESSION_NAME: sessionId,
+      ...(tmuxName && { AO_TMUX_NAME: tmuxName }),
+      AO_CALLER_TYPE: "orchestrator",
+      AO_PROJECT_ID: orchestratorConfig.projectId,
+      AO_CONFIG_PATH: config.configPath,
+      AO_STATE_ROOT: getStateRoot(),
+    });
+
+    // An agent can refuse the launch (for example an unsupported binary version,
+    // or a model that OpenCode does not list). Clean up like any later failure,
+    // so a refused orchestrator spawn leaves no worktree, reserved metadata or
+    // prompt file behind.
+    let prepared: PreparedAgentSession | undefined;
+    let preparedCreatedAt: string | undefined;
     let launchCommand: string;
     let environment: Record<string, string>;
     try {
-      launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
-      environment = plugins.agent.getEnvironment(agentLaunchConfig);
+      if (plugins.agent.prepareAgentSession) {
+        // I-3: the same create, store and check as a worker spawn.
+        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+        prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
+          workspacePath,
+          environment,
+        });
+        preparedCreatedAt = new Date().toISOString();
+        updateMetadata(sessionsDir, sessionId, {
+          worktree: workspacePath,
+          branch,
+          status: "working",
+          role: "orchestrator",
+          tmuxName,
+          project: orchestratorConfig.projectId,
+          agent: selection.agentName,
+          createdAt: preparedCreatedAt,
+          ...prepared.metadata,
+        });
+        launchCommand = plugins.agent.getLaunchCommand(
+          withPreparedAgentConfig(agentLaunchConfig, prepared),
+        );
+      } else {
+        launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+        environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+      }
     } catch (err) {
+      await discardPreparedSession(prepared);
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     }
 
-    let launchLock: OpenCodeLaunchLock | undefined;
-    let launchStartedAt = 0;
-
-    // Serialize before recording time: another fleet can share this title and
-    // directory. A previous unresolved launch refuses before any new pane.
     let handle: RuntimeHandle;
     try {
-      if (plugins.agent.name === "opencode" && !reusableOpenCodeSessionId) {
-        launchLock = await acquireOpenCodeLaunchLock(workspacePath, `AO:${sessionId}`);
-        launchStartedAt = await launchLock.start();
-      }
       handle = await plugins.runtime.create({
         sessionId: tmuxName ?? sessionId,
         workspacePath,
         launchCommand,
-        environment: {
-          ...environment,
-          AO_SESSION: sessionId,
-          AO_DATA_DIR: sessionsDir,
-          AO_SESSION_NAME: sessionId,
-          ...(tmuxName && { AO_TMUX_NAME: tmuxName }),
-          AO_CALLER_TYPE: "orchestrator",
-          AO_PROJECT_ID: orchestratorConfig.projectId,
-          AO_CONFIG_PATH: config.configPath,
-          AO_STATE_ROOT: getStateRoot(),
-        },
+        environment,
       });
     } catch (err) {
-      await recordFailedOpenCodeLaunch(
-        launchLock,
-        { id: tmuxName ?? sessionId, runtimeName: plugins.runtime.name, data: {} },
-        err,
-      );
+      await discardPreparedSession(prepared);
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
     }
@@ -1877,14 +1857,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       agentInfo: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
-      metadata: {
-        ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
-      },
+      metadata: prepared
+        ? { ...prepared.metadata }
+        : {
+            ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
+          },
     };
 
-    let setupFailed = false;
     try {
-      await launchLock?.recordRuntime(handle);
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,
@@ -1893,45 +1873,42 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         tmuxName,
         project: orchestratorConfig.projectId,
         agent: selection.agentName,
-        createdAt: new Date().toISOString(),
+        createdAt: preparedCreatedAt ?? new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
-        opencodeSessionId: reusableOpenCodeSessionId,
+        opencodeSessionId: session.metadata["opencodeSessionId"],
       });
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
       }
 
-      if (plugins.agent.name === "opencode" && !session.metadata["opencodeSessionId"]) {
-        // Row 23 (until I-3): the same wait as a worker spawn, for every
-        // orchestrator strategy. Never throws; see `discoverNewOpenCodeSession`.
-        const discovered = await discoverNewOpenCodeSession(
-          sessionId,
-          workspacePath,
-          launchStartedAt,
-          launchLock?.recoveryHint ?? "",
-        );
-        if (discovered) {
-          session.metadata["opencodeSessionId"] = discovered;
+      // I-3: prove that the pane runs the agent on the prepared session.
+      if (prepared && plugins.agent.confirmLaunch) {
+        const confirmation = await plugins.agent.confirmLaunch(session, prepared, {
+          timeoutMs: LAUNCH_CONFIRM_TIMEOUT_MS,
+          promptExpected: launchHasPrompt(agentLaunchConfig),
+          promptTimeoutMs: LAUNCH_PROMPT_CONFIRM_TIMEOUT_MS,
+        });
+        if (confirmation.promptDelivered !== undefined) {
+          session.metadata["promptDelivered"] = String(confirmation.promptDelivered);
+          if (!confirmation.promptDelivered) warnLaunchPromptNotSeen(sessionId);
         }
       }
 
       if (Object.keys(session.metadata || {}).length > 0) {
         updateMetadata(sessionsDir, sessionId, session.metadata);
       }
-      if (session.metadata["opencodeSessionId"]) launchLock?.complete();
     } catch (err) {
-      setupFailed = true;
-      // Clean up runtime on post-launch failure
+      // Clean up runtime on post-launch failure. The runtime goes first, so no
+      // pane still uses the agent session that is removed.
       try {
         await plugins.runtime.destroy(handle);
       } catch {
         /* best effort */
       }
+      await discardPreparedSession(prepared);
       await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
       throw err;
-    } finally {
-      releaseOpenCodeLaunchLock(launchLock, setupFailed);
     }
 
     return session;

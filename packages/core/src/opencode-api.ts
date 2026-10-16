@@ -15,29 +15,35 @@
  *     bound instead of waiting 40 s), kill purge swallows (best effort).
  *   - `listOpenCodeSessionsByTitle` / `findOpenCodeSessionsByTitle`: throw;
  *     `remap` propagates (manual repair reports the hang instead of
- *     "missing").
- *   - `waitForOpenCodeSession` (spawn and orchestrator start, row 23): a
- *     failed search counts as "not found yet"; the whole wait is bounded by
- *     its window (plus a final API bound after suspension), and the spawn
- *     goes on without a mapping when it ends.
+ *     "missing"). No spawn path searches by title (row 23, I-3).
  *   - `removeOpenCodeSession` / `interruptOpenCodeSession`: throw; `kill`
  *     purge warns and archives anyway, `cleanup` records an error entry.
+ *   - The spawn calls (`listOpenCodeModels`, `createOpenCodeSession`, the
+ *     switches, `hasOpenCodeUserMessage`): throw; the OpenCode plugin's
+ *     `prepareAgentSession` fails the spawn before the pane starts, and its
+ *     `confirmLaunch` counts a failed message read as "not seen yet".
  * - The child's stderr is captured (`stdio` pipe) and never inherits the
  *   terminal. It is only used to build the thrown error message.
  * - Exit code 0 is never proof of a complete answer (0010 section 11.1):
  *   stdout must parse as JSON and have the expected envelope (`data` for
  *   get/list, any JSON for interrupt, empty or JSON for remove). A parse
- *   failure throws with `cause`, so a truncated pipe read becomes an error,
- *   not a silent empty result. Every answer of these operations is one JSON
- *   object, and a prefix of an object never parses. The title search reads
- *   pages of `OPENCODE_SESSION_LIST_PAGE_SIZE`, so one answer stays far below
- *   the 262144-byte pipe size where 0010 section 11.1 saw cut answers.
+ *   failure throws `OpenCodeApiIncompleteAnswerError` with `cause`, so a
+ *   truncated pipe read becomes an error, not a silent empty result. Every
+ *   answer of these operations is one JSON object, and a prefix of an object
+ *   never parses. The title search reads pages of
+ *   `OPENCODE_SESSION_LIST_PAGE_SIZE`, so one answer stays far below the
+ *   262144-byte pipe size where 0010 section 11.1 saw cut answers.
+ *   `model.list` (about 470 KB) cannot page, so it retries once on a cut.
+ * - A spawn passes the session's own environment (`env`): the call then runs
+ *   with the environment that the pane gets, not with the `AO_*` values of
+ *   the `ao` process (0010 sections 11.2 and 14 item 3).
  * - It never reads the service password: `opencode api` adds the auth itself
  *   (0009 section 2). No `service.json` is read.
  */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,7 +62,18 @@ export class OpenCodeApiTimeoutError extends Error {
   }
 }
 
-/** Largest `opencode api` answer observed (model.list, 458898 bytes); 64 MiB leaves headroom. */
+/**
+ * An `opencode api` call that exited 0 with empty or unparsable stdout: the
+ * answer was cut (0010 section 11.1), not empty. A caller can ask again.
+ */
+export class OpenCodeApiIncompleteAnswerError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "OpenCodeApiIncompleteAnswerError";
+  }
+}
+
+/** Largest `opencode api` answer observed (model.list, 473846 bytes on 2.0.31); 64 MiB leaves headroom. */
 export const OPENCODE_API_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 /**
@@ -101,6 +118,22 @@ export interface OpenCodeApiOptions {
   body?: unknown;
   /** Override for the bounded timeout. */
   timeoutMs?: number;
+  /**
+   * The environment of the session that the call works for: the map that
+   * core passes to `runtime.create`. When set, the child gets the `ao`
+   * process environment without its `AO_*` variables, plus this map (the map
+   * wins). Without it, the child inherits the `ao` process environment.
+   */
+  env?: Record<string, string>;
+}
+
+/** The child environment for `OpenCodeApiOptions.env`. */
+function sessionChildEnvironment(env: Record<string, string>): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("AO_")) base[key] = value;
+  }
+  return { ...base, ...env };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -168,7 +201,9 @@ export async function callOpenCodeApi(
       maxBuffer: OPENCODE_API_MAX_BUFFER_BYTES,
       // `execFile` always pipes stdout and stderr: it does not pass a `stdio`
       // option on to `spawn` (checked on Node 25.7.0), so the child's stderr
-      // is captured here and never reaches the terminal.
+      // is captured here and never reaches the terminal. With `env`, Node
+      // also looks up `opencode` on that PATH, as the pane does.
+      ...(options?.env ? { env: sessionChildEnvironment(options.env) } : {}),
     });
     stdout = errorText(result.stdout);
     stderr = errorText(result.stderr);
@@ -207,15 +242,16 @@ export async function callOpenCodeApi(
     // `session.remove` answers 204 with no body; every other operation must
     // print JSON, so empty output is a truncation, not a result.
     if (operation === "session.remove") return null;
-    throw new Error(`opencode api ${operation} returned empty output with exit 0`, {
-      cause: new Error(`stdout length 0, stderr: ${stderr.trim().slice(0, 200)}`),
-    });
+    throw new OpenCodeApiIncompleteAnswerError(
+      `opencode api ${operation} returned empty output with exit 0`,
+      { cause: new Error(`stdout length 0, stderr: ${stderr.trim().slice(0, 200)}`) },
+    );
   }
 
   try {
     return JSON.parse(trimmed) as unknown;
   } catch (parseErr) {
-    throw new Error(
+    throw new OpenCodeApiIncompleteAnswerError(
       `opencode api ${operation} returned incomplete JSON with exit 0 (got ${trimmed.length} chars)`,
       { cause: parseErr },
     );
@@ -237,10 +273,12 @@ function asSessionRecord(value: unknown): OpenCodeApiSession | null {
 export async function getOpenCodeSession(
   sessionId: string,
   timeoutMs?: number,
+  env?: Record<string, string>,
 ): Promise<OpenCodeApiSession | null> {
   const parsed = await callOpenCodeApi("session.get", {
     params: { sessionID: sessionId },
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(env ? { env } : {}),
   });
   if (parsed === null) return null;
   if (!isRecord(parsed) || !("data" in parsed)) {
@@ -377,80 +415,19 @@ export async function findOpenCodeSessionsByTitle(
   return [...byId.values()].sort(byCreatedDesc);
 }
 
-export type OpenCodeSessionWaitResult =
-  | { status: "found"; session: OpenCodeApiSession }
-  | { status: "ambiguous"; sessions: OpenCodeApiSession[] }
-  | { status: "not-found"; lastError?: unknown };
-
-/**
- * Wait until exactly one session matches `match`, for at most `windowMs`
- * (row 23, spawn and orchestrator start, until I-3 creates the session in
- * Node). The pane creates its session only after `runtime.create` returns,
- * so the first search usually runs too early; this searches again every
- * `pollMs`. A failed search (timeout or another error) counts as "not found
- * yet". Each search gets only the time left in the window, so the whole wait
- * ends within `windowMs` plus one process exit. If the event loop stalls
- * across the deadline during a poll pause or an in-flight search, make one final bounded search:
- * a session may have appeared while the launcher was suspended. That recovery
- * adds at most one API bound; an ordinary timeout does not cause another retry.
- *
- * This is a search primitive, not proof of pane ownership. Fresh-launch
- * callers must hold the host-wide OpenCode launch lock from BEFORE recording
- * createdAtOrAfter through persistence. Otherwise two staggered creates can
- * both observe the first single result. Visible duplicates still refuse.
- */
-export async function waitForOpenCodeSession(
-  match: OpenCodeSessionMatch,
-  windowMs: number,
-  pollMs: number,
-): Promise<OpenCodeSessionWaitResult> {
-  const deadline = Date.now() + windowMs;
-  let lastError: unknown;
-  for (;;) {
-    const searchStartedAt = Date.now();
-    const remainingMs = deadline - searchStartedAt;
-    const finalSearch = remainingMs <= 0;
-    const searchBound = finalSearch
-      ? OPENCODE_API_TIMEOUT_MS
-      : Math.min(OPENCODE_API_TIMEOUT_MS, remainingMs);
-    let searchCompleted = false;
-    let emptyAfterTimeout = false;
-    try {
-      const sessions = await findOpenCodeSessionsByTitle(match, searchBound);
-      searchCompleted = true;
-      const [only, ...others] = sessions;
-      if (only && others.length === 0) return { status: "found", session: only };
-      if (only) return { status: "ambiguous", sessions };
-    } catch (err) {
-      lastError = err;
-      // After SIGCONT Node can run an overdue execFile timer before reading
-      // the child's output, reporting exit 0 with an empty pipe.
-      emptyAfterTimeout =
-        err instanceof Error &&
-        err.message === "opencode api session.list returned empty output with exit 0" &&
-        Date.now() - searchStartedAt > searchBound;
-    }
-    if (finalSearch) break;
-    const pauseMs = Math.min(pollMs, deadline - Date.now());
-    if (pauseMs <= 0) {
-      // Buffered results and searches spanning a suspension need one fresh
-      // observation. A normal timeout still ends at the discovery deadline.
-      if (searchCompleted || emptyAfterTimeout || Date.now() - deadline > searchBound) continue;
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, pauseMs));
-  }
-  return { status: "not-found", ...(lastError !== undefined ? { lastError } : {}) };
-}
-
 /**
  * `session.remove` by ID (rows 9, 21). A 404 (already removed) is success and
  * returns; every other error throws with `cause` after the caller's retries.
  */
-export async function removeOpenCodeSession(sessionId: string, timeoutMs?: number): Promise<void> {
+export async function removeOpenCodeSession(
+  sessionId: string,
+  timeoutMs?: number,
+  env?: Record<string, string>,
+): Promise<void> {
   await callOpenCodeApi("session.remove", {
     params: { sessionID: sessionId },
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(env ? { env } : {}),
   });
 }
 
@@ -462,10 +439,12 @@ export async function removeOpenCodeSession(sessionId: string, timeoutMs?: numbe
 export async function interruptOpenCodeSession(
   sessionId: string,
   timeoutMs?: number,
+  env?: Record<string, string>,
 ): Promise<{ interrupted: boolean } | null> {
   const parsed = await callOpenCodeApi("session.interrupt", {
     params: { sessionID: sessionId },
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(env ? { env } : {}),
   });
   if (parsed === null) return null;
   if (
@@ -483,4 +462,187 @@ export async function interruptOpenCodeSession(
   throw new Error("opencode api session.interrupt returned unexpected JSON", {
     cause: new Error(JSON.stringify(parsed).slice(0, 500)),
   });
+}
+
+// =============================================================================
+// Spawn calls (I-3: the session is created in Node before the pane starts)
+// =============================================================================
+
+/** A model reference of the 2.x API (`Model.Ref`: `providerID`, `id`, optional `variant`). */
+export interface OpenCodeModelRef {
+  providerID: string;
+  id: string;
+  variant?: string;
+}
+
+/** Options of the spawn calls: the session's environment and a bound. */
+export interface OpenCodeSpawnCallOptions {
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+function spawnCallOptions(options: OpenCodeSpawnCallOptions | undefined): OpenCodeApiOptions {
+  return {
+    ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options?.env ? { env: options.env } : {}),
+  };
+}
+
+/**
+ * One `model.list` entry (`Model.Info`, `GET /api/model`), the fields that the
+ * model check reads. `id` is the key that `Model.Ref.id` names: measured on
+ * 2.0.31, `providerID` + `id` is unique over all 586 entries, while 26
+ * `providerID` + `modelID` keys hold more than one entry (`openai/gpt-6.1-sol`
+ * is the `modelID` of `gpt-6.1-sol`, `-fast`, `-pro` and `-ultrafast`).
+ */
+export interface OpenCodeApiModel {
+  id: string;
+  providerID: string;
+  modelID?: string;
+  enabled?: boolean;
+  variants?: Array<{ id?: unknown }>;
+  [key: string]: unknown;
+}
+
+/**
+ * `model.list`. The answer is about 470 KB, above the 262144-byte pipe size
+ * where 0010 section 11.1 saw `opencode api` stop early with exit 0, and the
+ * operation has no paging. A cut answer (empty or incomplete JSON) is asked
+ * again once, so one cut does not fail a spawn. Throws on timeout, on every
+ * other error and on a second cut.
+ */
+export async function listOpenCodeModels(
+  options?: OpenCodeSpawnCallOptions,
+): Promise<OpenCodeApiModel[]> {
+  let parsed: unknown;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      parsed = await callOpenCodeApi("model.list", spawnCallOptions(options));
+      break;
+    } catch (err) {
+      if (attempt >= 2 || !(err instanceof OpenCodeApiIncompleteAnswerError)) throw err;
+    }
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed["data"])) {
+    throw new Error("opencode api model.list returned JSON without data array", {
+      cause: new Error(JSON.stringify(parsed).slice(0, 500)),
+    });
+  }
+  return (parsed["data"] as unknown[]).filter(
+    (entry): entry is OpenCodeApiModel =>
+      isRecord(entry) && typeof entry["id"] === "string" && typeof entry["providerID"] === "string",
+  );
+}
+
+/**
+ * The model check before `session.create` (0010 sections 5.3 and 11.4:
+ * create accepts a model that has no route). Returns null when `models` has
+ * an entry with the requested `providerID` and `id` that is `enabled` and,
+ * for a requested variant, lists it; else the reason for the refusal. The
+ * variant `default` is what 2.x stores for a model without a variant, so it
+ * needs no listed entry.
+ */
+export function findOpenCodeModelProblem(
+  models: readonly OpenCodeApiModel[],
+  ref: OpenCodeModelRef,
+): string | null {
+  const name = `${ref.providerID}/${ref.id}`;
+  const entry = models.find((model) => model.providerID === ref.providerID && model.id === ref.id);
+  if (!entry) return `model.list has no model ${name}`;
+  if (entry.enabled !== true) return `model ${name} is not enabled`;
+  if (ref.variant && ref.variant !== "default") {
+    const variants = Array.isArray(entry.variants) ? entry.variants : [];
+    if (!variants.some((variant) => isRecord(variant) && variant["id"] === ref.variant)) {
+      return `model ${name} has no variant ${ref.variant}`;
+    }
+  }
+  return null;
+}
+
+/** The body of `session.create` that a spawn sends. */
+export interface OpenCodeSessionCreateBody {
+  title: string;
+  model?: OpenCodeModelRef;
+  agent?: string;
+  location: { directory: string };
+}
+
+/**
+ * `session.create`. Returns the new session; throws when the call fails, and
+ * when the answer holds no valid session ID (then no ID is known, so nothing
+ * can be removed).
+ */
+export async function createOpenCodeSession(
+  body: OpenCodeSessionCreateBody,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<OpenCodeApiSession> {
+  const parsed = await callOpenCodeApi("session.create", {
+    body,
+    ...spawnCallOptions(options),
+  });
+  const session = isRecord(parsed) ? asSessionRecord(parsed["data"]) : null;
+  if (!session || !asValidOpenCodeSessionId(session.id)) {
+    throw new Error("opencode api session.create returned no usable session ID", {
+      cause: new Error(JSON.stringify(parsed).slice(0, 500)),
+    });
+  }
+  return session;
+}
+
+async function switchOpenCodeSession(
+  operation: "session.switchModel" | "session.switchAgent",
+  sessionId: string,
+  body: Record<string, unknown>,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<void> {
+  const parsed = await callOpenCodeApi(operation, {
+    params: { sessionID: sessionId },
+    body,
+    ...spawnCallOptions(options),
+  });
+  if (parsed === null) {
+    throw new Error(`opencode api ${operation}: OpenCode session ${sessionId} does not exist`);
+  }
+}
+
+/** `session.switchModel` on an existing session (row 4). Throws on any failure, also on a 404. */
+export async function switchOpenCodeSessionModel(
+  sessionId: string,
+  model: OpenCodeModelRef,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<void> {
+  await switchOpenCodeSession("session.switchModel", sessionId, { model }, options);
+}
+
+/** `session.switchAgent` on an existing session (row 4). Throws on any failure, also on a 404. */
+export async function switchOpenCodeSessionAgent(
+  sessionId: string,
+  agent: string,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<void> {
+  await switchOpenCodeSession("session.switchAgent", sessionId, { agent }, options);
+}
+
+/**
+ * True when the session has a `user` message (`session.message.list` with
+ * `type=user`, one entry): the launch prompt reached the session. A 404
+ * answers false. Throws on timeout and on every other error.
+ */
+export async function hasOpenCodeUserMessage(
+  sessionId: string,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<boolean> {
+  const parsed = await callOpenCodeApi("session.message.list", {
+    params: { sessionID: sessionId, type: "user", limit: "1" },
+    ...spawnCallOptions(options),
+  });
+  if (parsed === null) return false;
+  if (!isRecord(parsed) || !Array.isArray(parsed["data"])) {
+    throw new Error("opencode api session.message.list returned JSON without data array", {
+      cause: new Error(JSON.stringify(parsed).slice(0, 500)),
+    });
+  }
+  return (parsed["data"] as unknown[]).some(
+    (message) => isRecord(message) && message["type"] === "user",
+  );
 }

@@ -376,6 +376,34 @@ export interface Agent {
   postLaunchSetup?(session: Session): Promise<void>;
 
   /**
+   * Optional: make the agent's own session ready before the pane starts
+   * (OpenCode: the model check, then `session.create` or the switch of a
+   * reused session, then a readback). Core calls it on spawn and orchestrator
+   * start, after the workspace exists and before `getLaunchCommand` and
+   * `runtime.create`. Core writes `metadata` to the session record before
+   * `runtime.create` and merges `agentConfig` into the launch config that
+   * `getLaunchCommand` gets. A throw fails the spawn before any pane starts;
+   * the hook removes what it created itself before it throws.
+   */
+  prepareAgentSession?(
+    config: AgentLaunchConfig,
+    context: AgentSessionPrepareContext,
+  ): Promise<PreparedAgentSession>;
+
+  /**
+   * Optional: prove that the pane runs the agent on the prepared session,
+   * within `options.timeoutMs`. Core calls it after `runtime.create` and
+   * `postLaunchSetup`, and only when `prepareAgentSession` ran. A throw fails
+   * the spawn: core destroys the runtime, calls `prepared.discard()`, destroys
+   * the workspace and deletes the record.
+   */
+  confirmLaunch?(
+    session: Session,
+    prepared: PreparedAgentSession,
+    options: AgentLaunchConfirmOptions,
+  ): Promise<AgentLaunchConfirmation>;
+
+  /**
    * Optional: Set up agent-specific hooks/config in the workspace for automatic metadata updates.
    * Called once per workspace during ao init/start and when creating new worktrees.
    *
@@ -438,6 +466,50 @@ export interface AgentLaunchConfig {
    * Use --subagent flag to select the subagent.
    */
   subagent?: string;
+}
+
+/** What `Agent.prepareAgentSession` gets besides the launch config. */
+export interface AgentSessionPrepareContext {
+  /** The workspace that the pane starts in. */
+  workspacePath: string;
+  /**
+   * The environment map that core passes to `runtime.create` for this
+   * session: the agent environment plus the session's own `AO_*` values. Every
+   * external call of the hook runs with it, never with the `AO_*` values of
+   * the `ao` process (which, for a spawn from an orchestrator, are the
+   * orchestrator's).
+   */
+  environment: Record<string, string>;
+}
+
+/** The agent session that `prepareAgentSession` made ready. */
+export interface PreparedAgentSession {
+  /** Keys that core writes to the session record before `runtime.create`. */
+  metadata: Record<string, string>;
+  /** Values that core merges into `projectConfig.agentConfig` for `getLaunchCommand`. */
+  agentConfig: Record<string, unknown>;
+  /** True when this call created the agent session; false when it reused one. */
+  created: boolean;
+  /**
+   * Remove the agent session when this call created it; a reused session is
+   * never removed. Best effort: it never throws, and it tells the operator
+   * when the removal fails.
+   */
+  discard(): Promise<void>;
+}
+
+export interface AgentLaunchConfirmOptions {
+  /** Bound on the proof that the pane runs the agent on the prepared session. */
+  timeoutMs: number;
+  /** True when the launch command gives the agent a prompt. */
+  promptExpected: boolean;
+  /** Bound on the wait for the prompt to reach the agent session. */
+  promptTimeoutMs: number;
+}
+
+export interface AgentLaunchConfirmation {
+  /** Whether the launch prompt reached the agent; absent when the agent cannot tell. */
+  promptDelivered?: boolean;
 }
 
 export interface WorkspaceHooksConfig {
