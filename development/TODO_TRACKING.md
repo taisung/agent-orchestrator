@@ -226,6 +226,20 @@ Durable progress record for this fork. Dated events only; the current state live
   loader "always sets permissionless"). N-15: a Codex worker with a damaged record now waits for approval
   (`waiting_input`). Not live, not pushed.
 
+- `5cbe84b3` (2026-10-16, ao-33, Muse; owner "fix m-10") - `fix(core): limit metadata helper to wrapper
+  keys to block privilege escalation`, the code of the reviewed `63567df0`. `update_ao_metadata` in
+  `~/.ao/bin/ao-metadata-helper.sh` takes only `pr`, `status pr_open` and `branch`; any other key or value
+  writes nothing, prints one stderr line and returns 1; the Claude hook's `update_metadata_key` gets the
+  same limit plus `status merged` (its own old `gh pr merge` write); the AGENTS.md text drops the generic
+  call; `WRAPPER_VERSION` 0.2.4. Blind review by Opus 5.5 (ao-32,
+  `development/reviews/helper_keys_review_r1_opus.md`): **LAND-SAFE**, m-10 fixed for the documented path
+  (live: a restore after the refused calls keeps the stored mode; the base raises it), 0 B, 1 M, 2 m, 8
+  notes. **M-3, rollout condition:** a resident process with the 0.2.3 code (the five lifecycle workers)
+  installs the old helper again on its next automatic restore, so after the rebuild restart them, then
+  check `cat ~/.ao/bin/.ao-version` (0.2.4, after the next Codex, Gemini or OpenCode spawn or restore) and
+  `grep -c refusing ~/.ao/bin/ao-metadata-helper.sh` (2). N-17: an agent with shell access can still write
+  the record file directly. Not live, not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -248,6 +262,17 @@ section 18 stays open, and I-4 polls with `opencode api`, which adds the auth it
 in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
+
+- **A stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
+  m-13; old, the same on the base). The helper and the Claude hook check only the key, so `branch=-Bvictim`
+  is stored; restore runs `git worktree add <path> -Bvictim` (`packages/plugins/workspace-worktree/src/index.ts:276`,
+  no `--`), and git resets the free branch `victim` (live: it lost its own commit, which stays in the
+  reflog). The orchestrator process runs that git command, outside the agent sandbox. Suggested fix: refuse
+  a `branch` value that `git check-ref-format --branch` refuses or that starts with `-`, in the helper, the
+  hook and restore. The `pr` value has no check either. Worker follow-up, needs the owner's word.
+- **`~/agent-skills/skills/ao-lifecycle/SKILL.md:854-860` documents the generic `update_ao_metadata <key>
+  <value>` call** (helper review m-14). After `5cbe84b3` only `pr`, `status pr_open` and `branch` work, and
+  other calls fail loudly. That text belongs to `as-orchestrator`.
 
 - **Owner decisions from review r3 of option 1** (2026-10-15, ao-32; decided by the owner on 2026-10-15:
   "keep the default, accept m-9, fix m-10"). The YAML `permissionless` default stays. m-9 is accepted as a
