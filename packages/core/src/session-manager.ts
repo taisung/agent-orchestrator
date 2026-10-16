@@ -2830,7 +2830,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     if (plugins.agent.getRestoreCommand) {
-      const restoreCmd = await plugins.agent.getRestoreCommand(session, project, selection.model);
+      // N-2: pass the same agentConfig the spawn used (role-merged, with the
+      // orchestrator permissionless override). Plugins read model and
+      // permissions from project.agentConfig, so a restore can neither gain
+      // permissions nor lose the spawn model. The third argument stays for
+      // backward compatibility with two-argument implementers.
+      const restoreProject = {
+        ...project,
+        agentConfig: agentLaunchConfig.projectConfig.agentConfig,
+      };
+      const restoreCmd = await plugins.agent.getRestoreCommand(
+        session,
+        restoreProject,
+        selection.model,
+      );
       launchCommand = restoreCmd ?? plugins.agent.getLaunchCommand(agentLaunchConfig);
     } else {
       launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);

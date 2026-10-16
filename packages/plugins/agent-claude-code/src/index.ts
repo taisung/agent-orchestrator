@@ -884,8 +884,7 @@ function createClaudeCodeAgent(): Agent {
       // C-04: prefer the persisted spawn --model override (passed as
       // effectiveModel) over the live config so a restore keeps the spawn
       // model even when the config changed after the spawn.
-      const model =
-        effectiveModel ?? (project.agentConfig?.model as string | undefined);
+      const model = effectiveModel ?? (project.agentConfig?.model as string | undefined);
       if (model) {
         parts.push("--model", shellEscape(model));
       }

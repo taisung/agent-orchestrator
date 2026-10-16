@@ -3,12 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { writeMetadata, readMetadataRaw, deleteMetadata } from "../../metadata.js";
-import type {
-  OrchestratorConfig,
-  PluginRegistry,
-  Runtime,
-  Agent,
-} from "../../types.js";
+import type { OrchestratorConfig, PluginRegistry, Runtime, Agent } from "../../types.js";
 import {
   setupTestContext,
   teardownTestContext,
@@ -219,12 +214,12 @@ describe("restore model (C-04)", () => {
 
     const agentWithRestore: Agent = {
       ...mockAgent,
-      getRestoreCommand: vi.fn().mockResolvedValue("mock-agent --resume --model spawn-model-X"),
+      getRestoreCommand: vi.fn().mockImplementation(async (_s, _p, effectiveModel) => {
+        return `mock-agent --resume --model ${effectiveModel}`;
+      }),
     };
     vi.mocked(mockRuntime.create).mockResolvedValue(makeHandle("rt-restored"));
-    vi.mocked(mockRuntime.getOutput)
-      .mockResolvedValueOnce("before")
-      .mockResolvedValueOnce("after");
+    vi.mocked(mockRuntime.getOutput).mockResolvedValueOnce("before").mockResolvedValueOnce("after");
 
     const sm = createSessionManager({ config, registry: registryWith(agentWithRestore) });
     await sm.send("app-1", "hello");

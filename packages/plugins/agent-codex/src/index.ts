@@ -658,9 +658,9 @@ function createCodexAgent(): Agent {
       // of data.model to match the pre-fix order (config ?? data.model) and
       // to keep all four plugins consistent; data.model is the fallback when
       // neither is set.
-      const modelToUse = (effectiveModel ??
-        project.agentConfig?.model ??
-        data.model) as string | undefined;
+      const modelToUse = (effectiveModel ?? project.agentConfig?.model ?? data.model) as
+        | string
+        | undefined;
       appendModelFlags(parts, modelToUse ?? undefined);
 
       // Positional threadId goes last, after all flags
