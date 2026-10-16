@@ -306,6 +306,18 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     race: I-3 shortens it but does not remove it (needs `lifecycle-manager.ts`). Blind review r1
     dispatched at 14:07 EDT to ao-40 (gpt-6.1-sol, xhigh; Codex weekly 80% left): brief
     `brief-review-i3-r1-sol.md`, review file `i3_review_r1_sol61.md`, watcher PID 1378201.
+    **Review r1** (`development/reviews/i3_review_r1_sol61.md`, about 1.41 USD): NOT-LAND-SAFE. B-1 the
+    pre-pane record publishes the ID before the pane exists, so the shared-ID guard calls the holder dead
+    and a concurrent issue spawn with the `delete` strategy removes the first spawn's new session (live
+    reproducer); M-1 the launch check accepts `bash -c sleep 60 opencode --session <id>`; M-2 an old
+    `user` message confirms a new prompt on a reused session; m-1 the reuse resolver and the delete path
+    still use the caller's environment; m-2 two cut `model.list` answers fail the spawn; m-3 the double
+    warning; m-4 the stale restore comment. The reviewer rates the old first-poll `killed` race major
+    (I-3 lengthens the window before the pane exists). **Owner (2026-10-16): the race is a separate item
+    after I-3.** **Round 2** dispatched to ao-36 at 14:31 EDT: brief `brief-aofork-i3-r2.md` (launcher
+    PID plus start time as ownership evidence that does not depend on `status`, executable identity from
+    structured process data, a `user` message baseline for a reused session, the pane environment for the
+    resolver, `model.list` through a file, one warning in `cli/src/commands/spawn.ts`, the comment fix).
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
