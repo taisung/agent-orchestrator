@@ -15,6 +15,13 @@ was on 2026-10-16 at 10:45 EDT, and the five lifecycle workers were restarted by
 10:45:24. `~/.ao/bin` holds 0.2.5 since 10:46:44. `origin/main` is `331d0c31` (CI green); `main` holds the
 handover commit on top of it.
 
+**Update 2026-10-16 12:10 EDT (priority 1, steps up to the landing done):** ao-32 reviewed
+`ac0f662a..7f34bf4d`: LAND-SAFE, m-15 to m-17 fixed, new m-18 (bash `pr` checks depend on the locale) and
+N-34 to N-38 (`branch_check_review_r2_opus.md`, TODO). `7f34bf4d` is on `main` as `cd39ea9d`, not pushed.
+Both router rows are closed. Still open for priority 1, on the owner's word: `pnpm build`, the restart of
+the five lifecycle workers by exact PID, `cat ~/.ao/bin/.ao-version` = 0.2.6, the push. The watcher (PID
+1710074) watches ao-32. The text below is from before this update.
+
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
 finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch
 rule, the hook `pr` anchor tests, `WRAPPER_VERSION` 0.2.6; core 948 and claude-code 208 tests pass, its three

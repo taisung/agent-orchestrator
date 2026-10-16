@@ -294,16 +294,24 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   remote branch deleted at 11:31 EDT; `7f34bf4d` stays local. Every author brief must forbid push and PR work in section 0 and say that this overrides the
   spawn prompt.
 
-- **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17 in
-  progress** (owner, 2026-10-16: "fix m-15 to m-17"): author ao-35 (Muse), brief
-  `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`, `WRAPPER_VERSION` 0.2.6; N-27 stays
-  open. ao-35 finished `7f34bf4d` on 2026-10-16 (core 948 and claude-code 208 tests pass, its three mutants
-  fail tests); not on `main`. Blind review r2 dispatched to ao-32 (Opus 5.5) on 2026-10-16 at 11:40 EDT
-  (meter `5h 5%`, `wk 32%`): worktree moved to `7f34bf4d` with `reset --keep`, brief
-  `~/.cache/agent-skills-haiku55-arc/brief-review-branch-check-r2-opus.md`, review file
-  `branch_check_review_r2_opus.md`, router row open, watcher PID 1710074; its r1 task and report are saved
-  as `reports/ao-32-branchcheck-r1.*`. The brief asks whether the worker gate, now inside
-  `if (plugins.workspace)`, still runs for a spawn with no workspace plugin. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
+- **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17
+  landed on `main` as `cd39ea9d`** (cherry-pick of `7f34bf4d`, ao-35 Muse, owner 2026-10-16: "fix m-15 to
+  m-17"; `WRAPPER_VERSION` 0.2.6). **Not live:** the rebuild of the primary checkout, the restart of the
+  five lifecycle workers by exact PID (M-3: a resident 0.2.5 process writes 0.2.5 back, and it writes the
+  0.2.5 Claude hook into every workspace it restores, because the hook file has no version check), the
+  check `cat ~/.ao/bin/.ao-version` = 0.2.6 and the push wait for the owner's word. Blind review r2 by
+  Opus 5.5 (ao-32, `development/reviews/branch_check_review_r2_opus.md`, 8.42 USD): **LAND-SAFE**, m-15,
+  m-16 and m-17 fixed live and by tests, 0 B, 0 M. The worker gate now sits inside
+  `if (plugins.workspace)`, but a spawn with no workspace plugin throws at `session-manager.ts:1211-1219`
+  before the reservation, so no unchecked branch is stored. **Open:** **m-18** (not new; r1 missed it) the
+  bash `pr` checks (`agent-workspace-hooks.ts:250-252`, `agent-claude-code/src/index.ts:139-141`) and both
+  `pr` extracts (helper `:433`, hook `:224`) still depend on the locale: their bracket ranges follow the
+  collation order, so under `en_US.UTF-8` (the host `LANG`) they accept 4,225 table URLs that
+  `isSafePrUrl` refuses; live, the `gh` wrapper stores `pr=…/pull/7١` and core reads PR #7 (low: the value
+  reaches only `gh` read calls). N-34 the hook branch extract stops at U+2028 and U+2029; N-35 no test
+  checks that the locale change stays inside the function (a mutant without `local` passes); N-36 the hook
+  locale test uses 13 fixed names, not the shared table; N-37 no `LANG`-only test case; N-38 count
+  correction (213 code points). N-27 to N-29 below stay open. Text of the round-1 minors: **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
   free-text branch `feat/x.lock`) leaves an empty reserved session record, shown as `[spawning]` in
   `ao session ls`; the gate at `session-manager.ts:1275` throws before the `try` whose `catch` deletes the
   reservation. **m-16** the bash copies of the rule use `[[:cntrl:]]`, which in a UTF-8 locale also matches
