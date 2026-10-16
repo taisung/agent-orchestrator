@@ -12,7 +12,10 @@ export interface MockApiSession {
   /** The stored model; `session.create` stores variant `default` when none is given. */
   model?: { providerID: string; id: string; variant?: string };
   agent?: string;
-  /** How many `user` messages `session.message.list` shows. */
+  /**
+   * How many `user` messages `session.message.list` shows: message `n` has
+   * ID `msg_user_<n>` and `time.created` `n * 1000`.
+   */
   userMessages?: number;
 }
 
@@ -61,6 +64,7 @@ export interface MockApiOptions {
  * - `session.create` stores the body (title, `location.directory`, model with
  *   variant `default` when none is given, agent) as `ses_created_<n>`;
  *   `envLogPath` gets the `AO_*` variables and PATH of every call.
+ * - `session.message.list` honors `type`, `order` and `limit`.
  *
  * The mock reads its config (sessions, logs, delay) from `config.json` next to
  * the script on every call, so a test can add a session while a spawn runs
@@ -206,9 +210,16 @@ if (op === "session.message.list") {
   const found = sessions.find((s) => s.id === params.sessionID);
   if (!found) notFound(params.sessionID);
   const count = found.userMessages || 0;
-  const data = params.type === "user" && count > 0
-    ? [{ id: "msg_user_1", type: "user", text: "launch prompt", time: { created: Date.now() } }]
+  const all = params.type === "user" || params.type === undefined
+    ? Array.from({ length: count }, (_, i) => ({
+        id: "msg_user_" + (i + 1),
+        type: "user",
+        text: "prompt " + (i + 1),
+        time: { created: (i + 1) * 1000 },
+      }))
     : [];
+  const ordered = params.order === "desc" ? all.reverse() : all;
+  const data = params.limit ? ordered.slice(0, Number.parseInt(params.limit, 10)) : ordered;
   process.stdout.write(JSON.stringify({ data, cursor: {} }) + "\\n");
   process.exit(0);
 }

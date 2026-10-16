@@ -22,6 +22,9 @@
  *     switches, `hasOpenCodeUserMessage`): throw; the OpenCode plugin's
  *     `prepareAgentSession` fails the spawn before the pane starts, and its
  *     `confirmLaunch` counts a failed message read as "not seen yet".
+ *     `getNewestOpenCodeUserMessage` (the prompt baseline of a reused
+ *     session, M-2) throws too; the plugin then reports
+ *     `promptDelivered: false`, and the spawn goes on.
  * - The child's stderr is captured (`stdio` pipe) and never inherits the
  *   terminal. It is only used to build the thrown error message.
  * - Exit code 0 is never proof of a complete answer (0010 section 11.1):
@@ -33,7 +36,8 @@
  *   never parses. The title search reads pages of
  *   `OPENCODE_SESSION_LIST_PAGE_SIZE`, so one answer stays far below the
  *   262144-byte pipe size where 0010 section 11.1 saw cut answers.
- *   `model.list` (about 470 KB) cannot page, so it retries once on a cut.
+ *   `model.list` (about 470 KB) cannot page: its stdout goes to a temporary
+ *   file, not a pipe (0010 section 11.1), and it retries once on a cut.
  * - A spawn passes the session's own environment (`env`): the call then runs
  *   with the environment that the pane gets, not with the `AO_*` values of
  *   the `ao` process (0010 sections 11.2 and 14 item 3).
@@ -41,7 +45,10 @@
  *   (0009 section 2). No `service.json` is read.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 
@@ -237,6 +244,11 @@ export async function callOpenCodeApi(
     throw new Error(`opencode api ${operation} failed: ${detail}`, { cause: err });
   }
 
+  return parseExitZeroAnswer(operation, stdout, stderr);
+}
+
+/** The JSON of an answer with exit 0; empty or unparsable stdout is a cut answer. */
+function parseExitZeroAnswer(operation: string, stdout: string, stderr: string): unknown | null {
   const trimmed = stdout.trim();
   if (trimmed.length === 0) {
     // `session.remove` answers 204 with no body; every other operation must
@@ -255,6 +267,107 @@ export async function callOpenCodeApi(
       `opencode api ${operation} returned incomplete JSON with exit 0 (got ${trimmed.length} chars)`,
       { cause: parseErr },
     );
+  }
+}
+
+/** After SIGTERM at the bound, a child that still runs gets SIGKILL after this. */
+const ANSWER_FILE_KILL_GRACE_MS = 2_000;
+
+/** How a child of `callOpenCodeApiThroughFile` ended. */
+interface FileAnswerExit {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  stderr: string;
+}
+
+/**
+ * m-2: one `opencode api` operation with stdout to a regular file instead of
+ * a pipe. 0010 section 11.1 saw `opencode api` stop early with exit 0 when an
+ * answer above the 262144-byte pipe size went to a pipe. The file lives in a
+ * new directory (`mkdtemp`, mode 0700) that only this call uses; it is read
+ * after the child exits and then removed, also on every error. The result and
+ * the errors are those of `callOpenCodeApi`: `null` for a 404, the timeout
+ * error at the bound, the incomplete-answer error for empty or unparsable
+ * output with exit 0, and another error for every other failure.
+ */
+async function callOpenCodeApiThroughFile(
+  operation: string,
+  options?: OpenCodeApiOptions,
+): Promise<unknown | null> {
+  const timeoutMs = options?.timeoutMs ?? OPENCODE_API_TIMEOUT_MS;
+  const args = buildArgs(operation, options);
+  const answerDir = mkdtempSync(join(tmpdir(), "ao-opencode-answer-"));
+  try {
+    const answerPath = join(answerDir, "stdout.json");
+    const fd = openSync(answerPath, "wx", 0o600);
+    let exit: FileAnswerExit;
+    try {
+      exit = await new Promise<FileAnswerExit>((resolve, reject) => {
+        // As with `execFile`: with `env`, Node looks up `opencode` on that PATH.
+        const child = spawn("opencode", args, {
+          stdio: ["ignore", fd, "pipe"],
+          ...(options?.env ? { env: sessionChildEnvironment(options.env) } : {}),
+        });
+        let stderr = "";
+        let timedOut = false;
+        let settled = false;
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
+        const boundTimer = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+          killTimer = setTimeout(() => child.kill("SIGKILL"), ANSWER_FILE_KILL_GRACE_MS);
+        }, timeoutMs);
+        const settle = (): void => {
+          settled = true;
+          clearTimeout(boundTimer);
+          clearTimeout(killTimer);
+        };
+        child.stderr?.setEncoding("utf-8");
+        child.stderr?.on("data", (chunk: string) => {
+          if (stderr.length < 4_096) stderr += chunk;
+        });
+        child.once("error", (err) => {
+          if (settled) return;
+          settle();
+          reject(new Error(`opencode api ${operation} failed: ${err.message}`, { cause: err }));
+        });
+        child.once("close", (code, signal) => {
+          if (settled) return;
+          settle();
+          resolve({ code, signal, timedOut, stderr });
+        });
+      });
+    } finally {
+      closeSync(fd);
+    }
+
+    const size = statSync(answerPath).size;
+    if (size > OPENCODE_API_MAX_BUFFER_BYTES) {
+      throw new Error(
+        `opencode api ${operation} failed: the answer has ${size} bytes, more than ${OPENCODE_API_MAX_BUFFER_BYTES}`,
+      );
+    }
+    const stdout = readFileSync(answerPath, "utf-8");
+    if (exit.timedOut) {
+      throw new OpenCodeApiTimeoutError(
+        `opencode api ${operation} did not answer within ${timeoutMs} ms: ${exit.stderr.trim().slice(0, 500)}`,
+        { cause: new Error(`signal ${exit.signal ?? "none"}`) },
+      );
+    }
+    if (exit.code !== 0) {
+      if (isSessionNotFound(stdout, exit.stderr)) return null;
+      const detail =
+        exit.stderr.trim().length > 0
+          ? exit.stderr.trim().slice(0, 500)
+          : stdout.trim().slice(0, 500) || `exit code ${exit.code}, signal ${exit.signal}`;
+      throw new Error(`opencode api ${operation} failed: ${detail}`, {
+        cause: new Error(`exit code ${exit.code}, signal ${exit.signal}`),
+      });
+    }
+    return parseExitZeroAnswer(operation, stdout, exit.stderr);
+  } finally {
+    rmSync(answerDir, { recursive: true, force: true });
   }
 }
 
@@ -507,9 +620,10 @@ export interface OpenCodeApiModel {
 /**
  * `model.list`. The answer is about 470 KB, above the 262144-byte pipe size
  * where 0010 section 11.1 saw `opencode api` stop early with exit 0, and the
- * operation has no paging. A cut answer (empty or incomplete JSON) is asked
- * again once, so one cut does not fail a spawn. Throws on timeout, on every
- * other error and on a second cut.
+ * operation has no paging, so its stdout goes to a temporary file (m-2). A
+ * cut answer (empty or incomplete JSON) is asked again once, so one cut does
+ * not fail a spawn. Throws on timeout, on every other error and on a second
+ * cut.
  */
 export async function listOpenCodeModels(
   options?: OpenCodeSpawnCallOptions,
@@ -517,7 +631,7 @@ export async function listOpenCodeModels(
   let parsed: unknown;
   for (let attempt = 1; ; attempt++) {
     try {
-      parsed = await callOpenCodeApi("model.list", spawnCallOptions(options));
+      parsed = await callOpenCodeApiThroughFile("model.list", spawnCallOptions(options));
       break;
     } catch (err) {
       if (attempt >= 2 || !(err instanceof OpenCodeApiIncompleteAnswerError)) throw err;
@@ -623,26 +737,97 @@ export async function switchOpenCodeSessionAgent(
   await switchOpenCodeSession("session.switchAgent", sessionId, { agent }, options);
 }
 
-/**
- * True when the session has a `user` message (`session.message.list` with
- * `type=user`, one entry): the launch prompt reached the session. A 404
- * answers false. Throws on timeout and on every other error.
- */
-export async function hasOpenCodeUserMessage(
-  sessionId: string,
-  options?: OpenCodeSpawnCallOptions,
-): Promise<boolean> {
-  const parsed = await callOpenCodeApi("session.message.list", {
-    params: { sessionID: sessionId, type: "user", limit: "1" },
-    ...spawnCallOptions(options),
-  });
-  if (parsed === null) return false;
+/** A `user` message of a session: its ID and `time.created` (epoch ms). */
+export interface OpenCodeUserMessageMark {
+  id: string;
+  created: number;
+}
+
+/** The `data` array of a `session.message.list` answer. */
+function messageListData(parsed: unknown): unknown[] {
   if (!isRecord(parsed) || !Array.isArray(parsed["data"])) {
     throw new Error("opencode api session.message.list returned JSON without data array", {
       cause: new Error(JSON.stringify(parsed).slice(0, 500)),
     });
   }
-  return (parsed["data"] as unknown[]).some(
-    (message) => isRecord(message) && message["type"] === "user",
-  );
+  return parsed["data"] as unknown[];
+}
+
+/** The mark of a `user` message entry, or null when the entry is not one. */
+function userMessageMark(message: unknown): OpenCodeUserMessageMark | null {
+  if (!isRecord(message) || message["type"] !== "user") return null;
+  const id = message["id"];
+  const time = message["time"];
+  const created = isRecord(time) ? time["created"] : undefined;
+  if (typeof id !== "string" || id.length === 0) return null;
+  if (typeof created !== "number" || !Number.isFinite(created)) return null;
+  return { id, created };
+}
+
+/**
+ * The newest `user` message (`type=user`, `order=desc`, one entry), or null
+ * when the session has none. Returns `undefined` for a 404.
+ */
+async function readNewestUserMessage(
+  sessionId: string,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<OpenCodeUserMessageMark | null | undefined> {
+  const parsed = await callOpenCodeApi("session.message.list", {
+    params: { sessionID: sessionId, type: "user", limit: "1", order: "desc" },
+    ...spawnCallOptions(options),
+  });
+  if (parsed === null) return undefined;
+  const newest = messageListData(parsed)[0];
+  if (newest === undefined) return null;
+  const mark = userMessageMark(newest);
+  if (!mark) {
+    throw new Error(
+      "opencode api session.message.list returned a user message without id or time.created",
+      { cause: new Error(JSON.stringify(newest).slice(0, 500)) },
+    );
+  }
+  return mark;
+}
+
+/**
+ * M-2: the newest `user` message of a session, before the pane of a spawn
+ * that reuses the session starts; `hasOpenCodeUserMessage` with `after` then
+ * needs a newer one. Null when the session has no `user` message. Throws on
+ * a 404, on timeout and on every other error.
+ */
+export async function getNewestOpenCodeUserMessage(
+  sessionId: string,
+  options?: OpenCodeSpawnCallOptions,
+): Promise<OpenCodeUserMessageMark | null> {
+  const newest = await readNewestUserMessage(sessionId, options);
+  if (newest === undefined) {
+    throw new Error(
+      `opencode api session.message.list: OpenCode session ${sessionId} does not exist`,
+    );
+  }
+  return newest;
+}
+
+/**
+ * True when the session has a `user` message (`session.message.list` with
+ * `type=user`, one entry): the launch prompt reached the session. With
+ * `after` (M-2, a reused session), only a `user` message newer than that
+ * mark counts: the newest one has another ID and is not older. A 404
+ * answers false. Throws on timeout and on every other error.
+ */
+export async function hasOpenCodeUserMessage(
+  sessionId: string,
+  options?: OpenCodeSpawnCallOptions & { after?: OpenCodeUserMessageMark },
+): Promise<boolean> {
+  const after = options?.after;
+  if (after) {
+    const newest = await readNewestUserMessage(sessionId, options);
+    return !!newest && newest.id !== after.id && newest.created >= after.created;
+  }
+  const parsed = await callOpenCodeApi("session.message.list", {
+    params: { sessionID: sessionId, type: "user", limit: "1" },
+    ...spawnCallOptions(options),
+  });
+  if (parsed === null) return false;
+  return messageListData(parsed).some((message) => isRecord(message) && message["type"] === "user");
 }

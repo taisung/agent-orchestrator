@@ -122,6 +122,7 @@ export {
   switchOpenCodeSessionModel,
   switchOpenCodeSessionAgent,
   hasOpenCodeUserMessage,
+  getNewestOpenCodeUserMessage,
   OpenCodeApiTimeoutError,
   OpenCodeApiIncompleteAnswerError,
 } from "./opencode-api.js";
@@ -133,6 +134,7 @@ export type {
   OpenCodeModelRef,
   OpenCodeSessionCreateBody,
   OpenCodeSpawnCallOptions,
+  OpenCodeUserMessageMark,
 } from "./opencode-api.js";
 export { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 

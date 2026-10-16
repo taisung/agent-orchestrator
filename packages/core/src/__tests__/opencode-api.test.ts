@@ -1,13 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type * as ChildProcess from "node:child_process";
 
-const { mockExecFileAsync, realExecFile } = vi.hoisted(() => ({
+const { mockExecFileAsync, realExecFile, mockSpawn, realSpawn } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   realExecFile: { current: undefined as undefined | ((...a: unknown[]) => Promise<unknown>) },
+  mockSpawn: vi.fn(),
+  realSpawn: { current: undefined as undefined | ((...a: unknown[]) => unknown) },
 }));
 
 vi.mock("node:child_process", async () => {
@@ -21,9 +31,14 @@ vi.mock("node:child_process", async () => {
   // The "real child process" tests below route it to the real `execFile`.
   execFileMock[Symbol.for("nodejs.util.promisify.custom")] = (...args: unknown[]) =>
     (mockExecFileAsync as (...a: unknown[]) => Promise<unknown>)(...args);
+  // `model.list` runs with `spawn` (stdout to a file, m-2). Only the tests
+  // that put the fake opencode on PATH route it to the real `spawn`, so no
+  // test can start an `opencode` from the host PATH.
+  realSpawn.current = actual.spawn as unknown as (...a: unknown[]) => unknown;
   return {
     ...actual,
     execFile: execFileMock,
+    spawn: (...args: unknown[]) => (mockSpawn as (...a: unknown[]) => unknown)(...args),
   };
 });
 
@@ -40,6 +55,7 @@ import {
   switchOpenCodeSessionModel,
   switchOpenCodeSessionAgent,
   hasOpenCodeUserMessage,
+  getNewestOpenCodeUserMessage,
   OPENCODE_SESSION_LIST_MAX_PAGES,
   OpenCodeApiTimeoutError,
   OpenCodeApiIncompleteAnswerError,
@@ -77,6 +93,10 @@ function paramsOf(call: unknown[]): Record<string, string> {
 beforeEach(() => {
   vi.clearAllMocks();
   mockExecFileAsync.mockReset();
+  mockSpawn.mockReset();
+  mockSpawn.mockImplementation(() => {
+    throw new Error("unexpected spawn: put the fake opencode on PATH first");
+  });
 });
 
 describe("callOpenCodeApi", () => {
@@ -428,19 +448,21 @@ describe("the session environment of a spawn call (env)", () => {
   it("gives the map to every spawn call", async () => {
     const env = { AO_SESSION: "app-7" };
     mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
-      if (args[1] === "model.list") return { stdout: '{"data":[]}', stderr: "" };
       if (args[1] === "session.create") return { stdout: '{"data":{"id":"ses_new"}}', stderr: "" };
       if (args[1] === "session.message.list") return { stdout: '{"data":[]}', stderr: "" };
       return { stdout: "{}", stderr: "" };
     });
-    await listOpenCodeModels({ env });
+    // `model.list` runs through a file; its env is checked with the fake
+    // binary in the listOpenCodeModels tests.
     await createOpenCodeSession({ title: "AO:app-7", location: { directory: "/w" } }, { env });
     await switchOpenCodeSessionModel("ses_new", { providerID: "p", id: "m" }, { env });
     await switchOpenCodeSessionAgent("ses_new", "build", { env });
     await hasOpenCodeUserMessage("ses_new", { env });
+    await getNewestOpenCodeUserMessage("ses_new", { env });
+    await hasOpenCodeUserMessage("ses_new", { env, after: { id: "msg_1", created: 1 } });
     await interruptOpenCodeSession("ses_new", undefined, env);
     await removeOpenCodeSession("ses_new", undefined, env);
-    expect(mockExecFileAsync).toHaveBeenCalledTimes(7);
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(8);
     for (const call of mockExecFileAsync.mock.calls) {
       const childEnv = (call[2] as { env?: NodeJS.ProcessEnv }).env;
       expect(childEnv?.["AO_SESSION"]).toBe("app-7");
@@ -449,40 +471,162 @@ describe("the session environment of a spawn call (env)", () => {
   });
 });
 
-describe("listOpenCodeModels", () => {
-  const full = JSON.stringify({ location: { directory: "/w" }, data: FLEET_PIN_MODELS });
+describe("listOpenCodeModels (stdout through a file, m-2)", () => {
+  let tmpDir: string;
+  let answerRoot: string;
+  let apiLogPath: string;
+  const originalPath = process.env["PATH"];
+  const originalTmpdir = process.env["TMPDIR"];
 
-  it("asks once more after an answer cut with exit 0, so one cut does not fail a spawn", async () => {
-    mockExecFileAsync
-      .mockResolvedValueOnce({ stdout: full.slice(0, 100), stderr: "" })
-      .mockResolvedValueOnce({ stdout: full, stderr: "" });
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "ao-opencode-models-"));
+    // `os.tmpdir()` reads TMPDIR on each call, so the answer files of the
+    // calls under test land here and the tests can see them removed.
+    answerRoot = join(tmpDir, "answers");
+    mkdirSync(answerRoot);
+    apiLogPath = join(tmpDir, "api.log");
+    process.env["TMPDIR"] = answerRoot;
+    mockSpawn.mockImplementation((...args: unknown[]) => realSpawn.current!(...args));
+  });
+
+  afterEach(() => {
+    process.env["PATH"] = originalPath;
+    if (originalTmpdir === undefined) Reflect.deleteProperty(process.env, "TMPDIR");
+    else process.env["TMPDIR"] = originalTmpdir;
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function useMock(options?: Parameters<typeof installMockOpencodeApi>[2]): string {
+    const binDir = installMockOpencodeApi(tmpDir, [], {
+      models: FLEET_PIN_MODELS,
+      apiLogPath,
+      ...options,
+    });
+    process.env["PATH"] = `${binDir}:${originalPath ?? ""}`;
+    return binDir;
+  }
+
+  /** A fake `opencode` that prints `stdout` and exits 0, for answers the API mock cannot give. */
+  function useScript(stdout: string): void {
+    const binDir = join(tmpDir, "script-bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = join(binDir, "opencode");
+    writeFileSync(script, `#!/bin/sh\nprintf '%s' '${stdout}'\n`, "utf-8");
+    chmodSync(script, 0o755);
+    process.env["PATH"] = `${binDir}:${originalPath ?? ""}`;
+  }
+
+  function calls(): number {
+    return readFileSync(apiLogPath, "utf-8").trim().split("\n").length;
+  }
+
+  it("reads the answer from a file, not a pipe, and removes the file", async () => {
+    useMock();
     const models = await listOpenCodeModels();
     expect(models.map((m) => m.id)).toEqual(["muse-spark-1.3-contributor", "deepseek-v4.1-flash"]);
-    expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+    const [file, args, options] = mockSpawn.mock.calls[0]! as [
+      string,
+      string[],
+      { stdio: unknown[] },
+    ];
+    expect([file, args]).toEqual(["opencode", ["api", "model.list"]]);
+    // stdout is a file descriptor (a number), not "pipe".
+    expect(typeof options.stdio[1]).toBe("number");
+    expect(options.stdio[2]).toBe("pipe");
+    expect(readdirSync(answerRoot)).toEqual([]);
+  });
+
+  it("reads an answer far above the 262144-byte pipe size in full", async () => {
+    const many = Array.from({ length: 3_000 }, (_, i) => ({
+      ...FLEET_PIN_MODELS[0]!,
+      id: `model-${i}`,
+      description: "x".repeat(200),
+    }));
+    useMock({ models: many });
+    const models = await listOpenCodeModels();
+    expect(models).toHaveLength(3_000);
+    expect(models[2_999]!.id).toBe("model-2999");
+    expect(readdirSync(answerRoot)).toEqual([]);
+  });
+
+  it("asks once more after a cut file answer with exit 0, so one cut does not fail a spawn", async () => {
+    useMock({ cutModelListTimes: 1 });
+    await expect(listOpenCodeModels()).resolves.toHaveLength(2);
+    expect(calls()).toBe(2);
+    expect(readdirSync(answerRoot)).toEqual([]);
+  });
+
+  it("throws the incomplete-answer error after a second cut file answer", async () => {
+    useMock({ cutModelListTimes: 2 });
+    await expect(listOpenCodeModels()).rejects.toBeInstanceOf(OpenCodeApiIncompleteAnswerError);
+    expect(calls()).toBe(2);
+    expect(readdirSync(answerRoot)).toEqual([]);
   });
 
   it("also asks again after an empty exit-0 answer", async () => {
-    mockExecFileAsync
-      .mockResolvedValueOnce({ stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ stdout: full, stderr: "" });
-    await expect(listOpenCodeModels()).resolves.toHaveLength(2);
-  });
-
-  it("throws the incomplete-answer error after a second cut", async () => {
-    mockExecFileAsync.mockResolvedValue({ stdout: full.slice(0, 50), stderr: "" });
+    useScript("");
     await expect(listOpenCodeModels()).rejects.toBeInstanceOf(OpenCodeApiIncompleteAnswerError);
-    expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(readdirSync(answerRoot)).toEqual([]);
   });
 
-  it("does not ask again after another failure", async () => {
-    mockExecFileAsync.mockRejectedValue(execError("boom", "", "HTTP 500", { code: 1 }));
-    await expect(listOpenCodeModels()).rejects.toThrow(/model.list failed/);
-    expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+  it("does not ask again after another failure, and keeps the child's stderr in the error", async () => {
+    useMock({ failOperations: ["model.list"] });
+    await expect(listOpenCodeModels()).rejects.toThrow(
+      "opencode api model.list failed: HTTP 500 Internal Server Error",
+    );
+    expect(calls()).toBe(1);
+    expect(readdirSync(answerRoot)).toEqual([]);
+  });
+
+  it("ends a hanging call at its bound and removes the file", async () => {
+    useMock({ apiDelaySeconds: 5 });
+    const started = Date.now();
+    const thrown = (await listOpenCodeModels({ timeoutMs: 400 }).catch((e: unknown) => e)) as Error;
+    expect(thrown).toBeInstanceOf(OpenCodeApiTimeoutError);
+    expect(thrown.message).toContain("did not answer within 400 ms");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(readdirSync(answerRoot)).toEqual([]);
+  });
+
+  it("fails when no opencode is on PATH, and removes the file", async () => {
+    process.env["PATH"] = join(tmpDir, "empty-bin");
+    await expect(listOpenCodeModels()).rejects.toThrow(
+      /opencode api model\.list failed: spawn opencode ENOENT/,
+    );
+    expect(readdirSync(answerRoot)).toEqual([]);
   });
 
   it("refuses an answer without a data array", async () => {
-    mockExecFileAsync.mockResolvedValue({ stdout: '{"models":[]}', stderr: "" });
+    useScript('{"models":[]}');
     await expect(listOpenCodeModels()).rejects.toThrow(/without data array/);
+  });
+
+  it("still refuses a model that the file answer does not list", async () => {
+    useMock();
+    const models = await listOpenCodeModels();
+    expect(findOpenCodeModelProblem(models, { providerID: "openai", id: "no-such-model" })).toBe(
+      "model.list has no model openai/no-such-model",
+    );
+  });
+
+  it("runs the child with the session map and none of the ao process AO_* values", async () => {
+    const envLogPath = join(tmpDir, "env.log");
+    const binDir = useMock({ envLogPath });
+    const saved = process.env["AO_SESSION"];
+    process.env["AO_SESSION"] = "orch-1";
+    try {
+      await listOpenCodeModels({
+        env: { AO_SESSION: "app-7", PATH: `${binDir}:${originalPath ?? ""}` },
+      });
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, "AO_SESSION");
+      else process.env["AO_SESSION"] = saved;
+    }
+    const [entry] = readMockApiEnvLog(envLogPath);
+    expect(entry?.op).toBe("model.list");
+    expect(entry?.env["AO_SESSION"]).toBe("app-7");
   });
 });
 
@@ -639,6 +783,86 @@ describe("hasOpenCodeUserMessage", () => {
       execError("HTTP 404", '{"_tag":"SessionNotFoundError"}', "HTTP 404 Not Found", { code: 1 }),
     );
     await expect(hasOpenCodeUserMessage("ses_gone")).resolves.toBe(false);
+  });
+
+  function newestAnswer(messages: unknown[]) {
+    return { stdout: JSON.stringify({ data: messages, cursor: {} }), stderr: "" };
+  }
+
+  it("with a baseline, asks for the newest user message and needs a newer one (M-2)", async () => {
+    const after = { id: "msg_old", created: 1_000 };
+    mockExecFileAsync.mockResolvedValueOnce(
+      newestAnswer([{ id: "msg_old", type: "user", text: "old", time: { created: 1_000 } }]),
+    );
+    await expect(hasOpenCodeUserMessage("ses_1", { after })).resolves.toBe(false);
+    expect(paramsOf(mockExecFileAsync.mock.calls[0]!)).toEqual({
+      sessionID: "ses_1",
+      type: "user",
+      limit: "1",
+      order: "desc",
+    });
+
+    mockExecFileAsync.mockResolvedValueOnce(
+      newestAnswer([{ id: "msg_new", type: "user", text: "new", time: { created: 2_000 } }]),
+    );
+    await expect(hasOpenCodeUserMessage("ses_1", { after })).resolves.toBe(true);
+
+    // Another ID that is older than the baseline is not newer.
+    mockExecFileAsync.mockResolvedValueOnce(
+      newestAnswer([{ id: "msg_odd", type: "user", text: "odd", time: { created: 500 } }]),
+    );
+    await expect(hasOpenCodeUserMessage("ses_1", { after })).resolves.toBe(false);
+
+    mockExecFileAsync.mockResolvedValueOnce(newestAnswer([]));
+    await expect(hasOpenCodeUserMessage("ses_1", { after })).resolves.toBe(false);
+
+    mockExecFileAsync.mockRejectedValueOnce(
+      execError("HTTP 404", '{"_tag":"SessionNotFoundError"}', "HTTP 404 Not Found", { code: 1 }),
+    );
+    await expect(hasOpenCodeUserMessage("ses_gone", { after })).resolves.toBe(false);
+  });
+});
+
+describe("getNewestOpenCodeUserMessage", () => {
+  it("returns the ID and time.created of the newest user message", async () => {
+    mockExecFileAsync.mockResolvedValue({
+      stdout: JSON.stringify({
+        data: [{ id: "msg_9", type: "user", text: "Go", time: { created: 9_000 } }],
+        cursor: {},
+      }),
+      stderr: "",
+    });
+    await expect(getNewestOpenCodeUserMessage("ses_1")).resolves.toEqual({
+      id: "msg_9",
+      created: 9_000,
+    });
+    expect(paramsOf(mockExecFileAsync.mock.calls[0]!)).toEqual({
+      sessionID: "ses_1",
+      type: "user",
+      limit: "1",
+      order: "desc",
+    });
+  });
+
+  it("returns null for a session without a user message", async () => {
+    mockExecFileAsync.mockResolvedValue({ stdout: '{"data":[],"cursor":{}}', stderr: "" });
+    await expect(getNewestOpenCodeUserMessage("ses_1")).resolves.toBeNull();
+  });
+
+  it("throws on a 404 and on an entry without id or time", async () => {
+    mockExecFileAsync.mockRejectedValueOnce(
+      execError("HTTP 404", '{"_tag":"SessionNotFoundError"}', "HTTP 404 Not Found", { code: 1 }),
+    );
+    await expect(getNewestOpenCodeUserMessage("ses_gone")).rejects.toThrow(
+      "OpenCode session ses_gone does not exist",
+    );
+    mockExecFileAsync.mockResolvedValueOnce({
+      stdout: '{"data":[{"type":"user","text":"x"}],"cursor":{}}',
+      stderr: "",
+    });
+    await expect(getNewestOpenCodeUserMessage("ses_1")).rejects.toThrow(
+      "user message without id or time.created",
+    );
   });
 });
 
