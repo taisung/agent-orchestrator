@@ -171,6 +171,22 @@ Durable progress record for this fork. Dated events only; the current state live
   `package.json` (`:23-24`, `pnpm -r build && changeset publish` can still be run by hand) and `.changeset/`.
   Not pushed.
 
+- `854690c3` (2026-10-15, ao-30, Muse; owner word "go ahead with the restore model fix") - `fix(core):
+  keep the spawn --model through restore`, the code of the reviewed `781a3a6e`. `ao spawn --model X` now
+  writes `model=X` into the session metadata, and every later operation on a worker (restore, the restore
+  before `send`, the archive restore, the fallback launch) uses it before the config. `Agent.getRestoreCommand`
+  takes an optional third argument, the effective model, and all four plugins use it first; Codex order:
+  effective model, then config, then the model in Codex's own session data. An orchestrator stores no
+  model. Blind review by Opus 5.5 (ao-32, `development/reviews/restore_model_review_r1_opus.md`):
+  **LAND-SAFE**, 0 B, 0 M, 3 m, 5 notes, live checks on Claude Code (`--resume` path) and Codex.
+  **Behaviour change (m-1, correct, not stated in the commit):** a session spawned without `--model` now
+  restores on the role-scoped model (`worker.agentConfig.model`, or the orchestrator keys) that its spawn
+  used, not on the shared `agentConfig.model`. Open minors: m-1 has no worker-role test; m-2 the new
+  lines are not in Prettier style (CI has no format check); m-3 one restore-before-send assertion checks
+  a literal of its own mock. **Not live** until the owner's rebuild of the primary checkout and the
+  lifecycle-worker restarts. Sessions spawned before the rebuild have no `model=` line and still restore
+  on the config model (N-3): add the line to the session file by hand before such a restore. Not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -193,6 +209,16 @@ section 18 stays open, and I-4 polls with `opencode api`, which adds the auth it
 in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
+
+- **Restore follow-ups from the review of `854690c3`** (2026-10-15, ao-32). N-1, an owner decision: a
+  session spawned without `--model` still restores on the config model of restore time, also when Codex
+  recorded another one; to close it, store the effective model of every worker at spawn, but then a
+  config edit no longer reaches existing sessions. N-2, worker follow-up: the restore commands read
+  `permissions` from the raw `project.agentConfig`, not from the role-merged selection that spawn uses
+  (`agent-claude-code/src/index.ts:879`, `agent-codex/src/index.ts:653`, `agent-gemini/src/index.ts:251`).
+  N-5: an external agent plugin with the two-argument `getRestoreCommand` still type-checks and keeps the
+  config model. Process note N-4: ao-30 used `git stash` for its base check, and the stash stack is
+  shared by all worktrees; the stack still holds only the old `feat/opencode-gemini-plugins` entry.
 
 - **A reviewer stopped the host's default tmux server** (2026-10-15 11:41:47 EDT). The I-2 reviewer
   ao-16 (Sonnet 5.5) ran `TMUX_TMPDIR=/tmp/ao16-sonnet-it tmux new-session -d -s probe && ... &&
@@ -248,7 +274,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   every `pnpm test`, not only the integration package, runs with a fake `HOME` and with every `AO_*`
   variable removed. A test-isolation fix (tests that ignore an inherited `AO_STATE_ROOT`) is a worker
   follow-up.
-- **`ao session restore` drops the spawn `--model` of a Claude Code session** (found 2026-10-15). The
+- **`ao session restore` dropped the spawn `--model` of a Claude Code session** (found 2026-10-15; fixed in
+  code by `854690c3`, live after the next rebuild). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
   metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host
   default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix
