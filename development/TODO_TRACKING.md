@@ -318,6 +318,18 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     PID plus start time as ownership evidence that does not depend on `status`, executable identity from
     structured process data, a `user` message baseline for a reused session, the pane environment for the
     resolver, `model.list` through a file, one warning in `cli/src/commands/spawn.ts`, the comment fix).
+    ao-36 finished round 2 as `e9882651` at 15:2x EDT (7 commits, 11 files): launch ownership keys
+    `launchPid` and `launchPidStart` (written before the prepare, kept by the lifecycle's merge write,
+    removed after `confirmLaunch`; a dead or reused PID protects nothing), the argv check on
+    `/proc/<pid>/cmdline`, a `user` message baseline for a reused session, the resolver and delete path
+    with the pane environment, `model.list` through a temp file, one CLI warning, the restore comment;
+    full suite 2273 passed; every mutant fails tests; cleanup checked by the orchestrator (lock directory
+    empty). Author notes for the owner: issue reuse with a model fails after the old worktree is gone
+    (`LocationNotFoundError` read as "session does not exist"; said to be older); the argv check needs
+    `/proc` (no macOS); a non-`exec` bash wrapper is rejected; a project-mode orchestrator start with
+    `delete` drops a dead record without an archive (older). **Re-check r2** dispatched to ao-40 at
+    15:30 EDT (brief `brief-review-i3-r2-sol.md`, review file `i3_review_r2_sol61.md`), watcher PID
+    3815606.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
@@ -360,7 +372,10 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     dialog captures at 80x24 and 200x50 as fixtures, per-rule tests, the bound pinned, M12 killed;
     plugin 226 tests; cleanup checked by the orchestrator). **Re-check r3** dispatched at 15:06 EDT to
     ao-38 and ao-39 (brief `brief-review-i4-r3.md`, review files `i4_review_r3_{sonnet,v4flash}.md`),
-    watcher PID 3273642.
+    watcher PID 3273642. ao-39 (V4.1 Flash) r3: **LAND-SAFE** for `15757aae..296b21b1`, 0 B, 0 M; m-8
+    no test pins the boundary of the bottom `┃` block (2 boundary mutants live; the false positive needs
+    a capture with no status row); m-9 at about 45 columns or less the hint row of a question form wraps
+    and the form reads `active`. The Sonnet r3 re-check is still running.
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
