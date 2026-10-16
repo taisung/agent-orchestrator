@@ -2742,6 +2742,52 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
     ]);
   });
 
+  it.each(["worker", "orchestrator"] as const)(
+    "keeps the launch keys of a %s through postLaunchSetup and the launch check, then removes them",
+    async (role) => {
+      const mockBin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject(role === "orchestrator" ? { orchestratorWorkspaceMode: "project" } : {});
+      livePanes(agent);
+      const seen: Array<Record<string, string> | null> = [];
+      agent.postLaunchSetup = vi.fn(async (session: Session) => {
+        seen.push(readMetadataRaw(sessionsDir, session.id));
+      });
+      const confirm = agent.confirmLaunch!;
+      agent.confirmLaunch = vi.fn(
+        async (
+          session: Session,
+          prepared: PreparedAgentSession,
+          options: AgentLaunchConfirmOptions,
+        ) => {
+          seen.push(readMetadataRaw(sessionsDir, session.id));
+          return confirm(session, prepared, options);
+        },
+      );
+      const sm = createSessionManager({ config, registry });
+
+      const session =
+        role === "worker"
+          ? await sm.spawn({ projectId: "my-app" })
+          : await sm.spawnOrchestrator({ projectId: "my-app" });
+
+      const claim = {
+        launchPid: String(process.pid),
+        launchPidStart: startToken(process.pid),
+        opencodeSessionId: "ses_created_1",
+      };
+      expect(seen).toEqual([
+        expect.objectContaining({ ...claim, runtimeHandle: expect.any(String) }),
+        expect.objectContaining(claim),
+      ]);
+      const final = readMetadataRaw(sessionsDir, session.id);
+      expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+      expect(final?.["launchPid"]).toBeUndefined();
+      expect(final?.["launchPidStart"]).toBeUndefined();
+    },
+  );
+
   it("cleanup while the spawn waits at runtime.create neither kills it nor removes its session", async () => {
     const deleteLogPath = join(tmpDir, "opencode-delete-b1-cleanup.log");
     const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath });
