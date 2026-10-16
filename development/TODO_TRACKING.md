@@ -218,7 +218,9 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   `spawning` to `killed` before its pane starts the agent; some return to `working` on the next poll,
   some stay `killed` with a live pane. Seen on the I-2 build and on `3b2bb918`. A running agent with a
   terminal status also defeats any guard that reads the status as proof of a dead pane (I-2 round-2
-  M-1). Lifecycle worker follow-up.
+  M-1). Seen live on the new build on 2026-10-15 at 19:58: ao-29 (OpenCode) was `killed`
+  within a minute of its spawn and stayed so while its pane ran. Because `isRestorable()` treats `killed` as
+  terminal, an `ao send` to such a session restores it first (a pane relaunch). Lifecycle worker follow-up.
 - **A private tmux server started from a worker shell gives its panes the real `HOME`** (found
   2026-10-15 by ao-26 in the I-2 round-5 re-check, its own isolation breach). With only `TMUX` removed,
   the new server's global environment held the reviewer's real `HOME`, so the panes' login shells put the
