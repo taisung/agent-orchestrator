@@ -38,7 +38,7 @@ function getAoBinDir(): string {
 }
 
 /** Current version of wrapper scripts — bump when scripts change */
-export const WRAPPER_VERSION = "0.2.5";
+export const WRAPPER_VERSION = "0.2.6";
 
 // =============================================================================
 // PATH Builder
@@ -205,6 +205,11 @@ export const AO_METADATA_HELPER = `#!/usr/bin/env bash
 # previous-checkout expansion), plus a leading "-" and the single "@".
 ao_is_safe_branch() {
   local name="\$1"
+  # Byte-based control check: run the [[:cntrl:]] test in the C locale so
+  # that U+0080-U+009F, U+2028 and U+2029 pass, matching git and the
+  # TypeScript rule. Local to this function, so the caller's LC_ALL/LANG
+  # are unchanged after the sourced helper returns.
+  local LC_ALL=C
   [[ -z "\$name" ]] && return 1
   [[ "\$name" == "@" || "\$name" == "HEAD" ]] && return 1
   [[ "\$name" == -* ]] && return 1

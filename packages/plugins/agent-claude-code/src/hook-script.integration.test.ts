@@ -383,7 +383,16 @@ describe("hook script: key allowlist", () => {
     },
   );
 
-  it.each([["notaurl"], [""], ["https://github.com/o/r/issues/1"]])(
+  // m-17: the hook pr pattern has an end anchor; without it these two pass.
+  it.each([
+    ["notaurl"],
+    [""],
+    ["https://github.com/o/r/issues/1"],
+    ["https://github.com/o/r/pull/1x"],
+    ["https://github.com/o/r/pull/1 x"],
+    ["https://github.com/o/r/pull/1/extra"],
+    ["https://github.com/o/r/pull/1?x=1"],
+  ])(
     "refuses pr value %j: writes nothing, names pr, non-zero",
     (value) => {
       const before = "status=working\nbranch=main\n";
@@ -402,5 +411,124 @@ describe("hook script: key allowlist", () => {
     });
     expect(metadata).not.toContain("-Bvictim");
     expect(metadata).toContain("branch=main");
+  });
+});
+
+// =========================================================================
+// m-16: hook bash copy agrees with the TypeScript rule in C and UTF-8 locales
+// m-17: hook pr copy agrees with the shared PR table (end anchor)
+// =========================================================================
+describe("hook script: m-16 locale agreement and m-17 pr anchor", () => {
+  function hookBranchAccepts(value: string, locale: string): boolean {
+    const sessionsDir = join(testDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const sessionId = `locale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const metadataFile = join(sessionsDir, sessionId);
+    writeFileSync(metadataFile, "status=working\nbranch=main\n");
+    const script = [
+      `metadata_file=${JSON.stringify(metadataFile)}`,
+      `eval "$(sed -n '/^hook_is_safe_branch/,/^}/p;/^hook_is_safe_pr/,/^}/p;/^update_metadata_key/,/^}/p' ${JSON.stringify(hookScriptPath)})"`,
+      `update_metadata_key ${JSON.stringify("branch")} ${JSON.stringify(value)}`,
+    ].join("\n");
+    try {
+      execFileSync("bash", ["-c", script], {
+        encoding: "utf-8",
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 5000,
+        env: { ...process.env, LC_ALL: locale, LC_CTYPE: locale, LANG: locale },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function hookPrAccepts(value: string): boolean {
+    const sessionsDir = join(testDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const sessionId = `pr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const metadataFile = join(sessionsDir, sessionId);
+    writeFileSync(metadataFile, "status=working\nbranch=main\n");
+    const script = [
+      `metadata_file=${JSON.stringify(metadataFile)}`,
+      `eval "$(sed -n '/^hook_is_safe_branch/,/^}/p;/^hook_is_safe_pr/,/^}/p;/^update_metadata_key/,/^}/p' ${JSON.stringify(hookScriptPath)})"`,
+      `update_metadata_key ${JSON.stringify("pr")} ${JSON.stringify(value)}`,
+    ].join("\n");
+    try {
+      execFileSync("bash", ["-c", script], {
+        encoding: "utf-8",
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 5000,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // C1 and U+2028/U+2029 names are valid: git and the TypeScript rule accept
+  // them. The bash copy must accept them in C and in UTF-8 locales.
+  const VALID_LOCALE_NAMES = [
+    "feat/n\u0085x",
+    "feat/c\u0080d",
+    "feat/e\u009Ff",
+    "feat/a\u2028b",
+    "feat/a\u2029b",
+    "main",
+    "feat/x",
+  ];
+  const INVALID_LOCALE_NAMES = ["-Bvictim", "a..b", "a b", "HEAD", "@", "a.lock"];
+
+  it.each(["C", "C.UTF-8", "en_US.UTF-8"])(
+    "hook branch agrees with TypeScript in locale %s",
+    (locale) => {
+      for (const name of VALID_LOCALE_NAMES) {
+        expect(hookBranchAccepts(name, locale), `hook should accept ${JSON.stringify(name)} in ${locale}`).toBe(
+          true,
+        );
+      }
+      for (const name of INVALID_LOCALE_NAMES) {
+        expect(hookBranchAccepts(name, locale), `hook should refuse ${JSON.stringify(name)} in ${locale}`).toBe(
+          false,
+        );
+      }
+    },
+  );
+
+  // Shared PR table, as the helper copy is. Without the end anchor,
+  // pull/1x and pull/1<space> pass.
+  const VALID_PR = [
+    "https://github.com/o/r/pull/1",
+    "https://github.com/owner/repo/pull/42",
+    "https://github.com/my-org/my.repo-name/pull/123",
+    "https://github.com/A/B/pull/999999",
+    "https://github.com/a-b/c_d.e/pull/7",
+  ];
+  const INVALID_PR = [
+    "notaurl",
+    "",
+    "https://github.com/o/r/pull/",
+    "https://github.com/o/r/pull/abc",
+    "https://github.com/o/pull/1",
+    "https://github.com/o/r/issues/1",
+    "http://github.com/o/r/pull/1",
+    "https://github.com/o/r/pull/1/extra",
+    "https://github.com/o/r/pull/1?x=1",
+    " https://github.com/o/r/pull/1",
+    "https://github.com/o/r/pull/1 ",
+    "https://gitlab.com/o/r/pull/1",
+    "https://github.com/o/r/pull/-1",
+    "javascript:alert(1)",
+    "https://github.com/o/r/pull/1x",
+    "https://github.com/o/r/pull/1 x",
+  ];
+
+  it("hook pr agrees with the shared PR table", () => {
+    for (const url of VALID_PR) {
+      expect(hookPrAccepts(url), `hook should accept pr ${JSON.stringify(url)}`).toBe(true);
+    }
+    for (const url of INVALID_PR) {
+      expect(hookPrAccepts(url), `hook should refuse pr ${JSON.stringify(url)}`).toBe(false);
+    }
   });
 });
