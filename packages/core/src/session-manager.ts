@@ -1007,12 +1007,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       project.sessionPrefix,
       Object.values(config.projects).map((p) => p.sessionPrefix),
     );
-    // C-04: a worker spawned with --model keeps it via the persisted
-    // `model=` metadata key. It wins over the config (spawnModelOverride is
-    // first in the worker rule). Orchestrators never persist a model
-    // (OrchestratorSpawnConfig has no model), and the orchestrator rule has
-    // no spawn override, so a stray `model=` key is ignored for them.
+    // C-04 + stored spawn identity: a worker keeps its spawn model via the
+    // persisted `model=` key (spawnModelOverride is first in the worker rule)
+    // and its spawn permission mode via the persisted `permissions=` key,
+    // which wins over the current config so a later config edit cannot
+    // change existing sessions. Orchestrators persist neither
+    // (OrchestratorSpawnConfig has no model; the mode is forced
+    // permissionless at spawn and restore), so stray keys of either kind
+    // are ignored for them. A record without the keys (spawned before the
+    // change) keeps the legacy behaviour: the current config applies.
     const persistedModel = metadata["model"];
+    const persistedPermissions = metadata["permissions"];
     return resolveAgentSelection({
       role,
       project,
@@ -1020,6 +1025,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       persistedAgent: metadata["agent"],
       ...(role === "worker" && typeof persistedModel === "string" && persistedModel.length > 0
         ? { spawnModelOverride: persistedModel }
+        : {}),
+      ...(role === "worker" && persistedPermissions !== undefined
+        ? { persistedPermissionsOverride: persistedPermissions }
         : {}),
     });
   }
@@ -1412,9 +1420,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let setupFailed = false;
     try {
       await launchLock?.recordRuntime(handle);
-      // C-04: persist the spawn --model override so later operations
-      // (restore, send's restore-for-delivery) reuse it before the config.
-      // Only `ao spawn` supplies a model (batch-spawn has no --model flag).
+      // Stored spawn identity: every worker persists its effective model
+      // (selection.model, which is the explicit --model when given) and its
+      // effective permission mode ("default" when no mode is configured, so
+      // that a later config edit cannot add one). Later operations reuse
+      // both before the config. Only `ao spawn` supplies a model
+      // (batch-spawn has no --model flag); the mode comes from the config.
       writeMetadata(sessionsDir, sessionId, {
         worktree: workspacePath,
         branch,
@@ -1423,10 +1434,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         issue: spawnConfig.issueId,
         project: spawnConfig.projectId,
         agent: selection.agentName, // Persist agent name for lifecycle manager
-        model:
-          typeof spawnConfig.model === "string" && spawnConfig.model.length > 0
-            ? spawnConfig.model
-            : undefined,
+        model: selection.model,
+        permissions: selection.permissions ?? "default",
         createdAt: new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: reusedOpenCodeSessionId,
@@ -2852,7 +2861,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
     if (fromArchive) {
-      // C-04: keep the persisted spawn model when copying the archive back.
+      // Keep the stored spawn identity when copying the archive back.
       writeMetadata(sessionsDir, sessionId, {
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
@@ -2867,6 +2876,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         project: raw["project"],
         agent: raw["agent"],
         model: raw["model"],
+        permissions: raw["permissions"],
         createdAt: raw["createdAt"],
         runtimeHandle: raw["runtimeHandle"],
         opencodeSessionId: raw["opencodeSessionId"],

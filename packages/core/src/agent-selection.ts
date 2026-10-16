@@ -36,9 +36,17 @@ export function resolveAgentSelection(params: {
   persistedAgent?: string;
   spawnAgentOverride?: string;
   spawnModelOverride?: string;
+  persistedPermissionsOverride?: string;
 }): ResolvedAgentSelection {
-  const { role, project, defaults, persistedAgent, spawnAgentOverride, spawnModelOverride } =
-    params;
+  const {
+    role,
+    project,
+    defaults,
+    persistedAgent,
+    spawnAgentOverride,
+    spawnModelOverride,
+    persistedPermissionsOverride,
+  } = params;
   const roleProjectConfig = role === "orchestrator" ? project.orchestrator : project.worker;
   const roleDefaults = role === "orchestrator" ? defaults.orchestrator : defaults.worker;
   const sharedConfig = project.agentConfig ?? {};
@@ -75,9 +83,17 @@ export function resolveAgentSelection(params: {
     agentConfig.model = model;
   }
 
-  const permissions = normalizeAgentPermissionMode(
-    typeof agentConfig.permissions === "string" ? agentConfig.permissions : undefined,
-  );
+  const permissions =
+    role === "worker" && persistedPermissionsOverride !== undefined
+      ? // Stored spawn mode wins over the current config. Empty, unknown or
+        // malformed values can never escalate: they resolve to "default"
+        // (no permissive flag in any plugin), never back to the config,
+        // which could be permissionless. A missing key (undefined) keeps the
+        // legacy behaviour below (current config).
+        (normalizeAgentPermissionMode(persistedPermissionsOverride) ?? "default")
+      : normalizeAgentPermissionMode(
+          typeof agentConfig.permissions === "string" ? agentConfig.permissions : undefined,
+        );
   if (permissions !== undefined) {
     agentConfig.permissions = permissions;
   }

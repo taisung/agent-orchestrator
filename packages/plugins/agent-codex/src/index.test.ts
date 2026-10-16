@@ -1413,6 +1413,29 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("--model 'spawn-model-X'");
   });
 
+  it("restore with stored default matches a launch with no mode (no approval flags)", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const launch = agent.getLaunchCommand(makeLaunchConfig());
+    const restore = await agent.getRestoreCommand!(
+      makeSession({ workspacePath: "/workspace/test" }),
+      makeProjectConfig({ agentConfig: { permissions: "default" } }),
+    );
+
+    for (const cmd of [launch, restore]) {
+      expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+      expect(cmd).not.toContain("--ask-for-approval");
+    }
+  });
+
   it("handles unreadable session files gracefully", async () => {
     mockReaddir.mockResolvedValue(["sess.jsonl"]);
     // open() finds matching session_meta for cwd check

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import { writeMetadata } from "../../metadata.js";
+import { readMetadataRaw, updateMetadata, writeMetadata } from "../../metadata.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -179,5 +179,224 @@ describe("restore role model (m-1)", () => {
       "worker-role-model",
     );
     expect(seen).toEqual(["worker-role-model"]);
+  });
+});
+
+describe("stored spawn identity (owner option 1)", () => {
+  function writeStoredSession(wsName: string, stored: Record<string, string>): void {
+    const wsPath = join(tmpDir, wsName);
+    mkdirSync(wsPath, { recursive: true });
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+      ...stored,
+    });
+  }
+
+  function configWithModelAndPermissions(
+    model?: string,
+    shared?: AgentPermissionMode,
+  ): OrchestratorConfig {
+    return {
+      ...config,
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"]!,
+          agentConfig: {
+            ...(model ? { model } : {}),
+            ...(shared ? { permissions: shared } : {}),
+          },
+        },
+      },
+    };
+  }
+
+  it("spawn stores the effective model and mode; a later config edit does not reach restore", async () => {
+    config = configWithModelAndPermissions("model-A", "default");
+    const wsPath = join(tmpDir, "ws-spawn-stored");
+    mkdirSync(wsPath, { recursive: true });
+    vi.mocked(ctx.mockWorkspace.create).mockResolvedValue({
+      path: wsPath,
+      branch: "feat/TEST-1",
+      sessionId: "app-1",
+      projectId: "my-app",
+    });
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.spawn({ projectId: "my-app" });
+
+    const raw = readMetadataRaw(sessionsDir, "app-1");
+    expect(raw?.["model"]).toBe("model-A");
+    expect(raw?.["permissions"]).toBe("default");
+    updateMetadata(sessionsDir, "app-1", { status: "killed" });
+    vi.mocked(mockRuntime.create).mockClear();
+
+    config = configWithModelAndPermissions("model-B", "permissionless");
+    const seen: Array<string | undefined> = [];
+    const agentWithRestore: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi.fn().mockImplementation(async (_s, project, effectiveModel) => {
+        seen.push(effectiveModel);
+        const perms = project.agentConfig?.permissions as string | undefined;
+        return `mock-agent --resume --perms ${perms ?? "none"} --model ${effectiveModel ?? "none"}`;
+      }),
+    };
+    const sm2 = createSessionManager({ config, registry: registryWith(agentWithRestore) });
+    await sm2.restore("app-1");
+
+    expect(seen).toEqual(["model-A"]);
+    const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(createCall.launchCommand).toContain("--perms default");
+    expect(createCall.launchCommand).toContain("--model model-A");
+    expect(createCall.launchCommand).not.toContain("model-B");
+    expect(createCall.launchCommand).not.toContain("permissionless");
+  });
+
+  it("spawn with no mode stores default, so a later permissionless edit adds no flag", async () => {
+    const wsPath = join(tmpDir, "ws-spawn-no-mode");
+    mkdirSync(wsPath, { recursive: true });
+    vi.mocked(ctx.mockWorkspace.create).mockResolvedValue({
+      path: wsPath,
+      branch: "feat/TEST-1",
+      sessionId: "app-1",
+      projectId: "my-app",
+    });
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.spawn({ projectId: "my-app" });
+
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["permissions"]).toBe("default");
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["model"]).toBeUndefined();
+    updateMetadata(sessionsDir, "app-1", { status: "killed" });
+    vi.mocked(mockRuntime.create).mockClear();
+
+    config = configWithPermissions("permissionless", "permissionless");
+    const cmd = await restoreCommand(makePermissionMock(), "app-1");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("stored permissionless wins when the config is changed to default", async () => {
+    writeStoredSession("ws-stored-perm", { permissions: "permissionless" });
+    config = configWithPermissions("default", "default");
+    const cmd = await restoreCommand(makePermissionMock(), "app-1");
+    expect(cmd).toContain("--dangerously-skip-permissions");
+  });
+
+  it.each(["", "bogus", "PERMISSIONLESS", "skip!"])(
+    "malformed stored permissions %j restores with the most restrictive mode",
+    async (stored) => {
+      const wsPath = join(tmpDir, "ws-malformed");
+      mkdirSync(wsPath, { recursive: true });
+      const lines = [
+        `worktree=${wsPath}`,
+        "branch=feat/TEST-1",
+        "status=killed",
+        "project=my-app",
+        `permissions=${stored}`,
+        `runtimeHandle=${JSON.stringify(makeHandle("rt-old"))}`,
+      ];
+      writeFileSync(join(sessionsDir, "app-1"), `${lines.join("\n")}\n`);
+      expect(readFileSync(join(sessionsDir, "app-1"), "utf-8")).toContain("permissions=");
+
+      config = configWithPermissions("permissionless", "permissionless");
+      const cmd = await restoreCommand(makePermissionMock(), "app-1");
+      expect(cmd).not.toContain("--dangerously-skip-permissions");
+    },
+  );
+
+  it("a record without the keys follows the current config", async () => {
+    writeStoredSession("ws-legacy", {});
+    config = configWithModelAndPermissions("model-B", "permissionless");
+    const agentWithRestore: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi.fn().mockImplementation(async (_s, project, effectiveModel) => {
+        return `mock-agent --resume --perms ${project.agentConfig?.permissions} --model ${effectiveModel}`;
+      }),
+    };
+    const sm = createSessionManager({ config, registry: registryWith(agentWithRestore) });
+    await sm.restore("app-1");
+    expect(agentWithRestore.getRestoreCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "model-B",
+    );
+    const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(createCall.launchCommand).toContain("--perms permissionless");
+    expect(createCall.launchCommand).toContain("--model model-B");
+  });
+
+  it("an orchestrator ignores stray stored model and mode keys", async () => {
+    const wsPath = join(tmpDir, "ws-orch-stray");
+    mkdirSync(wsPath, { recursive: true });
+    const configWithOrchModel: OrchestratorConfig = {
+      ...config,
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"]!,
+          agentConfig: { model: "shared-model", orchestratorModel: "orch-model" },
+        },
+      },
+    };
+    config = configWithOrchModel;
+    writeMetadata(sessionsDir, "app-orchestrator", {
+      worktree: wsPath,
+      branch: "main",
+      status: "killed",
+      project: "my-app",
+      role: "orchestrator",
+      model: "stray-model",
+      permissions: "default",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    const agentWithRestore: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi.fn().mockImplementation(async (_s, project, effectiveModel) => {
+        const perms = project.agentConfig?.permissions as string | undefined;
+        return `mock-agent --resume --perms ${perms} --model ${effectiveModel}`;
+      }),
+    };
+    const sm = createSessionManager({
+      config: configWithOrchModel,
+      registry: registryWith(agentWithRestore),
+    });
+    await sm.restore("app-orchestrator");
+    expect(agentWithRestore.getRestoreCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "orch-model",
+    );
+    const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(createCall.launchCommand).toContain("--perms permissionless");
+    expect(createCall.launchCommand).not.toContain("stray-model");
+  });
+
+  it("restore-before-send uses the stored model and mode", async () => {
+    writeStoredSession("ws-send-stored", { model: "model-A", permissions: "default" });
+    config = configWithModelAndPermissions("model-B", "permissionless");
+
+    const agentWithRestore: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi.fn().mockImplementation(async (_s, project, effectiveModel) => {
+        const perms = project.agentConfig?.permissions as string | undefined;
+        return `mock-agent --resume --perms ${perms} --model ${effectiveModel}`;
+      }),
+    };
+    vi.mocked(mockRuntime.create).mockResolvedValue(makeHandle("rt-restored"));
+    vi.mocked(mockRuntime.getOutput).mockResolvedValueOnce("before").mockResolvedValueOnce("after");
+
+    const sm = createSessionManager({ config, registry: registryWith(agentWithRestore) });
+    await sm.send("app-1", "hello");
+
+    expect(agentWithRestore.getRestoreCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "model-A",
+    );
+    const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(createCall.launchCommand).toContain("--perms default");
+    expect(createCall.launchCommand).toContain("--model model-A");
   });
 });

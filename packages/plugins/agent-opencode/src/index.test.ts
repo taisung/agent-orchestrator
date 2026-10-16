@@ -819,6 +819,24 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("spawn-model-X");
   });
 
+  it("restore with stored default reads no mode, like a launch with no mode", async () => {
+    mockGetOpenCodeSession.mockResolvedValue({ id: "ses_abc123", title: "AO:test-1" });
+    const launch = agent.getLaunchCommand(makeLaunchConfig());
+    const restore = await agent.getRestoreCommand!(
+      makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+      {
+        name: "proj",
+        repo: "o/r",
+        path: "/p",
+        defaultBranch: "main",
+        sessionPrefix: "p",
+        agentConfig: { permissions: "default" },
+      },
+    );
+    expect(launch).not.toContain("session.switchModel");
+    expect(restore).toBe("opencode --session 'ses_abc123'");
+  });
+
   it("refuses the restore when no session ID is stored, and names remap (no title search)", async () => {
     const restore = agent.getRestoreCommand!(
       makeSession({ metadata: {} }),

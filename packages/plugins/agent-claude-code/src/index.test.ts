@@ -1219,4 +1219,16 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("--resume 'abc123-def456'");
     expect(cmd).not.toContain("--dangerously-skip-permissions");
   });
+
+  it("restore with stored default matches a launch with no mode (no skip flag)", async () => {
+    mockReaddir.mockResolvedValue(["abc123-def456.jsonl"]);
+    mockStat.mockResolvedValue({ mtimeMs: 1000, mtime: new Date(1000) });
+    const launch = agent.getLaunchCommand(makeLaunchConfig());
+    const restore = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProject({ agentConfig: { permissions: "default" } }) as never,
+    );
+    expect(launch).not.toContain("--dangerously-skip-permissions");
+    expect(restore).not.toContain("--dangerously-skip-permissions");
+  });
 });

@@ -92,6 +92,7 @@ export function readMetadata(dataDir: string, sessionId: SessionId): SessionMeta
     project: raw["project"],
     agent: raw["agent"],
     model: raw["model"],
+    permissions: raw["permissions"],
     createdAt: raw["createdAt"],
     runtimeHandle: raw["runtimeHandle"],
     restoredAt: raw["restoredAt"],
@@ -143,6 +144,7 @@ export function writeMetadata(
   if (metadata.project) data["project"] = metadata.project;
   if (metadata.agent) data["agent"] = metadata.agent;
   if (metadata.model) data["model"] = metadata.model;
+  if (metadata.permissions) data["permissions"] = metadata.permissions;
   if (metadata.createdAt) data["createdAt"] = metadata.createdAt;
   if (metadata.runtimeHandle) data["runtimeHandle"] = metadata.runtimeHandle;
   if (metadata.restoredAt) data["restoredAt"] = metadata.restoredAt;

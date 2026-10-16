@@ -468,6 +468,17 @@ describe("getRestoreCommand", () => {
     const cmd = await agent.getRestoreCommand!(makeSession(), makeProjectConfig(), "spawn-model-X");
     expect(cmd).toBe("gemini -m 'spawn-model-X' -r latest");
   });
+
+  it("restore with stored default matches a launch with no mode (no --yolo)", async () => {
+    mockReaddir.mockResolvedValue(["project-1"]);
+    const launch = agent.getLaunchCommand(makeLaunchConfig());
+    const restore = await agent.getRestoreCommand!(
+      makeSession(),
+      makeProjectConfig({ agentConfig: { permissions: "default" } }),
+    );
+    expect(launch).not.toContain("--yolo");
+    expect(restore).not.toContain("--yolo");
+  });
 });
 
 // =========================================================================
