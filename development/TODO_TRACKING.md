@@ -255,7 +255,12 @@ Durable progress record for this fork. Dated events only; the current state live
   `development/reviews/branch_check_review_r1_opus.md`): **LAND-SAFE**, m-13 fixed (live: restore refuses
   `-Bvictim` and other option values, `victim` keeps its commit, the base resets it), 0 B, 0 M, 3 m, 9
   notes. **Rollout condition (M-3 again):** until the five lifecycle workers restart on the new build, their
-  restore path has no gate, and their installs write the 0.2.4 helper over 0.2.5. Not live, not pushed.
+  restore path has no gate, and their installs write the 0.2.4 helper over 0.2.5. **Live and pushed**
+  (owner, 2026-10-16: "roll out now"): `pnpm build` at 10:45 EDT (exit 0, 12 Done); the five lifecycle
+  workers restarted by exact PID at 10:45:11 to 10:45:24 (agent-skills 1218013, agent-orchestrator 1218338
+  for the Nexus config and 1219143 for this config, Nexus 1218695, VSF 1218968); pushed
+  `c8bccfb2..ac0f662a`. M-3 check passed: the ao-35 spawn at 10:46:44 installed `.ao-version` 0.2.5, and
+  the helper holds 4 `refusing` lines.
 
 ## Decisions
 
@@ -280,8 +285,10 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
-- **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`), open, small worker
-  follow-ups: **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
+- **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17 in
+  progress** (owner, 2026-10-16: "fix m-15 to m-17"): author ao-35 (Muse), brief
+  `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`, `WRAPPER_VERSION` 0.2.6; N-27 stays
+  open. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
   free-text branch `feat/x.lock`) leaves an empty reserved session record, shown as `[spawning]` in
   `ao session ls`; the gate at `session-manager.ts:1275` throws before the `try` whose `catch` deletes the
   reservation. **m-16** the bash copies of the rule use `[[:cntrl:]]`, which in a UTF-8 locale also matches
@@ -300,7 +307,7 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   and removed the three paths by literal path. Briefs now ask for an empty
   `find ~/.agent-orchestrator -maxdepth 1 -newer <marker>` at the end.
 
-- **Fixed by `0ec55a64`, not live yet: a stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
+- **Fixed by `0ec55a64`, live since 2026-10-16 10:45: a stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
   m-13; old, the same on the base). The helper and the Claude hook check only the key, so `branch=-Bvictim`
   is stored; restore runs `git worktree add <path> -Bvictim` (`packages/plugins/workspace-worktree/src/index.ts:276`,
   no `--`), and git resets the free branch `victim` (live: it lost its own commit, which stays in the
