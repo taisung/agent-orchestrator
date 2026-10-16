@@ -183,8 +183,8 @@ Durable progress record for this fork. Dated events only; the current state live
   restores on the role-scoped model (`worker.agentConfig.model`, or the orchestrator keys) that its spawn
   used, not on the shared `agentConfig.model`. Open minors: m-1 has no worker-role test; m-2 the new
   lines are not in Prettier style (CI has no format check); m-3 one restore-before-send assertion checks
-  a literal of its own mock. **Not live** until the owner's rebuild of the primary checkout and the
-  lifecycle-worker restarts. Sessions spawned before the rebuild have no `model=` line and still restore
+  a literal of its own mock. **Live** since the owner's rebuild of the primary checkout on 2026-10-15 at
+  21:09 EDT and the lifecycle-worker restarts at 21:09:24 to 21:09:37. Sessions spawned before the rebuild have no `model=` line and still restore
   on the config model (N-3): add the line to the session file by hand before such a restore. Not pushed.
 
 ## Decisions
@@ -274,8 +274,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   every `pnpm test`, not only the integration package, runs with a fake `HOME` and with every `AO_*`
   variable removed. A test-isolation fix (tests that ignore an inherited `AO_STATE_ROOT`) is a worker
   follow-up.
-- **`ao session restore` dropped the spawn `--model` of a Claude Code session** (found 2026-10-15; fixed in
-  code by `854690c3`, live after the next rebuild). The
+- **`ao session restore` dropped the spawn `--model` of a Claude Code session** (found 2026-10-15; fixed by
+  `854690c3`, live since the rebuild of 21:09 EDT). The
   claude-code `getRestoreCommand` adds `--model` only from `project.agentConfig.model`, and the session
   metadata stores no model, so a session spawned with `--model claude-sonnet-5-5` restores on the host
   default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix

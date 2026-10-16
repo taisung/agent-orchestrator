@@ -21,7 +21,11 @@ restarted by exact PID at 19:43:19 to 19:43:32 (agent-skills 2210537, agent-orch
 Nexus config and 2212230 for this config, Nexus 2210642, VSF 2210682). A module check of the new build
 under a fake `HOME`: Codex `PATH` starts with `~/.ao/bin`; Claude Code removes both wrapper spellings and
 `.` and sets an empty `GH_PATH`. The host's `~/.ao/bin` still holds 0.2.1 until the next spawn installs
-0.2.3. **The onboarding CI cleanup landed** (`ebc8e25b`,
+0.2.3. **The restore model fix landed and is live**: `854690c3` (LAND-SAFE by Opus 5.5 ao-32), with the
+Release workflow removal `14bb4670`. On the owner's word the primary checkout was rebuilt on 2026-10-15
+at 21:09 EDT (`pnpm build`, exit 0, 12 Done, no dependency change), and the five lifecycle workers were
+restarted by exact PID at 21:09:24 to 21:09:37 (agent-skills 3423773, agent-orchestrator 3424589 for the
+Nexus config and 3427311 for this config, Nexus 3425536, VSF 3426151). **The onboarding CI cleanup landed** (`ebc8e25b`,
 `c9a7ed93`, `19d99667`). On the owner's word, `main` was pushed to `origin` on 2026-10-15 at 12:42 EDT and again at 19:44 EDT, a
 fast-forward `70d19d70..c831caff` (the CI cleanup, the PATH fix, I-2 and the docs). On the owner's word
 the 13 finished worker sessions (ao-1, ao-16, ao-18 to ao-28) were killed at 19:40 after a check that
@@ -114,11 +118,9 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Rebuild and push** on the owner's word: `main` holds `854690c3` (the restore model fix, LAND-SAFE),
-   `14bb4670` (the Release workflow removal) and docs. The fix is live only after `pnpm build` in the
-   primary checkout and restarts of the five lifecycle workers by exact PID. A worker whose record says
-   `killed` while its pane runs must not get an `ao send` (a send restores a `killed` session first);
-   place a brief in the second that the spawn returns.
+1. **Read the CI of the 21:1x push** - the Release workflow must no longer run. A worker whose record
+   says `killed` while its pane runs must not get an `ao send` (a send restores a `killed` session
+   first); place a brief in the second that the spawn returns.
 2. **The restore minors and notes** (TODO Known Issues): m-1 to m-3 and N-2 for a worker; N-1 for the owner.
 3. **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with `~/agent-skills/scripts/routing.py
    route`; I-3 and I-5 are HIGH by the profile.
