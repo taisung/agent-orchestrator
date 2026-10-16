@@ -294,7 +294,18 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     lock, its pending marker and `waitForOpenCodeSession`; the model check runs before the create
     (`model.list`). **Landing gate:** the tool-environment check (0010 §14 item 3, one model turn in an
     API-only session) is deferred by the owner; I-3 does not land until it runs or the owner accepts the
-    risk. The good path with a real TUI also needs an owner-approved probe.
+    risk. The good path with a real TUI also needs an owner-approved probe. ao-36 finished `ad5daa51` at
+    14:05 EDT (3 commits, 13 files: hooks `prepareAgentSession` and `confirmLaunch`, create and readback
+    in Node with the pane environment, model check on `providerID` plus `id`, lock and title discovery
+    removed; full suite 2228 passed, 29 skipped; live (a) to (d) in an isolated store; 15 mutants fail
+    tests). Its D3 base run wrote 7 markers and 2 leases into the real lock directory
+    `/tmp/ao-opencode-launch-44402` (all named its own vitest PID) and removed them; the orchestrator
+    checked that the directory is empty. It also ran `npx tsc` once (removed). Author open items: the
+    double warning on `promptDelivered=false` (`cli/src/commands/spawn.ts:132-138`), a stale comment in
+    `getRestoreCommand`, two cut `model.list` answers fail the spawn (fail-closed). First-poll `killed`
+    race: I-3 shortens it but does not remove it (needs `lifecycle-manager.ts`). Blind review r1
+    dispatched at 14:07 EDT to ao-40 (gpt-6.1-sol, xhigh; Codex weekly 80% left): brief
+    `brief-review-i3-r1-sol.md`, review file `i3_review_r1_sol61.md`, watcher PID 1378201.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
