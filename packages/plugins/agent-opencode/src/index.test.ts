@@ -573,52 +573,9 @@ describe("isProcessRunning", () => {
 describe("detectActivity — terminal output classification", () => {
   const agent = create();
 
-  it("returns idle for empty terminal output", () => {
-    expect(agent.detectActivity("")).toBe("idle");
-  });
-
-  it("returns idle for whitespace-only terminal output", () => {
-    expect(agent.detectActivity("   \n  ")).toBe("idle");
-  });
-
-  it("returns idle for constructed 0009-section-5.1 idle capture fixture", () => {
-    const idleCapture = [
-      "  ┃  Build · Muse Spark 1.3 Contributor OpenCode Go · xhigh",
-      "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-      "  /tmp/ao1s-work:main                    shift+tab agents  ctrl+p commands    /tmp/ao1s-work:main",
-    ].join("\n");
-    expect(agent.detectActivity(idleCapture)).toBe("idle");
-  });
-
-  it("returns active for constructed census running fixture with esc interrupt under border", () => {
-    const running = [
-      "  ┃  Build · model · xhigh",
-      "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-      "  ⬝⬝⬝■■ working  esc interrupt",
-    ].join("\n");
-    expect(agent.detectActivity(running)).toBe("active");
-  });
-
-  it("returns waiting_input for constructed census permission fixture with triangle marker", () => {
-    const permission = [
-      "△ Permission required",
-      "← Access external directory /tmp/outside",
-      "Allow once   Always allow   Reject",
-    ].join("\n");
-    expect(agent.detectActivity(permission)).toBe("waiting_input");
-  });
-
-  it("returns waiting_input for constructed census question fixture with select submit hint", () => {
-    const question = [
-      "Questions",
-      "Color preference",
-      "↑↓ select  enter submit  esc dismiss",
-    ].join("\n");
-    expect(agent.detectActivity(question)).toBe("waiting_input");
-  });
-
-  it("returns active for non-empty terminal output without a positive idle marker", () => {
-    expect(agent.detectActivity("opencode is working\n")).toBe("active");
+  it("delegates to the 2.x pane classifier: the real idle Muse capture is idle", async () => {
+    const { REAL_IDLE_MUSE_2031 } = await import("./__fixtures__/panes-2.0.31.js");
+    expect(agent.detectActivity(REAL_IDLE_MUSE_2031)).toBe("idle");
   });
 });
 
@@ -1115,7 +1072,7 @@ describe("getActivityState with activity JSONL", () => {
     expect(result?.state).toBe("blocked");
   });
 
-  it("falls back to opencode API when activity JSONL is empty", async () => {
+  it("returns active from the API when the AO JSONL is empty and a session is stored", async () => {
     mockTmuxWithProcess("opencode");
     mockGetOpenCodeSession.mockResolvedValue({
       id: "ses_abc123",

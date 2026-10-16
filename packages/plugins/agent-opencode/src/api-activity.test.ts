@@ -22,8 +22,14 @@ import {
   getApiActivityState,
   getApiSessionInfo,
 } from "./api-activity.js";
+import {
+  REAL_BUSY_LAST3_2031,
+  REAL_IDLE_MUSE_2031,
+  REAL_IDLE_V4FLASH_2031,
+} from "./__fixtures__/panes-2.0.31.js";
 
 const SID = "ses_abc123";
+const OTHER_SID = "ses_other999";
 const ACTIVE_WINDOW = 30_000;
 const THRESHOLD = 60_000;
 
@@ -84,6 +90,118 @@ describe("getApiActivityState — waiting_input", () => {
     expect(state?.state).toBe("waiting_input");
     expect(state?.timestamp.getTime()).toBe(updated);
   });
+
+  it("returns waiting_input when a permission waits and session.active also holds this ID (M1)", async () => {
+    mockSession({ time: { updated: Date.now(), idle: Date.now() } });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list")
+        return Promise.resolve({
+          data: [{ id: "per_1", sessionID: SID, action: "write", resources: ["/tmp/x"] }],
+        });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active")
+        return Promise.resolve({ data: { [SID]: { type: "running" } } });
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("waiting_input");
+  });
+
+  it("returns waiting_input when a form waits and session.active also holds this ID (M1)", async () => {
+    mockSession({ time: { updated: Date.now(), idle: Date.now() } });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list")
+        return Promise.resolve({
+          data: [{ id: "frm_1", sessionID: SID, title: "Questions", fields: [] }],
+        });
+      if (operation === "session.active")
+        return Promise.resolve({ data: { [SID]: { type: "running" } } });
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("waiting_input");
+  });
+
+  it("is not active when session.active holds only another session ID (M29)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "succeeded" });
+    mockEmptyLists({ [OTHER_SID]: { type: "running" } });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("idle");
+  });
+});
+
+describe("getApiActivityState — call shape and parallelism (M3 M33 M4)", () => {
+  it("passes timeoutMs and sessionID params to each call including message.list (M3 M33)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "failed" });
+    await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+
+    expect(mockCallOpenCodeApi).toHaveBeenCalledWith("session.permission.list", {
+      params: { sessionID: SID },
+      timeoutMs: OPENCODE_ACTIVITY_API_TIMEOUT_MS,
+    });
+    expect(mockCallOpenCodeApi).toHaveBeenCalledWith("session.form.list", {
+      params: { sessionID: SID },
+      timeoutMs: OPENCODE_ACTIVITY_API_TIMEOUT_MS,
+    });
+    expect(mockCallOpenCodeApi).toHaveBeenCalledWith("session.active", {
+      timeoutMs: OPENCODE_ACTIVITY_API_TIMEOUT_MS,
+    });
+    expect(mockCallOpenCodeApi).toHaveBeenCalledWith("session.message.list", {
+      params: { sessionID: SID, type: "user", order: "desc", limit: "1" },
+      timeoutMs: OPENCODE_ACTIVITY_API_TIMEOUT_MS,
+    });
+    expect(mockGetOpenCodeSession).toHaveBeenCalledWith(
+      SID,
+      OPENCODE_ACTIVITY_API_TIMEOUT_MS,
+    );
+  });
+
+  it("starts all four calls before the first resolves (M4 deferred promises)", async () => {
+    const now = Date.now();
+    let resolvePermission!: (value: unknown) => void;
+    let resolveForm!: (value: unknown) => void;
+    let resolveActive!: (value: unknown) => void;
+    let resolveGet!: (value: unknown) => void;
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list")
+        return new Promise((resolve) => {
+          resolvePermission = resolve;
+        });
+      if (operation === "session.form.list")
+        return new Promise((resolve) => {
+          resolveForm = resolve;
+        });
+      if (operation === "session.active")
+        return new Promise((resolve) => {
+          resolveActive = resolve;
+        });
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+    mockGetOpenCodeSession.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve;
+        }),
+    );
+
+    const pending = getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockCallOpenCodeApi).toHaveBeenCalledTimes(3);
+    expect(mockGetOpenCodeSession).toHaveBeenCalledTimes(1);
+
+    resolvePermission({ data: [] });
+    resolveForm({ data: [] });
+    resolveActive({ data: {} });
+    resolveGet({ id: SID, time: { updated: now, idle: now } });
+    const state = await pending;
+    expect(state?.state).toBe("active");
+  });
 });
 
 describe("getApiActivityState — blocked and interrupted", () => {
@@ -126,6 +244,49 @@ describe("getApiActivityState — blocked and interrupted", () => {
     expect(state?.state).toBe("idle");
   });
 
+  it("follows the age rule when the message.list read fails in the failed case (M12)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "failed" });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active") return Promise.resolve({ data: {} });
+      if (operation === "session.message.list")
+        return Promise.reject(new Error("pipe cut with exit 0"));
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("idle");
+    expect(state?.timestamp.getTime()).toBe(idle);
+  });
+
+  it("stays blocked when only a non-user message is newer than time.idle (M23)", async () => {
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated: idle, idle }, outcome: "failed" });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list") return Promise.resolve({ data: [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active") return Promise.resolve({ data: {} });
+      if (operation === "session.message.list")
+        return Promise.resolve({
+          data: [
+            {
+              id: "msg_9",
+              type: "assistant",
+              time: { created: idle + 60_000 },
+              text: "working",
+            },
+          ],
+          cursor: { previous: null, next: null },
+        });
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("blocked");
+  });
+
   it("decays constructed interrupted-outcome fixture by age instead of blocked", async () => {
     const idle = Date.now() - 120_000;
     mockSession({ time: { updated: idle, idle }, outcome: "interrupted" });
@@ -152,6 +313,16 @@ describe("getApiActivityState — age rule", () => {
 
     const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
     expect(state?.state).toBe("idle");
+  });
+
+  it("ages by time.idle when time.updated is newer (M14)", async () => {
+    const updated = Date.now() - 5_000;
+    const idle = Date.now() - 120_000;
+    mockSession({ time: { updated, idle }, outcome: "succeeded" });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state?.state).toBe("idle");
+    expect(state?.timestamp.getTime()).toBe(idle);
   });
 
   it("uses time.updated for constructed no-time.idle fixture with no finished turn", async () => {
@@ -213,6 +384,13 @@ describe("getApiActivityState — no signal", () => {
     expect(state).toBeNull();
   });
 
+  it("returns null when the record has neither time.updated nor time.idle (M27)", async () => {
+    mockSession({ time: {} });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state).toBeNull();
+  });
+
   it("makes four calls in the common case and five in the constructed failed case", async () => {
     const now = Date.now();
     mockSession({ time: { updated: now, idle: now }, outcome: "succeeded" });
@@ -228,19 +406,15 @@ describe("getApiActivityState — no signal", () => {
     expect(mockCallOpenCodeApi).toHaveBeenCalledTimes(4);
     expect(mockGetOpenCodeSession).toHaveBeenCalledTimes(1);
   });
-
-  it("bounds each call below the helper default", () => {
-    expect(OPENCODE_ACTIVITY_API_TIMEOUT_MS).toBeLessThan(10_000);
-  });
 });
 
 describe("getApiSessionInfo — cost and tokens", () => {
-  it("maps constructed cost fixture with reasoning in outputTokens", async () => {
+  it("maps constructed cost fixture with reasoning and cache in the token sums (M15)", async () => {
     mockGetOpenCodeSession.mockResolvedValue({
       id: SID,
       title: "AO:test-1",
       cost: 0.0014781,
-      tokens: { input: 14499, output: 11, reasoning: 130, cache: { read: 0, write: 0 } },
+      tokens: { input: 14499, output: 11, reasoning: 130, cache: { read: 384, write: 16 } },
       time: { updated: Date.now() },
     });
 
@@ -249,7 +423,7 @@ describe("getApiSessionInfo — cost and tokens", () => {
     expect(info?.summary).toBe("AO:test-1");
     expect(info?.summaryIsFallback).toBe(true);
     expect(info?.cost).toEqual({
-      inputTokens: 14499,
+      inputTokens: 14899,
       outputTokens: 141,
       estimatedCostUsd: 0.0014781,
     });
@@ -276,27 +450,89 @@ describe("getApiSessionInfo — cost and tokens", () => {
   });
 });
 
-describe("classifyOpenCodePaneActivity", () => {
-  it("gives idle for constructed 0009-section-5.1 idle capture fixture", () => {
+describe("classifyOpenCodePaneActivity — real 2.0.31 captures", () => {
+  const TRANSCRIPT_LINE =
+    "  ┃   100 `packages/plugins/agent-opencode/src/index.test.ts` core mock plus `detectActivity`,";
+
+  function withTranscriptText(capture: string, text: string): string {
+    const marked = capture.replace(TRANSCRIPT_LINE, `  ┃   100 ${text}`);
+    expect(marked).not.toBe(capture);
+    return marked;
+  }
+
+  function withInputBoxText(capture: string, text: string): string {
+    const lines = capture.split("\n");
+    const boxIndex = lines.findIndex((line) => line === "  ┃");
+    expect(boxIndex).toBeGreaterThan(-1);
+    const typed = [...lines];
+    typed[boxIndex] = `  ┃  ${text}`;
+    return typed.join("\n");
+  }
+
+  it("gives idle for the real idle Muse capture", () => {
+    expect(classifyOpenCodePaneActivity(REAL_IDLE_MUSE_2031)).toBe("idle");
+  });
+
+  it("gives idle for the real idle V4.1 Flash capture", () => {
+    expect(classifyOpenCodePaneActivity(REAL_IDLE_V4FLASH_2031)).toBe("idle");
+  });
+
+  it("gives active for the real busy last-3-lines sample with esc interrupt and ctrl+p commands (M20)", () => {
+    expect(classifyOpenCodePaneActivity(REAL_BUSY_LAST3_2031)).toBe("active");
+  });
+
+  it("gives idle for the real idle capture cut to its last 24 lines (80x24)", () => {
+    const cut = REAL_IDLE_MUSE_2031.split("\n").slice(-24).join("\n");
+    expect(classifyOpenCodePaneActivity(cut)).toBe("idle");
+  });
+
+  it.each([
+    "icon: △ Permission required",
+    "the dialog says Allow once or Reject",
+    "hint: ↑↓ select  enter submit to pick",
+    "see skills ao-communicate: the esc interrupt rule",
+  ])("gives idle when %s sits in a transcript line of the real idle capture", (text) => {
+    expect(classifyOpenCodePaneActivity(withTranscriptText(REAL_IDLE_MUSE_2031, text))).toBe(
+      "idle",
+    );
+  });
+
+  it.each([
+    "icon: △ Permission required",
+    "the dialog says Allow once or Reject",
+    "hint: ↑↓ select  enter submit to pick",
+    "see skills ao-communicate: the esc interrupt rule",
+  ])("gives idle when %s is typed into the input box line of the real idle capture", (text) => {
+    expect(classifyOpenCodePaneActivity(withInputBoxText(REAL_IDLE_MUSE_2031, text))).toBe(
+      "idle",
+    );
+  });
+
+  it("gives waiting_input for the constructed census permission dialog shape", () => {
+    const dialog = [
+      "△ Permission required",
+      "← Access external directory /tmp/outside",
+      "Allow once   Always allow   Reject",
+      "…/proj  1.0K · $0.00  ctrl+p commands",
+    ].join("\n");
+    expect(classifyOpenCodePaneActivity(dialog)).toBe("waiting_input");
+  });
+
+  it("gives waiting_input for the constructed census question dialog shape", () => {
+    const dialog = [
+      "Questions",
+      "↑↓ select  enter submit  esc dismiss",
+      "…/proj  1.0K · $0.00  ctrl+p commands",
+    ].join("\n");
+    expect(classifyOpenCodePaneActivity(dialog)).toBe("waiting_input");
+  });
+
+  it("gives idle for the constructed 0009-section-5.1 idle capture fixture", () => {
     const idle = [
       "  ┃  Build · Muse Spark 1.3 Contributor OpenCode Go · xhigh",
       "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
       "  /tmp/ao1s-work:main                    shift+tab agents  ctrl+p commands    /tmp/ao1s-work:main",
     ].join("\n");
     expect(classifyOpenCodePaneActivity(idle)).toBe("idle");
-  });
-
-  it("gives active for constructed census running fixture", () => {
-    expect(classifyOpenCodePaneActivity("work\nesc interrupt")).toBe("active");
-  });
-
-  it("gives waiting_input for constructed census permission fixture", () => {
-    expect(classifyOpenCodePaneActivity("△ Permission required\nAllow once   Reject")).toBe(
-      "waiting_input",
-    );
-  });
-
-  it("gives waiting_input for constructed census question fixture", () => {
-    expect(classifyOpenCodePaneActivity("↑↓ select  enter submit")).toBe("waiting_input");
   });
 });

@@ -22,10 +22,11 @@
  *   (TokenUsage.Info {input, output, reasoning, cache {read, write}}),
  *   outcome ("succeeded" | "failed" | "interrupted"), time {created,
  *   updated, idle?, viewed?, archived?}}`. 404 is `SessionNotFoundError`.
- * - `session.message.list` with `--param sessionID=<id>`, answer
- *   `{"data": Session.Message.Info[], cursor: {previous, next}}`; a `user`
- *   message carries `time.created`. Used only for the `failed` blocked
- *   check.
+ * - `session.message.list` with `--param sessionID=<id> --param type=user
+ *   --param order=desc --param limit=1`, answer `{"data":
+ *   Session.Message.Info[], cursor: {previous, next}}`; a `user` message
+ *   carries `time.created`. Used only for the `failed` blocked check, one
+ *   small record.
  */
 
 import {
@@ -118,31 +119,48 @@ export function mapSessionCost(record: Record<string, unknown>): CostEstimate | 
 }
 
 /**
- * Classify a 2.x TUI pane from positive markers (0010 section 11.5).
+ * Classify a 2.x TUI pane from its screen structure (0010 section 11.5,
+ * real 2.0.31 captures in `src/__fixtures__/panes-2.0.31.ts`).
  *
- * - `waiting_input` for `△ Permission required` or `Allow once ... Reject`,
- *   and for the question dialog `↑↓ select  enter submit`.
- * - `active` for `esc interrupt` under the `╹▀▀▀` border (running turns show
- *   it; permission and question dialogs do not).
- * - `idle` for the status row that ends in `ctrl+p commands` with no
- *   `esc interrupt` (the 0009 section 5.1 idle capture has this row).
+ * Exact rules:
+ * - Empty capture → `idle`.
+ * - Dialog markers count only on lines that are not transcript or input
+ *   text: in the real captures, transcript and input lines start with `┃`
+ *   after the leading spaces, and dialog lines do not. On such a line,
+ *   `△ Permission required` → `waiting_input`; `Allow once` with `Reject`
+ *   on the same line → `waiting_input`; `↑↓ select` with `enter submit`
+ *   on the same line → `waiting_input`.
+ * - Otherwise the status row decides: it is the last non-empty line of the
+ *   capture. It holds `esc interrupt` → `active` (checked first: a real busy
+ *   status row also holds `ctrl+p commands`); else it holds
+ *   `ctrl+p commands` → `idle`. The marker is matched anywhere on the status
+ *   row itself (the 0009 section 5.1 idle row carries a trailing directory
+ *   after `ctrl+p commands`); transcript and input lines never decide.
+ * - Unknown output stays `active`.
  *
- * The 1.x patterns (`>`, `$`, `#` prompts, `(Y)es/(N)o`, `approval
- * required`, `Do you want to proceed?`, `Allow ...?`) are gone: I-1 dropped
- * 1.x, and on 2.x an idle pane was classified `active` by the old rules
- * (0009 section 5.1). Unknown output stays `active`.
+ * No real permission or question dialog capture exists (those need a model
+ * turn); the dialog shapes above come from the 0010 section 11.5 census.
  */
 export function classifyOpenCodePaneActivity(terminalOutput: string): ActivityState {
   if (terminalOutput.trim().length === 0) return "idle";
-  if (terminalOutput.includes("△ Permission required")) return "waiting_input";
-  if (terminalOutput.includes("Allow once") && terminalOutput.includes("Reject")) {
-    return "waiting_input";
+  for (const line of terminalOutput.split("\n")) {
+    if (line.trimStart().startsWith("┃")) continue;
+    if (line.includes("△ Permission required")) return "waiting_input";
+    if (line.includes("Allow once") && line.includes("Reject")) return "waiting_input";
+    if (line.includes("↑↓ select") && line.includes("enter submit")) return "waiting_input";
   }
-  if (terminalOutput.includes("↑↓ select") && terminalOutput.includes("enter submit")) {
-    return "waiting_input";
+  const lines = terminalOutput.split("\n");
+  let statusRow: string | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line !== undefined && line.trim().length > 0) {
+      statusRow = line;
+      break;
+    }
   }
-  if (terminalOutput.includes("esc interrupt")) return "active";
-  if (terminalOutput.includes("ctrl+p commands")) return "idle";
+  if (statusRow === null) return "idle";
+  if (statusRow.includes("esc interrupt")) return "active";
+  if (statusRow.includes("ctrl+p commands")) return "idle";
   return "active";
 }
 
@@ -159,7 +177,7 @@ function getSessionTimes(session: OpenCodeApiSession): ValidSessionTimes {
 }
 
 function getSessionOutcome(session: OpenCodeApiSession): string | null {
-  const outcome = (session as unknown as Record<string, unknown>)["outcome"];
+  const outcome = session["outcome"];
   return typeof outcome === "string" ? outcome : null;
 }
 
@@ -218,7 +236,7 @@ export async function getApiActivityState(
     let lastUser: number | null = null;
     try {
       const messageRaw = await callOpenCodeApi("session.message.list", {
-        params: { sessionID: sessionId },
+        params: { sessionID: sessionId, type: "user", order: "desc", limit: "1" },
         timeoutMs,
       });
       if (messageRaw !== null) {

@@ -24,7 +24,6 @@ import {
   type Session,
   type WorkspaceHooksConfig,
   type OpenCodeAgentConfig,
-  type OpenCodeApiSession,
 } from "@aoagents/ao-core";
 import {
   classifyOpenCodePaneActivity,
@@ -363,30 +362,6 @@ function buildResumeCommand(
 }
 
 // =============================================================================
-// Session Lookup Helper (rows 5 and 6)
-// =============================================================================
-
-/**
- * `session.get` by the stored ID (rows 5 and 6). No title search: a session
- * without a stored ID stays unmapped until `ao session remap`, and a stored
- * ID that is gone (404) is not replaced by a title match. On timeout or
- * another error, returns null so activity falls back to JSONL and session
- * info reports no data; the helper throws with `cause` and this wrapper
- * treats it as unavailable, never as "does not exist".
- */
-async function findOpenCodeSession(
-  session: Session,
-): Promise<OpenCodeApiSession | null> {
-  const storedId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
-  if (!storedId) return null;
-  try {
-    return await getOpenCodeSession(storedId);
-  } catch {
-    return null;
-  }
-}
-
-// =============================================================================
 // Plugin Manifest
 // =============================================================================
 
@@ -498,11 +473,6 @@ function createOpenCodeAgent(): Agent {
     ): Promise<ActivityDetection | null> {
       const threshold = readyThresholdMs ?? DEFAULT_READY_THRESHOLD_MS;
       const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
-
-      // Retained per A5 (I-2 rows 5 and 6): findOpenCodeSession stays
-      // unchanged in this file; the new paths use getOpenCodeSession with
-      // OPENCODE_ACTIVITY_API_TIMEOUT_MS. Referenced so the helper is kept.
-      void findOpenCodeSession;
 
       // 1. Process check first, unchanged: no runtime handle or not running → exited.
       const exitedAt = new Date();
