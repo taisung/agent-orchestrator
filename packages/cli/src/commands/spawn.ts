@@ -127,16 +127,10 @@ async function spawnSession(
     spinner.succeed(`Session ${chalk.green(session.id)} spawned${issueLabel}${claimLabel}`);
     console.log(`  Attach:   ${chalk.dim(`ao session attach ${session.id}`)}`);
 
-    // Warn if prompt delivery failed (for post-launch agents like Claude Code)
-    const promptDelivered = session.metadata?.promptDelivered;
-    if (promptDelivered === "false") {
-      console.warn(
-        chalk.yellow(
-          `  ⚠ Prompt delivery failed — agent may be idle.\n` +
-            `    Use '${chalk.cyan("ao send " + session.id + ' "message..."')}' to send instructions manually.`,
-        ),
-      );
-    }
+    // promptDelivered=false: the session manager already printed the one
+    // operator line (an OpenCode launch prompt that did not show names
+    // `ao session attach` and `ao send`; a failed post-launch delivery names
+    // `ao send`), for every caller of spawn. No second warning here (m-3).
 
     // Output for scripting
     console.log(`SESSION=${session.id}`);

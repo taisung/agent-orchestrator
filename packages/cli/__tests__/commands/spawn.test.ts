@@ -179,6 +179,34 @@ describe("spawn command", () => {
     expect(output).toContain("app-7");
   });
 
+  it("adds no second warning when the launch prompt did not arrive (m-3)", async () => {
+    // The session manager prints the one operator line (with `ao session
+    // attach` and `ao send`) before spawn returns.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockSessionManager.spawn.mockResolvedValue({
+      id: "app-7",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-100",
+      issueId: "INT-100",
+      pr: null,
+      workspacePath: "/tmp/worktrees/app-7",
+      runtimeHandle: { id: "8474d6f29887-app-7", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: { promptDelivered: "false" },
+    } satisfies Session);
+
+    await program.parseAsync(["node", "test", "spawn", "INT-100"]);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(output).toContain("SESSION=app-7");
+    expect(output).not.toMatch(/Prompt delivery failed/);
+  });
+
   it("passes issueId to sessionManager.spawn()", async () => {
     const fakeSession: Session = {
       id: "app-1",
