@@ -391,6 +391,24 @@ describe("getApiActivityState — no signal", () => {
     expect(state).toBeNull();
   });
 
+  it("returns null with no times even when a permission list is non-empty (M27)", async () => {
+    mockSession({ time: {} });
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list")
+        return Promise.resolve({
+          data: [{ id: "per_1", sessionID: SID, action: "write", resources: ["/tmp/x"] }],
+        });
+      if (operation === "session.form.list") return Promise.resolve({ data: [] });
+      if (operation === "session.active") return Promise.resolve({ data: {} });
+      if (operation === "session.message.list")
+        return Promise.resolve({ data: [], cursor: { previous: null, next: null } });
+      return Promise.reject(new Error(`unexpected: ${operation}`));
+    });
+
+    const state = await getApiActivityState(SID, ACTIVE_WINDOW, THRESHOLD);
+    expect(state).toBeNull();
+  });
+
   it("makes four calls in the common case and five in the constructed failed case", async () => {
     const now = Date.now();
     mockSession({ time: { updated: now, idle: now }, outcome: "succeeded" });
