@@ -242,7 +242,9 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
-- **Owner decisions from review r3 of option 1** (2026-10-15, ao-32). (1) m-9: a worker spawned with no
+- **Owner decisions from review r3 of option 1** (2026-10-15, ao-32; decided by the owner on 2026-10-15:
+  "keep the default, accept m-9, fix m-10"). The YAML `permissionless` default stays. m-9 is accepted as a
+  known limit. m-10 goes to ao-33. (1) m-9: a worker spawned with no
   model in any config and no `--model` stores no `model=`, so a later config model reaches its restore;
   option: treat a record with `permissions=` but no `model=` as "spawned with no model" and drop the
   config model on restore. (2) m-10: the documented metadata helper `update_ao_metadata <key> <value>`
