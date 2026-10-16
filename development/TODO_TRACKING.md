@@ -298,7 +298,12 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   progress** (owner, 2026-10-16: "fix m-15 to m-17"): author ao-35 (Muse), brief
   `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`, `WRAPPER_VERSION` 0.2.6; N-27 stays
   open. ao-35 finished `7f34bf4d` on 2026-10-16 (core 948 and claude-code 208 tests pass, its three mutants
-  fail tests); not reviewed, not on `main`. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
+  fail tests); not on `main`. Blind review r2 dispatched to ao-32 (Opus 5.5) on 2026-10-16 at 11:40 EDT
+  (meter `5h 5%`, `wk 32%`): worktree moved to `7f34bf4d` with `reset --keep`, brief
+  `~/.cache/agent-skills-haiku55-arc/brief-review-branch-check-r2-opus.md`, review file
+  `branch_check_review_r2_opus.md`, router row open, watcher PID 1710074; its r1 task and report are saved
+  as `reports/ao-32-branchcheck-r1.*`. The brief asks whether the worker gate, now inside
+  `if (plugins.workspace)`, still runs for a spawn with no workspace plugin. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
   free-text branch `feat/x.lock`) leaves an empty reserved session record, shown as `[spawning]` in
   `ao session ls`; the gate at `session-manager.ts:1275` throws before the `try` whose `catch` deletes the
   reservation. **m-16** the bash copies of the rule use `[[:cntrl:]]`, which in a UTF-8 locale also matches
