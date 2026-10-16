@@ -1917,7 +1917,9 @@ describe("confirmLaunch (I-3)", () => {
     // The review's row: a shell whose -c text only names OpenCode.
     ["a shell -c text", ["/bin/bash", "-c", "sleep 60 opencode --session ses_made"]],
     ["a shell script named opencode", ["/bin/sh", "/tmp/bin/opencode", "--session", "ses_made"]],
-    ["node with inline code", ["node", "-e", "1", "/x/opencode", "--session", "ses_made"]],
+    // `-e` takes the code text that follows it; that text is not a script.
+    ["node -e with a code text", ["node", "-e", "/x/opencode", "--session", "ses_made"]],
+    ["node --eval=", ["node", "--eval=1", "/x/opencode", "--session", "ses_made"]],
     ["node on another script", ["node", "/x/server.js", "/x/opencode", "--session", "ses_made"]],
     ["the ID only in the prompt text", ["opencode", "--prompt", "use --session ses_made"]],
     ["--session after --", ["opencode", "--", "--session", "ses_made"]],
