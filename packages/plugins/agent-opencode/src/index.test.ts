@@ -1838,6 +1838,18 @@ describe("confirmLaunch (I-3)", () => {
     ).rejects.toThrow("did not run OpenCode on session ses_made");
   });
 
+  it("does not count a process that exits before the settle time", async () => {
+    // A 2 s bound gives a 500 ms settle time: two sightings 250 ms apart are too short.
+    paneProcesses(
+      ["  4242 pts/7    opencode --session ses_made"],
+      ["  4242 pts/7    opencode --session ses_made"],
+      ["  4244 pts/7    bash"],
+    );
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), { ...quick, timeoutMs: 2_000 }),
+    ).rejects.toThrow("did not run OpenCode on session ses_made within 2 s");
+  });
+
   it("fails at once when the pane is gone", async () => {
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === "tmux") {
