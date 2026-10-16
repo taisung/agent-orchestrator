@@ -203,7 +203,8 @@ Durable progress record for this fork. Dated events only; the current state live
   `test(agent-claude-code): guard the restore permission flag` adds 4 real-output restore tests (both
   mutants of the review now fail 2 tests each), one JSDoc sentence in `types.ts`, and one core mock style.
   The orchestrator re-ran the tests under a fake `HOME`: claude-code 174 of 174, the core restore files 13
-  of 13, typecheck exit 0. Not live, not pushed.
+  of 13, typecheck exit 0. **Live** since the owner's rebuild on 2026-10-15 at 22:39 EDT and the
+  lifecycle-worker restarts at 22:39:55 to 22:40:08.
 
 ## Decisions
 
@@ -236,7 +237,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   process list. Protocol text for as-orchestrator.
 
 - **Restore follow-ups from the reviews of `854690c3` and `458786e6`** (2026-10-15, ao-32). N-2 is fixed by
-  `458786e6`. m-6 (r2), an owner decision of the same class as N-1: the permission mode is not stored at
+  `458786e6`. m-6 (r2), decided with N-1 by the owner on 2026-10-15 ("option 1": store the spawn model and permission
+  mode of every worker at spawn; a worker follow-up): the permission mode is not stored at
   spawn, so a config edit after the spawn changes it on restore (live: `worker` changed to
   `permissionless` after the spawn, and the restore added the skip flag). N-1, an owner decision: a
   session spawned without `--model` still restores on the config model of restore time, also when Codex

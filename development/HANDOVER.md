@@ -21,7 +21,11 @@ restarted by exact PID at 19:43:19 to 19:43:32 (agent-skills 2210537, agent-orch
 Nexus config and 2212230 for this config, Nexus 2210642, VSF 2210682). A module check of the new build
 under a fake `HOME`: Codex `PATH` starts with `~/.ao/bin`; Claude Code removes both wrapper spellings and
 `.` and sets an empty `GH_PATH`. The host's `~/.ao/bin` still holds 0.2.1 until the next spawn installs
-0.2.3. **CI is green with no Release run**: on the push of 2026-10-15 at 21:10 EDT (`c831caff..972f13ef`), CI,
+0.2.3. **The restore permission fix is live**: `458786e6` and its tests `120f500a`; on the owner's word the
+primary checkout was rebuilt on 2026-10-15 at 22:39 EDT (`pnpm build`, exit 0, 12 Done, no dependency
+change), and the five lifecycle workers were restarted by exact PID at 22:39:55 to 22:40:08 (agent-skills
+288652, agent-orchestrator 289254 for the Nexus config and 289549 for this config, Nexus 289313, VSF
+289330). **CI is green with no Release run**: on the push of 2026-10-15 at 21:10 EDT (`c831caff..972f13ef`), CI,
 Integration Tests, Security and Onboarding passed, and no Release run started. A worker whose record
 says `killed` while its pane runs must not get an `ao send` (a send restores a `killed` session first);
 place a brief in the second that the spawn returns. **The restore model fix landed and is live**: `854690c3` (LAND-SAFE by Opus 5.5 ao-32), with the
@@ -121,9 +125,8 @@ model with no provider route, and the `status=killed` write after the M-6 spawn.
 
 ## Next Priorities
 
-1. **Rebuild and push** on the owner's word: `main` holds `458786e6` (N-2, LAND-SAFE r2) and `120f500a`
-   (its tests), not live and not pushed. The owner decides N-1 and m-6 together: store the spawn model and
-   permission mode of every worker at spawn, or let restore follow the current config.
+1. **Store the spawn model and permission mode of every worker** (owner, 2026-10-15: "option 1" for N-1
+   and m-6) - a worker change, python/L1/HIGH; then a blind review.
 2. **I-3 and I-4** (I-2 is on `main`), **then I-5** - route each with `~/agent-skills/scripts/routing.py
    route`; I-3 and I-5 are HIGH by the profile.
 
