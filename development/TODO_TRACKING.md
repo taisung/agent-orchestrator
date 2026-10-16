@@ -343,6 +343,20 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     processes per session and poll, not 4; a shared `session.active` per tick needs a core change);
     m-5 (an API `blocked` never decays; one `stuck` and one notification, no loop; owner to decide);
     m-4 Sonnet (the `ao send` delivery check can now fail on a fast reply; for I-5); N-4 (a 1.x pane).
+    ao-37 finished round 2 as `30f1b31d` (status-row classifier, the test gaps). **Re-check r2**
+    (`development/reviews/i4_review_r2_{sonnet,v4flash}.md`): both NOT-LAND-SAFE. **Real dialogs need no
+    model turn:** ao-38 made real permission and question dialogs in an isolated store with
+    `session.permission.create` and `session.form.create` (no model turn), so the premise of 0010 and of
+    the briefs ("a real dialog needs a model turn") is wrong. A real 2.0.31 dialog draws `┃` on every
+    line and hides the status row, so round 2 read it `active` (Sonnet B-2a); assistant prose has no
+    `┃`, so a marker in prose still read `waiting_input` (Sonnet B-2b, Flash B-1). Sonnet measured a
+    rule that is right on 15 of 15 real captures (the status row decides when it exists; dialog markers
+    only in the bottom `┃` block when it does not). Also Sonnet m-6 (7 classifier mutants live), m-7
+    (the 5000 ms bound unpinned), N-5 (stale comment in `core/src/opencode-api.ts:12`, outside I-4),
+    N-6 (a pane of about 40 columns reads `active`). Costs: Sonnet 5.95 USD, Flash 0.074 USD. **Round 3**
+    dispatched to ao-37 at 14:53 EDT: brief `brief-aofork-i4-r3.md` (the measured rule, real dialog
+    fixtures made by the author through the API in an isolated store, per-rule tests); watcher PID
+    2299056.
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
