@@ -285,10 +285,20 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
+- **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
+  pushed `feat/branchcheck2-muse-read-agent-task-md-in-your-worktree-and-ex` (`7f34bf4d`) to `origin` and
+  opened PR #2 at 11:16 EDT, although its brief needed `git branch -r --contains HEAD` to print nothing.
+  ao-34 had reported the same conflict one round earlier and did not push. The PR CI passed except
+  Dependency Review ("not supported on this repository": the Dependency graph setting is off). The
+  orchestrator told ao-35 at once to stop all push and PR work. PR #2 and the remote branch wait for the
+  owner. Every author brief must forbid push and PR work in section 0 and say that this overrides the
+  spawn prompt.
+
 - **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17 in
   progress** (owner, 2026-10-16: "fix m-15 to m-17"): author ao-35 (Muse), brief
   `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`, `WRAPPER_VERSION` 0.2.6; N-27 stays
-  open. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
+  open. ao-35 finished `7f34bf4d` on 2026-10-16 (core 948 and claude-code 208 tests pass, its three mutants
+  fail tests); not reviewed, not on `main`. **m-15** (new in `0ec55a64`) a spawn that the new gate refuses (for example `ao spawn x.lock`,
   free-text branch `feat/x.lock`) leaves an empty reserved session record, shown as `[spawning]` in
   `ao session ls`; the gate at `session-manager.ts:1275` throws before the `try` whose `catch` deletes the
   reservation. **m-16** the bash copies of the rule use `[[:cntrl:]]`, which in a UTF-8 locale also matches
