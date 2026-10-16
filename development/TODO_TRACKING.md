@@ -207,6 +207,18 @@ Durable progress record for this fork. Dated events only; the current state live
   lifecycle-worker restarts at 22:39:55 to 22:40:08. Pushed at 22:40 EDT (`9b77bdac..d013e400`): CI,
   Integration Tests, Security and Onboarding passed.
 
+- `5b488fdb` (2026-10-15, ao-30, Muse; owner "option 1" for N-1 and m-6) - `fix(core): store the spawn
+  model and permission mode of every worker`, the code of the reviewed `cfb64f67`. Spawn of a worker
+  stores `model=` (the effective model, when defined) and `permissions=` (the effective mode; `default` for
+  a config object with no mode); every later operation on a worker uses them before the current config,
+  through `resolveSelectionForSession`; a malformed stored mode maps to `default`; orchestrators store
+  nothing; records without the keys follow the config. Blind review r3 by Opus 5.5 (ao-32,
+  `development/reviews/restore_model_review_r3_opus.md`): **LAND-SAFE**, m-6 fixed, N-1 partly fixed, 0 B,
+  1 M, 4 m, 5 notes; live on Claude Code and Codex in both directions, on the archive and active paths.
+  M-2 (no test guards the archive copy-back of `permissions=`), m-7 (the fail-safe `default` is not the
+  strictest mode for Codex: `suggest` adds `--ask-for-approval untrusted`) and m-8 (comments describe a
+  "no mode" case that a YAML config never has) went to ao-30 as option-1 round 2. Not live, not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -229,6 +241,16 @@ section 18 stays open, and I-4 polls with `opencode api`, which adds the auth it
 in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
+
+- **Owner decisions from review r3 of option 1** (2026-10-15, ao-32). (1) m-9: a worker spawned with no
+  model in any config and no `--model` stores no `model=`, so a later config model reaches its restore;
+  option: treat a record with `permissions=` but no `model=` as "spawned with no model" and drop the
+  config model on restore. (2) m-10: the documented metadata helper `update_ao_metadata <key> <value>`
+  (`packages/core/src/agent-workspace-hooks.ts:240-241`, AGENTS.md text `:465-477`) accepts any key, so an
+  agent can raise its own restore mode with `permissions permissionless` (live, Codex), as it already
+  could with `role orchestrator` (r2 N-8); option: limit the helper to `pr`, `status`, `branch` and drop
+  the generic call from AGENTS.md. (3) m-8: a YAML project with no `permissions` key runs its workers
+  `permissionless`, because `AgentPermissionSchema` defaults to it (`packages/core/src/config.ts:132-135`).
 
 - **Workers leave `ao spawn` lifecycle workers running** (2026-10-15, review r2 N-6). `ao spawn` starts a
   detached `ao lifecycle-worker`; ao-30's live runs left four (2919552, 2953478, 3670285, 3674356), with
