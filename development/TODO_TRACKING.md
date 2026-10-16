@@ -199,7 +199,11 @@ Durable progress record for this fork. Dated events only; the current state live
   Blind review r2 by Opus 5.5 (ao-32, `development/reviews/restore_model_review_r2_opus.md`): **LAND-SAFE**,
   N-2 and m-1 to m-3 fixed, 0 B, 1 M, 3 m, 4 notes; cases (a) and (b) shown live against the base for
   Claude Code, Codex and Gemini. M-1 (no test guards the Claude Code restore flag: two mutants survive),
-  m-4 (JSDoc) and m-5 (copied mapping) went to ao-30 as round 3. Not live, not pushed.
+  m-4 (JSDoc) and m-5 (copied mapping) are closed by `120f500a` (round 3, ao-30; receipts only):
+  `test(agent-claude-code): guard the restore permission flag` adds 4 real-output restore tests (both
+  mutants of the review now fail 2 tests each), one JSDoc sentence in `types.ts`, and one core mock style.
+  The orchestrator re-ran the tests under a fake `HOME`: claude-code 174 of 174, the core restore files 13
+  of 13, typecheck exit 0. Not live, not pushed.
 
 ## Decisions
 
