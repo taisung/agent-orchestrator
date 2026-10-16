@@ -164,6 +164,13 @@ Durable progress record for this fork. Dated events only; the current state live
   can no longer settle a marker while the earlier pane lives); I-3 (Node-side create) removes the title
   evidence at the root.
 
+- `14bb4670` (2026-10-15, ao-31, Muse; owner word "delete release.yml") - `ci: remove the npm release
+  workflow`: `.github/workflows/release.yml` is gone, so a push no longer tries to publish the upstream
+  `@aoagents` packages. Receipts checked by the orchestrator (python/L0/LOW): only that file deleted, the
+  five other workflows parse. Kept on purpose: the `release` and `version-packages` scripts in
+  `package.json` (`:23-24`, `pnpm -r build && changeset publish` can still be run by hand) and `.changeset/`.
+  Not pushed.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -247,7 +254,7 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   default (`opus`). This breaks `CLAUDE.md` C-04. Follow-up for a worker (restore path, HIGH). Do not fix
   a worker's model with `/model`: on 2026-10-15 at 11:51 `/model claude-opus-5-5` on ao-18 also rewrote
   `~/.claude/settings.json` (`"opus"` to `"claude-opus-5-5"`); the orchestrator put back `"opus"` at once.
-- **The Release workflow fails on every push to `main`** (seen on `70d19d70` and on `c831caff`, the push
+- **The Release workflow failed on every push to `main`** (removed by `14bb4670`; kept for the record) (seen on `70d19d70` and on `c831caff`, the push
   of 2026-10-15 at 19:44 EDT). It runs `changesets/action` with `publish: pnpm release`; with no pending
   changeset it tries to publish every `@aoagents/*` package. The repository has no `NPM_TOKEN`, and the
   action then tries npm trusted publishing by OIDC ("No NPM_TOKEN found, but OIDC is available"), which
