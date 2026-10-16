@@ -296,10 +296,12 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 - **Minors of the m-13 review** (2026-10-16, ao-32, `branch_check_review_r1_opus.md`). **m-15 to m-17
   landed on `main` as `cd39ea9d`** (cherry-pick of `7f34bf4d`, ao-35 Muse, owner 2026-10-16: "fix m-15 to
-  m-17"; `WRAPPER_VERSION` 0.2.6). **Not live:** the rebuild of the primary checkout, the restart of the
-  five lifecycle workers by exact PID (M-3: a resident 0.2.5 process writes 0.2.5 back, and it writes the
-  0.2.5 Claude hook into every workspace it restores, because the hook file has no version check), the
-  check `cat ~/.ao/bin/.ao-version` = 0.2.6 and the push wait for the owner's word. Blind review r2 by
+  m-17"; `WRAPPER_VERSION` 0.2.6). **Live** on the owner's word (2026-10-16: build, restart, push): the
+  primary checkout was rebuilt at 12:12 EDT, and the five lifecycle workers were restarted by exact PID at
+  12:13 EDT (now 3215891, 3215991, 3216043, 3216103, 3216178), because of M-3: a resident 0.2.5 process
+  writes 0.2.5 back, and it writes the 0.2.5 Claude hook into every workspace it restores (the hook file
+  has no version check). `main` pushed. **Open:** `cat ~/.ao/bin/.ao-version` shows 0.2.5 until the next
+  Codex, Gemini or OpenCode spawn; check that it shows 0.2.6 then. Blind review r2 by
   Opus 5.5 (ao-32, `development/reviews/branch_check_review_r2_opus.md`, 8.42 USD): **LAND-SAFE**, m-15,
   m-16 and m-17 fixed live and by tests, 0 B, 0 M. The worker gate now sits inside
   `if (plugins.workspace)`, but a spawn with no workspace plugin throws at `session-manager.ts:1211-1219`

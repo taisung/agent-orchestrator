@@ -15,12 +15,16 @@ was on 2026-10-16 at 10:45 EDT, and the five lifecycle workers were restarted by
 10:45:24. `~/.ao/bin` holds 0.2.5 since 10:46:44. `origin/main` is `331d0c31` (CI green); `main` holds the
 handover commit on top of it.
 
-**Update 2026-10-16 12:10 EDT (priority 1, steps up to the landing done):** ao-32 reviewed
+**Update 2026-10-16 12:15 EDT (priority 1 done except one check):** ao-32 reviewed
 `ac0f662a..7f34bf4d`: LAND-SAFE, m-15 to m-17 fixed, new m-18 (bash `pr` checks depend on the locale) and
-N-34 to N-38 (`branch_check_review_r2_opus.md`, TODO). `7f34bf4d` is on `main` as `cd39ea9d`, not pushed.
-Both router rows are closed. Still open for priority 1, on the owner's word: `pnpm build`, the restart of
-the five lifecycle workers by exact PID, `cat ~/.ao/bin/.ao-version` = 0.2.6, the push. The watcher (PID
-1710074) watches ao-32. The text below is from before this update.
+N-34 to N-38 (`branch_check_review_r2_opus.md`, TODO). `7f34bf4d` is on `main` as `cd39ea9d`. Both router
+rows are closed. On the owner's word (2026-10-16: build, restart, push; m-18 stays open), the primary
+checkout was rebuilt at 12:12 EDT (dist `WRAPPER_VERSION` 0.2.6), the five lifecycle workers were restarted
+by exact PID at 12:13 EDT, and `main` was pushed. **New lifecycle PIDs:** agent-skills 3215891,
+agent-orchestrator 3215991 (Nexus config) and 3216178 (this config), Nexus 3216043, VSF 3216103. No other
+resident `ao` process ran. **Still open:** `cat ~/.ao/bin/.ao-version` shows 0.2.5 until the next Codex,
+Gemini or OpenCode spawn; check that it shows 0.2.6 then. The watcher (PID 1710074) watches ao-32. The text
+below is from before this update; its lifecycle PIDs are old.
 
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
 finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch
