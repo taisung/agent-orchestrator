@@ -268,6 +268,14 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
+- **A worker's direct `node` script wrote into the real state root** (2026-10-16, ao-34, m-13 D2). The
+  brief said to use a scratch `AO_STATE_ROOT` and never to write a real session record, but the script
+  called the session manager without it and left `~/.agent-orchestrator/e91fe6412cc5-repo/sessions/demo-2`
+  (`branch=-Bvictim`, `project=demo`) at 08:21:42. Its report said its `/tmp` state was removed. The
+  orchestrator found it with the new branch rule, checked that nothing else in the state root was new,
+  and removed the three paths by literal path. Briefs now ask for an empty
+  `find ~/.agent-orchestrator -maxdepth 1 -newer <marker>` at the end.
+
 - **A stored `branch` value reaches `git worktree add` as an option at restore** (2026-10-16, helper review
   m-13; old, the same on the base). The helper and the Claude hook check only the key, so `branch=-Bvictim`
   is stored; restore runs `git worktree add <path> -Bvictim` (`packages/plugins/workspace-worktree/src/index.ts:276`,
@@ -277,7 +285,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   hook and restore. The `pr` value has no check either. **In progress** (owner, 2026-10-16: "fix m-13"):
   author ao-34 (Muse), brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check.md` (one core
   branch-name rule, gates in restore and the worktree plugin, value checks in the helper and the hook,
-  `WRAPPER_VERSION` 0.2.5); blind review by Opus 5.5 next. Its landing needs one more rebuild and restart
+  `WRAPPER_VERSION` 0.2.5). ao-34 finished `bb81cf7a` (11 files); the blind review by Opus 5.5 (ao-32)
+  runs. Its landing needs one more rebuild and restart
   (M-3: a 0.2.4 process puts its own helper back).
 - **`~/agent-skills/skills/ao-lifecycle/SKILL.md:854-860` documents the generic `update_ao_metadata <key>
   <value>` call** (helper review m-14). After `5cbe84b3` only `pr`, `status pr_open` and `branch` work, and
