@@ -139,14 +139,17 @@ export function mapSessionCost(record: Record<string, unknown>): CostEstimate | 
  *   `┃` first. Markers: `△ Permission required` at the start of the
  *   stripped line; `Allow once` with `Reject` on one line; `↑↓ select` with
  *   `enter submit`, `enter confirm` or `enter choose` on one line (the
- *   two-field form shows `⇆ tab  ↑↓ select  enter confirm  esc dismiss`).
- *   Any of them → `waiting_input`. Assistant prose has no `┃` and sits just
- *   above the input box, so it is never in the block; tool and command
- *   blocks have `┃` but sit above the dialog block.
+ *   two-field form shows `⇆ tab  ↑↓ select  enter confirm  esc dismiss`); a
+ *   stripped line that holds `esc dismiss` (free-text, number, multiselect
+ *   and external fields show no select pair, only a confirm, open, toggle or
+ *   dismiss hint). Any of them → `waiting_input`. Assistant prose has no `┃`
+ *   and sits just above the input box, so it is never in the block; tool and
+ *   command blocks have `┃` but sit above the dialog block.
  * - Anything else → `active` (unknown stays `active`).
  *
- * Accepted: a narrow pane (about 40 columns) loses `ctrl+p commands` from
- * its status row and then reads `active`.
+ * A narrow or short pane: the markers wrap or drop, and the pane reads
+ * `active` (for example the status row at about 40 columns, a form hint
+ * below about 45 columns, a pane of 7 rows or fewer). Accepted.
  */
 export function classifyOpenCodePaneActivity(terminalOutput: string): ActivityState {
   if (terminalOutput.trim().length === 0) return "idle";
@@ -182,6 +185,7 @@ export function classifyOpenCodePaneActivity(terminalOutput: string): ActivitySt
     if (stripped.includes("↑↓ select") && /enter (submit|confirm|choose)/.test(stripped)) {
       return "waiting_input";
     }
+    if (stripped.includes("esc dismiss")) return "waiting_input";
   }
   return "active";
 }

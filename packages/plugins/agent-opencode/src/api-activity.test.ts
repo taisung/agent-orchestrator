@@ -28,6 +28,10 @@ import {
   REAL_DIALOG_FORM1_80_S20,
   REAL_DIALOG_FORM2_200_S20,
   REAL_DIALOG_FORM2_80_S20,
+  REAL_DIALOG_FORM_EXTERNAL_80_S20,
+  REAL_DIALOG_FORM_INTEGER_80_S20,
+  REAL_DIALOG_FORM_MULTISELECT_80_S20,
+  REAL_DIALOG_FORM_STRING_80_S20,
   REAL_DIALOG_PERMISSION_200_S20,
   REAL_DIALOG_PERMISSION_80_S20,
   REAL_IDLE_MUSE_2031,
@@ -726,5 +730,45 @@ describe("classifyOpenCodePaneActivity — real dialogs and rules", () => {
       "  /tmp/proj  shift+tab agents  ctrl+p commands",
     ].join("\n");
     expect(classifyOpenCodePaneActivity(pane)).toBe("idle");
+  });
+
+  it("gives waiting_input for the real free-text form with esc dismiss", () => {
+    expect(classifyOpenCodePaneActivity(REAL_DIALOG_FORM_STRING_80_S20)).toBe("waiting_input");
+  });
+
+  it("gives waiting_input for the real integer form with esc dismiss", () => {
+    expect(classifyOpenCodePaneActivity(REAL_DIALOG_FORM_INTEGER_80_S20)).toBe("waiting_input");
+  });
+
+  it("gives waiting_input for the real multiselect form with esc dismiss", () => {
+    expect(classifyOpenCodePaneActivity(REAL_DIALOG_FORM_MULTISELECT_80_S20)).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("gives waiting_input for the real external-link form with esc dismiss", () => {
+    expect(classifyOpenCodePaneActivity(REAL_DIALOG_FORM_EXTERNAL_80_S20)).toBe("waiting_input");
+  });
+
+  it("gives active for a stale marker block above a prose line with a bare box line last", () => {
+    expect(
+      classifyOpenCodePaneActivity(
+        ["  ┃  △ Permission required", "     some assistant prose", "  ┃"].join("\n"),
+      ),
+    ).toBe("active");
+  });
+
+  it("gives active for a triangle pasted mid-line in place", () => {
+    expect(
+      classifyOpenCodePaneActivity(["  ┃", "  ┃  icon: △ Permission required", "  ┃"].join("\n")),
+    ).toBe("active");
+  });
+
+  it("gives active for a marker box line separated from the bottom bare box line by a blank line", () => {
+    expect(
+      classifyOpenCodePaneActivity(
+        ["  ┃  ↑↓ select  enter submit  esc dismiss", "", "  ┃"].join("\n"),
+      ),
+    ).toBe("active");
   });
 });
