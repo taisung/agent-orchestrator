@@ -329,7 +329,13 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     `/proc` (no macOS); a non-`exec` bash wrapper is rejected; a project-mode orchestrator start with
     `delete` drops a dead record without an archive (older). **Re-check r2** dispatched to ao-40 at
     15:30 EDT (brief `brief-review-i3-r2-sol.md`, review file `i3_review_r2_sol61.md`), watcher PID
-    3815606.
+    3815606. An OpenAI content filter cut an ao-40 turn ("This content can't be shown ... apply for
+    Daybreak"), and ao-40 then stood idle with `running|` until 23:56 EDT. Its last visible note named
+    three gaps in round 2 (a kill of the launching record lets the spawn write it again; the argv check
+    can take a Node preload file for the main script; a crash during the prepare leaves a stale record
+    that blocks deletion). The orchestrator sent one `ao send` to continue at 23:56 EDT. **Watcher gap
+    (agent-skills, `as-orchestrator`):** `fleet_watch.sh` has no rule for this Codex filter banner, so
+    the stop raised no notice.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
@@ -375,7 +381,14 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     watcher PID 3273642. ao-39 (V4.1 Flash) r3: **LAND-SAFE** for `15757aae..296b21b1`, 0 B, 0 M; m-8
     no test pins the boundary of the bottom `┃` block (2 boundary mutants live; the false positive needs
     a capture with no status row); m-9 at about 45 columns or less the hint row of a question form wraps
-    and the form reads `active`. The Sonnet r3 re-check is still running.
+    and the form reads `active`. ao-38 (Sonnet) r3: **LAND-SAFE**, 0 B; M-3 (not a regression) four real
+    form types (string with no options, integer, multiselect, external link) read `active`, as on the
+    base, measured fix `esc dismiss` in the bottom block (38 real captures, no other answer changes); m-8
+    the boundary and line-start rules untested (4 mutants live, two ready tests); N-7 the narrow-pane
+    comment. Reviews filed as `development/reviews/i4_review_r3_{sonnet,v4flash}.md` (3.73 and 0.090
+    USD). **Owner (2026-10-16): a short round 4 with a receipts check by the orchestrator, then land and
+    roll out I-4 at once (build, restart the five workers, push).** Round 4 dispatched to ao-37 (brief
+    `brief-aofork-i4-r4.md`).
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)
