@@ -261,6 +261,24 @@ Durable progress record for this fork. Dated events only; the current state live
   for the Nexus config and 1219143 for this config, Nexus 1218695, VSF 1218968); pushed
   `c8bccfb2..ac0f662a`. M-3 check passed: the ao-35 spawn at 10:46:44 installed `.ao-version` 0.2.5, and
   the helper holds 4 `refusing` lines.
+- `740c880d`, `07584ac8`, `6ae01062`, `61f7c67e`, `b853f74f` (2026-10-17, ao-37, Muse; owner priority 2,
+  2026-10-16) - **I-4**: the OpenCode plugin reads activity, cost and session info from the 2.x API
+  (cherry-picks of `09c77de0`, `730ad8f9`, `30f1b31d`, `296b21b1`, `02ce92df`; 4 rounds). Long tool calls
+  stay `active` with no cap (owner). The pane classifier: the status row decides when it exists
+  (`esc interrupt` gives `active`, `ctrl+p commands` gives `idle`); when it is gone, dialog markers count
+  only in the bottom `┃` block (`△ Permission required` at the line start, `Allow once` with `Reject`,
+  `↑↓ select` with `enter submit|confirm|choose`, `esc dismiss`); answer text never decides. The fixtures
+  hold real 2.0.31 dialogs made with `session.permission.create` and `session.form.create` (no model
+  turn). Reviews: Sonnet 5.5 (ao-38) and V4.1 Flash (ao-39), `development/reviews/i4_review_r{1,2,3}_*.md`;
+  r3 LAND-SAFE by both; round 4 (M-3, m-8, N-7) checked by receipts on the owner's word (plugin 233 tests
+  passed in the orchestrator's own run; scope 3 files; cleanup empty). Canonical check: `git diff
+  02ce92df b853f74f` lists only `development/` files. **Live** (owner, 2026-10-16: "roll out I-4 now"):
+  `pnpm build` at 00:02 EDT (exit 0); the five lifecycle workers restarted by exact PID at 00:03:12 to
+  00:03:28 (agent-skills 1815472, agent-orchestrator 1815599 for the Nexus config and 1816016 for this
+  config, Nexus 1815614, VSF 1815674). Accepted limits: a narrow or short pane reads `active` (m-9, N-6,
+  N-7). Kept out: N-5, Sonnet m-1 (9 `opencode api` calls per poll), m-4 (for I-5), m-5 (`blocked` never
+  decays; owner), N-4 (1.x). Costs: author about 0.33 USD; Sonnet 6.75, 5.95, 3.73 USD; Flash about 0.42
+  USD over 3 rounds.
 
 ## Decisions
 
@@ -388,7 +406,12 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     comment. Reviews filed as `development/reviews/i4_review_r3_{sonnet,v4flash}.md` (3.73 and 0.090
     USD). **Owner (2026-10-16): a short round 4 with a receipts check by the orchestrator, then land and
     roll out I-4 at once (build, restart the five workers, push).** Round 4 dispatched to ao-37 (brief
-    `brief-aofork-i4-r4.md`).
+    `brief-aofork-i4-r4.md`). ao-37 finished round 4 as `02ce92df`. **I-4 landed on `main` as
+    `b853f74f` and is live** (What Landed). **Router log pitfall:** `router_log.py open` reuses the last
+    row of a session while any outcome column is `pending`, so a round closed with `--landed pending`
+    lost its row at the next round's open. The r1 and r2 rows of ao-38 and ao-39 and the r1 row of ao-40
+    were restored from git history (`a86042cd`, `b368feae`) on 2026-10-17. Close a round whose increment
+    is still in review with `--landed in-review`, and set the SHA by hand at the landing.
   - Both edit `agent-opencode/src/index.ts` in different functions; the second cherry-pick may need a
     worker rebase.
 - **The `ao spawn` base prompt tells workers to push and open a PR** (2026-10-16). ao-35 (m-15 to m-17)

@@ -1,7 +1,7 @@
 # Handover
 
-**Last Updated**: 2026-10-16
-**Latest Code Commit**: 0ec55a64 (fix(core): validate stored branch names before git to block option injection)
+**Last Updated**: 2026-10-17
+**Latest Code Commit**: b853f74f (feat(plugin-opencode): catch dismiss-only forms with an esc dismiss marker)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
@@ -32,6 +32,16 @@ ao-32 (idle, reviewer) still runs. ao-35 was killed at 13:21 EDT on the owner's 
 `7f34bf4d` is on `main` by patch and that its worktree had no tracked change; its report and brief are in
 `reports/ao-35.*`, and its local branch and its OpenCode session (not purged) remain. The text below is from before these
 updates; its lifecycle PIDs are old.
+
+**Update 2026-10-17 00:05 EDT (I-4 landed and live):** I-4 is on `main` as `740c880d..b853f74f` (5
+cherry-picks, 4 rounds, What Landed). On the owner's word (2026-10-16: short round 4 with a receipts
+check, then roll out at once) the primary checkout was rebuilt at 00:02 EDT and the five lifecycle workers
+were restarted by exact PID at 00:03 EDT. **New lifecycle PIDs:** agent-skills 1815472, agent-orchestrator
+1815599 (Nexus config) and 1816016 (this config), Nexus 1815614, VSF 1815674. `WRAPPER_VERSION` did not
+change (0.2.6). **I-3** is in re-check r2 by ao-40 (gpt-6.1-sol) on `15757aae..e9882651`; its pane note
+says NOT-LAND-SAFE (launch ownership and argv gaps). I-3 lands only after the tool-environment check or
+the owner's risk acceptance. ao-32, ao-36, ao-37, ao-38 and ao-39 are idle. The watcher (PID 1739570)
+watches ao-37 and ao-40.
 
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
 finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch
