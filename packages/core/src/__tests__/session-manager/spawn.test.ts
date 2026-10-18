@@ -3326,6 +3326,38 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
     });
 
+    it("a dead launcher whose pane runs (tmuxName, no runtime handle yet) still keeps its ID (M-4)", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-m4-pane.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_paned", title: "AO:app-6", directory: "/tmp/app-6", createdAt: 1 }],
+        { deleteLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject({ opencodeIssueSessionStrategy: "delete" });
+      const panes = livePanes(agent);
+      // The launcher died after runtime.create and before it stored the
+      // handle: the record names the pane only by its tmux name.
+      const dead = await deadProcess();
+      writeIssueRecord("app-6", "ses_paned", {
+        launchPid: String(dead.pid),
+        launchPidStart: dead.start,
+      });
+      panes.add("hash-app-6");
+
+      await createSessionManager({ config, registry }).spawn({
+        projectId: "my-app",
+        issueId: "INT-42",
+      });
+
+      expect(existsSync(deleteLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual([
+        "ses_paned",
+        "ses_created_1",
+      ]);
+    });
+
     it("an old record without launch keys or runtime identity still keeps the older session (M-4)", async () => {
       const deleteLogPath = join(tmpDir, "opencode-delete-m4-old.log");
       const mockBin = installMockOpencodeApi(
