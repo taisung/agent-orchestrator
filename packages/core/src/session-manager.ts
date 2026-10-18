@@ -1454,20 +1454,44 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // m-1: an agent that prepares its session gets the pane environment
     // before the reuse resolver, so every spawn API call (the resolver's
     // too) runs with the environment of the pane.
-    const preparedEnvironment = plugins.agent.prepareAgentSession
-      ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
-      : undefined;
+    // m-5: both run inside the rollback, so a throw from the agent
+    // environment or from the resolver removes the workspace and the
+    // reservation, as a later launch failure does.
     const opencodeIssueSessionStrategy = project.opencodeIssueSessionStrategy ?? "reuse";
-    const reusedOpenCodeSessionId =
-      plugins.agent.name === "opencode" && spawnConfig.issueId
-        ? await resolveOpenCodeSessionReuse({
-            sessionsDir,
-            project,
-            criteria: { issueId: spawnConfig.issueId },
-            strategy: opencodeIssueSessionStrategy,
-            env: preparedEnvironment,
-          })
+    let preparedEnvironment: Record<string, string> | undefined;
+    let reusedOpenCodeSessionId: string | undefined;
+    try {
+      preparedEnvironment = plugins.agent.prepareAgentSession
+        ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
         : undefined;
+      reusedOpenCodeSessionId =
+        plugins.agent.name === "opencode" && spawnConfig.issueId
+          ? await resolveOpenCodeSessionReuse({
+              sessionsDir,
+              project,
+              criteria: { issueId: spawnConfig.issueId },
+              strategy: opencodeIssueSessionStrategy,
+              env: preparedEnvironment,
+            })
+          : undefined;
+    } catch (err) {
+      if (
+        plugins.workspace &&
+        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
+      ) {
+        try {
+          await plugins.workspace.destroy(workspacePath);
+        } catch {
+          /* best effort */
+        }
+      }
+      try {
+        deleteMetadata(sessionsDir, sessionId, false);
+      } catch {
+        /* best effort */
+      }
+      throw err;
+    }
     const agentLaunchConfig: AgentLaunchConfig = {
       ...baseLaunchConfig,
       projectConfig: {
@@ -1946,12 +1970,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       subagent: selection.subagent,
     };
     // m-1: the pane environment before the resolver, as for a worker spawn.
-    const preparedEnvironment = plugins.agent.prepareAgentSession
-      ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
-      : undefined;
-
+    // m-5: inside the rollback, so a throw removes the workspace, the
+    // reservation and the prompt file.
+    let preparedEnvironment: Record<string, string> | undefined;
     let reusableOpenCodeSessionId: string | undefined;
     try {
+      preparedEnvironment = plugins.agent.prepareAgentSession
+        ? paneEnvironment(plugins.agent.getEnvironment(baseLaunchConfig))
+        : undefined;
       reusableOpenCodeSessionId =
         plugins.agent.name === "opencode" && orchestratorSessionStrategy === "reuse"
           ? await resolveOpenCodeSessionReuse({

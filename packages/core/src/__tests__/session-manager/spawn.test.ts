@@ -3480,3 +3480,110 @@ describe("the pane environment of the reuse resolver (m-1)", () => {
     },
   );
 });
+
+describe("a throw before the launch rolls the spawn back (m-5)", () => {
+  function environmentFails(agent: Agent): void {
+    agent.getEnvironment = vi.fn(() => {
+      throw new Error("environment failed");
+    });
+  }
+
+  it("worker: a getEnvironment throw removes the workspace and the reservation", async () => {
+    const mockBin = installMockOpencodeApi(tmpDir, []);
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const { agent, registry } = openCodeRegistry();
+    useOpenCodeProject();
+    environmentFails(agent);
+    const project = config.projects["my-app"]!;
+    const workspace = join(getWorktreesDir(config.configPath, project.path), "app-1");
+    mkdirSync(workspace, { recursive: true });
+    vi.mocked(mockWorkspace.create).mockResolvedValue({
+      path: workspace,
+      branch: "session/app-1",
+      sessionId: "app-1",
+      projectId: "my-app",
+    });
+
+    const sm = createSessionManager({ config, registry });
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("environment failed");
+
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+    expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
+    expect(agent.prepareAgentSession).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("worker: a reuse resolver throw removes the workspace and the reservation too", async () => {
+    const mockBin = installMockOpencodeApi(
+      tmpDir,
+      [{ id: "ses_old", title: "AO:app-8", directory: "/tmp/app-8", createdAt: 1 }],
+      { failOperations: ["session.remove"] },
+    );
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const { agent, registry } = openCodeRegistry();
+    useOpenCodeProject({ opencodeIssueSessionStrategy: "delete" });
+    vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
+    vi.mocked(agent.isProcessRunning).mockResolvedValue(false);
+    writeMetadata(sessionsDir, "app-8", {
+      worktree: "/tmp/app-8",
+      branch: "feat/INT-42",
+      status: "killed",
+      project: "my-app",
+      issue: "INT-42",
+      agent: "opencode",
+      opencodeSessionId: "ses_old",
+      runtimeHandle: JSON.stringify(makeHandle("old-8")),
+    });
+    const project = config.projects["my-app"]!;
+    const workspace = join(getWorktreesDir(config.configPath, project.path), "app-9");
+    mkdirSync(workspace, { recursive: true });
+    vi.mocked(mockWorkspace.create).mockResolvedValue({
+      path: workspace,
+      branch: "feat/INT-42",
+      sessionId: "app-9",
+      projectId: "my-app",
+    });
+
+    const sm = createSessionManager({ config, registry });
+    await expect(sm.spawn({ projectId: "my-app", issueId: "INT-42" })).rejects.toThrow(
+      "session.remove",
+    );
+
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+    expect(readMetadataRaw(sessionsDir, "app-9")).toBeNull();
+    expect(readArchivedMetadataRaw(sessionsDir, "app-9")).toBeNull();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("orchestrator: a getEnvironment throw removes the workspace, the reservation and the prompt file", async () => {
+    const worktreePath = join(tmpDir, "orch-m5-env");
+    mkdirSync(worktreePath, { recursive: true });
+    vi.mocked(mockWorkspace.create).mockResolvedValue({
+      path: worktreePath,
+      branch: "orchestrator/app-orchestrator-1",
+      sessionId: "app-orchestrator-1",
+      projectId: "my-app",
+    });
+    const mockBin = installMockOpencodeApi(tmpDir, []);
+    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+    const { agent, registry } = openCodeRegistry();
+    useOpenCodeProject();
+    environmentFails(agent);
+    const promptFile = join(
+      getProjectBaseDirForTest(),
+      "orchestrator-prompt-app-orchestrator-1.md",
+    );
+
+    const sm = createSessionManager({ config, registry });
+    await expect(
+      sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "You are the orchestrator." }),
+    ).rejects.toThrow("environment failed");
+
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+    expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
+    expect(existsSync(promptFile)).toBe(false);
+    expect(agent.prepareAgentSession).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+  });
+});
