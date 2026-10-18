@@ -1899,12 +1899,33 @@ describe("confirmLaunch (I-3)", () => {
     ).resolves.toEqual({});
   });
 
+  /**
+   * M-3: the argv form of the real OpenCode TUI processes in the panes of
+   * ao-37 and ao-39 (read from `/proc/<pid>/cmdline` on 2026-10-18; exe
+   * `/home/taisung/.opencode/bin/opencode`): the bare name, then the session,
+   * then a prompt of many lines in one argument.
+   */
+  const REAL_TUI_ARGV = [
+    "opencode",
+    "--session",
+    "ses_made",
+    "--prompt",
+    "You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- Focus on the assigned task.",
+  ];
+
+  /** M-3: the review's row, a node preload file named opencode before the main script. */
+  const PRELOAD_ARGV = [
+    "node",
+    "--require",
+    "/x/opencode",
+    "/x/server.js",
+    "--session",
+    "ses_made",
+  ];
+
   it.each([
+    ["the real TUI argv of ao-37 and ao-39 (M-3)", REAL_TUI_ARGV],
     ["node", ["node", "/usr/lib/node_modules/opencode-ai/bin/opencode", "--session", "ses_made"]],
-    [
-      "node with its options",
-      ["/usr/bin/node", "--no-warnings", "/x/bin/.opencode", "--session=ses_made"],
-    ],
     ["bun", ["/home/u/.bun/bin/bun", "/x/opencode", "--prompt", "Go", "--session", "ses_made"]],
   ])("accepts the wrapper row %s on tmux (M-1)", async (_name, argv) => {
     paneProcesses([[4242, "pts/7", argv]]);
@@ -1921,6 +1942,28 @@ describe("confirmLaunch (I-3)", () => {
     ["node -e with a code text", ["node", "-e", "/x/opencode", "--session", "ses_made"]],
     ["node --eval=", ["node", "--eval=1", "/x/opencode", "--session", "ses_made"]],
     ["node on another script", ["node", "/x/server.js", "/x/opencode", "--session", "ses_made"]],
+    // M-3: an interpreter option before the main script; the file after
+    // --require, -r, --import or --loader is not the main script.
+    ["a node preload named opencode (M-3)", PRELOAD_ARGV],
+    [
+      "node -r <preload> (M-3)",
+      ["node", "-r", "/x/opencode", "/x/server.js", "--session=ses_made"],
+    ],
+    [
+      "node --import <file> (M-3)",
+      ["node", "--import", "/x/.opencode", "/x/a.mjs", "--session=ses_made"],
+    ],
+    [
+      "node --loader <file> (M-3)",
+      ["node", "--loader", "/x/opencode", "/x/a.mjs", "--session=ses_made"],
+    ],
+    ["node --require=<preload> (M-3)", ["node", "--require=/x/opencode", "--session", "ses_made"]],
+    // M-3: also an option that takes no value hides the main script position.
+    [
+      "node with any option first (M-3)",
+      ["node", "--no-warnings", "/x/bin/.opencode", "--session=ses_made"],
+    ],
+    ["bun with any option first (M-3)", ["bun", "--smol", "/x/opencode", "--session", "ses_made"]],
     ["the ID only in the prompt text", ["opencode", "--prompt", "use --session ses_made"]],
     ["--session after --", ["opencode", "--", "--session", "ses_made"]],
     ["a binary that only ends in opencode", ["/x/not-opencode", "--session", "ses_made"]],
@@ -2124,6 +2167,20 @@ describe("confirmLaunch (I-3)", () => {
     ).resolves.toEqual({});
     expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
     expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("accepts the real TUI argv of ao-37 and ao-39 on herdr (M-3)", async () => {
+    herdrProcesses([76, ["/bin/zsh"]], [77, REAL_TUI_ARGV]);
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).resolves.toEqual({});
+  });
+
+  it("rejects a node preload named opencode on herdr (M-3)", async () => {
+    herdrProcesses([77, PRELOAD_ARGV]);
+    await expect(
+      agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
+    ).rejects.toThrow(OPENS);
   });
 
   it("accepts a node wrapper row on herdr (M-1)", async () => {

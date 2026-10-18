@@ -522,20 +522,22 @@ async function readPromptBaseline(
 /** The file names of the OpenCode executable (the npm package installs `.opencode`). */
 const OPENCODE_EXECUTABLE_NAMES = new Set(["opencode", ".opencode"]);
 
-/** Interpreters that can run the OpenCode script as their script argument. */
+/** Interpreters that can run the OpenCode script as their main script. */
 const SCRIPT_INTERPRETER_NAMES = new Set(["node", "bun"]);
-
-/** Interpreter options that run inline code: such a process has no script argument. */
-const INLINE_CODE_OPTIONS = new Set(["-e", "--eval", "-p", "--print"]);
 
 /**
  * M-1: true when the argument vector of a process (from `/proc/<pid>/cmdline`,
  * so the argument boundaries are exact) runs OpenCode on `sessionId`.
  * argv[0] must have the file name `opencode` or `.opencode` (any directory),
- * or be `node` or `bun` whose script argument has such a file name. Then
- * `--session <id>` or `--session=<id>` must be one of the options of that
- * OpenCode process (before a `--`). A shell whose `-c` text names OpenCode
- * is argv[0] `bash` with one text argument, so it does not count.
+ * or be `node` or `bun` whose main script, argv[1], has such a file name.
+ * Then `--session <id>` or `--session=<id>` must be one of the options of
+ * that OpenCode process (before a `--`). A shell whose `-c` text names
+ * OpenCode is argv[0] `bash` with one text argument, so it does not count.
+ *
+ * M-3: an interpreter option before the script makes the main script
+ * unknown: `--require <file>`, `--import <file>` and `--loader <file>` take
+ * a file that is not the main script, and `-e <code>` runs no script. So an
+ * interpreter counts only when argv[1] is the OpenCode script itself.
  */
 function argvOpensSession(argv: readonly string[], sessionId: string): boolean {
   const program = argv[0];
@@ -544,16 +546,9 @@ function argvOpensSession(argv: readonly string[], sessionId: string): boolean {
   if (OPENCODE_EXECUTABLE_NAMES.has(basename(program))) {
     optionsStart = 1;
   } else if (SCRIPT_INTERPRETER_NAMES.has(basename(program))) {
-    let script = -1;
-    for (let i = 1; i < argv.length; i++) {
-      const arg = argv[i] ?? "";
-      if (INLINE_CODE_OPTIONS.has(arg) || /^--(?:eval|print)=/.test(arg)) return false;
-      if (arg.startsWith("-")) continue;
-      script = i;
-      break;
-    }
-    if (script < 0 || !OPENCODE_EXECUTABLE_NAMES.has(basename(argv[script] ?? ""))) return false;
-    optionsStart = script + 1;
+    const script = argv[1] ?? "";
+    if (script.startsWith("-") || !OPENCODE_EXECUTABLE_NAMES.has(basename(script))) return false;
+    optionsStart = 2;
   } else {
     return false;
   }
