@@ -368,7 +368,19 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     `i3-r2-pre-rebase`), then B-2, M-3 (main script only at `argv[1]`), M-4, m-5. Watcher PID 2838095.
     ao-36 had written a note into the orchestrator's memory directory
     (`opencode-reuse-switchmodel-location-404.md`); the content is right, and the round-3 brief forbids
-    such writes.
+    such writes. ao-36 finished round 3 as `0b21660c` (16 commits on `b853f74f`): the rebase gave
+    `762c5eff..b511e950` (only commit 1 had conflict hunks; the I-4 parts equal `b853f74f`), then 6
+    commits: the claim written at the reservation, and a kill, restore, remap or replace of a record
+    during its launch refused; the interpreter rule `argv[1]` only (the real TUIs on this host run the
+    bare native `opencode`; `node --no-warnings <dir>/opencode` is now rejected); a dead prepare-only
+    claim is a dead holder; `getEnvironment` and the worker resolver inside the rollback. Full suite 2368
+    passed, 29 skipped. Cleanup checked by the orchestrator. **Rule deviation (reported by ao-36):** one
+    `opencode --version` run with the real HOME at 19:38:47 EDT appended one `cli starting` line to the
+    global `~/.local/share/opencode/log/opencode.log`; no session, API call or model turn. Author notes:
+    `recovery/actions.ts:149` deletes a record with no launch check (no shipped caller); `ao stop` on a
+    launching orchestrator exits 1 before it stops the lifecycle worker; agents without preparation hooks
+    keep the older kill-during-spawn race. **Re-check r3** dispatched to ao-40 at 19:56 EDT (brief
+    `brief-review-i3-r3-sol.md`, review file `i3_review_r3_sol61.md`), watcher PID 3178843.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
