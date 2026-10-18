@@ -21,20 +21,21 @@ import {
   readArchivedMetadataRaw,
   updateMetadata,
 } from "../../metadata.js";
-import type {
-  CleanupResult,
-  OrchestratorConfig,
-  PluginRegistry,
-  Runtime,
-  Agent,
-  AgentLaunchConfig,
-  AgentLaunchConfirmOptions,
-  AgentSessionPrepareContext,
-  OpenCodeAgentConfig,
-  PreparedAgentSession,
-  Session,
-  Workspace,
-  Tracker,
+import {
+  type CleanupResult,
+  type OrchestratorConfig,
+  type PluginRegistry,
+  type Runtime,
+  type Agent,
+  type AgentLaunchConfig,
+  type AgentLaunchConfirmOptions,
+  type AgentSessionPrepareContext,
+  type OpenCodeAgentConfig,
+  type PreparedAgentSession,
+  type Session,
+  type Workspace,
+  type Tracker,
+  SessionLaunchInProgressError,
 } from "../../types.js";
 import {
   setupTestContext,
@@ -2994,6 +2995,286 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       }
     },
   );
+
+  describe("a kill, restore, remap or orchestrator start during the launch (B-2)", () => {
+    function refusal(action: string, id: string): string {
+      return (
+        `Cannot ${action} session ${id}: ao process ${process.pid} is still launching it. ` +
+        `Stop ao process ${process.pid} or wait for the launch to finish, then try again.`
+      );
+    }
+
+    /** A zombie: a child that exited and that its parent (an exec'd `sleep`) never reaps. */
+    async function zombieProcess(): Promise<{
+      pid: number;
+      start: string;
+      stop: () => Promise<void>;
+    }> {
+      const parent = spawnChild("sh", ["-c", "sleep 0.3 & echo $!; exec sleep 30"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const [chunk] = (await once(parent.stdout!, "data")) as [Buffer];
+      const pid = Number(String(chunk).trim());
+      let state = "";
+      for (let i = 0; i < 150 && state !== "Z"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+        state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] ?? "";
+      }
+      expect(state).toBe("Z");
+      return {
+        pid,
+        start: startToken(pid),
+        stop: async () => {
+          parent.kill("SIGKILL");
+          await once(parent, "exit");
+        },
+      };
+    }
+
+    function olderIssueRecord(): void {
+      writeMetadata(sessionsDir, "app-8", {
+        worktree: "/tmp/app-8",
+        branch: "feat/INT-42",
+        status: "killed",
+        project: "my-app",
+        issue: "INT-42",
+        agent: "opencode",
+        opencodeSessionId: "ses_old",
+        runtimeHandle: JSON.stringify(makeHandle("old-8")),
+      });
+    }
+
+    it("refuses a kill of the launching record during the prepare: the record and its reused session stay, the spawn completes", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-b2-prepare.log");
+      const interruptLogPath = join(tmpDir, "opencode-interrupt-b2-prepare.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_old", title: "AO:app-8", directory: "/tmp/app-8", createdAt: 1 }],
+        { deleteLogPath, interruptLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject();
+      livePanes(agent);
+      olderIssueRecord();
+      const sm = createSessionManager({ config, registry });
+
+      let launching = "";
+      const refusals: unknown[] = [];
+      let recordAfterKill: Record<string, string> | null = null;
+      pauseFirstPrepare(agent, async (sessionId) => {
+        launching = sessionId;
+        for (const purgeOpenCode of [false, true]) {
+          refusals.push(await sm.kill(sessionId, { purgeOpenCode }).catch((err: unknown) => err));
+        }
+        recordAfterKill = readMetadataRaw(sessionsDir, sessionId);
+      });
+      const session = await sm.spawn({ projectId: "my-app", issueId: "INT-42" });
+
+      expect(refusals).toHaveLength(2);
+      for (const err of refusals) {
+        expect(err).toBeInstanceOf(SessionLaunchInProgressError);
+        expect((err as Error).message).toBe(refusal("kill", launching));
+      }
+      expect(recordAfterKill).toMatchObject({
+        opencodeSessionId: "ses_old",
+        launchPid: String(process.pid),
+      });
+      expect(session.id).toBe(launching);
+      expect(session.metadata["opencodeSessionId"]).toBe("ses_old");
+      expect(readMetadataRaw(sessionsDir, launching)?.["opencodeSessionId"]).toBe("ses_old");
+      expect(readArchivedMetadataRaw(sessionsDir, launching)).toBeNull();
+      expect(existsSync(deleteLogPath)).toBe(false);
+      expect(existsSync(interruptLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_old"]);
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+      expect(mockWorkspace.destroy).not.toHaveBeenCalled();
+    });
+
+    it("refuses a kill of the launching record at runtime.create: the created session stays and the record names it", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-b2-create.log");
+      const interruptLogPath = join(tmpDir, "opencode-interrupt-b2-create.log");
+      const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath, interruptLogPath });
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject();
+      const panes = livePanes(agent);
+      const sm = createSessionManager({ config, registry });
+
+      const refusals: unknown[] = [];
+      let recordAfterKill: Record<string, string> | null = null;
+      pauseFirstRuntimeCreate(panes, async () => {
+        for (const purgeOpenCode of [false, true]) {
+          refusals.push(await sm.kill("app-1", { purgeOpenCode }).catch((err: unknown) => err));
+        }
+        recordAfterKill = readMetadataRaw(sessionsDir, "app-1");
+      });
+      const session = await sm.spawn({ projectId: "my-app" });
+
+      expect(refusals.map((err) => (err as Error).message)).toEqual([
+        refusal("kill", "app-1"),
+        refusal("kill", "app-1"),
+      ]);
+      expect(recordAfterKill).toMatchObject({
+        opencodeSessionId: "ses_created_1",
+        launchPid: String(process.pid),
+      });
+      expect(session.id).toBe("app-1");
+      const final = readMetadataRaw(sessionsDir, "app-1");
+      expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+      expect(final?.["launchPid"]).toBeUndefined();
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
+      expect(existsSync(deleteLogPath)).toBe(false);
+      expect(existsSync(interruptLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+    });
+
+    it("refuses a kill while the workspace of the launch is made: the claim follows the reservation", async () => {
+      const mockBin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject();
+      livePanes(agent);
+      const sm = createSessionManager({ config, registry });
+      const create = vi.mocked(mockWorkspace.create).getMockImplementation()!;
+      let recordAtCreate: Record<string, string> | null = null;
+      let refused: unknown;
+      vi.mocked(mockWorkspace.create).mockImplementationOnce(async (workspaceConfig) => {
+        recordAtCreate = readMetadataRaw(sessionsDir, workspaceConfig.sessionId);
+        refused = await sm.kill(workspaceConfig.sessionId).catch((err: unknown) => err);
+        return create(workspaceConfig);
+      });
+
+      const session = await sm.spawn({ projectId: "my-app" });
+
+      // The reserved record holds the launch keys before the workspace exists.
+      expect(recordAtCreate).toEqual({
+        launchPid: String(process.pid),
+        launchPidStart: startToken(process.pid),
+      });
+      expect((refused as Error).message).toBe(refusal("kill", "app-1"));
+      expect(session.id).toBe("app-1");
+      expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe("ses_created_1");
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
+      expect(mockWorkspace.destroy).not.toHaveBeenCalled();
+    });
+
+    it("refuses a restore and a remap of the launching record, also after the lifecycle wrote killed", async () => {
+      const mockBin = installMockOpencodeApi(tmpDir, []);
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject();
+      const panes = livePanes(agent);
+      const sm = createSessionManager({ config, registry });
+
+      let restoreError: unknown;
+      let remapError: unknown;
+      pauseFirstRuntimeCreate(panes, async () => {
+        // A launch without a pane looks dead; with `killed` it looks restorable.
+        updateMetadata(sessionsDir, "app-1", { status: "killed" });
+        restoreError = await sm.restore("app-1").catch((err: unknown) => err);
+        remapError = await sm.remap("app-1", true).catch((err: unknown) => err);
+      });
+      const session = await sm.spawn({ projectId: "my-app" });
+
+      expect(restoreError).toBeInstanceOf(SessionLaunchInProgressError);
+      expect((restoreError as Error).message).toBe(refusal("restore", "app-1"));
+      expect((remapError as Error).message).toBe(refusal("remap", "app-1"));
+      // Only the spawn made a pane; the remap ran no title search.
+      expect(mockRuntime.create).toHaveBeenCalledTimes(1);
+      expect(findOpenCodeSessionsByTitle).not.toHaveBeenCalled();
+      expect(session.id).toBe("app-1");
+      expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe("ses_created_1");
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+    });
+
+    it("refuses to replace a project orchestrator whose launch waits at its launch check", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-b2-orchestrator.log");
+      const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath });
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject({
+        orchestratorWorkspaceMode: "project",
+        orchestratorSessionStrategy: "delete",
+      });
+      livePanes(agent);
+      const sm = createSessionManager({ config, registry });
+      const confirm = agent.confirmLaunch!;
+      let second: unknown;
+      let paused = false;
+      agent.confirmLaunch = vi.fn(
+        async (
+          session: Session,
+          prepared: PreparedAgentSession,
+          options: AgentLaunchConfirmOptions,
+        ) => {
+          if (!paused) {
+            paused = true;
+            // The first start has a pane and a record with its runtime
+            // handle; a second start with `delete` would destroy both.
+            second = await sm
+              .spawnOrchestrator({ projectId: "my-app" })
+              .catch((err: unknown) => err);
+          }
+          return confirm(session, prepared, options);
+        },
+      );
+
+      const first = await sm.spawnOrchestrator({ projectId: "my-app" });
+
+      expect(second).toBeInstanceOf(SessionLaunchInProgressError);
+      expect((second as Error).message).toBe(refusal("replace", "app-orchestrator"));
+      expect(mockRuntime.destroy).not.toHaveBeenCalled();
+      expect(mockRuntime.create).toHaveBeenCalledTimes(1);
+      expect(first.id).toBe("app-orchestrator");
+      const final = readMetadataRaw(sessionsDir, "app-orchestrator");
+      expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+      expect(final?.["launchPid"]).toBeUndefined();
+      expect(existsSync(deleteLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+    });
+
+    it.each(["dead PID", "reused PID", "zombie"] as const)(
+      "a %s launcher does not block the kill",
+      async (kind) => {
+        const deleteLogPath = join(tmpDir, `opencode-delete-b2-${kind.replace(" ", "-")}.log`);
+        const mockBin = installMockOpencodeApi(
+          tmpDir,
+          [{ id: "ses_left", title: "AO:app-6", directory: "/tmp/app-6", createdAt: 1 }],
+          { deleteLogPath },
+        );
+        process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+        const { agent, registry } = openCodeRegistry();
+        useOpenCodeProject();
+        livePanes(agent);
+        const zombie = kind === "zombie" ? await zombieProcess() : undefined;
+        try {
+          const owner =
+            kind === "dead PID"
+              ? await deadProcess()
+              : kind === "reused PID"
+                ? { pid: process.pid, start: "stat:1" }
+                : zombie!;
+          writeIssueRecord("app-6", "ses_left", {
+            launchPid: String(owner.pid),
+            launchPidStart: owner.start,
+          });
+
+          const sm = createSessionManager({ config, registry });
+          await sm.kill("app-6", { purgeOpenCode: true });
+
+          expect(readMetadataRaw(sessionsDir, "app-6")).toBeNull();
+          expect(readArchivedMetadataRaw(sessionsDir, "app-6")).not.toBeNull();
+          expect(readFileSync(deleteLogPath, "utf-8")).toContain("sessionID=ses_left");
+          expect(readMockApiSessions(mockBin)).toEqual([]);
+        } finally {
+          await zombie?.stop();
+        }
+      },
+    );
+  });
 });
 
 describe("the pane environment of the reuse resolver (m-1)", () => {

@@ -16,6 +16,7 @@ import {
   type Session,
   type CleanupResult,
   type SessionManager,
+  SessionLaunchInProgressError,
   SessionNotFoundError,
   getSessionsDir,
   getProjectBaseDir,
@@ -463,6 +464,29 @@ describe("session kill", () => {
 
     expect(mockSessionManager.kill).toHaveBeenCalledWith("app-1", { purgeOpenCode: true });
   });
+
+  it.each([[[]], [["--purge-session"]]])(
+    "exits 1 with the refusal text while another ao process launches the session (B-2) %j",
+    async (flags) => {
+      mockSessionManager.kill.mockRejectedValue(
+        new SessionLaunchInProgressError("app-1", 4242, "kill"),
+      );
+
+      await expect(
+        program.parseAsync(["node", "test", "session", "kill", "app-1", ...flags]),
+      ).rejects.toThrow("process.exit(1)");
+
+      const errors = vi
+        .mocked(console.error)
+        .mock.calls.map((c) => String(c[0]))
+        .join("\n");
+      expect(errors).toContain(
+        "Cannot kill session app-1: ao process 4242 is still launching it. Stop ao process 4242 or wait for the launch to finish, then try again.",
+      );
+      const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(output).not.toContain("killed");
+    },
+  );
 });
 
 describe("session attach", () => {

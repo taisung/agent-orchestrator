@@ -1628,6 +1628,25 @@ export class WorkspaceMissingError extends Error {
   }
 }
 
+/**
+ * Thrown when an operation would remove or replace a session record while
+ * another `ao` process still launches it (B-2): the record's launch keys
+ * name a process that runs with the recorded start time.
+ */
+export class SessionLaunchInProgressError extends Error {
+  constructor(
+    public readonly sessionId: string,
+    public readonly launcherPid: number,
+    action: string,
+  ) {
+    super(
+      `Cannot ${action} session ${sessionId}: ao process ${launcherPid} is still launching it. ` +
+        `Stop ao process ${launcherPid} or wait for the launch to finish, then try again.`,
+    );
+    this.name = "SessionLaunchInProgressError";
+  }
+}
+
 /** Thrown when a session lookup fails (session does not exist). */
 export class SessionNotFoundError extends Error {
   constructor(public readonly sessionId: string) {

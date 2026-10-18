@@ -30,6 +30,7 @@ import {
   isIssueNotFoundError,
   isRestorable,
   NON_RESTORABLE_STATUSES,
+  SessionLaunchInProgressError,
   SessionNotFoundError,
   SessionNotRestorableError,
   WorkspaceMissingError,
@@ -163,12 +164,13 @@ function launchHasPrompt(launchConfig: AgentLaunchConfig): boolean {
 
 /**
  * B-1: record keys that name the `ao` process of a launch in progress. A
- * spawn with `prepareAgentSession` writes them before that hook runs (with
- * a reused agent session ID), keeps them through `confirmLaunch`, and then
- * removes them; a failed launch deletes the whole record. While that process
- * runs, the shared-ID guard counts the record as a live holder, also before
- * its pane exists. The rule does not read `status`, which the lifecycle's
- * first poll can overwrite with `killed`.
+ * spawn with `prepareAgentSession` writes them right after it reserves the
+ * record (B-2), keeps them through `confirmLaunch`, and then removes them; a
+ * failed launch deletes the whole record. While that process runs, the
+ * shared-ID guard counts the record as a live holder, also before its pane
+ * exists, and `kill`, `restore`, `remap` and an orchestrator start refuse to
+ * remove or replace the record. The rule does not read `status`, which the
+ * lifecycle's first poll can overwrite with `killed`.
  */
 const LAUNCH_PID_KEY = "launchPid";
 const LAUNCH_PID_START_KEY = "launchPidStart";
@@ -217,26 +219,44 @@ async function currentLaunchClaim(): Promise<Record<string, string> | null> {
 }
 
 /**
- * Write the launch keys of this `ao` process into the reserved record, with
- * the reused agent session ID when there is one. Without a readable start
- * time the launch goes on unprotected, as before B-1, and the operator gets
- * one line that says so.
+ * The launch keys of this `ao` process for a spawn that prepares its agent
+ * session. The spawn reads them before it reserves the record, so that the
+ * claim write follows the reservation with no wait between the two. Without
+ * a readable start time the launch goes on unprotected, as before B-1, and
+ * the operator gets one line that says so.
  */
-async function claimLaunch(
-  sessionsDir: string,
-  sessionId: SessionId,
-  reusedAgentSessionId: string | undefined,
-): Promise<void> {
+async function readLaunchClaim(): Promise<Record<string, string> | null> {
   const claim = await currentLaunchClaim();
   if (!claim) {
     warnOperator(
-      `ao: could not read the start time of ao process ${process.pid}; another ao command can take the launch of ${sessionId} for a dead session until its pane runs.`,
+      `ao: could not read the start time of ao process ${process.pid}; until the pane of this launch runs, another ao command can take it for a dead launch.`,
     );
   }
-  updateMetadata(sessionsDir, sessionId, {
-    ...claim,
-    ...(reusedAgentSessionId ? { opencodeSessionId: reusedAgentSessionId } : {}),
-  });
+  return claim;
+}
+
+/**
+ * B-2: write the launch keys into the record that this spawn has just
+ * reserved, before the workspace and every later step, so that no other
+ * `ao` command removes or replaces the record during the launch. A failed
+ * write removes the reservation.
+ */
+function claimReservedLaunch(
+  sessionsDir: string,
+  sessionId: SessionId,
+  claim: Record<string, string> | null,
+): void {
+  if (!claim) return;
+  try {
+    updateMetadata(sessionsDir, sessionId, claim);
+  } catch (err) {
+    try {
+      deleteMetadata(sessionsDir, sessionId, false);
+    } catch {
+      /* best effort */
+    }
+    throw err;
+  }
 }
 
 /**
@@ -252,6 +272,21 @@ async function liveLaunchOwner(raw: Record<string, string>): Promise<number | nu
   const pid = Number(pidText);
   const start = await processStartToken(pid);
   return start !== null && start === recordedStart ? pid : null;
+}
+
+/**
+ * B-2: refuse to remove or replace a record while its launch is in progress.
+ * The launcher would go on and write the record again (with an agent session
+ * that the refused operation removed), and both commands would report
+ * success. A dead launcher (gone, zombie, or its PID reused) does not block.
+ */
+async function assertNoLiveLauncher(
+  sessionId: SessionId,
+  raw: Record<string, string>,
+  action: string,
+): Promise<void> {
+  const launcher = await liveLaunchOwner(raw);
+  if (launcher !== null) throw new SessionLaunchInProgressError(sessionId, launcher, action);
 }
 
 /**
@@ -1297,7 +1332,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     // Determine session ID — atomically reserve to prevent concurrent collisions
+    const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
     const { sessionId, tmuxName } = await reserveNextSessionIdentity(project, sessionsDir);
+    claimReservedLaunch(sessionsDir, sessionId, launchClaim);
 
     // Determine branch name — explicit branch always takes priority
     let branch: string;
@@ -1446,11 +1483,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       let environment: Record<string, string>;
       if (plugins.agent.prepareAgentSession && preparedEnvironment) {
         environment = preparedEnvironment;
-        // B-1: name this `ao` process as the owner of the launch before the
-        // record names an agent session (the reused one now, a created one
-        // after the prepare), so the shared-ID guard does not take the
+        // B-1: the record names the reused agent session before the prepare
+        // switches it. The launch keys of this `ao` process are in the record
+        // since the reservation, so the shared-ID guard does not take the
         // record for a dead holder while its pane does not exist yet.
-        await claimLaunch(sessionsDir, sessionId, reusedOpenCodeSessionId);
+        if (reusedOpenCodeSessionId) {
+          updateMetadata(sessionsDir, sessionId, { opencodeSessionId: reusedOpenCodeSessionId });
+        }
         // I-3: the agent makes its own session ready before the pane starts
         // (OpenCode: model check, then create or the switch of a reused
         // session, then readback). A throw fails the spawn here: no pane.
@@ -1694,6 +1733,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let tmuxName: string | undefined;
     let branch: string;
     let workspacePath: string;
+    const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
 
     if (orchestratorWorkspaceMode === "project") {
       sessionId = `${project.sessionPrefix}-orchestrator`;
@@ -1708,6 +1748,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
 
       const existingRaw = readMetadataRaw(sessionsDir, sessionId);
+      // B-2: another `ao start` still launches this orchestrator. Its rollback
+      // or its later writes would hit the record that this start makes, so
+      // neither reuse nor replace it.
+      if (existingRaw) await assertNoLiveLauncher(sessionId, existingRaw, "replace");
       const existingOrchestrator = existingRaw?.["runtimeHandle"]
         ? metadataToSession(sessionId, existingRaw, orchestratorConfig.projectId)
         : null;
@@ -1746,6 +1790,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       let reserved = reserveSessionId(sessionsDir, sessionId);
       if (!reserved) {
         const concurrentRaw = readMetadataRaw(sessionsDir, sessionId);
+        if (concurrentRaw) await assertNoLiveLauncher(sessionId, concurrentRaw, "replace");
         const concurrentSession = concurrentRaw?.["runtimeHandle"]
           ? metadataToSession(sessionId, concurrentRaw, orchestratorConfig.projectId)
           : null;
@@ -1775,6 +1820,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           throw new Error(`Session ${sessionId} already exists but is not in a reusable state`);
         }
       }
+      claimReservedLaunch(sessionsDir, sessionId, launchClaim);
     } else {
       // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
       // Each isolated orchestrator gets its own numbered session and workspace.
@@ -1782,6 +1828,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       sessionId = identity.sessionId;
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
+      claimReservedLaunch(sessionsDir, sessionId, launchClaim);
 
       try {
         // m-13: refuse an unsafe branch before any git runs. Inside the
@@ -1949,7 +1996,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (plugins.agent.prepareAgentSession && preparedEnvironment) {
         // I-3: the same claim, create, store and check as a worker spawn.
         environment = preparedEnvironment;
-        await claimLaunch(sessionsDir, sessionId, reusableOpenCodeSessionId);
+        if (reusableOpenCodeSessionId) {
+          updateMetadata(sessionsDir, sessionId, { opencodeSessionId: reusableOpenCodeSessionId });
+        }
         prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
           workspacePath,
           environment,
@@ -2167,6 +2216,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
   async function kill(sessionId: SessionId, options?: { purgeOpenCode?: boolean }): Promise<void> {
     const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
+    // B-2: the launcher does not watch for a kill; it would go on and write
+    // the record again, maybe with an agent session that this kill removed.
+    await assertNoLiveLauncher(sessionId, raw, "kill");
 
     const cleanupAgent = resolveSelectionForSession(project, sessionId, raw).agentName;
 
@@ -2852,6 +2904,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new SessionNotFoundError(sessionId);
     }
     const { raw, sessionsDir, project } = located;
+    // B-2: the launcher writes the mapping of its own record.
+    await assertNoLiveLauncher(sessionId, raw, "remap");
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
     const selectedAgent = selection.agentName;
@@ -2947,6 +3001,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (!raw || !sessionsDir || !project || !projectId) {
       throw new SessionNotFoundError(sessionId);
     }
+    // B-2: a launch in progress has no pane yet, so it looks dead and
+    // restorable; a restore would start a second pane for it.
+    await assertNoLiveLauncher(sessionId, raw, "restore");
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
 
