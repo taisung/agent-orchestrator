@@ -827,6 +827,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (launcher !== null) {
       return `the launch of session ${id} by ao process ${launcher} is in progress`;
     }
+    // M-4: a launch that died before the record named its pane (the launch
+    // keys and a reused ID only) is a dead holder. Only an old record without
+    // launch keys keeps its ID when its liveness cannot be checked.
+    if (raw[LAUNCH_PID_KEY] && !raw["runtimeHandle"] && !raw["tmuxName"]) return undefined;
     const handle = raw["runtimeHandle"]
       ? safeJsonParse<RuntimeHandle>(raw["runtimeHandle"])
       : raw["tmuxName"]

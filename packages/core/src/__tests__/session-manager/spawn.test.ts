@@ -3274,6 +3274,92 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
         }
       },
     );
+
+    it("a dead prepare-only claim does not keep an older session from the delete strategy (M-4)", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-m4.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_old", title: "AO:app-8", directory: "/tmp/app-8", createdAt: 1 }],
+        { deleteLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject();
+      livePanes(agent);
+      olderIssueRecord();
+
+      // A reuse launch of the issue dies on entry to the prepare; the record
+      // that it leaves is the real prepare-only shape.
+      let orphanId = "";
+      let orphan: Record<string, string> | null = null;
+      pauseFirstPrepare(agent, async (sessionId) => {
+        orphanId = sessionId;
+        orphan = readMetadataRaw(sessionsDir, sessionId);
+        throw new Error("the launcher dies here");
+      });
+      await expect(
+        createSessionManager({ config, registry }).spawn({
+          projectId: "my-app",
+          issueId: "INT-42",
+        }),
+      ).rejects.toThrow("the launcher dies here");
+      expect(orphan).toEqual({
+        launchPid: String(process.pid),
+        launchPidStart: startToken(process.pid),
+        opencodeSessionId: "ses_old",
+      });
+      const dead = await deadProcess();
+      updateMetadata(sessionsDir, orphanId, {
+        ...orphan!,
+        launchPid: String(dead.pid),
+        launchPidStart: dead.start,
+      });
+
+      useOpenCodeProject({ opencodeIssueSessionStrategy: "delete" });
+      const session = await createSessionManager({ config, registry }).spawn({
+        projectId: "my-app",
+        issueId: "INT-42",
+      });
+
+      expect(readFileSync(deleteLogPath, "utf-8")).toContain("sessionID=ses_old");
+      expect(session.metadata["opencodeSessionId"]).toBe("ses_created_1");
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+    });
+
+    it("an old record without launch keys or runtime identity still keeps the older session (M-4)", async () => {
+      const deleteLogPath = join(tmpDir, "opencode-delete-m4-old.log");
+      const mockBin = installMockOpencodeApi(
+        tmpDir,
+        [{ id: "ses_old", title: "AO:app-8", directory: "/tmp/app-8", createdAt: 1 }],
+        { deleteLogPath },
+      );
+      process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+      const { agent, registry } = openCodeRegistry();
+      useOpenCodeProject({ opencodeIssueSessionStrategy: "delete" });
+      livePanes(agent);
+      olderIssueRecord();
+      updateMetadata(sessionsDir, "app-9", { opencodeSessionId: "ses_old" });
+
+      const stderr = captureStderr();
+      let warnings: string;
+      try {
+        const sm = createSessionManager({ config, registry });
+        await sm.spawn({ projectId: "my-app", issueId: "INT-42" });
+        await sm.kill("app-8", { purgeOpenCode: true });
+      } finally {
+        warnings = stderr.lines();
+        stderr.restore();
+      }
+
+      expect(existsSync(deleteLogPath)).toBe(false);
+      expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual([
+        "ses_old",
+        "ses_created_1",
+      ]);
+      expect(warnings).toContain(
+        "ao: kept OpenCode session ses_old of app-8: session app-9 may still use it (liveness could not be checked).",
+      );
+    });
   });
 });
 
