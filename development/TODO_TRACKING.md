@@ -353,7 +353,22 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     can take a Node preload file for the main script; a crash during the prepare leaves a stale record
     that blocks deletion). The orchestrator sent one `ao send` to continue at 23:56 EDT. **Watcher gap
     (agent-skills, `as-orchestrator`):** `fleet_watch.sh` has no rule for this Codex filter banner, so
-    the stop raised no notice.
+    the stop raised no notice. **Re-check r2** (`development/reviews/i3_review_r2_sol61.md`, about 2.25
+    USD): **NOT-LAND-SAFE**, 1 B, 2 M, 1 m. B-1 partly fixed; M-2 and m-1 to m-4 fixed; 13 mutants killed.
+    B-2: `kill()` of the launching record does not stop the spawn, which then writes the purged record
+    again (live: a successful spawn whose record names a removed session). M-3: the argv check takes a
+    `node --require <file named opencode>` preload for the main script. M-4: a launcher that dies in the
+    prepare leaves a record with launch keys and no pane identity, which the guard reads as "liveness
+    could not be checked", so it blocks the delete strategy. m-5: `getEnvironment` now runs outside the
+    rollback. The reviewer rated the older `LocationNotFoundError` reuse failure major and the
+    project-mode orchestrator record drop minor (both older than I-3). **Owner (2026-10-18): B-2 - refuse
+    the kill while a live launcher owns the record.** **Round 3** dispatched to ao-36 at 19:08 EDT on
+    2026-10-18 (brief `brief-aofork-i3-r3.md`): step 0 rebases the local branch onto `b853f74f` (a test
+    merge conflicts in `agent-opencode/src/index.ts` and `index.test.ts`; backup ref
+    `i3-r2-pre-rebase`), then B-2, M-3 (main script only at `argv[1]`), M-4, m-5. Watcher PID 2838095.
+    ao-36 had written a note into the orchestrator's memory directory
+    (`opencode-reuse-switchmodel-location-404.md`); the content is right, and the round-3 brief forbids
+    such writes.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
