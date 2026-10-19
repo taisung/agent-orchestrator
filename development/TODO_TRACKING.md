@@ -463,6 +463,18 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     **Owner (2026-10-19):** try `opencode-go` again, and run the probe through `session.shell` (no model
     turn) now. **Attempt 2** dispatched to ao-38 (brief `brief-toolenv-check-r2.md`): part A
     `session.shell`, part B one more model turn; two sessions, both deleted. I-3 lands after the result.
+    **Attempt 2** (about 1.2 USD): **SERVICE-ENV / FAILED**. Part A: a `session.shell` command in an
+    API-only session ran as a direct child of the service (PID 3252262) with the service environment (its
+    70 names plus `OPENCODE_TERMINAL` and `_`; the `AO_*` values of `as-73`; no marker of the create
+    client or the shell client; `~/.ao/bin` first on `PATH`, so `gh` and `git` resolve to the wrappers).
+    The helper writes only when `$AO_DATA_DIR/$AO_SESSION` exists, so today (`as-73` archived) a wrapper
+    write does nothing, by luck. Part B: the `opencode-go` turn failed again (401 `api_key_expired`, 0
+    tokens), so the model shell tool with no TUI is still not measured (0010 §11.2 shows that the model
+    tool of a TUI-attached session gets the TUI environment, which `session.shell` does not). Both
+    sessions removed; records and `~/.ao/bin` unchanged. **Consequences:** I-5 must not rely on the
+    wrappers for an API-only tool until the model path is measured; start the global service from an
+    environment with no `AO_*` (owner action; the service is shared by every fleet), or keep a TUI attached
+    to a session that I-5 prompts. I-3 is not changed by part A (its first prompt goes through the TUI).
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
