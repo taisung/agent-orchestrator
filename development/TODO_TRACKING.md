@@ -403,7 +403,22 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     no reader sees a record without its claim, and no later write creates a removed record again;
     `metadata.ts` and `metadata.test.ts` added to the allowed files. Watcher PID 3771710. **Watcher gaps
     (agent-skills, `as-orchestrator`):** no rule for the Codex filter banner, and the idle notice goes out
-    only one time per session (`<id>.idle.sent`), so a second stop raises no notice.
+    only one time per session (`<id>.idle.sent`), so a second stop raises no notice. ao-36 finished
+    **round 4** as `ff88bda5` (`c1825360`, `99f7b05c`, `ff88bda5`; 5 files; about 6.35 USD by the status
+    line): `reserveSessionId(dataDir, id, initial?)` writes the claim to a dot-named temp file and links
+    it to the record name (`EEXIST` gives `false`, any other error throws, the temp file is removed in
+    every case); every reservation of a launch with preparation hooks passes the claim (worker, isolated
+    orchestrator, the three project-orchestrator reservations); `claimReservedLaunch` is removed; a
+    caller without a claim keeps the empty `O_EXCL` record. Live (isolated store, stand-ins): with a
+    pause right after the record first exists, `ao session kill` with and without `--purge-session`
+    exits 1 on `ff88bda5` and the spawn completes; the same fixture on `0b21660c` shows M-5 (the kill
+    succeeds and the spawn makes the record again). 8 processes on one ID: one winner, 3 of 3 rounds.
+    Full suite 2378 passed, 29 skipped; the M-5 mutants fail tests. Cleanup checked by the orchestrator.
+    Author notes: other spawn writes (`updateMetadata`) can still create a missing record, but only
+    after a removal by a path without the launcher check; a file system without hard links now fails an
+    OpenCode spawn with a clear error. **Re-check r4** dispatched to ao-40 at 23:09 EDT (brief
+    `brief-review-i3-r4-sol.md`, review file `i3_review_r4_sol61.md`; it also runs the live checks that
+    did not run in r3), watcher PID 4059335.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
