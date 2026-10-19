@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type * as Fs from "node:fs";
 import { mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,16 +12,58 @@ import {
   updateMetadata,
   deleteMetadata,
   listMetadata,
+  reserveSessionId,
 } from "../metadata.js";
+
+/**
+ * M-5: every synchronous `node:fs` call can be watched (`after` runs once the
+ * call returns or throws) or made to fail (`fail` returns the error to throw
+ * instead of the call). The probe itself runs with the probe off.
+ */
+const fsProbe = vi.hoisted(() => ({
+  after: null as ((call: string) => void) | null,
+  fail: null as ((call: string) => Error | undefined) | null,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof Fs>();
+  const wrapped: Record<string, unknown> = { ...actual };
+  for (const [name, value] of Object.entries(actual)) {
+    if (typeof value !== "function" || !name.endsWith("Sync")) continue;
+    const call = value as (...args: unknown[]) => unknown;
+    wrapped[name] = (...args: unknown[]) => {
+      const error = fsProbe.fail?.(name);
+      if (error) throw error;
+      try {
+        return call(...args);
+      } finally {
+        const after = fsProbe.after;
+        if (after) {
+          fsProbe.after = null;
+          try {
+            after(name);
+          } finally {
+            fsProbe.after = after;
+          }
+        }
+      }
+    };
+  }
+  return { ...wrapped, default: wrapped };
+});
 
 let dataDir: string;
 
 beforeEach(() => {
+  fsProbe.after = null;
+  fsProbe.fail = null;
   dataDir = join(tmpdir(), `ao-test-metadata-${randomUUID()}`);
   mkdirSync(dataDir, { recursive: true });
 });
 
 afterEach(() => {
+  fsProbe.after = null;
+  fsProbe.fail = null;
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -472,6 +515,91 @@ describe("listMetadata", () => {
     const list = listMetadata(emptyDir);
     expect(list).toEqual([]);
     // no cleanup needed since dir was never created
+  });
+});
+
+describe("reserveSessionId (M-5)", () => {
+  const claim = { launchPid: "4242", launchPidStart: "stat:99" };
+
+  function errnoError(code: string): Error {
+    return Object.assign(new Error(`${code}: injected`), { code });
+  }
+
+  it("with a claim, the record holds the claim from the first moment it exists", () => {
+    const views: Array<{ call: string; listed: string[]; raw: Record<string, string> | null }> = [];
+    fsProbe.after = (call) => {
+      // What another process can read between two file system calls.
+      views.push({
+        call,
+        listed: listMetadata(dataDir),
+        raw: readMetadataRaw(dataDir, "app-1"),
+      });
+    };
+    let reserved: boolean;
+    try {
+      reserved = reserveSessionId(dataDir, "app-1", claim);
+    } finally {
+      fsProbe.after = null;
+    }
+
+    expect(reserved).toBe(true);
+    const withRecord = views.filter((view) => view.raw !== null);
+    // The record appeared during the call, and never without the claim.
+    expect(withRecord.length).toBeGreaterThan(0);
+    for (const view of withRecord) expect(view).toMatchObject({ raw: claim });
+    for (const view of views) {
+      expect(view.listed).toEqual(view.raw === null ? [] : ["app-1"]);
+    }
+    expect(readMetadataRaw(dataDir, "app-1")).toEqual(claim);
+    expect(readdirSync(dataDir)).toEqual(["app-1"]);
+  });
+
+  it("two reservations of one ID: the first wins, the second returns false, no temp file stays", () => {
+    expect(reserveSessionId(dataDir, "app-1", claim)).toBe(true);
+    expect(reserveSessionId(dataDir, "app-1", { launchPid: "77", launchPidStart: "stat:1" })).toBe(
+      false,
+    );
+    expect(reserveSessionId(dataDir, "app-1")).toBe(false);
+    expect(readMetadataRaw(dataDir, "app-1")).toEqual(claim);
+
+    // A claim does not win over an empty reservation either.
+    expect(reserveSessionId(dataDir, "app-2")).toBe(true);
+    expect(reserveSessionId(dataDir, "app-2", claim)).toBe(false);
+    expect(readFileSync(join(dataDir, "app-2"), "utf-8")).toBe("");
+
+    expect(readdirSync(dataDir).sort()).toEqual(["app-1", "app-2"]);
+  });
+
+  it("without a claim, makes the same empty record as before", () => {
+    expect(reserveSessionId(dataDir, "app-1")).toBe(true);
+    expect(reserveSessionId(dataDir, "app-2", {})).toBe(true);
+    expect(readFileSync(join(dataDir, "app-1"), "utf-8")).toBe("");
+    expect(readFileSync(join(dataDir, "app-2"), "utf-8")).toBe("");
+    expect(readMetadataRaw(dataDir, "app-1")).toEqual({});
+    expect(reserveSessionId(dataDir, "app-1")).toBe(false);
+    expect(readdirSync(dataDir).sort()).toEqual(["app-1", "app-2"]);
+  });
+
+  it.each([
+    ["the link (a file system without hard links)", "linkSync", "EPERM"],
+    ["the temp file write (a full disk)", "writeFileSync", "ENOSPC"],
+    ["the temp file create", "openSync", "EACCES"],
+  ])("a failure of %s throws and leaves no temp file and no record", (_what, call, code) => {
+    fsProbe.fail = (name) => (name === call ? errnoError(code) : undefined);
+    let thrown: unknown;
+    try {
+      reserveSessionId(dataDir, "app-1", claim);
+    } catch (err) {
+      thrown = err;
+    } finally {
+      fsProbe.fail = null;
+    }
+
+    expect((thrown as Error).message).toBe(`Could not reserve session app-1 in ${dataDir}`);
+    expect(((thrown as Error).cause as NodeJS.ErrnoException).code).toBe(code);
+    expect(readdirSync(dataDir)).toEqual([]);
+    expect(reserveSessionId(dataDir, "app-1", claim)).toBe(true);
+    expect(readdirSync(dataDir)).toEqual(["app-1"]);
   });
 });
 

@@ -29,8 +29,11 @@ import {
   statSync,
   openSync,
   closeSync,
+  linkSync,
+  rmSync,
   constants,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 import type { SessionId, SessionMetadata } from "./types.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
@@ -308,17 +311,53 @@ export function listMetadata(dataDir: string): SessionId[] {
 }
 
 /**
- * Atomically reserve a session ID by creating its metadata file with O_EXCL.
+ * Atomically reserve a session ID by creating its metadata file.
  * Returns true if the ID was successfully reserved, false if it already exists.
+ *
+ * Without `initial`, the file is created empty with O_EXCL. With `initial`
+ * (M-5: the launch claim of a spawn that prepares its agent session), the
+ * record exists only with that content: the content goes into a dot-named
+ * temp file in the same directory, which `listMetadata` skips and no session
+ * ID can name, and `link` then publishes that complete file under the record
+ * name. Like O_EXCL, `link` fails with EEXIST when the name exists. So no
+ * other process can read the record, not even for one system call, without
+ * the claim, and a kill or an orchestrator start always sees the launcher.
+ * The temp file is removed in every case. With `initial`, an error other
+ * than EEXIST throws.
  */
-export function reserveSessionId(dataDir: string, sessionId: SessionId): boolean {
+export function reserveSessionId(
+  dataDir: string,
+  sessionId: SessionId,
+  initial?: Record<string, string>,
+): boolean {
   const path = metadataPath(dataDir, sessionId);
   mkdirSync(dirname(path), { recursive: true });
+  if (!initial || Object.keys(initial).length === 0) {
+    try {
+      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
+      closeSync(fd);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const tempPath = join(dirname(path), `.${sessionId}.reserve-${process.pid}-${randomUUID()}`);
+  let tempCreated = false;
   try {
-    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
-    closeSync(fd);
+    const fd = openSync(tempPath, "wx");
+    tempCreated = true;
+    try {
+      writeFileSync(fd, serializeMetadata(initial), "utf-8");
+    } finally {
+      closeSync(fd);
+    }
+    linkSync(tempPath, path);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    if (tempCreated && (err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw new Error(`Could not reserve session ${sessionId} in ${dataDir}`, { cause: err });
+  } finally {
+    if (tempCreated) rmSync(tempPath, { force: true });
   }
 }
