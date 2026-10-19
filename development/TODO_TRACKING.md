@@ -380,7 +380,30 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     `recovery/actions.ts:149` deletes a record with no launch check (no shipped caller); `ao stop` on a
     launching orchestrator exits 1 before it stops the lifecycle worker; agents without preparation hooks
     keep the older kill-during-spawn race. **Re-check r3** dispatched to ao-40 at 19:56 EDT (brief
-    `brief-review-i3-r3-sol.md`, review file `i3_review_r3_sol61.md`), watcher PID 3178843.
+    `brief-review-i3-r3-sol.md`, review file `i3_review_r3_sol61.md`), watcher PID 3178843. The OpenAI
+    content filter cut ao-40 three times in this round. The watcher sent one idle notice (20:24 EDT) and
+    none for the next stop (about 21:03 to 22:29 EDT). At 22:29 the orchestrator told ao-40 to stop the
+    live checks and to write the review from its logs, with each unfinished check marked "not run".
+    **Re-check r3** (`development/reviews/i3_review_r3_sol61.md`, about 1.65 USD): **NOT-LAND-SAFE**, 0 B,
+    1 M, 0 m. The rebase keeps I-4 (only the conflict hunks of `762c5eff` and the context of `71f87770`
+    differ; 4 I-4 mutants killed). B-2 partly fixed: a CLI kill (with and without purge) during the prepare
+    and at `runtime.create` exits 1 and keeps the record, and restore, remap and the project orchestrator
+    start with `delete`, `reuse` or `ignore` refuse. M-3, M-4 and m-5 fixed; 22 mutants killed; gates
+    pass (full suite 2368 passed, 29 skipped). **M-5:** `reserveSessionId` (`metadata.ts:314-324`)
+    creates an empty file, and `claimReservedLaunch` (`session-manager.ts:244`) writes the claim later
+    with `updateMetadata`, which also creates a missing record again. A kill from another process
+    between the two steps sees no owner, removes the record, and the spawn writes it again (source
+    finding, checked by the orchestrator in the code; the timed reproducer was not run; the author saw
+    the same window, report item 3, but `metadata.ts` was not an allowed file). The reviewer rates
+    `recovery/actions.ts:149` a minor dormant risk and the `node --no-warnings` rejection a minor
+    compatibility limit. Not run (live): the M-4 crash case, the fault injection, Herdr, the restore
+    comparison. Cleanup checked by the orchestrator (no process left, `/tmp/ao40-i3-r3` removed, lock
+    directory empty, `~/.ao/bin` unchanged, lifecycle PIDs alive). **Round 4** dispatched to ao-36 at
+    22:36 EDT (brief `brief-aofork-i3-r4.md`): write the claim in the same step as the reservation, so
+    no reader sees a record without its claim, and no later write creates a removed record again;
+    `metadata.ts` and `metadata.test.ts` added to the allowed files. Watcher PID 3771710. **Watcher gaps
+    (agent-skills, `as-orchestrator`):** no rule for the Codex filter banner, and the idle notice goes out
+    only one time per session (`<id>.idle.sent`), so a second stop raises no notice.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
