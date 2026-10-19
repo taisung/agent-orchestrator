@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import { once } from "node:events";
+import type * as Metadata from "../../metadata.js";
 import type * as OpenCodeApi from "../../opencode-api.js";
 import {
   createOpenCodeSession,
@@ -63,6 +64,26 @@ vi.mock("../../opencode-api.js", async (importOriginal) => {
   };
 });
 
+/**
+ * M-5: `after` runs right after a `reserveSessionId` call of core returns
+ * true, before the spawn takes its next step.
+ */
+const reservation = vi.hoisted(() => ({
+  after: null as ((sessionId: string) => void) | null,
+}));
+
+vi.mock("../../metadata.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof Metadata>();
+  return {
+    ...actual,
+    reserveSessionId: (...args: Parameters<typeof actual.reserveSessionId>) => {
+      const reserved = actual.reserveSessionId(...args);
+      if (reserved) reservation.after?.(args[1]);
+      return reserved;
+    },
+  };
+});
+
 let ctx: TestContext;
 let tmpDir: string;
 let sessionsDir: string;
@@ -74,6 +95,7 @@ let config: OrchestratorConfig;
 let originalPath: string | undefined;
 
 beforeEach(() => {
+  reservation.after = null;
   vi.mocked(findOpenCodeSessionsByTitle).mockClear();
   vi.mocked(listOpenCodeSessionsByTitle).mockClear();
   ctx = setupTestContext();
@@ -3131,7 +3153,7 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       expect(mockRuntime.destroy).not.toHaveBeenCalled();
     });
 
-    it("refuses a kill while the workspace of the launch is made: the claim follows the reservation", async () => {
+    it("refuses a kill while the workspace of the launch is made: the reservation holds the claim", async () => {
       const mockBin = installMockOpencodeApi(tmpDir, []);
       process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
       const { agent, registry } = openCodeRegistry();
@@ -3234,6 +3256,120 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       expect(final?.["launchPid"]).toBeUndefined();
       expect(existsSync(deleteLogPath)).toBe(false);
       expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+    });
+
+    describe("a kill that starts right after the reservation returns (M-5)", () => {
+      /**
+       * From the reservation hook, read the reserved record and start a kill
+       * of it with purge. `kill` reads the record before its first await, so
+       * it acts on what another process can read at that moment.
+       */
+      function killRightAfterReservation(sm: ReturnType<typeof createSessionManager>): {
+        recordAtReservation: () => Record<string, string> | null;
+        outcome: () => Promise<unknown>;
+      } {
+        let record: Record<string, string> | null = null;
+        let kill: Promise<unknown> = Promise.resolve("no reservation");
+        reservation.after = (sessionId) => {
+          reservation.after = null;
+          record = readMetadataRaw(sessionsDir, sessionId);
+          kill = sm.kill(sessionId, { purgeOpenCode: true }).then(
+            () => "killed",
+            (err: unknown) => err,
+          );
+        };
+        return { recordAtReservation: () => record, outcome: () => kill };
+      }
+
+      it("worker: the record holds the launch keys from its creation, the kill is refused, the spawn completes", async () => {
+        const deleteLogPath = join(tmpDir, "opencode-delete-m5-worker.log");
+        const interruptLogPath = join(tmpDir, "opencode-interrupt-m5-worker.log");
+        const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath, interruptLogPath });
+        process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+        const { agent, registry } = openCodeRegistry();
+        useOpenCodeProject();
+        livePanes(agent);
+        const sm = createSessionManager({ config, registry });
+        const kill = killRightAfterReservation(sm);
+
+        const session = await sm.spawn({ projectId: "my-app" });
+        const outcome = await kill.outcome();
+
+        expect(kill.recordAtReservation()).toEqual({
+          launchPid: String(process.pid),
+          launchPidStart: startToken(process.pid),
+        });
+        expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
+        expect((outcome as Error).message).toBe(refusal("kill", "app-1"));
+        expect(session.id).toBe("app-1");
+        const final = readMetadataRaw(sessionsDir, "app-1");
+        expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+        expect(final?.["launchPid"]).toBeUndefined();
+        expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
+        expect(existsSync(deleteLogPath)).toBe(false);
+        expect(existsSync(interruptLogPath)).toBe(false);
+        expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+        expect(mockWorkspace.destroy).not.toHaveBeenCalled();
+        expect(mockRuntime.destroy).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["isolated", "app-orchestrator-1"],
+        ["project", "app-orchestrator"],
+      ] as const)(
+        "orchestrator (%s mode): the record holds the launch keys from its creation, the kill is refused, the start completes",
+        async (mode, id) => {
+          const worktreePath = join(tmpDir, `orch-m5-${mode}`);
+          mkdirSync(worktreePath, { recursive: true });
+          vi.mocked(mockWorkspace.create).mockResolvedValue({
+            path: worktreePath,
+            branch: `orchestrator/${id}`,
+            sessionId: id,
+            projectId: "my-app",
+          });
+          const deleteLogPath = join(tmpDir, `opencode-delete-m5-${mode}.log`);
+          const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath });
+          process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+          const { agent, registry } = openCodeRegistry();
+          useOpenCodeProject({ orchestratorWorkspaceMode: mode });
+          livePanes(agent);
+          const sm = createSessionManager({ config, registry });
+          const kill = killRightAfterReservation(sm);
+
+          const session = await sm.spawnOrchestrator({ projectId: "my-app" });
+          const outcome = await kill.outcome();
+
+          expect(kill.recordAtReservation()).toEqual({
+            launchPid: String(process.pid),
+            launchPidStart: startToken(process.pid),
+          });
+          expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
+          expect((outcome as Error).message).toBe(refusal("kill", id));
+          expect(session.id).toBe(id);
+          const final = readMetadataRaw(sessionsDir, id);
+          expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+          expect(final?.["launchPid"]).toBeUndefined();
+          expect(readArchivedMetadataRaw(sessionsDir, id)).toBeNull();
+          expect(existsSync(deleteLogPath)).toBe(false);
+          expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+          expect(mockWorkspace.destroy).not.toHaveBeenCalled();
+          expect(mockRuntime.destroy).not.toHaveBeenCalled();
+        },
+      );
+
+      it("an agent without preparation hooks still reserves an empty record", async () => {
+        let recordAtReservation: Record<string, string> | null = { unread: "true" };
+        reservation.after = (sessionId) => {
+          reservation.after = null;
+          recordAtReservation = readMetadataRaw(sessionsDir, sessionId);
+        };
+        const sm = createSessionManager({ config, registry: mockRegistry });
+
+        const session = await sm.spawn({ projectId: "my-app" });
+
+        expect(recordAtReservation).toEqual({});
+        expect(session.id).toBe("app-1");
+      });
     });
 
     it.each(["dead PID", "reused PID", "zombie"] as const)(

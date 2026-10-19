@@ -164,13 +164,14 @@ function launchHasPrompt(launchConfig: AgentLaunchConfig): boolean {
 
 /**
  * B-1: record keys that name the `ao` process of a launch in progress. A
- * spawn with `prepareAgentSession` writes them right after it reserves the
- * record (B-2), keeps them through `confirmLaunch`, and then removes them; a
- * failed launch deletes the whole record. While that process runs, the
- * shared-ID guard counts the record as a live holder, also before its pane
- * exists, and `kill`, `restore`, `remap` and an orchestrator start refuse to
- * remove or replace the record. The rule does not read `status`, which the
- * lifecycle's first poll can overwrite with `killed`.
+ * spawn with `prepareAgentSession` reserves the record with them in it (M-5:
+ * the record never exists without them), keeps them through `confirmLaunch`,
+ * and then removes them; a failed launch deletes the whole record. While
+ * that process runs, the shared-ID guard counts the record as a live holder,
+ * also before its pane exists, and `kill`, `restore`, `remap` and an
+ * orchestrator start refuse to remove or replace the record. The rule does
+ * not read `status`, which the lifecycle's first poll can overwrite with
+ * `killed`.
  */
 const LAUNCH_PID_KEY = "launchPid";
 const LAUNCH_PID_START_KEY = "launchPidStart";
@@ -220,10 +221,10 @@ async function currentLaunchClaim(): Promise<Record<string, string> | null> {
 
 /**
  * The launch keys of this `ao` process for a spawn that prepares its agent
- * session. The spawn reads them before it reserves the record, so that the
- * claim write follows the reservation with no wait between the two. Without
- * a readable start time the launch goes on unprotected, as before B-1, and
- * the operator gets one line that says so.
+ * session. The spawn reads them before it reserves the record, and the
+ * reservation creates the record with them. Without a readable start time
+ * the reservation is empty and the launch goes on unprotected, as before
+ * B-1, and the operator gets one line that says so.
  */
 async function readLaunchClaim(): Promise<Record<string, string> | null> {
   const claim = await currentLaunchClaim();
@@ -233,30 +234,6 @@ async function readLaunchClaim(): Promise<Record<string, string> | null> {
     );
   }
   return claim;
-}
-
-/**
- * B-2: write the launch keys into the record that this spawn has just
- * reserved, before the workspace and every later step, so that no other
- * `ao` command removes or replaces the record during the launch. A failed
- * write removes the reservation.
- */
-function claimReservedLaunch(
-  sessionsDir: string,
-  sessionId: SessionId,
-  claim: Record<string, string> | null,
-): void {
-  if (!claim) return;
-  try {
-    updateMetadata(sessionsDir, sessionId, claim);
-  } catch (err) {
-    try {
-      deleteMetadata(sessionsDir, sessionId, false);
-    } catch {
-      /* best effort */
-    }
-    throw err;
-  }
 }
 
 /**
@@ -981,6 +958,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   async function reserveNextSessionIdentity(
     project: ProjectConfig,
     sessionsDir: string,
+    launchClaim: Record<string, string> | null,
   ): Promise<{
     num: number;
     sessionId: string;
@@ -1008,7 +986,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ? generateTmuxName(config.configPath, project.sessionPrefix, num)
         : undefined;
 
-      if (!usedNumbers.has(num) && reserveSessionId(sessionsDir, sessionId)) {
+      if (
+        !usedNumbers.has(num) &&
+        reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined)
+      ) {
         return { num, sessionId, tmuxName };
       }
 
@@ -1028,6 +1009,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   function reserveNextOrchestratorIdentity(
     project: ProjectConfig,
     sessionsDir: string,
+    launchClaim: Record<string, string> | null,
   ): { num: number; sessionId: string; tmuxName: string | undefined } {
     const orchestratorPrefix = `${project.sessionPrefix}-orchestrator`;
     const usedNumbers = new Set<number>();
@@ -1069,7 +1051,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const tmuxName = config.configPath
           ? generateTmuxName(config.configPath, orchestratorPrefix, num)
           : undefined;
-        if (reserveSessionId(sessionsDir, sessionId)) {
+        if (reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined)) {
           return { num, sessionId, tmuxName };
         }
       }
@@ -1337,8 +1319,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // Determine session ID — atomically reserve to prevent concurrent collisions
     const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
-    const { sessionId, tmuxName } = await reserveNextSessionIdentity(project, sessionsDir);
-    claimReservedLaunch(sessionsDir, sessionId, launchClaim);
+    const { sessionId, tmuxName } = await reserveNextSessionIdentity(
+      project,
+      sessionsDir,
+      launchClaim,
+    );
 
     // Determine branch name — explicit branch always takes priority
     let branch: string;
@@ -1815,7 +1800,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
 
-      let reserved = reserveSessionId(sessionsDir, sessionId);
+      let reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
       if (!reserved) {
         const concurrentRaw = readMetadataRaw(sessionsDir, sessionId);
         if (concurrentRaw) await assertNoLiveLauncher(sessionId, concurrentRaw, "replace");
@@ -1839,24 +1824,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               sessionId,
               orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
             );
-            reserved = reserveSessionId(sessionsDir, sessionId);
+            reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
           }
         } else {
-          reserved = reserveSessionId(sessionsDir, sessionId);
+          reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
         }
         if (!reserved) {
           throw new Error(`Session ${sessionId} already exists but is not in a reusable state`);
         }
       }
-      claimReservedLaunch(sessionsDir, sessionId, launchClaim);
     } else {
       // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
       // Each isolated orchestrator gets its own numbered session and workspace.
-      const identity = reserveNextOrchestratorIdentity(project, sessionsDir);
+      const identity = reserveNextOrchestratorIdentity(project, sessionsDir, launchClaim);
       sessionId = identity.sessionId;
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
-      claimReservedLaunch(sessionsDir, sessionId, launchClaim);
 
       try {
         // m-13: refuse an unsafe branch before any git runs. Inside the
