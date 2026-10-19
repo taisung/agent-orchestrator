@@ -329,14 +329,23 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 ## Known Issues
 
 - **Follow-ups after I-3 (2026-10-19):**
-  - **I-5 gate:** measure the model shell tool in a session with no TUI (Part B of
-    `brief-toolenv-check-r2.md`, one turn) after the `opencode-go` key is renewed. Until then, I-5 must not
-    trust the `gh` and `git` wrappers for an API-only tool.
-  - **Owner action:** the `opencode-go` key is expired (401 `api_key_expired`, again at 18:03 EDT through
-    the ao-37 TUI). Every Muse worker and the OpenCode review lens fail at the first turn until a new key
-    is made in the OpenCode Console.
-  - **Owner / `as-orchestrator`:** the global OpenCode service (PID 3252262) carries the `AO_*` values of
-    the archived `agent-skills` session `as-73`; start it from an environment with no `AO_*`.
+  - **I-5 gate, measured (attempt 3, ao-38, 2026-10-19 18:12 EDT, about 0.61 USD; the turn cost 0.0013
+    USD): NO-AO-ENV.** The model shell tool of an API-only session ran as a direct child of the global
+    service with the service environment, plus `AGENT`, `AI_AGENT`, `OPENCODE`, `OPENCODE_SESSION_ID`
+    and `OPENCODE_TERMINAL`. No marker of the client that created the session or sent the prompt reached
+    it. So the service alone decides what an API-only tool sees. The service is clean now (below), so the
+    tool has no `AO_*`, no `~/.ao/bin` on `PATH`, and `gh` and `git` resolve to `/usr/bin`: no wrong-session
+    write, and no wrapper record of a PR made in such a session. **Still open for I-5:** a session with an
+    attached TUI that gets its turn through `session.prompt` (TUI environment or service environment?). If
+    the service environment, every `ao send` turn of an OpenCode worker runs `gh` and `git` without the
+    wrappers, and PR tracking stops. This needs one more turn with a TUI in a scratch environment on a
+    private tmux server (owner approval). Proposed guard: `ao` warns when the service environment holds an
+    `AO_*` name.
+  - **Key renewed:** the `opencode-go` key works again (ao-37 answered a one-word turn at 18:11 EDT).
+  - **Global service clean:** the global OpenCode service started again at 18:02:15 EDT as PID 15920
+    (parent PID 1, not started by this orchestrator) with no `AO_*`, `TMUX` or `GH_PATH`. The old service
+    (PID 3252262) carried the `AO_*` values of the archived `agent-skills` session `as-73`. The risk comes
+    back if the service is started from a pane of a live session (note for `as-orchestrator`).
   - Code items: the first-poll `killed` race (separate item, `lifecycle-manager.ts`); `ao stop` on a
     launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
     project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
