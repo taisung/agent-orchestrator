@@ -21,6 +21,7 @@ import {
   readMetadataRaw,
   readArchivedMetadataRaw,
   updateMetadata,
+  deleteMetadata,
 } from "../../metadata.js";
 import {
   type CleanupResult,
@@ -66,10 +67,14 @@ vi.mock("../../opencode-api.js", async (importOriginal) => {
 
 /**
  * M-5: `after` runs right after a `reserveSessionId` call of core returns
- * true, before the spawn takes its next step.
+ * true, before the spawn takes its next step. m-6: `before` runs right
+ * before such a call and `lost` right after one that returns false, so that
+ * a test can stage a concurrent record.
  */
 const reservation = vi.hoisted(() => ({
+  before: null as ((sessionId: string) => void) | null,
   after: null as ((sessionId: string) => void) | null,
+  lost: null as ((sessionId: string) => void) | null,
 }));
 
 vi.mock("../../metadata.js", async (importOriginal) => {
@@ -77,8 +82,10 @@ vi.mock("../../metadata.js", async (importOriginal) => {
   return {
     ...actual,
     reserveSessionId: (...args: Parameters<typeof actual.reserveSessionId>) => {
+      reservation.before?.(args[1]);
       const reserved = actual.reserveSessionId(...args);
       if (reserved) reservation.after?.(args[1]);
+      else reservation.lost?.(args[1]);
       return reserved;
     },
   };
@@ -95,7 +102,9 @@ let config: OrchestratorConfig;
 let originalPath: string | undefined;
 
 beforeEach(() => {
+  reservation.before = null;
   reservation.after = null;
+  reservation.lost = null;
   vi.mocked(findOpenCodeSessionsByTitle).mockClear();
   vi.mocked(listOpenCodeSessionsByTitle).mockClear();
   ctx = setupTestContext();
@@ -3356,6 +3365,103 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
           expect(mockRuntime.destroy).not.toHaveBeenCalled();
         },
       );
+
+      describe("a project orchestrator start that retries its reservation after a concurrent record (m-6)", () => {
+        let registry: PluginRegistry;
+        let lostReservations: string[];
+
+        beforeEach(() => {
+          const openCode = openCodeRegistry();
+          registry = openCode.registry;
+          useOpenCodeProject({ orchestratorWorkspaceMode: "project" });
+          livePanes(openCode.agent);
+          lostReservations = [];
+          reservation.lost = (sessionId) => {
+            lostReservations.push(sessionId);
+          };
+        });
+
+        /**
+         * Another start makes the record after this start read it and before
+         * this start's first reservation, so that reservation returns false.
+         */
+        function stageConcurrentRecord(extra: Record<string, string>): void {
+          reservation.before = (sessionId) => {
+            reservation.before = null;
+            writeMetadata(sessionsDir, sessionId, {
+              worktree: config.projects["my-app"]!.path,
+              branch: "main",
+              status: "working",
+              project: "my-app",
+              role: "orchestrator",
+            });
+            updateMetadata(sessionsDir, sessionId, extra);
+          };
+        }
+
+        /**
+         * Start the project orchestrator with a kill at the reservation that
+         * succeeds, then check: the first reservation lost, the record held
+         * both launch keys at the second one, the kill was refused, and the
+         * start completed with its created session.
+         */
+        async function expectKillAtRetryRefused(): Promise<void> {
+          const deleteLogPath = join(tmpDir, "opencode-delete-m6.log");
+          const mockBin = installMockOpencodeApi(tmpDir, [], { deleteLogPath });
+          process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
+          const sm = createSessionManager({ config, registry });
+          const kill = killRightAfterReservation(sm);
+
+          const session = await sm.spawnOrchestrator({ projectId: "my-app" });
+          const outcome = await kill.outcome();
+
+          expect(lostReservations).toEqual(["app-orchestrator"]);
+          expect(kill.recordAtReservation()).toEqual({
+            launchPid: String(process.pid),
+            launchPidStart: startToken(process.pid),
+          });
+          expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
+          expect((outcome as Error).message).toBe(refusal("kill", "app-orchestrator"));
+          expect(session.id).toBe("app-orchestrator");
+          const final = readMetadataRaw(sessionsDir, "app-orchestrator");
+          expect(final?.["opencodeSessionId"]).toBe("ses_created_1");
+          expect(final?.["launchPid"]).toBeUndefined();
+          expect(existsSync(deleteLogPath)).toBe(false);
+          expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_created_1"]);
+          expect(mockRuntime.destroy).not.toHaveBeenCalled();
+        }
+
+        it("the concurrent record's pane is dead: the start deletes it, and the second reservation holds the launch keys from its creation", async () => {
+          const deadHandle = JSON.stringify(makeHandle("dead-orchestrator"));
+          stageConcurrentRecord({ runtimeHandle: deadHandle });
+
+          await expectKillAtRetryRefused();
+
+          // The retry after the dead-record delete ran: the start checked the
+          // dead pane and archived the concurrent record (strategy reuse).
+          expect(mockRuntime.isAlive).toHaveBeenCalledWith(
+            expect.objectContaining({ id: "dead-orchestrator" }),
+          );
+          const archived = readArchivedMetadataRaw(sessionsDir, "app-orchestrator");
+          expect(archived?.["runtimeHandle"]).toBe(deadHandle);
+          expect(archived?.["launchPid"]).toBeUndefined();
+        });
+
+        it("the concurrent record is gone at the second read: the second reservation holds the launch keys from its creation", async () => {
+          stageConcurrentRecord({ status: "spawning" });
+          // The other start rolls back before this start reads the record again.
+          reservation.lost = (sessionId) => {
+            lostReservations.push(sessionId);
+            deleteMetadata(sessionsDir, sessionId, false);
+          };
+
+          await expectKillAtRetryRefused();
+
+          // The retry for a record without a runtime handle ran: nothing was
+          // archived.
+          expect(readArchivedMetadataRaw(sessionsDir, "app-orchestrator")).toBeNull();
+        });
+      });
 
       it("an agent without preparation hooks still reserves an empty record", async () => {
         let recordAtReservation: Record<string, string> | null = { unread: "true" };
