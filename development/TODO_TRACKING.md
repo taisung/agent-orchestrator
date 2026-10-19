@@ -418,7 +418,23 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     after a removal by a path without the launcher check; a file system without hard links now fails an
     OpenCode spawn with a clear error. **Re-check r4** dispatched to ao-40 at 23:09 EDT (brief
     `brief-review-i3-r4-sol.md`, review file `i3_review_r4_sol61.md`; it also runs the live checks that
-    did not run in r3), watcher PID 4059335.
+    did not run in r3), watcher PID 4059335. **Re-check r4**
+    (`development/reviews/i3_review_r4_sol61.md`, about 1.58 USD, 23:09 to 23:26 EDT, no filter stop):
+    **LAND-SAFE**, 0 B, 0 M, 1 m. M-5 fixed: the record first appears with both claim keys; 12 processes
+    on one ID gave one winner and no temp file; at the first visible record, both CLI kill forms exit 1
+    on `ff88bda5`, and on a `0b21660c` build they exit 0 and the spawn makes the record again. All live
+    checks that did not run in r3 ran: the M-4 crash with its own branch, the dead-owner kill, a dead
+    launcher with a live pane and an old record keep their IDs, the `getEnvironment` and resolver faults
+    roll back (worker and orchestrator, prompt file included), restore equals `b853f74f`, Herdr on a
+    private socket (native and npm accepted, preload and shell rejected). Gates pass (full suite 2378
+    passed, 29 skipped); 11 of 13 mutants caught. **m-6:** the two project-orchestrator retry
+    reservations (`session-manager.ts:1827`, `:1830`) pass the claim but have no test, so a mutant that
+    drops the claim there passes all 983 core tests. The author notes are minor (other `updateMetadata`
+    writes after a removal that skips the launcher check; no hard links gives a clear error). Cleanup
+    checked by the orchestrator (stale private tmux socket files remain in `/tmp/tmux-44402`, no server).
+    I-3 sends the first prompt through the pane TUI (`opencode --session <id> --prompt`), the path that
+    0010 §11.2 measured; a tool with no attached TUI is the main path of I-5. **Landing waits for the
+    owner:** m-6, and the deferred tool-environment check (0010 §14 item 3) or risk acceptance.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
