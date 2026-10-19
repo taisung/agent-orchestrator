@@ -335,12 +335,25 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     and `OPENCODE_TERMINAL`. No marker of the client that created the session or sent the prompt reached
     it. So the service alone decides what an API-only tool sees. The service is clean now (below), so the
     tool has no `AO_*`, no `~/.ao/bin` on `PATH`, and `gh` and `git` resolve to `/usr/bin`: no wrong-session
-    write, and no wrapper record of a PR made in such a session. **Still open for I-5:** a session with an
-    attached TUI that gets its turn through `session.prompt` (TUI environment or service environment?). If
-    the service environment, every `ao send` turn of an OpenCode worker runs `gh` and `git` without the
-    wrappers, and PR tracking stops. This needs one more turn with a TUI in a scratch environment on a
-    private tmux server (owner approval). Proposed guard: `ao` warns when the service environment holds an
-    `AO_*` name.
+    write, and no wrapper record of a PR made in such a session. Proposed guard: `ao` warns when the
+    service environment holds an `AO_*` name.
+  - **I-5 gate, measured (attempt 4, ao-38, 2026-10-19 19:53 EDT, about 1.05 USD by the status line; the
+    turn cost 0.0015 USD; owner: "yes" to the TUI-attached measurement): TUI-ENV.** One API session
+    (`ses_ea96ab07cffedIyPEHdVCjgG1L`), one scratch TUI (`opencode --session <id>`, no `--prompt`) on the
+    private server `tmux -L envcheck38`, started from `env -i` with `AO_SESSION_ID=envcheck-tui`, then
+    one `session.prompt` (`delivery: queue`) with the client marker `envcheck-prompt`. The model shell
+    tool ran as a direct child of the service (15920), not of the TUI, but with the TUI environment (15
+    names, among them `AO_SESSION_ID=envcheck-tui` and `TMUX_PANE=%0`) plus the same five OpenCode names.
+    No create or prompt client marker and none of the 48 service-only names reached it. The TUI showed the
+    API prompt, the tool row and the answer. **Consequence for I-5:** `ao send` through `session.prompt`
+    keeps the `AO_*` and `~/.ao/bin` of the worker pane while the TUI is attached, and the `opencode api`
+    client environment does not matter. With no attached TUI, the tool gets the service environment
+    (attempt 3), so I-5 must check that the TUI process lives before it sends, or warn. Not measured: a
+    real worker, how the service gets the TUI environment, a TUI that exits or attaches late, two TUIs,
+    `delivery` other than `queue`. Side effect: the TUI start wrote shared OpenCode state
+    (`~/.local/state/opencode/latest/tui/tabs.json`, `prompt-history.jsonl`, `session.json`; names only,
+    other TUIs also run). Session, TUI, server and socket removed; records, `~/.ao/bin`, `~/.opencode/bin`
+    and the service environment unchanged. Report: `reports/ao-38-toolenv-r4.agent_report.md`.
   - **Key renewed:** the `opencode-go` key works again (ao-37 answered a one-word turn at 18:11 EDT).
   - **Global service clean:** the global OpenCode service started again at 18:02:15 EDT as PID 15920
     (parent PID 1, not started by this orchestrator) with no `AO_*`, `TMUX` or `GH_PATH`. The old service
