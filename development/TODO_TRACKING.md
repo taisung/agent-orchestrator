@@ -444,7 +444,25 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     service (PID 3252262, parent PID 1), one `session.prompt` that runs a probe script; different
     `AO_SESSION_ID` markers for the client that creates the session and the client that sends the
     prompt; the probe prints variable names, and values only for `AO_*`, `PWD` and its markers; the
-    session is deleted at the end. Watcher PID 7930 (ao-36 and ao-38).
+    session is deleted at the end. Watcher PID 18812 (ao-36 and ao-38; `--preseed` is a flag with no
+    value, so give the sessions as separate arguments after it). ao-36 finished **round 5** as `7e03e41e`
+    (`spawn.test.ts` only, 107 insertions): two tests stage a concurrent record before the first
+    project-orchestrator reservation, then a kill right after the retry reservation sees both claim keys
+    and is refused; the claim removed at `:1827` fails only test 1, at `:1830` only test 2; core 985
+    passed; lint, typecheck, build pass; cleanup clean. A test merge (`git merge-tree`) of `7e03e41e` into
+    `main` is clean. **Tool-environment check, attempt 1** (ao-38, about 1.06 USD): **UNMEASURED**. The one
+    turn (`opencode-go/muse-spark-1.3-contributor`) failed with `provider.auth` 401 `api_key_expired`
+    121 ms after admission, 0 tokens, so no tool ran; no second prompt; session removed; records and
+    `~/.ao/bin` unchanged. Findings: the global service (PID 3252262, started 2026-10-16 12:16:17) now
+    carries the `AO_*` values of `as-73` of the `agent-skills` fleet (archived 2026-10-16 23:57), so a tool
+    that inherits the service environment writes to the record of an archived session (cross-fleet item
+    for `as-orchestrator`: start the service with a clean environment); every Muse worker on this host
+    fails at its first turn until the key is renewed; the failed turn is a real 2.x backend error for
+    0010 §14 item 2 (`finish: "error"`, an `idle` record with `outcome: failed`). In I-3 every `opencode
+    api` call of the prepare runs with the pane environment (`agent-opencode/src/index.ts:803`).
+    **Owner (2026-10-19):** try `opencode-go` again, and run the probe through `session.shell` (no model
+    turn) now. **Attempt 2** dispatched to ao-38 (brief `brief-toolenv-check-r2.md`): part A
+    `session.shell`, part B one more model turn; two sessions, both deleted. I-3 lands after the result.
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
