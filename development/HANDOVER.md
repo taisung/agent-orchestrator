@@ -1,7 +1,7 @@
 # Handover
 
-**Last Updated**: 2026-10-17
-**Latest Code Commit**: b853f74f (feat(plugin-opencode): catch dismiss-only forms with an esc dismiss marker)
+**Last Updated**: 2026-10-19
+**Latest Code Commit**: c76a3085 (test(core): cover the claim at both project orchestrator retry reservations)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
@@ -42,6 +42,17 @@ change (0.2.6). **I-3** is in re-check r2 by ao-40 (gpt-6.1-sol) on `15757aae..e
 says NOT-LAND-SAFE (launch ownership and argv gaps). I-3 lands only after the tool-environment check or
 the owner's risk acceptance. ao-32, ao-36, ao-37, ao-38 and ao-39 are idle. The watcher (PID 1739570)
 watches ao-37 and ao-40.
+
+**Update 2026-10-19 18:05 EDT (I-3 landed and live):** I-3 is on `main` as `45dd8fe1..c76a3085` (20
+cherry-picks of the I-3 branch rebased onto I-4, 5 rounds, What Landed). On the owner's word (2026-10-18:
+roll out and push; 2026-10-19: land I-3 and make the model-tool check a gate for I-5) the primary
+checkout was rebuilt at 18:01 EDT and the five lifecycle workers were restarted by exact PID at 18:02 EDT.
+**New lifecycle PIDs:** agent-skills 19579, agent-orchestrator 19624 (Nexus config) and 19689 (this
+config), Nexus 19636, VSF 19653. `WRAPPER_VERSION` did not change. Open for the owner: the expired
+`opencode-go` key (every Muse turn fails), and the `AO_*` values of `as-73` in the global OpenCode service
+(Known Issues, follow-ups after I-3). Next item: I-5 (`ao send` through `session.prompt`), gated by the
+model-tool check. All workers are idle. The rest of this file is stale and needs a full update at the
+next handover.
 
 **In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
 finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch

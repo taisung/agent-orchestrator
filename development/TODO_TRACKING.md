@@ -279,6 +279,31 @@ Durable progress record for this fork. Dated events only; the current state live
   N-7). Kept out: N-5, Sonnet m-1 (9 `opencode api` calls per poll), m-4 (for I-5), m-5 (`blocked` never
   decays; owner), N-4 (1.x). Costs: author about 0.33 USD; Sonnet 6.75, 5.95, 3.73 USD; Flash about 0.42
   USD over 3 rounds.
+- `45dd8fe1..c76a3085` (20 commits, 2026-10-19, ao-36, Opus 5.5; owner priority 2, 2026-10-16) - **I-3**:
+  ao creates the OpenCode session in Node before the pane starts, and the TUI attaches with
+  `opencode --session <id> --prompt` (cherry-picks of `762c5eff..7e03e41e`, the I-3 branch rebased onto
+  `b853f74f`; 5 rounds). The I-2 launch lock and its marker are gone. The model check reads `model.list`
+  through a file before the create. Every `opencode api` call of the prepare runs with the pane
+  environment. Launch ownership: the reservation writes `launchPid` and `launchPidStart` in one step
+  (temp file plus `link`), so no process reads a launch record without its owner; a kill, restore, remap
+  or orchestrator replace of a record with a live launcher is refused and names the launcher PID; a dead
+  launcher protects nothing. The launch check reads `/proc/<pid>/cmdline` (an interpreter only with the
+  OpenCode script at `argv[1]`) and a `user` message baseline for a reused session. A `getEnvironment` or
+  resolver throw rolls back the workspace, the reservation and the prompt file. Reviews: gpt-6.1-sol
+  (ao-40), `development/reviews/i3_review_r{1,2,3,4}_sol61.md`; r1 B-1, r2 B-2, r3 M-5, r4 LAND-SAFE with
+  m-6; round 5 (m-6 tests) checked by the orchestrator. Canonical check: `git diff 7e03e41e c76a3085`
+  outside `development/` is empty; core 985 and OpenCode plugin 253 passed in the orchestrator's run
+  (fake HOME, no `AO_*`, no `opencode` on `PATH`). **Live** (owner, 2026-10-18: "roll out and push";
+  2026-10-19: "land I-3, gate I-5"): `pnpm build` at 18:01 EDT (exit 0); the five lifecycle workers
+  restarted by exact PID at 18:02:44 to 18:02:56 (agent-skills 19579, agent-orchestrator 19624 for the
+  Nexus config and 19689 for this config, Nexus 19636, VSF 19653). Tool-environment check: the TUI path
+  (I-3) is the path that 0010 §11.2 measured; a `session.shell` command with no TUI gets the service
+  environment; the model tool with no TUI is not measured (expired `opencode-go` key) and gates I-5.
+  Kept out: the first-poll `killed` race, `ao stop` on a launching orchestrator (exit 1 before the
+  lifecycle stop), `recovery/actions.ts:149` (no shipped caller), `node --no-warnings <dir>/opencode`
+  rejected, agents without preparation hooks, the `LocationNotFoundError` reuse failure, the project-mode
+  orchestrator record drop, the `/proc` need. Costs: author about 60.17 USD (transcript); reviewer about
+  1.41, 2.25, 1.65, 1.58 USD; tool-environment attempts about 1.06 and 1.2 USD.
 
 ## Decisions
 
@@ -303,8 +328,22 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
 
 ## Known Issues
 
-- **I-3 and I-4 in progress** (owner, 2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT,
-  meter `5h 0%`, `wk 33%`, both on `15757aae`, router rows open, watcher PID 107999.
+- **Follow-ups after I-3 (2026-10-19):**
+  - **I-5 gate:** measure the model shell tool in a session with no TUI (Part B of
+    `brief-toolenv-check-r2.md`, one turn) after the `opencode-go` key is renewed. Until then, I-5 must not
+    trust the `gh` and `git` wrappers for an API-only tool.
+  - **Owner action:** the `opencode-go` key is expired (401 `api_key_expired`, again at 18:03 EDT through
+    the ao-37 TUI). Every Muse worker and the OpenCode review lens fail at the first turn until a new key
+    is made in the OpenCode Console.
+  - **Owner / `as-orchestrator`:** the global OpenCode service (PID 3252262) carries the `AO_*` values of
+    the archived `agent-skills` session `as-73`; start it from an environment with no `AO_*`.
+  - Code items: the first-poll `killed` race (separate item, `lifecycle-manager.ts`); `ao stop` on a
+    launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
+    project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
+    message reached the session, not that the turn succeeded (a failed turn reads `blocked` through I-4).
+- **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
+  2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
+  `15757aae`, router rows open, watcher PID 107999.
   - **I-3** (create in Node, launch check, no title discovery; python L1 HIGH): author ao-36, Opus 5.5 by
     the owner's choice (the router default was Muse; the I-2 precedent needed 5 rounds). Reviewer:
     gpt-6.1-sol (Codex), the cross-family lens for an Opus author at HIGH. Brief
