@@ -435,6 +435,16 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     I-3 sends the first prompt through the pane TUI (`opencode --session <id> --prompt`), the path that
     0010 §11.2 measured; a tool with no attached TUI is the main path of I-5. **Landing waits for the
     owner:** m-6, and the deferred tool-environment check (0010 §14 item 3) or risk acceptance.
+    **Owner (2026-10-18, 23:30 EDT):** run the tool-environment check now (one model turn); a
+    tests-only round 5 for m-6; after the landing, roll out and push (build, restart the five lifecycle
+    workers by exact PID, push `main`). **Round 5** dispatched to ao-36 at 23:33 EDT (brief
+    `brief-aofork-i3-r5.md`: two tests for the retry reservations at `:1827` and `:1830`, only
+    `spawn.test.ts`, each mutant must fail its test). **Tool-environment check** dispatched to ao-38
+    (Sonnet 5.5) at 23:33 EDT (brief `brief-toolenv-check.md`): one API-only session on the global
+    service (PID 3252262, parent PID 1), one `session.prompt` that runs a probe script; different
+    `AO_SESSION_ID` markers for the client that creates the session and the client that sends the
+    prompt; the probe prints variable names, and values only for `AO_*`, `PWD` and its markers; the
+    session is deleted at the end. Watcher PID 7930 (ao-36 and ao-38).
   - **I-4** (activity, cost and session info from the API; python L1 MEDIUM): author ao-37, Muse.
     Reviewers: Sonnet 5.5 and V4.1 Flash. Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i4-activity.md`.
     New code in `agent-opencode/src/api-activity.ts`; no core change. Owner decision: a long tool call
