@@ -793,6 +793,19 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
     With fix C the next poll corrects them. Owner decision; not run.
+- **claude-code `detectActivity` reads an open dialog and an idle 2.1.304 fullscreen pane as `active`**
+  (reported 2026-10-20 by `as-orchestrator`, measured by as-77 on Claude Code 2.1.304, `"tui":
+  "fullscreen"`, 120x50, private tmux; evidence `~/agent-skills/development/artifacts/dialog_paste_2026_10_20/`
+  trials t7 and t8, agent-skills `9a89e8e`). An open AskUserQuestion dialog reads `active`, not
+  `waiting_input`; an idle pane read `active` in 25 of 25 polls, because the last row is the footer
+  (`⏵⏵ ...`), not `❯`. So `ao send` without `--no-wait` always waits to its timeout (600 s) and then
+  pastes, and the paste's `Enter` answers the current question with the option under the cursor (t1,
+  t3); with the cursor on the free-text field, `C-u` erases the owner's text and the paste becomes the
+  answer (t4). `--no-wait` pastes at once in every case, and `ao send` prints `Message sent and
+  processing`. A `waiting_input` form for the dialog would let the wait path refuse; `--no-wait` would
+  still paste. Open; a worker change in `agent-claude-code/src/index.ts` (and possibly `send.ts`), after
+  the killed-status round 2 lands (it changes the same plugin file). Orchestrator rule until then: no
+  AskUserQuestion dialog in the orchestrator pane while a watcher or a worker can send to it.
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;
