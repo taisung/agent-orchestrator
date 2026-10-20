@@ -34,9 +34,12 @@ cleanup` at this handover removed the OpenCode session of the archived ao-35 (40
 
 **Local branches kept** (from earlier cleanups): `i3-r2-pre-rebase` holds two commits that `main` has
 only in rewritten form (`7aa587e5` create the OpenCode session before the pane starts, `dab0ba43` check
-the launch on the exact argv) - keep it. These seven show no `+` in `git cherry main` and can go after
-the owner's word: `feat/branchcheck2-muse-*`, `feat/i3create-opus-*`, `feat/i3rev-sol-*`,
-`feat/i4activity-muse-*`, `feat/i4rev-sonnet-*`, `feat/i4rev-v4flash-*`, `feat/restoremodelrev-opus-*`.
+the launch on the exact argv) - keep it. On the owner's word (2026-10-20, after the handover commit)
+the seven older worker branches with no `+` in `git cherry main` and no merge commit were deleted
+(`feat/branchcheck2-muse-*`, `feat/i3create-opus-*`, `feat/i3rev-sol-*`, `feat/i4activity-muse-*`,
+`feat/i4rev-sonnet-*`, `feat/i4rev-v4flash-*`, `feat/restoremodelrev-opus-*`). `main` and
+`i3-r2-pre-rebase` are the only local branches. `git worktree list` shows only the primary checkout, and
+`/home/taisung/.worktrees/agent-orchestrator/` is empty.
 
 **Lifecycle workers** (since 2026-10-20 09:52): agent-skills 105049, agent-orchestrator 105142 (Nexus
 config) and 106285 (this config), Nexus 105154, VSF 106266. Every brief must protect these PIDs, not
@@ -78,8 +81,7 @@ lock name. Owner decision only if AO ever runs on macOS or on a shared host.
 **Dependency Review on PRs**: open - owner decision - it fails because the repository's Dependency graph
 setting is off. Turn the setting on, or let a worker remove the job.
 **Owner decisions carried forward**: the global OpenCode permissions that allow every action; the orphan
-stash (`stash@{0}` on `feat/opencode-gemini-plugins`); `0007` §6 decisions 1 to 4 and 6; the deletion of
-the seven merged old branches above.
+stash (`stash@{0}` on `feat/opencode-gemini-plugins`); `0007` §6 decisions 1 to 4 and 6.
 **Q3 event stream**: blocked by D-4 (no worker reads the service password) - I-4 polls.
 **Minors from I-1 and I-6**: I-6 m-7 and m-8, the `npm ls` timeout, the export surface, the picker hint;
 I-1: the refusal message omits the probe's stderr, a refused spawn leaves its branch.
