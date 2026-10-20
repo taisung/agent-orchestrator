@@ -1138,9 +1138,10 @@ function createOpenCodeAgent(): Agent {
      * Enter and no screen check. In this order: the size check (a message
      * that can never go gets no TUI wait), the TUI check (`AgentNotAttachedError`
      * without a TUI: then nothing is sent), one read of the pending input and
-     * the busy state, the input ID from `attempt.begin` (core persists it
-     * first, or gives back the ID of an earlier unknown send of the same
-     * text), then one `session.prompt` with that ID. The admitted inbox item
+     * the busy state, the input ID from `attempt.begin` (core persists it in
+     * the delivery ledger of this OpenCode session first, or gives back the
+     * ID of an earlier attempt of the same text that may have been admitted),
+     * then one `session.prompt` with that ID. The admitted inbox item
      * is the record; an item created before this call is a replay of the
      * earlier attempt. A refused prompt or a child that never started fails
      * with `admission: "none"`; a prompt whose admission is unknown gets one
@@ -1161,7 +1162,7 @@ function createOpenCodeAgent(): Agent {
       await waitForSendTui(session, sessionId);
       const context = await getApiSendContext(sessionId);
       const inputId = attempt
-        ? attempt.begin(() => mintOpenCodeMessageId())
+        ? await attempt.begin(() => mintOpenCodeMessageId(), sessionId)
         : mintOpenCodeMessageId();
       const startedAt = Date.now();
       let item: OpenCodeInboxItem;
@@ -1174,7 +1175,9 @@ function createOpenCodeAgent(): Agent {
         }
         return recoverUnknownAdmission(session.id, sessionId, inputId, context, err);
       }
-      const replayed = item.created !== undefined && item.created < startedAt;
+      // A new admission is created after the child starts, so later than
+      // `startedAt`; an input created at or before it is a replay.
+      const replayed = item.created !== undefined && item.created <= startedAt;
       return {
         inputId: item.id,
         mode: item.delivery,

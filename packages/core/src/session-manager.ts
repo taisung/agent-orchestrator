@@ -80,10 +80,17 @@ import {
   getStateRoot,
   getWorktreesDir,
   getProjectBaseDir,
+  getDeliveryLedgerDir,
   generateConfigHash,
   generateTmuxName,
   validateAndStoreOrigin,
 } from "./paths.js";
+import {
+  beginDelivery,
+  removeDeliveryLedger,
+  settleDelivery,
+  type DeliveryAttempt,
+} from "./delivery-ledger.js";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
   getOpenCodeSession,
@@ -403,92 +410,9 @@ const SEND_CONFIRMATION_OUTPUT_LINES = 20;
 const SEND_BOOTSTRAP_READY_TIMEOUT_MS = 20_000;
 const SEND_BOOTSTRAP_STABLE_POLLS = 2;
 
-/**
- * I-5 (B-1, M-1): the record key of the pending agent deliveries. Its value is
- * a JSON array of `PendingDelivery`, one entry per send that called
- * `AgentDeliveryAttempt.begin` and did not end yet, or whose admission stayed
- * unknown. Core removes the key when the array is empty.
- */
-const PENDING_DELIVERIES_KEY = "pendingDeliveries";
-
-/**
- * A later send of the same text reuses the input ID of an `unknown` entry
- * younger than this. The lifecycle polls every 30 s, and one poll that waits
- * for a send without a TUI takes about 1 to 2 min (two TUI checks, one
- * restore, the prompt and its read-back), so its retry of the same dispatch
- * comes well inside 10 min; so does a human who reads the error and sends
- * again. An older entry is removed, and the same text then counts as a new
- * logical send with a new ID.
- */
-const PENDING_DELIVERY_REUSE_MS = 10 * 60_000;
-
-/** How many pending entries one record keeps at most (the newest). */
-const PENDING_DELIVERIES_MAX = 20;
-
-type PendingDeliveryState = "sending" | "unknown";
-
-interface PendingDelivery {
-  /** The input ID that the agent sends (OpenCode: the client `msg_...` ID). */
-  inputId: string;
-  /** SHA-256 (hex) of the UTF-8 message text. */
-  textSha256: string;
-  /** When the first attempt of this ID began (ISO 8601). */
-  at: string;
-  /** `sending` while a call runs: never reused. `unknown`: reused by the same text. */
-  state: PendingDeliveryState;
-}
-
+/** SHA-256 (hex) of the UTF-8 message text: the delivery ledger compares sends by it. */
 function messageSha256(message: string): string {
   return createHash("sha256").update(message, "utf-8").digest("hex");
-}
-
-function isPendingDelivery(value: unknown): value is PendingDelivery {
-  if (typeof value !== "object" || value === null) return false;
-  const entry = value as Record<string, unknown>;
-  return (
-    typeof entry["inputId"] === "string" &&
-    entry["inputId"].length > 0 &&
-    typeof entry["textSha256"] === "string" &&
-    typeof entry["at"] === "string" &&
-    Number.isFinite(Date.parse(entry["at"])) &&
-    (entry["state"] === "sending" || entry["state"] === "unknown")
-  );
-}
-
-function parsePendingDeliveries(value: string | undefined): PendingDelivery[] {
-  if (!value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter(isPendingDelivery) : [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Change the pending entries of one record: a synchronous read, `change`, and
- * one `updateMetadata` of this key only, so no other key of the record is
- * lost and no other code of this process runs in between. Entries older than
- * `PENDING_DELIVERY_REUSE_MS` are removed on every change. A record that is
- * gone (killed or archived during the send) is not written, because
- * `updateMetadata` would make a new record. Returns false for that case.
- */
-function changePendingDeliveries(
-  sessionsDir: string,
-  sessionId: SessionId,
-  change: (entries: PendingDelivery[], now: number) => PendingDelivery[],
-): boolean {
-  const raw = readMetadataRaw(sessionsDir, sessionId);
-  if (!raw) return false;
-  const now = Date.now();
-  const current = parsePendingDeliveries(raw[PENDING_DELIVERIES_KEY]).filter(
-    (entry) => now - Date.parse(entry.at) < PENDING_DELIVERY_REUSE_MS,
-  );
-  const next = change(current, now).slice(-PENDING_DELIVERIES_MAX);
-  updateMetadata(sessionsDir, sessionId, {
-    [PENDING_DELIVERIES_KEY]: next.length > 0 ? JSON.stringify(next) : "",
-  });
-  return true;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2402,6 +2326,29 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     deleteMetadata(sessionsDir, sessionId, true);
     if (didPurgeOpenCodeSession) {
       markArchivedOpenCodeCleanup(sessionsDir, sessionId);
+      await removeLedgerOfRemovedSession(project, raw["opencodeSessionId"], sessionId);
+    }
+  }
+
+  /**
+   * I-5: the OpenCode session is removed, so no send can use its delivery
+   * ledger any more. A kill without purge keeps the ledger (a restore keeps
+   * the stored session ID). Best effort: the entries expire after
+   * `DELIVERY_REUSE_MS` anyway.
+   */
+  async function removeLedgerOfRemovedSession(
+    project: ProjectConfig,
+    openCodeSessionId: string | undefined,
+    aoSessionId: SessionId,
+  ): Promise<void> {
+    const key = asValidOpenCodeSessionId(openCodeSessionId);
+    if (!key) return;
+    try {
+      await removeDeliveryLedger(getDeliveryLedgerDir(config.configPath, project.path), key);
+    } catch (err) {
+      warnOperator(
+        `ao: could not remove the delivery ledger of OpenCode session ${key} of ${aoSessionId} (${shortErrorText(err)}); its entries expire after 10 min.`,
+      );
     }
   }
 
@@ -2574,6 +2521,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             try {
               await deleteOpenCodeSession(mappedOpenCodeSessionId);
               markArchivedOpenCodeCleanup(sessionsDir, archivedId);
+              await removeLedgerOfRemovedSession(project, mappedOpenCodeSessionId, archivedId);
             } catch (err) {
               result.errors.push({
                 sessionId: archivedId,
@@ -2613,7 +2561,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
   async function deliver(sessionId: SessionId, message: string): Promise<SessionMessageDelivery> {
     const sendStartedAt = Date.now();
-    const { raw, project, projectId, sessionsDir } = requireSessionRecord(sessionId);
+    const { raw, project, projectId } = requireSessionRecord(sessionId);
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
     const selectedAgent = selection.agentName;
@@ -2877,64 +2825,49 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // record is replaced (inherited behavior, not changed by I-5).
     const deliverMessage = agentPlugin.deliverMessage?.bind(agentPlugin);
 
-    // I-5 (B-1, M-1): one input ID per logical send. `begin` persists the ID
-    // (state `sending`) before the agent's API call, and gives back the ID of
-    // an earlier send of the same text whose admission stayed `unknown`, so a
-    // retry by any caller (CLI, lifecycle reaction, review-check) cannot admit
-    // the message twice. A `sending` entry is never reused: a concurrent send
-    // of the same text gets its own ID.
+    // I-5 (B-1, B-2, M-2, M-3): one input ID per logical send. `begin`
+    // persists the ID in the delivery ledger of the agent session (a file of
+    // its own under a cross-process lock, keyed by the agent session, so a
+    // record write, a kill, the archive and a restore keep it) before the
+    // agent's API call. It gives back the ID of an earlier attempt of the
+    // same text that may have been admitted: its admission stayed `unknown`,
+    // or its process ended during the call, or this process failed to write
+    // its `unknown`. So a retry by any caller (CLI, lifecycle reaction,
+    // review-check) cannot admit the message twice. The `sending` entry of a
+    // live attempt is never taken: a concurrent send of the same text gets
+    // its own ID.
+    const ledgerDir = getDeliveryLedgerDir(config.configPath, project.path);
     const textSha256 = messageSha256(message);
-    let begunInputId: string | undefined;
+    let begun: { key: string; attempt: DeliveryAttempt } | undefined;
+    const settleDeliveryAttempt = async (outcome: "clear" | "unknown"): Promise<void> => {
+      const current = begun;
+      if (!current) return;
+      begun = undefined;
+      // Never throws: the outcome of the API call is final at this point. A
+      // failed write of `unknown` leaves the entry `sending` with this
+      // process as its owner and the attempt out of flight, so a later send
+      // of the same text takes the ID (in this process at once, in another
+      // one after this process ends). A failed clear is tried again; see
+      // `settleDelivery`.
+      await settleDelivery({ dir: ledgerDir, key: current.key, attempt: current.attempt, outcome });
+    };
     const attempt: AgentDeliveryAttempt = {
-      begin(mint: () => string): string {
-        let chosen: string | undefined;
-        const written = changePendingDeliveries(sessionsDir, sessionId, (entries, now) => {
-          const reuse = entries
-            .filter((entry) => entry.state === "unknown" && entry.textSha256 === textSha256)
-            .at(-1);
-          if (reuse) {
-            chosen = reuse.inputId;
-            return entries.map((entry) =>
-              entry === reuse ? { ...entry, state: "sending" as const } : entry,
-            );
-          }
-          const minted = mint();
-          if (typeof minted !== "string" || minted.length === 0) {
-            throw new Error(`Cannot send to session ${sessionId}: the agent minted no input ID`);
-          }
-          chosen = minted;
-          return [
-            ...entries,
-            { inputId: minted, textSha256, at: new Date(now).toISOString(), state: "sending" },
-          ];
-        });
-        if (!written || chosen === undefined) {
+      async begin(mint: () => string, key: string): Promise<string> {
+        // A second begin in one send (after a restore) ends the first
+        // attempt as unknown, so the second takes its ID.
+        await settleDeliveryAttempt("unknown");
+        try {
+          const started = await beginDelivery({ dir: ledgerDir, key, textSha256, mint });
+          begun = { key, attempt: started };
+          return started.inputId;
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
           throw new Error(
-            `Cannot send to session ${sessionId}: its record is gone, so the input ID cannot be kept; nothing was sent`,
+            `Cannot send to session ${sessionId}: the input ID cannot be persisted (${detail}); nothing was sent`,
+            { cause: err },
           );
         }
-        begunInputId = chosen;
-        return chosen;
       },
-    };
-    // Best effort: the outcome of the API call is final at this point. A
-    // failed record write must not turn an admitted message into a failed
-    // send (a caller would retry it under a new ID); the entry that stays is
-    // `sending` (never reused) and expires after PENDING_DELIVERY_REUSE_MS.
-    const settlePendingDelivery = (outcome: "clear" | "unknown"): void => {
-      const inputId = begunInputId;
-      if (inputId === undefined) return;
-      try {
-        changePendingDeliveries(sessionsDir, sessionId, (entries) =>
-          outcome === "clear"
-            ? entries.filter((entry) => entry.inputId !== inputId)
-            : entries.map((entry) =>
-                entry.inputId === inputId ? { ...entry, state: "unknown" as const } : entry,
-              ),
-        );
-      } catch {
-        // See above: keep the result of the send.
-      }
     };
 
     const deliverThroughAgent = async (
@@ -2993,12 +2926,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       } catch (err) {
         // A definite refusal admitted nothing; every other failure after
         // `begin` may have admitted the message, so its ID stays reusable.
-        settlePendingDelivery(
+        await settleDeliveryAttempt(
           isAgentDeliveryError(err) && err.admission === "none" ? "clear" : "unknown",
         );
         throw err;
       }
-      settlePendingDelivery("clear");
+      await settleDeliveryAttempt("clear");
       return { route: "agent", delivery };
     }
 

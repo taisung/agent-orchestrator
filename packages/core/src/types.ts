@@ -428,10 +428,12 @@ export interface Agent {
    * it returns the record of the admitted message, or throws.
    *
    * Right before its API call, the hook gets the input ID from
-   * `attempt.begin`: core persists that ID first, and gives back the ID of an
-   * earlier send of the same text whose admission stayed unknown, so the
-   * service admits one logical send at most once. Without `attempt`, the hook
-   * mints an ID that nothing persists.
+   * `attempt.begin`: core persists that ID in the delivery ledger of the
+   * agent session first, and gives back the ID of an earlier attempt of the
+   * same text that may have been admitted (its admission stayed unknown, or
+   * its process ended during the call), so the service admits one logical
+   * send at most once. When `begin` throws, nothing may be sent. Without
+   * `attempt`, the hook mints an ID that nothing persists.
    *
    * `AgentNotAttachedError` (thrown before `begin`) means that nothing was
    * delivered because the interactive agent process that the delivery needs
@@ -584,13 +586,17 @@ export interface AgentMessageDelivery {
 
 /**
  * The input ID of one logical send (I-5). `begin` is called by the agent
- * right before its API call, with the agent's ID generator. Core persists the
- * pending entry (state `sending`) before it returns, and returns the ID to
- * use: the ID of an earlier send of the same text to the same session whose
- * admission stayed unknown, or a new ID from `mint`.
+ * right before its API call, with the agent's ID generator and `key`, the
+ * agent session that gets the input (OpenCode: the stored `ses_...` ID).
+ * Core keeps one delivery ledger per key, writes the entry (state
+ * `sending`, owner: this process and attempt) under the ledger lock before
+ * it resolves, and resolves the ID to use: the ID of an earlier attempt of
+ * the same text to the same key that may have been admitted, or a new ID
+ * from `mint`. It rejects when the ID cannot be persisted; then the agent
+ * sends nothing.
  */
 export interface AgentDeliveryAttempt {
-  begin(mint: () => string): string;
+  begin(mint: () => string, key: string): Promise<string>;
 }
 
 /** How `SessionManager.deliver` sent one message. */

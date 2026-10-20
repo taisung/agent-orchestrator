@@ -2508,22 +2508,29 @@ describe("deliverMessage (I-5)", () => {
         id: inputId,
         sessionID: sessionId,
         delivery: "queue",
-        created: Date.now(),
+        // The service creates a new input after the child started, so
+        // always later than the call start.
+        created: Date.now() + 1,
       }),
     );
   }
 
-  /** A recording `AgentDeliveryAttempt`: `begin` gives `reuse` when set, else the minted ID. */
+  /**
+   * A recording `AgentDeliveryAttempt`: `begin` gives `reuse` when set, else
+   * the minted ID, and records the ledger key that it got.
+   */
   function attempt(reuse?: string) {
     const begun: string[] = [];
+    const keys: string[] = [];
     const value: AgentDeliveryAttempt = {
-      begin: vi.fn((mint: () => string) => {
+      begin: vi.fn(async (mint: () => string, key: string) => {
         const id = reuse ?? mint();
         begun.push(id);
+        keys.push(key);
         return id;
       }),
     };
-    return { attempt: value, begun };
+    return { attempt: value, begun, keys };
   }
 
   function apiState(state: { permissions?: unknown[]; forms?: unknown[]; active?: unknown }) {
@@ -2603,12 +2610,14 @@ describe("deliverMessage (I-5)", () => {
     expect(psOrder).toBeLessThan(mockPromptOpenCodeSession.mock.invocationCallOrder[0]!);
   });
 
-  it("calls attempt.begin after the TUI check and the context reads, and before the prompt", async () => {
+  it("calls attempt.begin with the stored session ID after the TUI check and the context reads, and before the prompt", async () => {
     pane([TUI]);
     admits();
-    const { attempt: att } = attempt();
+    const { attempt: att, keys } = attempt();
 
     await agent.deliverMessage!(session(), TEXT, att);
+
+    expect(keys).toEqual([ID]);
 
     const beginOrder = vi.mocked(att.begin).mock.invocationCallOrder[0]!;
     const lastRead = Math.max(...mockCallOpenCodeApi.mock.invocationCallOrder);
@@ -2641,6 +2650,45 @@ describe("deliverMessage (I-5)", () => {
     const record = await agent.deliverMessage!(session(), TEXT, attempt(reused).attempt);
 
     expect(record).toEqual(expect.objectContaining({ inputId: reused, replayed: true }));
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+  });
+
+  it("marks a replay also when the service answers an input created in the millisecond of the call start", async () => {
+    pane([TUI]);
+    const reused = "msg_157009572001NJPQm5mQNVn3gG";
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      mockPromptOpenCodeSession.mockResolvedValue({
+        id: reused,
+        sessionID: ID,
+        delivery: "queue",
+        created: now,
+      });
+
+      const record = await agent.deliverMessage!(session(), TEXT, attempt(reused).attempt);
+
+      expect(record).toEqual(expect.objectContaining({ inputId: reused, replayed: true }));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("sends nothing when begin rejects (the ID cannot be persisted)", async () => {
+    pane([TUI]);
+    admits();
+    const refused: AgentDeliveryAttempt = {
+      begin: vi.fn(async () => {
+        throw new Error(
+          "Cannot send to session sess-1: the input ID cannot be persisted; nothing was sent",
+        );
+      }),
+    };
+
+    const err = await failure(agent.deliverMessage!(session(), TEXT, refused));
+
+    expect(err.message).toContain("cannot be persisted; nothing was sent");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
     expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
   });
 
@@ -2987,6 +3035,13 @@ describe("deliverMessage (I-5)", () => {
       [
         "a child that a signal stopped",
         () => new Error("opencode api session.prompt failed: exit code null, signal SIGKILL"),
+      ],
+      [
+        "an I/O error of a child that started (EPIPE)",
+        () =>
+          new Error("opencode api session.prompt failed: write EPIPE", {
+            cause: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+          }),
       ],
     ];
 
