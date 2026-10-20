@@ -23,6 +23,7 @@ import {
   writeMetadata,
 } from "../metadata.js";
 import { getWorktreesDir } from "../paths.js";
+import { interruptOpenCodeSession, removeOpenCodeSession } from "../opencode-api.js";
 import { cleanupSession, escalateSession, recoverSession } from "../recovery/actions.js";
 import { DEFAULT_RECOVERY_CONFIG, type RecoveryAssessment } from "../recovery/types.js";
 import type * as DeliveryLedger from "../delivery-ledger.js";
@@ -60,6 +61,7 @@ vi.mock("../opencode-api.js", async (importOriginal) => {
     removeOpenCodeSession: vi.fn(async () => {
       discovery.duringRemove?.();
     }),
+    interruptOpenCodeSession: vi.fn(async () => ({ interrupted: true })),
   };
 });
 vi.mock("../delivery-ledger.js", async (importOriginal) => {
@@ -80,6 +82,8 @@ beforeEach(() => {
   discovery.during = null;
   discovery.duringRemove = null;
   discovery.duringLedgerRemove = null;
+  vi.mocked(removeOpenCodeSession).mockClear();
+  vi.mocked(interruptOpenCodeSession).mockClear();
   ctx = setupTestContext();
   ({ sessionsDir, config } = ctx);
 });
@@ -685,18 +689,149 @@ describe("1.1 item 3: an orchestrator start writes only into its own record", ()
   });
 });
 
-describe("1.1 item 3: kill and cleanup archive only the launch they read", () => {
-  it("a restore during the runtime destroy of a kill keeps its record, and the kill fails", async () => {
-    launchedRecord("app-1");
-    vi.mocked(ctx.mockRuntime.destroy).mockImplementation(async () => {
-      publishNewLaunch("app-1");
+describe("1.1 item 3: an orchestrator start that reuses a live orchestrator", () => {
+  beforeEach(() => {
+    config.projects["my-app"]!.orchestratorWorkspaceMode = "project";
+    config.projects["my-app"]!.orchestratorSessionStrategy = "reuse";
+    launchedRecord("app-orchestrator", { role: "orchestrator" }, makeHandle("rt-orch-old"));
+  });
+
+  it("a record archived during the liveness check: its orphan runtime is stopped, and a new start follows", async () => {
+    vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async (handle) => {
+      if (handle.id === "rt-orch-old") deleteMetadata(sessionsDir, "app-orchestrator", true);
+      return true;
     });
     const sm = createSessionManager({ config, registry: ctx.mockRegistry });
 
-    await expect(sm.kill("app-1")).rejects.toThrow(
+    const session = await sm.spawnOrchestrator({ projectId: "my-app" });
+
+    expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-orch-old"));
+    expect(session.metadata["orchestratorSessionReused"]).toBeUndefined();
+    expect(recordOf("app-orchestrator")?.["runtimeHandle"]).toBe(
+      JSON.stringify(makeHandle("rt-1")),
+    );
+  });
+
+  it("a reservation of another start during the liveness check is kept, and no runtime is stopped", async () => {
+    let reservation: Record<string, string> | null = null;
+    vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async (handle) => {
+      if (handle.id === "rt-orch-old" && !reservation) {
+        reservation = archiveAndReserve("app-orchestrator");
+      }
+      return true;
+    });
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+
+    await expect(sm.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
+      "Session app-orchestrator already exists but is not in a reusable state",
+    );
+    expect(ctx.mockRuntime.destroy).not.toHaveBeenCalled();
+    expect(recordOf("app-orchestrator")).toEqual(reservation);
+  });
+});
+
+describe("1.1 item 3: kill and cleanup archive only the launch they read", () => {
+  /** A launched OpenCode record of app-1 in a managed worktree (a kill destroys it). */
+  function managedOpenCodeRecord(): string {
+    const project = config.projects["my-app"]!;
+    const worktree = join(getWorktreesDir(config.configPath, project.path), "app-1");
+    mkdirSync(worktree, { recursive: true });
+    launchedRecord("app-1", { worktree, agent: "opencode", opencodeSessionId: "ses_old" });
+    return worktree;
+  }
+
+  it("a restore during the runtime destroy: the worktree, agent session and record stay, and the kill fails", async () => {
+    const worktree = managedOpenCodeRecord();
+    vi.mocked(ctx.mockRuntime.destroy).mockImplementation(async () => {
+      // The restored launch uses the same worktree and OpenCode session.
+      publishNewLaunch("app-1");
+      updateMetadata(sessionsDir, "app-1", { worktree, opencodeSessionId: "ses_old" });
+    });
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+
+    await expect(sm.kill("app-1", { purgeOpenCode: true })).rejects.toThrow(
+      /Session app-1 changed while it was killed .*its worktree, agent session and record were kept; run the kill again/,
+    );
+    expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch" });
+    expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
+    expect(removeOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("a restore during the worktree destroy: the agent session and the record stay", async () => {
+    managedOpenCodeRecord();
+    vi.mocked(ctx.mockWorkspace.destroy).mockImplementation(async () => {
+      publishNewLaunch("app-1");
+      updateMetadata(sessionsDir, "app-1", { agent: "opencode", opencodeSessionId: "ses_old" });
+    });
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+
+    await expect(sm.kill("app-1", { purgeOpenCode: true })).rejects.toThrow(
+      /Session app-1 changed while it was killed .*its agent session and record were kept; run the kill again/,
+    );
+    expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch" });
+    expect(interruptOpenCodeSession).not.toHaveBeenCalled();
+    expect(removeOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("a restore during the OpenCode removal: the record is not archived, and the kill fails", async () => {
+    managedOpenCodeRecord();
+    discovery.duringRemove = () => publishNewLaunch("app-1");
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+
+    await expect(sm.kill("app-1", { purgeOpenCode: true })).rejects.toThrow(
       /Session app-1 changed while it was killed .*its record was not archived; run the kill again/,
     );
     expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch" });
+    // The only archive is the old launch's (the other process archived it).
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({ branch: "feat/old" });
+  });
+
+  it("a failed ledger removal does not write over the pending key of a newer archive", async () => {
+    managedOpenCodeRecord();
+    discovery.duringLedgerRemove = () => {
+      // A restore and a kill of the ID leave a newer archive with its own key.
+      publishNewLaunch("app-1");
+      updateMetadata(sessionsDir, "app-1", { opencodeLedgerPending: "ses_newer" });
+      deleteMetadata(sessionsDir, "app-1", true);
+      throw new Error("ledger busy");
+    };
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+    const lines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    try {
+      await sm.kill("app-1", { purgeOpenCode: true });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({
+      branch: "feat/new-launch",
+      opencodeLedgerPending: "ses_newer",
+    });
+    expect(lines.join("")).toMatch(/could not be marked for a retry either/);
+  });
+
+  it("control: a failed ledger removal marks the archive of this kill for a retry", async () => {
+    managedOpenCodeRecord();
+    discovery.duringLedgerRemove = () => {
+      throw new Error("ledger busy");
+    };
+    const sm = createSessionManager({ config, registry: ctx.mockRegistry });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await sm.kill("app-1", { purgeOpenCode: true });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(vi.mocked(removeOpenCodeSession).mock.calls.map((call) => call[0])).toEqual(["ses_old"]);
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({
+      branch: "feat/old",
+      opencodeLedgerPending: "ses_old",
+    });
   });
 
   it("control: a status write of the lifecycle during the kill does not stop the archive", async () => {

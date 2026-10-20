@@ -1986,6 +1986,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             persisted.metadata["orchestratorSessionReused"] = "true";
             return persisted;
           }
+          // The record is gone (another process archived or deleted it)
+          // while its runtime still runs: no record names that runtime, so
+          // it is stopped before this start uses the ID and its runtime name.
+          // A record without a handle is another start's reservation, and
+          // it is kept (the reservation below then fails).
+          if (!persistedRaw) {
+            await plugins.runtime
+              .destroy(existingOrchestrator.runtimeHandle)
+              .catch(() => undefined);
+          }
         } else if (existingAlive) {
           if (stillNames(existingRaw)) {
             await plugins.runtime
@@ -2461,6 +2471,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const cleanupAgent = resolveSelectionForSession(project, sessionId, raw).agentName;
 
+    // B-1 (round 4): the destroy steps await. A restore (or a new launch) of
+    // the ID meanwhile uses the same worktree path and the same agent
+    // session, so the later steps stop when the record names another launch.
+    // A record that is gone (another kill archived it) does not stop them.
+    const stopWhenReplaced = (kept: string): void => {
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      if (current && !holdsExpected(current, launchIdentity(raw))) {
+        throw recordChangedError(sessionsDir, sessionId, "it was killed", kept);
+      }
+    };
+
     // Destroy runtime — prefer handle.runtimeName to find the correct plugin
     if (raw["runtimeHandle"]) {
       const handle = safeJsonParse<RuntimeHandle>(raw["runtimeHandle"]);
@@ -2480,6 +2501,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
+    stopWhenReplaced("its worktree, agent session and record were kept; run the kill again");
     const worktree = raw["worktree"];
     if (worktree && shouldDestroyWorkspacePath(project, projectId, worktree)) {
       const workspacePlugin = project
@@ -2496,6 +2518,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     let didPurgeOpenCodeSession = false;
     if (options?.purgeOpenCode === true && cleanupAgent === "opencode") {
+      stopWhenReplaced("its agent session and record were kept; run the kill again");
       // Row 20: `session.interrupt`, then `session.remove`, by the stored ID
       // only (no title discovery). A failure still archives the AO session
       // without `opencodeCleanedAt`, so `ao session cleanup` retries the
@@ -2569,7 +2592,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     } catch (err) {
       let kept: boolean;
       try {
-        kept = updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: key });
+        // B-1 (round 4): the ledger removal waits for its lock; a newer
+        // archive of the ID can appear meanwhile. Never write over another
+        // pending key (that ledger would lose its retry). The key names its
+        // own ledger, so it can go into an archive that has none.
+        const pending =
+          readArchivedMetadataRaw(sessionsDir, aoSessionId)?.["opencodeLedgerPending"] ?? "";
+        kept =
+          (pending === "" || pending === key) &&
+          updateArchivedMetadata(
+            sessionsDir,
+            aoSessionId,
+            { opencodeLedgerPending: key },
+            { opencodeLedgerPending: pending },
+          );
       } catch {
         kept = false;
       }
