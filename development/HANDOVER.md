@@ -45,10 +45,10 @@ the seven older worker branches with no `+` in `git cherry main` and no merge co
 `i3-r2-pre-rebase` are the only local branches. `git worktree list` shows only the primary checkout, and
 `/home/taisung/.worktrees/agent-orchestrator/` is empty.
 
-**Lifecycle workers** (since the host restart of 2026-10-20 10:42): only 271579 (this config, started by
-`ao start` at 11:19:55). The workers of agent-skills, Nexus, VSF and the Nexus config of this fork do
-not run until their orchestrators run `ao start`. Every brief must protect 271579, not the old 105049,
-105142, 105154, 106266, 106285. The global OpenCode service does not run (old PID 15920): an
+**Lifecycle workers** (since the host restart of 2026-10-20 10:42): 271579 (this config, started by
+`ao start` at 11:19:55) and 321413 (agent-skills, 11:25:30). The workers of Nexus, VSF and the Nexus
+config of this fork do not run until their orchestrators run `ao start`. Every brief must protect the
+live ones (check with `ps` at dispatch), not the old 105049, 105142, 105154, 106266, 106285. The global OpenCode service does not run (old PID 15920): an
 `opencode api` call starts one with the caller's environment.
 
 **Watcher**: PID 337062 since 11:26:06, state `/home/taisung/.cache/fleet_watch/ao-killed-2026-10-20`,

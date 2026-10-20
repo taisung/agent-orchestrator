@@ -756,6 +756,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     spawn of ao-46): mtime 11:25:23.333 no `status=`, 11:25:23.720 `spawning`, 11:25:26.737 `working`;
     ao-46 did not go to `killed`. A reader in that window gets `killed` from the default of
     `session-manager.ts:3360` (`raw["status"] ?? "killed"`).
+  - **The same write in agent-skills** (2026-10-20, reported by `as-orchestrator`, checked read-only):
+    `ao start` at 11:25:31 gave `as-orchestrator` `createdAt=2026-10-20T15:25:31.166Z` and
+    `status=killed` at mtime 11:25:31.415 (249 ms later) with a live pane; its lifecycle worker 321413
+    started 11:25:30. A CLI `ao send` to that record at about 11:33 delivered the text and did not
+    restore the pane or change the record: the CLI pastes through tmux while the tmux session lives
+    (`send.ts:318-327`), so the restore risk is in core `send` (lifecycle reactions, `review-check`).
   - **In progress**: ao-46 (Claude Code, Opus 5.5, owner Priority 1, 2026-10-20) measures the cause, adds
     failing tests and writes `development/reviews/killed_status_r1_opus.md`. No source change in this
     round; no change to real records.
