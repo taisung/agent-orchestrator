@@ -13,8 +13,13 @@ import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
 import type * as FsPromises from "node:fs/promises";
 import {
+  AgentNotAttachedError,
+  OPENCODE_PROMPT_MAX_BODY_BYTES,
   OpenCodeApiIncompleteAnswerError,
+  OpenCodeApiRequestError,
   OpenCodeApiTimeoutError,
+  OpenCodeApiUnexpectedAnswerError,
+  OpenCodePromptTooLargeError,
   SessionNotRestorableError,
   type Session,
   type RuntimeHandle,
@@ -38,7 +43,11 @@ const {
   mockInterruptOpenCodeSession,
   mockRemoveOpenCodeSession,
   mockGetHerdrPaneProcesses,
+  mockPromptOpenCodeSession,
+  mockFindOpenCodePromptInput,
   procCmdlines,
+  procStats,
+  procUptime,
 } = vi.hoisted(() => ({
   mockAppendActivityEntry: vi.fn().mockResolvedValue(undefined),
   mockReadLastActivityEntry: vi.fn().mockResolvedValue(null),
@@ -54,8 +63,14 @@ const {
   mockInterruptOpenCodeSession: vi.fn(),
   mockRemoveOpenCodeSession: vi.fn(),
   mockGetHerdrPaneProcesses: vi.fn(),
+  mockPromptOpenCodeSession: vi.fn(),
+  mockFindOpenCodePromptInput: vi.fn(),
   /** The argument vectors that `/proc/<pid>/cmdline` gives, by PID (M-1). */
   procCmdlines: new Map<number, string[]>(),
+  /** The text of `/proc/<pid>/stat`, by PID (the TUI age of a send, I-5). */
+  procStats: new Map<number, string>(),
+  /** The text of `/proc/uptime`; null gives ENOENT. */
+  procUptime: { current: null as string | null },
 }));
 
 const mockExecFileAsync = vi.fn();
@@ -80,6 +95,9 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     interruptOpenCodeSession: mockInterruptOpenCodeSession,
     removeOpenCodeSession: mockRemoveOpenCodeSession,
     getHerdrPaneProcesses: mockGetHerdrPaneProcesses,
+    // The I-5 send calls; `buildOpenCodePromptBody` stays the real size check.
+    promptOpenCodeSession: mockPromptOpenCodeSession,
+    findOpenCodePromptInput: mockFindOpenCodePromptInput,
   };
 });
 
@@ -98,10 +116,22 @@ vi.mock("node:child_process", () => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
-// The launch check reads `/proc/<pid>/cmdline` (M-1); every other path is the real file.
+// The launch check reads `/proc/<pid>/cmdline` (M-1) and the send reads
+// `/proc/<pid>/stat` and `/proc/uptime` (I-5); every other path is the real file.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
   const readFile = async (path: unknown, ...rest: unknown[]): Promise<unknown> => {
+    const enoent = () => Object.assign(new Error(`ENOENT: ${String(path)}`), { code: "ENOENT" });
+    if (String(path) === "/proc/uptime") {
+      if (procUptime.current === null) throw enoent();
+      return procUptime.current;
+    }
+    const stat = /^\/proc\/(\d+)\/stat$/.exec(String(path));
+    if (stat) {
+      const text = procStats.get(Number(stat[1]));
+      if (text === undefined) throw enoent();
+      return text;
+    }
     const match = /^\/proc\/(\d+)\/cmdline$/.exec(String(path));
     if (!match) return (actual.readFile as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
     const argv = procCmdlines.get(Number(match[1]));
@@ -195,6 +225,13 @@ beforeEach(() => {
   mockInterruptOpenCodeSession.mockResolvedValue(undefined);
   mockRemoveOpenCodeSession.mockResolvedValue(undefined);
   mockGetHerdrPaneProcesses.mockResolvedValue([]);
+  // I-5: the send calls; tests set the answers they need.
+  procStats.clear();
+  procUptime.current = null;
+  mockPromptOpenCodeSession.mockReset();
+  mockPromptOpenCodeSession.mockRejectedValue(new Error("unexpected session.prompt"));
+  mockFindOpenCodePromptInput.mockReset();
+  mockFindOpenCodePromptInput.mockRejectedValue(new Error("unexpected read-back"));
 });
 
 /**
@@ -2403,5 +2440,465 @@ describe("version gate on restore", () => {
     await expect(restore).rejects.toThrow("found 1.18.35");
     await expect(restore).rejects.not.toThrow("no stored OpenCode session ID");
     expect(mockGetOpenCodeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverMessage (I-5)", () => {
+  const agent = create();
+  const ID = "ses_live";
+  const TEXT = "Fix the review comments.\nLine two with 'quotes' and \"double\".";
+
+  function session(overrides: Partial<Session> = {}): Session {
+    return makeSession({
+      id: "sess-1",
+      runtimeHandle: makeTmuxHandle("abc-sess-1"),
+      metadata: { opencodeSessionId: ID },
+      ...overrides,
+    });
+  }
+
+  type PaneProcess = [pid: number, argv: string[]];
+  const TUI: PaneProcess = [4242, ["/home/u/.opencode/bin/opencode", "--session", ID]];
+
+  /**
+   * The pane TTY is pts/7; `calls` gives the pane processes of each `ps`
+   * call in turn (the last one repeats). The argv comes from `/proc`.
+   */
+  function pane(...calls: PaneProcess[][]) {
+    let call = 0;
+    for (const rows of calls) for (const [pid, argv] of rows) procCmdlines.set(pid, argv);
+    mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "tmux" && args[0] === "list-panes") {
+        return Promise.resolve({ stdout: "/dev/pts/7\n", stderr: "" });
+      }
+      if (cmd === "ps") {
+        const rows = calls[Math.min(call++, calls.length - 1)]!;
+        const lines = rows.map(([pid]) => `${String(pid).padStart(7)} pts/7`);
+        return Promise.resolve({ stdout: `${lines.join("\n")}\n`, stderr: "" });
+      }
+      return Promise.reject(new Error(`unexpected ${cmd} ${args.join(" ")}`));
+    });
+  }
+
+  /** `/proc` says that `pid` started `ageMs` ago. */
+  function processAge(pid: number, ageMs: number) {
+    procUptime.current = "1000.00 3000.00\n";
+    const startTicks = Math.round(((1_000_000 - ageMs) / 1000) * 100);
+    const afterComm = ["S", ...Array.from({ length: 18 }, () => "0"), String(startTicks), "0"];
+    procStats.set(pid, `${pid} (opencode (tui)) ${afterComm.join(" ")}\n`);
+  }
+
+  /** The pane writes of the tmux path: a send through the API makes none. */
+  function paneWrites(): unknown[][] {
+    return mockExecFileAsync.mock.calls.filter(
+      (call: unknown[]) =>
+        call[0] === "tmux" &&
+        ["send-keys", "load-buffer", "paste-buffer"].includes((call[1] as string[])[0] ?? ""),
+    );
+  }
+
+  const ADMITTED = { id: "msg_admitted", sessionID: ID, delivery: "queue", created: 5 };
+
+  function apiState(state: { permissions?: unknown[]; forms?: unknown[]; active?: unknown }) {
+    mockCallOpenCodeApi.mockImplementation((operation: string) => {
+      if (operation === "session.permission.list")
+        return Promise.resolve({ data: state.permissions ?? [] });
+      if (operation === "session.form.list") return Promise.resolve({ data: state.forms ?? [] });
+      if (operation === "session.active") return Promise.resolve({ data: state.active ?? {} });
+      return Promise.reject(new Error(`unexpected operation: ${operation}`));
+    });
+  }
+
+  async function failure(promise: Promise<unknown>): Promise<Error> {
+    const result = await promise.then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+    if (!result) throw new Error("expected the send to fail");
+    return result;
+  }
+
+  /** Run a send under fake timers, past the TUI wait. */
+  async function withFakeTimers<T>(run: () => Promise<T>, advanceMs = 11_000) {
+    vi.useFakeTimers();
+    try {
+      const settled = run().then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      return await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  beforeEach(() => {
+    mockExecFileAsync.mockReset();
+    apiState({});
+  });
+
+  it("can deliver only to a session with a valid stored OpenCode session ID", () => {
+    expect(agent.canDeliverMessage!(session())).toBe(true);
+    expect(agent.canDeliverMessage!(session({ metadata: {} }))).toBe(false);
+    expect(agent.canDeliverMessage!(session({ metadata: { opencodeSessionId: "ses bad" } }))).toBe(
+      false,
+    );
+  });
+
+  it("admits through one session.prompt with the exact text after the TUI check, and writes nothing to the pane", async () => {
+    pane([TUI]);
+    processAge(4242, 60_000);
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+
+    const record = await agent.deliverMessage!(session(), TEXT);
+
+    expect(record).toEqual({ inputId: "msg_admitted", mode: "queue", waitsFor: [], busy: false });
+    expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(mockPromptOpenCodeSession).toHaveBeenCalledWith(ID, TEXT);
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+    expect(paneWrites()).toEqual([]);
+    // The TUI check (`ps` of the pane TTY) runs before the prompt.
+    const psOrder = Math.min(
+      ...mockExecFileAsync.mock.calls
+        .map((call: unknown[], index: number) => (call[0] === "ps" ? index : Infinity))
+        .filter(Number.isFinite)
+        .map((index: number) => mockExecFileAsync.mock.invocationCallOrder[index]!),
+    );
+    expect(psOrder).toBeLessThan(mockPromptOpenCodeSession.mock.invocationCallOrder[0]!);
+  });
+
+  it("refuses a pane without opencode: AgentNotAttachedError, and no session.prompt", async () => {
+    pane([[4300, ["bash"]]]);
+    const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+    expect("error" in outcome && outcome.error).toBeInstanceOf(AgentNotAttachedError);
+    const err = (outcome as { error: AgentNotAttachedError }).error;
+    expect(err.sessionId).toBe("sess-1");
+    expect(err.message).toContain(`no OpenCode TUI runs on session ${ID}`);
+    expect(err.message).toContain("not seen within 10 s");
+    expect(err.message).toContain("AO_* variables and ~/.ao/bin wrappers");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+    expect(mockCallOpenCodeApi).not.toHaveBeenCalled();
+  });
+
+  it("refuses a TUI on another session, an opencode api call and a shell that names the ID", async () => {
+    pane([
+      [4301, ["/home/u/.opencode/bin/opencode", "--session", "ses_other"]],
+      [4302, ["opencode", "api", "session.switchModel", "--param", `sessionID=${ID}`]],
+      [4303, ["bash", "-c", `opencode --session ${ID}`]],
+    ]);
+    const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+    expect((outcome as { error: unknown }).error).toBeInstanceOf(AgentNotAttachedError);
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses a gone pane at once", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) =>
+      cmd === "tmux"
+        ? Promise.reject(
+            Object.assign(new Error("exit 1"), { stderr: "can't find session: abc-sess-1" }),
+          )
+        : Promise.reject(new Error(`unexpected ${cmd}`)),
+    );
+    const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+    expect(err).toBeInstanceOf(AgentNotAttachedError);
+    expect(err.message).toContain("the pane is gone");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session without a runtime handle, and one without a stored ID", async () => {
+    const noHandle = await failure(agent.deliverMessage!(session({ runtimeHandle: null }), TEXT));
+    expect(noHandle).toBeInstanceOf(AgentNotAttachedError);
+    const noId = await failure(agent.deliverMessage!(session({ metadata: {} }), TEXT));
+    expect(noId.message).toContain("no valid stored OpenCode session ID");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("waits for a TUI that starts during the wait (a restored pane), then sends", async () => {
+    pane(
+      [[4302, ["opencode", "api", "session.switchModel", "--param", `sessionID=${ID}`]]],
+      [[4302, ["opencode", "api", "session.switchModel", "--param", `sessionID=${ID}`]]],
+      [TUI],
+    );
+    processAge(4242, 10_000);
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+    const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT), 2_000);
+
+    expect(outcome).toEqual({ value: expect.objectContaining({ inputId: "msg_admitted" }) });
+    expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a TUI younger than 3 s the rest of that time before the send", async () => {
+    pane([TUI]);
+    processAge(4242, 500);
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+    vi.useFakeTimers();
+    try {
+      const settled = agent.deliverMessage!(session(), TEXT);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      await expect(settled).resolves.toEqual(expect.objectContaining({ inputId: "msg_admitted" }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not count a young TUI that exits during its settle time", async () => {
+    pane([TUI], [[4300, ["bash"]]]);
+    processAge(4242, 500);
+    const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+    expect((outcome as { error: unknown }).error).toBeInstanceOf(AgentNotAttachedError);
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("sends at once when the TUI age cannot be read", async () => {
+    pane([TUI]);
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+    await expect(agent.deliverMessage!(session(), TEXT)).resolves.toEqual(
+      expect.objectContaining({ inputId: "msg_admitted" }),
+    );
+  });
+
+  it("checks the herdr pane processes", async () => {
+    procCmdlines.set(4242, TUI[1]);
+    mockGetHerdrPaneProcesses.mockResolvedValue([
+      { pid: 4242, name: "opencode", cmdline: TUI[1].join(" ") },
+    ]);
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+    const herdr = session({ runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: {} } });
+
+    await expect(agent.deliverMessage!(herdr, TEXT)).resolves.toEqual(
+      expect.objectContaining({ inputId: "msg_admitted" }),
+    );
+    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
+  });
+
+  it("marks a pending permission and a pending question, and still sends once", async () => {
+    pane([TUI]);
+    apiState({ permissions: [{ id: "per_1" }], forms: [{ id: "frm_1" }] });
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+
+    const record = await agent.deliverMessage!(session(), TEXT);
+
+    expect(record.waitsFor).toEqual(["permission", "question"]);
+    expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+    for (const operation of ["session.permission.list", "session.form.list"]) {
+      expect(mockCallOpenCodeApi).toHaveBeenCalledWith(operation, {
+        params: { sessionID: ID },
+        timeoutMs: 5_000,
+      });
+    }
+  });
+
+  it("marks only the permission when no form waits", async () => {
+    pane([TUI]);
+    apiState({ permissions: [{ id: "per_1" }] });
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+
+    expect((await agent.deliverMessage!(session(), TEXT)).waitsFor).toEqual(["permission"]);
+  });
+
+  it("reports busy when session.active holds the session", async () => {
+    pane([TUI]);
+    apiState({ active: { [ID]: { type: "running" }, ses_other: { type: "running" } } });
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+
+    expect((await agent.deliverMessage!(session(), TEXT)).busy).toBe(true);
+  });
+
+  it("leaves busy and waitsFor out when their reads fail, and still sends", async () => {
+    pane([TUI]);
+    mockCallOpenCodeApi.mockRejectedValue(new OpenCodeApiTimeoutError("did not answer"));
+    mockPromptOpenCodeSession.mockResolvedValue(ADMITTED);
+
+    expect(await agent.deliverMessage!(session(), TEXT)).toEqual({
+      inputId: "msg_admitted",
+      mode: "queue",
+    });
+  });
+
+  it("refuses a 200 KB message before the TUI check, with no session.prompt", async () => {
+    pane([TUI]);
+    const err = await failure(agent.deliverMessage!(session(), "x".repeat(200 * 1024)));
+
+    expect(err).toBeInstanceOf(OpenCodePromptTooLargeError);
+    expect(err.message).toContain(`more than the ${OPENCODE_PROMPT_MAX_BODY_BYTES} bytes`);
+    expect(err.message).toContain("nothing was sent");
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  it("fails a 404 SessionNotFoundError and names the stale record; one prompt, no read-back", async () => {
+    pane([TUI]);
+    const cause = new OpenCodeApiRequestError(
+      "opencode api session.prompt failed: HTTP 404 Not Found",
+      { status: 404, tag: "SessionNotFoundError", apiMessage: `Session not found: ${ID}` },
+    );
+    mockPromptOpenCodeSession.mockRejectedValue(cause);
+    const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+    expect(err.message).toBe(
+      `the OpenCode session ${ID} of sess-1 does not exist (session.prompt answered 404 SessionNotFoundError): the stored session ID of sess-1 is stale; nothing was sent`,
+    );
+    expect(err.cause).toBe(cause);
+    expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+    expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+    expect(paneWrites()).toEqual([]);
+  });
+
+  it("fails a 404 LocationNotFoundError with the directory text", async () => {
+    pane([TUI]);
+    mockPromptOpenCodeSession.mockRejectedValue(
+      new OpenCodeApiRequestError("opencode api session.prompt failed: HTTP 404 Not Found", {
+        status: 404,
+        tag: "LocationNotFoundError",
+        apiMessage: "Location not found: /tmp/gone",
+      }),
+    );
+    const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+    expect(err.message).toContain(
+      "is gone (session.prompt answered 404 LocationNotFoundError: Location not found: /tmp/gone)",
+    );
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+  });
+
+  it("fails a 409 ConflictError, a 400 and a 401 with their messages; one prompt each, no read-back", async () => {
+    pane([TUI]);
+    for (const [status, tag, apiMessage] of [
+      [409, "ConflictError", "Prompt message ID conflicts with an existing durable record: msg_1"],
+      [400, "InvalidRequestError", "Expected Session.Inbox.Delivery"],
+      [401, "UnauthorizedError", "Unauthorized"],
+    ] as const) {
+      mockPromptOpenCodeSession.mockReset();
+      const cause = new OpenCodeApiRequestError("opencode api session.prompt failed", {
+        status,
+        tag,
+        apiMessage,
+      });
+      mockPromptOpenCodeSession.mockRejectedValue(cause);
+      const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+      expect(err.message).toBe(
+        `session.prompt to the OpenCode session ${ID} of sess-1 answered ${status} ${tag}: ${apiMessage}; nothing was sent`,
+      );
+      expect(err.cause).toBe(cause);
+      expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+    }
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+  });
+
+  it("fails a missing opencode binary with no read-back", async () => {
+    pane([TUI]);
+    mockPromptOpenCodeSession.mockRejectedValue(
+      new Error("opencode api session.prompt failed: spawn opencode ENOENT", {
+        cause: Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" }),
+      }),
+    );
+    const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+    expect(err.message).toContain(
+      "failed: opencode api session.prompt failed: spawn opencode ENOENT",
+    );
+    expect(mockFindOpenCodePromptInput).not.toHaveBeenCalled();
+  });
+
+  describe("an unknown admission reads the session back once, and never prompts again", () => {
+    const unknownCauses: Array<[string, () => Error]> = [
+      ["a timeout", () => new OpenCodeApiTimeoutError("did not answer within 10000 ms")],
+      ["a cut answer", () => new OpenCodeApiIncompleteAnswerError("returned incomplete JSON")],
+      ["an unexpected answer", () => new OpenCodeApiUnexpectedAnswerError("no inbox item")],
+      [
+        "a 500 answer",
+        () => new OpenCodeApiRequestError("failed", { status: 500, tag: "UnknownError" }),
+      ],
+      [
+        "a child that a signal stopped",
+        () => new Error("opencode api session.prompt failed: exit code null, signal SIGKILL"),
+      ],
+    ];
+
+    for (const [name, makeError] of unknownCauses) {
+      it(`${name}: found gives success with recovered`, async () => {
+        pane([TUI]);
+        mockPromptOpenCodeSession.mockRejectedValue(makeError());
+        mockFindOpenCodePromptInput.mockResolvedValue({
+          id: "msg_found",
+          found: "inbox",
+          delivery: "queue",
+        });
+        const before = Date.now();
+
+        const record = await agent.deliverMessage!(session(), TEXT);
+
+        expect(record).toEqual({
+          inputId: "msg_found",
+          mode: "queue",
+          waitsFor: [],
+          busy: false,
+          recovered: true,
+        });
+        expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+        expect(mockFindOpenCodePromptInput).toHaveBeenCalledTimes(1);
+        const [sessionId, text, since] = mockFindOpenCodePromptInput.mock.calls[0]! as [
+          string,
+          string,
+          number,
+        ];
+        expect([sessionId, text]).toEqual([ID, TEXT]);
+        // The bound is the start of the prompt less the 1 s slack.
+        expect(since).toBeGreaterThanOrEqual(before - 1_000);
+        expect(since).toBeLessThanOrEqual(Date.now() - 1_000);
+      });
+
+      it(`${name}: not found fails the send`, async () => {
+        pane([TUI]);
+        const cause = makeError();
+        mockPromptOpenCodeSession.mockRejectedValue(cause);
+        mockFindOpenCodePromptInput.mockResolvedValue(null);
+
+        const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+        expect(err.message).toContain(
+          `the admission of the message to the OpenCode session ${ID} of sess-1 is unknown`,
+        );
+        expect(err.message).toContain(
+          "the read-back found it neither in the inbox nor as the newest user message; the message was not sent again",
+        );
+        expect(err.cause).toBe(cause);
+        expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+        expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+        expect(mockFindOpenCodePromptInput).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    it("a found user message reports the queue delivery that was sent", async () => {
+      pane([TUI]);
+      mockPromptOpenCodeSession.mockRejectedValue(new OpenCodeApiTimeoutError("timeout"));
+      mockFindOpenCodePromptInput.mockResolvedValue({ id: "msg_found", found: "message" });
+
+      expect(await agent.deliverMessage!(session(), TEXT)).toEqual(
+        expect.objectContaining({ inputId: "msg_found", mode: "queue", recovered: true }),
+      );
+    });
+
+    it("a failed read-back fails the send and does not prompt again", async () => {
+      pane([TUI]);
+      mockPromptOpenCodeSession.mockRejectedValue(new OpenCodeApiTimeoutError("timeout"));
+      mockFindOpenCodePromptInput.mockRejectedValue(new OpenCodeApiTimeoutError("read timeout"));
+
+      const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+      expect(err.message).toContain(
+        "and the read-back failed (read timeout); the message was not sent again",
+      );
+      expect(mockPromptOpenCodeSession).toHaveBeenCalledTimes(1);
+    });
   });
 });

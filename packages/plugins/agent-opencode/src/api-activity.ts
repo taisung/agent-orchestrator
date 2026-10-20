@@ -34,6 +34,7 @@ import {
   getOpenCodeSession,
   type ActivityDetection,
   type ActivityState,
+  type AgentPendingInput,
   type AgentSessionInfo,
   type CostEstimate,
   type OpenCodeApiSession,
@@ -311,5 +312,49 @@ export async function getApiSessionInfo(sessionId: string): Promise<AgentSession
     summaryIsFallback: true,
     agentSessionId: session.id,
     ...(cost ? { cost } : {}),
+  };
+}
+
+/** What `deliverMessage` (I-5) reports besides the admission; a part is absent when its read failed. */
+export interface ApiSendContext {
+  waitsFor?: AgentPendingInput[];
+  busy?: boolean;
+}
+
+/**
+ * I-5: the state of a session just before a send, with the reads of the A1
+ * cascade: `session.permission.list` and `session.form.list` (a message waits
+ * behind a pending permission or question until a human answers, 0010
+ * section 7.6) and `session.active` (a `queue` input waits for the running
+ * turn and goes in after its last answer, 0010 section 7.1). One call each,
+ * in parallel, with the plugin bound. A failed or unexpected read leaves its
+ * part unknown and never stops the send.
+ */
+export async function getApiSendContext(sessionId: string): Promise<ApiSendContext> {
+  const timeoutMs = OPENCODE_ACTIVITY_API_TIMEOUT_MS;
+  const [permissionRaw, formRaw, activeRaw] = await Promise.all([
+    callOpenCodeApi("session.permission.list", {
+      params: { sessionID: sessionId },
+      timeoutMs,
+    }).catch(() => null),
+    callOpenCodeApi("session.form.list", {
+      params: { sessionID: sessionId },
+      timeoutMs,
+    }).catch(() => null),
+    callOpenCodeApi("session.active", { timeoutMs }).catch(() => null),
+  ]);
+  const permissions = parseDataArray(permissionRaw);
+  const forms = parseDataArray(formRaw);
+  const activeData = parseActiveData(activeRaw);
+  const waitsFor: AgentPendingInput[] | null =
+    permissions !== null && forms !== null
+      ? [
+          ...(permissions.length > 0 ? (["permission"] as const) : []),
+          ...(forms.length > 0 ? (["question"] as const) : []),
+        ]
+      : null;
+  return {
+    ...(waitsFor !== null ? { waitsFor } : {}),
+    ...(activeData !== null ? { busy: Object.hasOwn(activeData, sessionId) } : {}),
   };
 }

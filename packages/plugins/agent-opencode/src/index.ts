@@ -25,7 +25,15 @@ import {
   getHerdrPaneProcesses,
   isHerdrProcessRunning,
   SessionNotRestorableError,
+  AgentNotAttachedError,
+  OpenCodeApiRequestError,
+  OpenCodePromptTooLargeError,
+  OPENCODE_PROMPT_READBACK_SLACK_MS,
+  buildOpenCodePromptBody,
+  promptOpenCodeSession,
+  findOpenCodePromptInput,
   type Agent,
+  type AgentMessageDelivery,
   type AgentSessionInfo,
   type AgentLaunchConfig,
   type AgentLaunchConfirmation,
@@ -41,13 +49,16 @@ import {
   type WorkspaceHooksConfig,
   type OpenCodeAgentConfig,
   type OpenCodeApiSession,
+  type OpenCodeInboxItem,
   type OpenCodeModelRef,
   type OpenCodeUserMessageMark,
 } from "@aoagents/ao-core";
 import {
   classifyOpenCodePaneActivity,
   getApiActivityState,
+  getApiSendContext,
   getApiSessionInfo,
+  type ApiSendContext,
 } from "./api-activity.js";
 import { execFile, execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -740,6 +751,196 @@ async function waitForUserMessage(
 }
 
 // =============================================================================
+// Send through the API (I-5)
+// =============================================================================
+
+/**
+ * How long `deliverMessage` looks for the TUI on the stored session. A pane
+ * that core just restored can run the `opencode api` settings calls of the
+ * restore command before its TUI starts.
+ */
+const SEND_TUI_WAIT_MS = 10_000;
+
+/**
+ * A TUI younger than this is given time to reach this age before the send.
+ * Assumption, not measured: a TUI that just started may not be attached to
+ * the service yet (0010 section 6: the 2.0.29 TUI showed its footer about
+ * 2 s after its start), and "a TUI that attaches late" is an open item of
+ * the tool-environment record (`development/TODO_TRACKING.md`, "Follow-ups
+ * after I-3", attempt 4).
+ */
+const SEND_TUI_MIN_AGE_MS = 3_000;
+
+/** `/proc/<pid>/stat` gives the start time in clock ticks of 1/100 s (Linux USER_HZ). */
+const PROC_TICKS_PER_SECOND = 100;
+
+/**
+ * A pause on the global timer. The send code uses it instead of the
+ * `node:timers/promises` sleep, so tests can drive the waits of a send with
+ * fake timers.
+ */
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The age of process `pid` in ms from `/proc`, or null when it cannot be read. */
+async function readProcessAgeMs(pid: number): Promise<number | null> {
+  try {
+    const [stat, uptime] = await Promise.all([
+      readFile(`/proc/${pid}/stat`, "utf-8"),
+      readFile("/proc/uptime", "utf-8"),
+    ]);
+    // Field 22 (starttime) is the 20th field after the `(comm)` field, which
+    // can hold spaces and parentheses.
+    const startTicks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+    const uptimeSeconds = Number(uptime.split(" ")[0]);
+    if (!Number.isFinite(startTicks) || !Number.isFinite(uptimeSeconds)) return null;
+    return Math.max(
+      0,
+      Math.round(uptimeSeconds * 1000 - (startTicks * 1000) / PROC_TICKS_PER_SECOND),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** The reason text of the "no TUI" refusal (the tool-environment record of I-5). */
+function noTuiReason(sessionId: string, handle: RuntimeHandle, detail: string): string {
+  return `no OpenCode TUI runs on session ${sessionId} in the ${handle.runtimeName} pane ${handle.id} (${detail}); a session.prompt without an attached TUI runs the tools of its turn without the worker's AO_* variables and ~/.ao/bin wrappers, so nothing was sent`;
+}
+
+/**
+ * I-5, the TUI check before every send: the pane must run an `opencode`
+ * process with `--session <sessionId>` (the I-3 argument check, tmux and
+ * herdr). Measured on 2.0.32 (ao-38, attempt 4): the tools of a turn get the
+ * TUI environment only while a TUI is attached. A TUI younger than
+ * `SEND_TUI_MIN_AGE_MS` gets the rest of that time, and must still run after
+ * it. Polls for up to `SEND_TUI_WAIT_MS`. Throws `AgentNotAttachedError` when
+ * no such TUI runs or the pane is gone, and another error when the pane
+ * cannot be checked.
+ */
+async function waitForSendTui(session: Session, sessionId: string): Promise<void> {
+  const handle = session.runtimeHandle;
+  if (!handle) {
+    throw new AgentNotAttachedError(
+      session.id,
+      `no runtime handle, so no OpenCode TUI on session ${sessionId} can be found; nothing was sent`,
+    );
+  }
+  const find = async (): Promise<number | null> => {
+    try {
+      return await findPaneOpenCodeProcess(handle, sessionId);
+    } catch (err) {
+      if (err instanceof PaneGoneError) {
+        throw new AgentNotAttachedError(
+          session.id,
+          noTuiReason(sessionId, handle, `the pane is gone: ${oneLine(err)}`),
+          { cause: err },
+        );
+      }
+      throw new Error(`cannot check the OpenCode TUI of ${session.id}: ${oneLine(err)}`, {
+        cause: err,
+      });
+    }
+  };
+  const deadline = Date.now() + SEND_TUI_WAIT_MS;
+  for (;;) {
+    const pid = await find();
+    if (pid !== null) {
+      const ageMs = await readProcessAgeMs(pid);
+      if (ageMs === null || ageMs >= SEND_TUI_MIN_AGE_MS) return;
+      await pause(SEND_TUI_MIN_AGE_MS - ageMs);
+      if ((await find()) === pid) return;
+    }
+    const leftMs = deadline - Date.now();
+    if (leftMs <= 0) {
+      throw new AgentNotAttachedError(
+        session.id,
+        noTuiReason(sessionId, handle, `not seen within ${SEND_TUI_WAIT_MS / 1000} s`),
+      );
+    }
+    await pause(Math.min(PANE_POLL_MS, leftMs));
+  }
+}
+
+/**
+ * True when a failed `session.prompt` may still have admitted the message:
+ * every failure except a refusal before any process (too large, `opencode`
+ * not found) and an HTTP 4xx answer of the service. A 5xx answer counts as
+ * unknown too: the service failed, but the record does not say before what.
+ */
+function admissionUnknown(err: unknown): boolean {
+  if (err instanceof OpenCodePromptTooLargeError) return false;
+  if (err instanceof OpenCodeApiRequestError) return err.status >= 500;
+  const cause = err instanceof Error ? (err.cause as NodeJS.ErrnoException | undefined) : undefined;
+  return cause?.code !== "ENOENT";
+}
+
+/** The final error of a `session.prompt` that the service refused, or that never ran. */
+function sendRefusal(aoSessionId: string, sessionId: string, err: unknown): Error {
+  if (err instanceof OpenCodePromptTooLargeError) return err;
+  const target = `the OpenCode session ${sessionId} of ${aoSessionId}`;
+  if (err instanceof OpenCodeApiRequestError) {
+    if (err.status === 404 && err.tag === "SessionNotFoundError") {
+      return new Error(
+        `${target} does not exist (session.prompt answered 404 SessionNotFoundError): the stored session ID of ${aoSessionId} is stale; nothing was sent`,
+        { cause: err },
+      );
+    }
+    if (err.status === 404 && err.tag === "LocationNotFoundError") {
+      return new Error(
+        `the directory of ${target} is gone (session.prompt answered 404 LocationNotFoundError: ${err.apiMessage ?? "no message"}); nothing was sent`,
+        { cause: err },
+      );
+    }
+    return new Error(
+      `session.prompt to ${target} answered ${err.status} ${err.tag ?? "error"}: ${err.apiMessage ?? oneLine(err)}; nothing was sent`,
+      { cause: err },
+    );
+  }
+  return new Error(`session.prompt to ${target} failed: ${oneLine(err)}; nothing was sent`, {
+    cause: err,
+  });
+}
+
+/**
+ * I-5: the admission of one message is unknown (a timeout, a cut answer, an
+ * unexpected answer). Read the session back once and never prompt again:
+ * found gives the record with `recovered: true`, not found or a failed read
+ * fails the send.
+ */
+async function recoverUnknownAdmission(
+  aoSessionId: string,
+  sessionId: string,
+  message: string,
+  startedAt: number,
+  context: ApiSendContext,
+  err: unknown,
+): Promise<AgentMessageDelivery> {
+  const unknown = `the admission of the message to the OpenCode session ${sessionId} of ${aoSessionId} is unknown (${oneLine(err)})`;
+  let match: Awaited<ReturnType<typeof findOpenCodePromptInput>>;
+  try {
+    match = await findOpenCodePromptInput(
+      sessionId,
+      message,
+      startedAt - OPENCODE_PROMPT_READBACK_SLACK_MS,
+    );
+  } catch (readErr) {
+    throw new Error(
+      `${unknown}, and the read-back failed (${oneLine(readErr)}); the message was not sent again`,
+      { cause: readErr },
+    );
+  }
+  if (!match) {
+    throw new Error(
+      `${unknown}, and the read-back found it neither in the inbox nor as the newest user message; the message was not sent again`,
+      { cause: err },
+    );
+  }
+  return { inputId: match.id, mode: match.delivery ?? "queue", ...context, recovered: true };
+}
+
+// =============================================================================
 // Plugin Manifest
 // =============================================================================
 
@@ -883,6 +1084,42 @@ function createOpenCodeAgent(): Agent {
         preparedStates.get(prepared),
       );
       return { promptDelivered: delivered };
+    },
+
+    /** I-5: a session with a valid stored OpenCode session ID gets its messages through the API. */
+    canDeliverMessage(session: Session): boolean {
+      return Boolean(asValidOpenCodeSessionId(session.metadata?.opencodeSessionId));
+    },
+
+    /**
+     * I-5 (0009 section 6, rows 14 and 15): deliver through `session.prompt`
+     * with `delivery: "queue"` (owner Q5), so there is no pane paste, no
+     * Enter and no screen check. In this order: the size check (a message
+     * that can never go gets no TUI wait), the TUI check (`AgentNotAttachedError`
+     * without a TUI: then nothing is sent), one read of the pending input and
+     * the busy state, then one `session.prompt`. The admitted inbox item is
+     * the record. A refused prompt fails the send; a prompt whose admission is
+     * unknown gets one read-back and is never sent again.
+     */
+    async deliverMessage(session: Session, message: string): Promise<AgentMessageDelivery> {
+      const sessionId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
+      if (!sessionId) {
+        throw new Error(
+          `cannot send to ${session.id} through the OpenCode API: no valid stored OpenCode session ID`,
+        );
+      }
+      buildOpenCodePromptBody(message);
+      await waitForSendTui(session, sessionId);
+      const context = await getApiSendContext(sessionId);
+      const startedAt = Date.now();
+      let item: OpenCodeInboxItem;
+      try {
+        item = await promptOpenCodeSession(sessionId, message);
+      } catch (err) {
+        if (!admissionUnknown(err)) throw sendRefusal(session.id, sessionId, err);
+        return recoverUnknownAdmission(session.id, sessionId, message, startedAt, context, err);
+      }
+      return { inputId: item.id, mode: item.delivery, ...context };
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {
