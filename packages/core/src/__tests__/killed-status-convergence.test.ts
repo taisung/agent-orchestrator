@@ -270,6 +270,46 @@ describe("1.1 item 2: an ambiguous negative of all sessions waits for the bound"
     expect(statuses("app-1", "app-2")).toEqual(["killed", "killed"]);
   });
 
+  it.each([
+    {
+      answer: "codex isProcessRunning false (no JSONL activity)",
+      plugins: { runtime: "tmux", agent: "codex" },
+      setup: () => {
+        vi.mocked(agent.getActivityState).mockResolvedValue(null);
+        vi.mocked(agent.isProcessRunning).mockResolvedValue(false);
+      },
+      reason: "agent-exited",
+    },
+    {
+      answer: "runtime-herdr isAlive false",
+      plugins: { runtime: "herdr", agent: "claude-code" },
+      setup: () => {
+        vi.mocked(runtime.isAlive).mockResolvedValue(false);
+      },
+      reason: "runtime",
+    },
+  ])(
+    "persists a $answer of every session only after 5 minutes",
+    async ({ plugins, setup, reason }) => {
+      usePlugins(plugins);
+      writeRecord("app-1");
+      writeRecord("app-2");
+      setup();
+      const at = useClock();
+      const lm = newLifecycle();
+
+      for (const minute of [0, 2, 4]) {
+        at(minute * MINUTE);
+        await pollOnce(lm);
+        expect(statuses("app-1", "app-2")).toEqual(["working", "working"]);
+      }
+      at(AMBIGUOUS_NEGATIVE_BOUND_MS);
+      await pollOnce(lm);
+      expect(recordOf("app-1")).toMatchObject({ status: "killed", killedReason: reason });
+      expect(recordOf("app-2")).toMatchObject({ status: "killed", killedReason: reason });
+    },
+  );
+
   it("does not hold back an ambiguous negative when another session answers alive (C1 only)", async () => {
     writeRecord("app-1");
     writeRecord("app-2");
