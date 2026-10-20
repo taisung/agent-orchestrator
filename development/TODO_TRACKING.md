@@ -485,6 +485,20 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r3-sol.md`, review file
     `development/reviews/i5_review_r3_sol61.md`. Codex token baseline (end of r2): input 15131597,
     cached 14807040, output 88159.
+  - **Review r3 in ao-42 stopped by a content filter (00:13 and 00:14 EDT).** The Codex notice was "This
+    content can't be shown ... We take extra care with some cybersecurity requests". The first stop came
+    after ao-42 read the brief and `delivery-ledger.ts`. The second stop came at once after the restart
+    message. No finding was written, no process was started, and the scratch directory
+    `/tmp/i5r3-ao42-20261020` holds only a pnpm cache and evidence files (0.12 USD). The fleet watcher
+    reported ao-42 idle at 00:33. The orchestrator's background wait missed the second stop: it counted
+    `content can` in the pane history, and the history limit kept the count at 2. A wait for a pane that
+    already shows a filter notice needs another signal (for example the last line of the pane).
+  - **Review r3 moved to ao-43 (00:35 EDT):** a new Codex session (gpt-6.1-sol, xhigh), worktree at
+    `72e5e59f`, brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r3-sol-v2.md`. The brief is
+    reworded in plain concurrency terms ("mutual exclusion", "a sender that ends abruptly", "attempt
+    ID"), with the same checks. Review file: `development/reviews/i5_review_r3_sol61.md`. ao-42 is idle,
+    and its round-1 and round-2 reviews are on `main`. If ao-43 is stopped too, the owner decides on a
+    reviewer of another family.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
