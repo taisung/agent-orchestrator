@@ -85,15 +85,8 @@ export function tryHoldDeliveryLock(name: string): Promise<DeliveryLock | null> 
       // not free the name, so the hold stays valid; without a listener the
       // error would end the process.
       server.on("error", () => {});
-      let held = true;
-      resolve({
-        name,
-        release() {
-          if (!held) return;
-          held = false;
-          server.close();
-        },
-      });
+      // A second close of a closed server does nothing (Node keeps no handle).
+      resolve({ name, release: () => void server.close() });
     });
   });
 }

@@ -211,6 +211,13 @@ describe("a lock that the OS releases (I-5 round 4, M-4)", () => {
     expect(await isDeliveryLockHeld(name)).toBe(true);
     expect(await tryHoldDeliveryLock(name)).toBeNull();
     await stop(holder);
+
+    // The same rule inside one process: a later hold of this process stays.
+    const later = await hold(name);
+    earlier.release();
+    expect(await tryHoldDeliveryLock(name)).toBeNull();
+    later.release();
+    expect(await isDeliveryLockHeld(name)).toBe(false);
   });
 
   it("holdDeliveryLock waits for a holder that releases, and gives null after the wait for one that keeps it", async () => {
