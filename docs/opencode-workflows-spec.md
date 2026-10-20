@@ -69,9 +69,17 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 
 ## 4) `ao send`
 
-- Resolves agent by project config. `send()` never searches by title: a session without a stored ID sends without the OpenCode delivery check from `session.get`.
-- Sends message through runtime plugin handle; fails if session/runtime cannot be resolved.
-- Busy detection is plugin-driven (`detectActivity`).
+- Resolves agent by project config. `send()` never searches by title.
+- An OpenCode session with a stored `opencodeSessionId` gets its messages through `opencode api session.prompt`, not through the pane. This covers `ao send` and core `send` (the lifecycle reactions and `ao review-check`). There is no idle wait, no tmux paste, no Enter and no screen check: the answer of `session.prompt` is the admitted inbox item (`Session.Inbox.User`), so each delivery has a positive record. In this order:
+  1. Size: the body `{"text": <message>, "delivery": "queue"}` goes on the command line as `-d <json>`, because `opencode api` 2.0.32 has no file or stdin form for a body. Linux refuses one argument of 131072 bytes or more (`E2BIG`). A message whose JSON body is more than 131071 bytes (UTF-8) fails at once, and nothing is sent: no truncation, no tmux fallback.
+  2. TUI check: the pane must run an `opencode` process with `--session <stored id>` (the argument rule of the launch check, tmux and Herdr). Without one, `session.prompt` does not run. Reason (measured on 2.0.32, `development/TODO_TRACKING.md`, Known Issues, "Follow-ups after I-3"): the model tools of a turn run as children of the global service, and they get the worker's environment (its `AO_*` values and `~/.ao/bin` first on `PATH`) only while the worker's TUI is attached. Without a TUI, the tools get the service environment for that turn, and the `gh` and `git` wrappers record no PR. The environment of the `opencode api` client never reaches the tools, so `ao` does not set one. The check waits up to 10 s for the TUI (a restored pane runs its settings calls first). A TUI that is younger than 3 s gets the rest of that time before the send.
+  3. No TUI: core restores the session once and checks again. `restore` accepts only a session whose agent process is gone, so a pane that still runs another OpenCode process (for example a TUI on another session) is not replaced: the send fails and names both reasons. A second failed check after the restore fails the send.
+  4. One read each of `session.permission.list`, `session.form.list` and `session.active`. A pending permission or question does not stop the send: the message waits until a human answers, and `ao send` prints one line that says so. For a busy session, `ao send` prints that the message goes in after the last answer of the running turn. The delivery is always `queue` (owner Q5): neither `queue` nor `steer` interrupts a running tool or a pending permission, and `steer` replaced the worker's own final answer (0010 section 7). A failed read leaves its line out and does not stop the send.
+  5. One `session.prompt`. The errors that the 2.0.32 OpenAPI document declares fail the send, and nothing is sent: 404 `SessionNotFoundError` (the stored session ID is stale), 404 `LocationNotFoundError` (the directory of the session is gone), 409 `ConflictError`, 400 `InvalidRequestError` and 401 `UnauthorizedError`. There is no restore, no second prompt and no tmux fallback after these errors.
+  6. Unknown admission: a timeout (10 s), an answer cut with exit 0, a complete answer that is not an inbox item of the session, a 5xx answer, or a child that a signal stopped. Then `ao` reads `session.inbox.list` once and the newest `user` message once (an input to an idle session becomes a `user` message with the same ID). An entry counts when its text is the message and it was created at or after the start of the prompt, less 1 s. Found: the send succeeds, and `ao send` says that it found the message by a read-back. Not found, or a failed read: the send fails. `session.prompt` never runs twice for one send.
+- `ao send` prints `Message admitted to <session> (input <msg_id>, delivery queue)` and exits 0, or prints `Message not sent to <session>: <error>` and exits 1. `--no-wait` and `--timeout` have no effect on this path, because the `queue` delivery handles a busy session.
+- A session without a stored ID, and every other agent, keeps the pane path: busy detection with `detectActivity`, the tmux paste, and the screen check of the delivery.
+- Lifecycle reactions: a send that fails keeps the dispatch hash, so the next poll sends again. A refused send admitted nothing, so this gives no second copy. After an unknown admission that the read-back did not find, a service that admits the message later than the read-back can still give a second copy on the next poll.
 
 ## 5) `ao status`
 
@@ -124,6 +132,6 @@ This document defines intended behavior for Agent Orchestrator when `agent: open
 
 - Unit/integration validation that should remain green for OpenCode workflows:
   - `@aoagents/ao-plugin-agent-opencode` tests.
-  - `@aoagents/ao-core` tests: `session-manager.test.ts`, `plugin-registry.test.ts`.
+  - `@aoagents/ao-core` tests: `session-manager.test.ts`, `plugin-registry.test.ts`, `opencode-api.test.ts`, `session-manager/send-agent.test.ts`.
   - `@aoagents/ao-cli` tests: `plugins.test.ts`, `start.test.ts`, `session.test.ts`, `send.test.ts`, `status.test.ts`.
   - `@aoagents/ao-integration-tests` with `test:integration` (includes `agent-opencode.integration.test.ts`, conditionally skipped tests where prerequisites are unavailable).
