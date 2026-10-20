@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,11 +13,13 @@ import {
 import { mintOpenCodeMessageId, OpenCodePromptTooLargeError } from "../../opencode-api.js";
 import { getDeliveryLedgerDir } from "../../paths.js";
 import {
+  deliveryAttemptLockName,
+  deliveryLedgerLockName,
   deliveryLedgerPath,
   readDeliveryLedger,
-  readProcessStartTime,
   type DeliveryEntry,
 } from "../../delivery-ledger.js";
+import { tryHoldDeliveryLock, type DeliveryLock } from "../../delivery-lock.js";
 import { installMockOpencodeApi } from "./opencode-helpers.js";
 import {
   AgentDeliveryError,
@@ -506,16 +507,12 @@ function writeLedger(entries: DeliveryEntry[]): void {
   mkdirSync(ledgerDir(), { recursive: true });
   writeFileSync(
     deliveryLedgerPath(ledgerDir(), STORED),
-    JSON.stringify({ version: 1, key: STORED, entries }),
+    JSON.stringify({ version: 2, key: STORED, entries }),
   );
 }
 
-function craftedEntry(
-  text: string,
-  state: DeliveryEntry["state"],
-  owner: { pid: number; startTime: string | null },
-  ageMs = 0,
-): DeliveryEntry {
+/** An entry whose attempt lock nobody holds (a random token), unless a test holds it. */
+function craftedEntry(text: string, state: DeliveryEntry["state"], ageMs = 0): DeliveryEntry {
   const at = new Date(Date.now() - ageMs).toISOString();
   return {
     inputId: mintOpenCodeMessageId(Date.now() - ageMs),
@@ -523,18 +520,26 @@ function craftedEntry(
     createdAt: at,
     updatedAt: at,
     state,
-    owner: { ...owner, token: randomUUID() },
+    owner: { pid: process.pid, token: randomUUID() },
   };
 }
 
-/** The PID of a process that ran and ended. */
-function deadPid(): number {
-  return spawnSync(process.execPath, ["-e", ""]).pid!;
+/** Locks that a test holds; released after each test. */
+const testHolds: DeliveryLock[] = [];
+
+async function holdLock(name: string): Promise<void> {
+  const lock = await tryHoldDeliveryLock(name);
+  expect(lock).not.toBeNull();
+  testHolds.push(lock!);
 }
+
+afterEach(() => {
+  for (const lock of testHolds.splice(0)) lock.release();
+});
 
 const MINUTE = 60_000;
 
-describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2, M-3)", () => {
+describe("one input ID per logical send (I-5 rounds 2 to 4, B-1, M-1, B-2, B-3, M-2, M-3, M-5, m-2)", () => {
   it("persists the ID as `sending` in the ledger before the prompt, writes no record key, and clears it on success", async () => {
     writeSession();
     const { service, entriesAtPrompt } = withFakeOpenCode();
@@ -699,7 +704,7 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     process.env["PATH"] = `${mockBin}:${originalPath ?? ""}`;
     try {
       writeSession({ agent: "opencode" });
-      writeLedger([craftedEntry("left over", "unknown", { pid: process.pid, startTime: null })]);
+      writeLedger([craftedEntry("left over", "unknown")]);
       const sm = createSessionManager({ config, registry: mockRegistry });
 
       await sm.kill("app-1", { purgeOpenCode: true });
@@ -709,6 +714,84 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     } finally {
       process.env["PATH"] = originalPath;
     }
+  });
+
+  it("m-2: a failed ledger removal at `kill --purge-session` is tried again by `ao session cleanup`", async () => {
+    const mockBin = installMockOpencodeApi(tmpDir, [
+      { id: STORED, title: "AO:app-1", directory: join(tmpDir, "ws-app-1") },
+    ]);
+    const originalPath = process.env["PATH"];
+    process.env["PATH"] = `${mockBin}:${originalPath ?? ""}`;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      writeSession({ agent: "opencode" });
+      writeLedger([craftedEntry("left over", "unknown")]);
+      const file = deliveryLedgerPath(ledgerDir(), STORED);
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      chmodSync(ledgerDir(), 0o555);
+      try {
+        await sm.kill("app-1", { purgeOpenCode: true });
+      } finally {
+        chmodSync(ledgerDir(), 0o755);
+      }
+      const lines = stderr.mock.calls.map((call) => String(call[0]));
+
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeTruthy();
+      expect(existsSync(file)).toBe(true);
+      expect(lines).toContainEqual(
+        expect.stringMatching(
+          new RegExp(
+            `^ao: could not remove the delivery ledger ${file} of OpenCode session ${STORED} of app-1 \\(.*EACCES.*\\); the next \`ao session cleanup\` tries again\\.\\n$`,
+          ),
+        ),
+      );
+
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeLedgerPending"]).toBe(STORED);
+
+      // The first cleanup fails too: the pending key stays for the next one.
+      chmodSync(ledgerDir(), 0o555);
+      try {
+        await sm.cleanup();
+      } finally {
+        chmodSync(ledgerDir(), 0o755);
+      }
+      expect(existsSync(file)).toBe(true);
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeLedgerPending"]).toBe(STORED);
+
+      await sm.cleanup();
+
+      expect(
+        readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeLedgerPending"],
+      ).toBeUndefined();
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      stderr.mockRestore();
+      process.env["PATH"] = originalPath;
+    }
+  });
+
+  it("m-2: `ao session cleanup` removes an expired ledger whose lock is free, and keeps one whose lock is held", async () => {
+    writeLedger([craftedEntry("old", "unknown", 11 * MINUTE)]);
+    const free = deliveryLedgerPath(ledgerDir(), STORED);
+    const held = deliveryLedgerPath(ledgerDir(), "ses_heldLock");
+    writeFileSync(
+      held,
+      JSON.stringify({
+        version: 2,
+        key: "ses_heldLock",
+        entries: [craftedEntry("old", "unknown", 11 * MINUTE)],
+      }),
+    );
+    await holdLock(deliveryLedgerLockName(ledgerDir(), "ses_heldLock"));
+    const sm = createSessionManager({ config, registry: mockRegistry });
+
+    await sm.cleanup(undefined, { dryRun: true });
+    expect([existsSync(free), existsSync(held)]).toEqual([true, true]);
+
+    await sm.cleanup();
+
+    expect([existsSync(free), existsSync(held)]).toEqual([false, true]);
   });
 
   it("M-2: a record writer with an old snapshot does not touch the ledger: the retry replays, one admission", async () => {
@@ -764,7 +847,7 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
 
   it("a concurrent send does not take an unknown entry that another send claimed", async () => {
     writeSession();
-    const earlier = craftedEntry("rebase now", "unknown", { pid: process.pid, startTime: null });
+    const earlier = craftedEntry("rebase now", "unknown");
     writeLedger([earlier]);
     let release!: () => void;
     const released = new Promise<void>((resolve) => {
@@ -801,12 +884,7 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
       [11, false],
     ] as const) {
       writeSession();
-      const earlier = craftedEntry(
-        "same text",
-        "unknown",
-        { pid: process.pid, startTime: null },
-        ageMinutes * MINUTE,
-      );
+      const earlier = craftedEntry("same text", "unknown", ageMinutes * MINUTE);
       writeLedger([earlier]);
       const { service } = withFakeOpenCode();
       const sm = createSessionManager({ config, registry: mockRegistry });
@@ -820,7 +898,7 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
 
   it("a different text after an unknown entry gets a new ID, and the unknown entry stays", async () => {
     writeSession();
-    const entry = craftedEntry("text A", "unknown", { pid: process.pid, startTime: null });
+    const entry = craftedEntry("text A", "unknown");
     writeLedger([entry]);
     const { service } = withFakeOpenCode();
     const sm = createSessionManager({ config, registry: mockRegistry });
@@ -832,31 +910,22 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     expect(pending()).toEqual([entry]);
   });
 
-  it("B-2: reuses the `sending` entry of a process that ended, and never one of a live process", async () => {
+  it("B-2, B-3: reuses a `sending` entry whose attempt lock is free, and never one whose attempt lock is held", async () => {
     writeSession();
-    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], {
-      stdio: "ignore",
-    });
-    try {
-      await vi.waitFor(() => expect(readProcessStartTime(sleeper.pid!)).toMatch(/^\d+$/));
-      const dead = craftedEntry("CRASH SAME TEXT", "sending", { pid: deadPid(), startTime: null });
-      const live = craftedEntry("LIVE SAME TEXT", "sending", {
-        pid: sleeper.pid!,
-        startTime: readProcessStartTime(sleeper.pid!),
-      });
-      writeLedger([dead, live]);
-      const { service } = withFakeOpenCode();
-      const sm = createSessionManager({ config, registry: mockRegistry });
+    const ended = craftedEntry("ENDED SAME TEXT", "sending");
+    const inFlight = craftedEntry("IN FLIGHT SAME TEXT", "sending");
+    writeLedger([ended, inFlight]);
+    // Another process (here: this test) holds the attempt lock of `inFlight`.
+    await holdLock(deliveryAttemptLockName(ledgerDir(), STORED, inFlight.owner.token));
+    const { service } = withFakeOpenCode();
+    const sm = createSessionManager({ config, registry: mockRegistry });
 
-      await sm.send("app-1", "CRASH SAME TEXT");
-      await sm.send("app-1", "LIVE SAME TEXT");
+    await sm.send("app-1", "ENDED SAME TEXT");
+    await sm.send("app-1", "IN FLIGHT SAME TEXT");
 
-      expect(service.prompted[0]).toBe(dead.inputId);
-      expect(service.prompted[1]).not.toBe(live.inputId);
-      expect(pending()).toEqual([live]);
-    } finally {
-      sleeper.kill("SIGKILL");
-    }
+    expect(service.prompted[0]).toBe(ended.inputId);
+    expect(service.prompted[1]).not.toBe(inFlight.inputId);
+    expect(pending()).toEqual([inFlight]);
   });
 
   it("B-2: a failed write of `unknown` in a long-lived process: its next send takes the same ID, one admission", async () => {
@@ -887,7 +956,82 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     expect(service.admitted).toHaveLength(1);
   });
 
-  it("item 4: a failed clear after a success: the same process gives the next equal text a new ID", async () => {
+  it("M-5: an `admitted` entry (a success whose clear failed in a process that ended) is never reused: a new ID and a new admission", async () => {
+    writeSession();
+    const admitted = craftedEntry("INTENDED AGAIN", "admitted");
+    writeLedger([admitted]);
+    const { service } = withFakeOpenCode();
+    service.admit(admitted.inputId, "INTENDED AGAIN");
+    const sm = createSessionManager({ config, registry: mockRegistry });
+
+    const again = await sm.deliver!("app-1", "INTENDED AGAIN");
+
+    expect(service.prompted).toHaveLength(1);
+    expect(service.prompted[0]).not.toBe(admitted.inputId);
+    expect(service.admitted).toHaveLength(2);
+    expect(again).toEqual({
+      route: "agent",
+      delivery: { inputId: service.prompted[0], mode: "queue" },
+    });
+    expect(pending()).toEqual([]);
+  });
+
+  it("M-5: a real lifecycle check after an `admitted` entry of the CI text: a new admission, and the dispatch hash only after it", async () => {
+    writeSession({ status: "ci_failed", pr: "https://github.com/org/my-app/pull/42" });
+    const hashAtPrompt: Array<string | undefined> = [];
+    const { service } = withFakeOpenCode([], {
+      afterPrompt: () =>
+        hashAtPrompt.push(readMetadataRaw(sessionsDir, "app-1")?.["lastCIFailureDispatchHash"]),
+    });
+    const scm = createMockSCM({
+      getCISummary: vi.fn().mockResolvedValue("failing"),
+      getCIChecks: vi
+        .fn()
+        .mockResolvedValue([
+          { name: "REVIEW-R4-CI", status: "failed", conclusion: "FAILURE", url: "https://ci/1" },
+        ]),
+    });
+    const registry = createMockRegistry({
+      runtime: mockRuntime,
+      agent: mockAgent,
+      workspace: ctx.mockWorkspace,
+      scm,
+    });
+    config.reactions = {
+      "ci-failed": { auto: true, action: "send-to-agent", message: "CI is failing.", retries: 3 },
+    };
+    const sm = createSessionManager({ config, registry });
+    const lm = createLifecycleManager({ config, registry, sessionManager: sm });
+    // Learn the exact text of the CI reaction from a first check, then reset
+    // the record and the service to the state after an earlier success of
+    // that text whose clear failed in a process that ended.
+    await lm.check("app-1");
+    const ciText = service.admitted[0]!.text;
+    writeSession({ status: "ci_failed", pr: "https://github.com/org/my-app/pull/42" });
+    const earlier = craftedEntry(ciText, "admitted");
+    writeLedger([earlier]);
+    service.admitted.splice(0, service.admitted.length, {
+      id: earlier.inputId,
+      text: ciText,
+      created: Date.now() - 1_000,
+    });
+    service.prompted.splice(0);
+    hashAtPrompt.splice(0);
+    const lm2 = createLifecycleManager({ config, registry, sessionManager: sm });
+
+    await lm2.check("app-1");
+
+    expect(service.prompted).toHaveLength(1);
+    expect(service.prompted[0]).not.toBe(earlier.inputId);
+    expect(service.admitted.map((input) => input.id)).toEqual([
+      earlier.inputId,
+      service.prompted[0],
+    ]);
+    expect(hashAtPrompt).toEqual([undefined]);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["lastCIFailureDispatchHash"]).toBeTruthy();
+  });
+
+  it("M-5: when the `admitted` mark fails, deliver reports it, and an equal send of this process gets a new ID", async () => {
     writeSession();
     const dir = ledgerDir();
     let blockWrites = true;
@@ -898,23 +1042,56 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     });
     const sm = createSessionManager({ config, registry: mockRegistry });
 
+    let first;
     try {
-      await expect(sm.deliver!("app-1", "SAY IT TWICE")).resolves.toEqual(
-        expect.objectContaining({ route: "agent" }),
-      );
+      first = await sm.deliver!("app-1", "MARK FAILS");
     } finally {
       chmodSync(dir, 0o755);
       blockWrites = false;
     }
-    expect(pending()).toEqual([expect.objectContaining({ state: "sending" })]);
 
-    const second = await sm.deliver!("app-1", "SAY IT TWICE");
-
+    expect(first).toEqual({
+      route: "agent",
+      delivery: { inputId: service.prompted[0], mode: "queue" },
+      admissionUnrecorded: true,
+    });
+    expect(pending()).toEqual([
+      expect.objectContaining({ inputId: service.prompted[0], state: "sending" }),
+    ]);
+    const second = await sm.deliver!("app-1", "MARK FAILS");
+    expect(second).toEqual({
+      route: "agent",
+      delivery: { inputId: service.prompted[1], mode: "queue" },
+    });
     expect(new Set(service.prompted).size).toBe(2);
     expect(service.admitted).toHaveLength(2);
-    expect(second).toEqual(
-      expect.objectContaining({ delivery: expect.not.objectContaining({ replayed: true }) }),
-    );
+  });
+
+  it("M-5: core send resolves when the `admitted` mark fails (the message was admitted) and prints one line", async () => {
+    writeSession();
+    const dir = ledgerDir();
+    let blockWrites = true;
+    const { service } = withFakeOpenCode([], {
+      afterPrompt: () => {
+        if (blockWrites) chmodSync(dir, 0o555);
+      },
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const sm = createSessionManager({ config, registry: mockRegistry });
+
+    try {
+      await expect(sm.send("app-1", "MARK FAILS IN SEND")).resolves.toBeUndefined();
+    } finally {
+      chmodSync(dir, 0o755);
+      blockWrites = false;
+    }
+    const lines = stderr.mock.calls.map((call) => String(call[0]));
+    stderr.mockRestore();
+
+    expect(lines).toEqual([
+      `ao: input ${service.prompted[0]} was admitted to app-1, but the delivery ledger could not record it. While this process runs (at most 11 min), a send of the same text gets a new ID; after this process ends, a send of the same text in the 10 min after this one can reuse the ID and admit nothing new.\n`,
+    ]);
+    expect(service.admitted).toHaveLength(1);
   });
 
   it("a definite refusal clears the entry, so the same text then gets a new ID", async () => {
@@ -944,35 +1121,46 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     expect(pending()).toEqual([expect.objectContaining({ state: "unknown" })]);
   });
 
-  it("a second begin in one send (after a restore) takes the ID of the first", async () => {
+  it("an AgentNotAttachedError after begin is final: no restore, no second begin, and the entry stays unknown", async () => {
     writeSession();
     const ids: string[] = [];
-    let calls = 0;
-    tuiExitsAtFirstCall(vi.fn(), async () => RECORD);
     mockAgent.canDeliverMessage = vi.fn().mockReturnValue(true);
     mockAgent.deliverMessage = vi.fn(
       async (session: Session, _m: string, attempt?: AgentDeliveryAttempt) => {
         ids.push(await attempt!.begin(() => mintOpenCodeMessageId(), STORED));
-        if (++calls === 1) {
-          vi.mocked(mockAgent.isProcessRunning).mockImplementation(
-            async (handle) => handle.id !== "rt-1",
-          );
-          vi.mocked(mockAgent.getActivityState).mockImplementation(async (s) => ({
-            state: s.runtimeHandle?.id === "rt-1" ? "exited" : "active",
-          }));
-          throw new AgentNotAttachedError(session.id, "the TUI exited during the send");
-        }
-        return { inputId: ids.at(-1)!, mode: "queue" };
+        throw new AgentNotAttachedError(session.id, "the TUI exited during the send");
       },
     );
     const sm = createSessionManager({ config, registry: mockRegistry });
 
-    await sm.send("app-1", "hello");
+    await expect(sm.send("app-1", "hello")).rejects.toBeInstanceOf(AgentNotAttachedError);
 
-    expect(mockRuntime.create).toHaveBeenCalledTimes(1);
-    expect(ids).toHaveLength(2);
-    expect(ids[1]).toBe(ids[0]);
-    expect(pending()).toEqual([]);
+    expect(mockAgent.deliverMessage).toHaveBeenCalledTimes(1);
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+    expect(pending()).toEqual([expect.objectContaining({ inputId: ids[0], state: "unknown" })]);
+  });
+
+  it("on a platform without the lock (darwin): a definite refusal before any restore, no hook and no ledger", async () => {
+    writeSession();
+    deadRuntime();
+    const { hook } = withFakeOpenCode();
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    let err: Error;
+    try {
+      err = (await sm.send("app-1", "hello").catch((e: unknown) => e)) as Error;
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+
+    expect(err.message).toBe(
+      "Cannot send to session app-1: delivery through the mock-agent API needs a lock that the OS releases (a Linux abstract Unix socket), and darwin has none; nothing was sent",
+    );
+    expect(hook).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+    expect(mockRuntime.sendMessage).not.toHaveBeenCalled();
+    expect(existsSync(ledgerDir())).toBe(false);
   });
 
   it("a corrupt ledger: a definite refusal that names the file, no prompt, and the file does not change", async () => {

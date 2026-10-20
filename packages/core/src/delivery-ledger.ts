@@ -1,40 +1,51 @@
 /**
- * I-5 round 3 (B-2, M-2, M-3): the delivery ledger.
+ * I-5 rounds 3 and 4 (B-2, B-3, M-2, M-3, M-4, M-5): the delivery ledger.
  *
  * One JSON file per agent session key (OpenCode: the stored `ses_...` ID)
  * in the project state directory (`getDeliveryLedgerDir`). Each entry is one
- * logical send that called `beginDelivery` and did not end yet, or whose
- * admission stayed unknown: its input ID, the SHA-256 of its text, its owner
- * (PID, process start time and attempt token) and its state. The file is
- * apart from the session record, so a record write (`updateMetadata`), a
- * kill, the archive and a restore do not touch it.
+ * logical send: its input ID, the SHA-256 of its text, its owner (the PID,
+ * for an operator, and the attempt token) and its state. The file is apart
+ * from the session record, so a record write (`updateMetadata`), a kill, the
+ * archive and a restore do not touch it.
  *
- * - Every read-change-write runs under a lock file (`<ledger>.lock`) that is
- *   created exclusively (a temp file and `link`, as `reserveSessionId` does)
- *   and holds the owner PID, start time and a token. The lock covers only
- *   the ledger change, never the agent's API call.
- * - A lock of a dead owner is broken through a claim file named after the
- *   stale token, created exclusively: only the claim holder removes the lock,
- *   and only after it reads the same token again, so two waiters cannot both
- *   take it. A lock of a live owner makes the caller wait for at most
- *   `DELIVERY_LOCK_WAIT_MS`.
+ * - Every read-change-write runs under the ledger lock, a lock that the
+ *   kernel releases when its process ends (`delivery-lock.ts`), so no lock
+ *   state stays behind after a process that ends abruptly. A live holder
+ *   makes the caller wait for at most `DELIVERY_LOCK_WAIT_MS`. The lock
+ *   covers only the ledger change, never the agent's API call.
+ * - Each attempt holds an attempt lock of its own (named after its token)
+ *   from before its claim is written until its settle. A `sending` entry
+ *   whose attempt lock no process holds belongs to an attempt that ended
+ *   (its process ended, or its settle could not write): a later send of the
+ *   same text takes its ID. A `sending` entry whose attempt lock is held is
+ *   in flight: a later send of the same text gets a new ID.
+ * - After a success the entry becomes `admitted` before it is removed, so a
+ *   failed removal leaves an entry that no send takes.
  * - The ledger is written with `atomicWriteFileSync` (a temp file and a
  *   rename). A file that does not parse, or that holds an invalid entry,
  *   fails closed: it is never overwritten and never read as empty.
  */
 import { randomUUID } from "node:crypto";
 import {
-  closeSync,
-  linkSync,
+  existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   rmSync,
-  unlinkSync,
-  writeFileSync,
+  statSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { atomicWriteFileSync } from "./atomic-write.js";
+import {
+  deliveryLockName,
+  holdDeliveryLock,
+  isDeliveryLockHeld,
+  isDeliveryLockSupported,
+  printableLockName,
+  tryHoldDeliveryLock,
+  type DeliveryLock,
+} from "./delivery-lock.js";
 
 /**
  * A later send of the same text reuses the ID of an entry that changed less
@@ -46,15 +57,14 @@ import { atomicWriteFileSync } from "./atomic-write.js";
 export const DELIVERY_REUSE_MS = 10 * 60_000;
 
 /**
- * How long a caller waits for a lock of a live owner. A holder keeps the
- * lock only for one read, one JSON change and one temp-file write and
- * rename of a small file (milliseconds), so 2 s is far above a normal hold
- * and still short for a CLI user and a 30 s lifecycle poll. After it the
- * caller fails before the prompt, so nothing is sent.
+ * How long a caller waits for the ledger lock of a live holder. A holder
+ * keeps it only for one read, the probes of the attempt locks, one JSON
+ * change and one temp-file write and rename of a small file (milliseconds),
+ * so 2 s is far above a normal hold and still short for a CLI user and a
+ * 30 s lifecycle poll. After it the caller fails before the prompt, so
+ * nothing is sent.
  */
 export const DELIVERY_LOCK_WAIT_MS = 2_000;
-
-const DELIVERY_LOCK_POLL_MS = 15;
 
 /**
  * At most this many entries younger than `DELIVERY_REUSE_MS` per ledger. A
@@ -63,24 +73,36 @@ const DELIVERY_LOCK_POLL_MS = 15;
  */
 export const DELIVERY_LEDGER_MAX_ENTRIES = 200;
 
-/** After a success, the clear is tried again after these waits (item 4). */
-const CLEAR_RETRY_DELAYS_MS = [200, 1_000];
+/** After a success, the `admitted` mark is tried again after these waits. */
+const MARK_RETRY_DELAYS_MS = [200, 1_000];
 
-const LEDGER_VERSION = 1;
+/**
+ * When the `admitted` mark cannot be written, this process keeps the
+ * attempt lock this long (the reuse bound plus a margin for clock steps), so
+ * that no send takes the ID of the admitted input while this process runs.
+ */
+export const DELIVERY_UNRECORDED_HOLD_MS = DELIVERY_REUSE_MS + 60_000;
+
+const LEDGER_VERSION = 2;
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const INPUT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const START_TIME_PATTERN = /^\d+$/;
+/** The temp file of `atomicWriteFileSync`: `<file>.tmp.<pid>.<ms>`. */
+const TEMP_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.json\.tmp\.\d+\.\d+$/;
 
-export type DeliveryState = "sending" | "unknown";
+/**
+ * `sending`: an attempt claimed the entry (in flight while its attempt lock
+ * is held). `unknown`: its admission stayed unknown. `admitted`: the service
+ * admitted it; no send takes it, and the next change removes it.
+ */
+export type DeliveryState = "sending" | "unknown" | "admitted";
 
-/** The process that owns an entry or a lock. */
+/** The attempt that owns an entry. */
 export interface DeliveryOwner {
+  /** The `ao` process of the attempt; only for an operator, no rule reads it. */
   pid: number;
-  /** Field 22 of `/proc/<pid>/stat` (clock ticks after boot), or null when unreadable. */
-  startTime: string | null;
-  /** The attempt token (entry) or the lock token (lock). */
+  /** The attempt token; it names the attempt lock. */
   token: string;
 }
 
@@ -93,13 +115,8 @@ export interface DeliveryEntry {
   createdAt: string;
   /** The last claim or settle (ISO 8601); the reuse bound counts from it. */
   updatedAt: string;
-  /** `sending` while an attempt runs; `unknown` after an admission that stayed unknown. */
   state: DeliveryState;
   owner: DeliveryOwner;
-}
-
-interface LockContent extends DeliveryOwner {
-  at: string;
 }
 
 /** A ledger problem. Before the prompt the caller treats it as a definite refusal. */
@@ -125,245 +142,42 @@ export class DeliveryLedgerCorruptError extends DeliveryLedgerError {
   }
 }
 
-/** A live owner held the lock for longer than `DELIVERY_LOCK_WAIT_MS`. */
+/** A live process held the ledger lock for longer than `DELIVERY_LOCK_WAIT_MS`. */
 export class DeliveryLedgerBusyError extends DeliveryLedgerError {
-  constructor(lockPath: string, detail: string) {
+  constructor(path: string, lockName: string) {
     super(
-      `the delivery ledger lock ${lockPath} is held (${detail}) for more than ${DELIVERY_LOCK_WAIT_MS} ms`,
-      lockPath,
+      `the delivery ledger ${path} is locked by another process for more than ${DELIVERY_LOCK_WAIT_MS} ms (the lock is the abstract socket ${printableLockName(lockName)}; \`ss -xlp\` shows the process that holds it)`,
+      path,
     );
     this.name = "DeliveryLedgerBusyError";
   }
 }
 
 // ---------------------------------------------------------------------------
-// Process identity and owner liveness
+// The locks
 // ---------------------------------------------------------------------------
 
-/** Attempt tokens of this process between `beginDelivery` and its settle. */
-const inFlight = new Set<string>();
-/** Attempt tokens of this process whose send succeeded but whose clear failed. */
-const admittedNotCleared = new Set<string>();
-/** Lock tokens that this process holds now. */
-const heldLocks = new Set<string>();
-
-let selfStart: string | null | undefined;
-
-/**
- * Field 22 (starttime) of `/proc/<pid>/stat`, or null when it cannot be
- * read (no such process, no `/proc`, EACCES). Only `kill(pid, 0)` decides
- * whether a process is gone: a host without `/proc` also gives ENOENT here.
- */
-export function readProcessStartTime(pid: number): string | null {
-  let stat: string;
-  try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
-  } catch {
-    return null;
-  }
-  // The `(comm)` field can hold spaces and parentheses.
-  const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  return start !== undefined && START_TIME_PATTERN.test(start) ? start : null;
+/** The real path of the ledger file: it names the locks of this ledger. */
+function ledgerSubject(dir: string, key: string): string {
+  return join(realpathSync.native(dir), `${key}.json`);
 }
 
-function selfStartTime(): string | null {
-  if (selfStart === undefined) selfStart = readProcessStartTime(process.pid);
-  return selfStart;
+/** The name of the ledger lock of `key` in `dir` (the directory must exist). */
+export function deliveryLedgerLockName(dir: string, key: string): string {
+  return deliveryLockName("ledger", ledgerSubject(dir, key));
 }
 
-/** `kill(pid, 0)`: false when the PID is gone (ESRCH) or belongs to another user (EPERM). */
-function pidRunsAsThisUser(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code !== "ESRCH" && code !== "EPERM";
-  }
+/** The name of the attempt lock of `token` in the ledger of `key` in `dir`. */
+export function deliveryAttemptLockName(dir: string, key: string, token: string): string {
+  return deliveryLockName("attempt", `${ledgerSubject(dir, key)}#${token}`);
 }
 
-/**
- * Whether the process that wrote `owner` still runs. Dead: the PID is gone
- * (ESRCH), it belongs to another user now (EPERM: the owner was a process of
- * this user), or it runs with another start time (the PID was reused). When
- * the start time cannot be read, the owner counts as alive: an entry of a
- * live owner must never be reused (that would turn a concurrent send into a
- * replay that admits nothing), so the unreadable case takes the direction
- * that can only give a new ID.
- */
-export function isDeliveryOwnerAlive(owner: { pid: number; startTime: string | null }): boolean {
-  if (owner.pid === process.pid) {
-    const own = selfStartTime();
-    return owner.startTime === null || own === null || owner.startTime === own;
-  }
-  if (!pidRunsAsThisUser(owner.pid)) return false;
-  if (owner.startTime === null) return true;
-  const now = readProcessStartTime(owner.pid);
-  // Unreadable: the process may have ended just now; ask again, else alive.
-  if (now === null) return pidRunsAsThisUser(owner.pid);
-  return now === owner.startTime;
-}
-
-/** True when the owner is this process (the same PID and start time). */
-function isSelf(owner: DeliveryOwner): boolean {
-  if (owner.pid !== process.pid) return false;
-  const own = selfStartTime();
-  return owner.startTime === null || own === null || owner.startTime === own;
-}
-
-/**
- * Whether a later send of the same text may take this entry's ID: the
- * admission is `unknown`; or the attempt is `sending` and its owner is dead;
- * or its owner is this process and the attempt is not in flight (its write
- * of `unknown` failed). A clear that failed after a success is never taken
- * by this process again.
- */
-function isReusable(entry: DeliveryEntry): boolean {
-  if (entry.state === "unknown") return true;
-  if (isSelf(entry.owner)) {
-    return !inFlight.has(entry.owner.token) && !admittedNotCleared.has(entry.owner.token);
-  }
-  return !isDeliveryOwnerAlive(entry.owner);
-}
-
-// ---------------------------------------------------------------------------
-// The lock
-// ---------------------------------------------------------------------------
-
-/** Create `path` with `content` only when it does not exist (a temp file, then `link`). */
-function createExclusive(path: string, content: string): boolean {
-  const temp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${randomUUID()}`);
-  const fd = openSync(temp, "wx", 0o600);
-  try {
-    try {
-      writeFileSync(fd, content, "utf-8");
-    } finally {
-      closeSync(fd);
-    }
-    linkSync(temp, path);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw err;
-  } finally {
-    rmSync(temp, { force: true });
-  }
-}
-
-function isOwner(value: unknown): value is DeliveryOwner {
-  if (typeof value !== "object" || value === null) return false;
-  const owner = value as Record<string, unknown>;
-  return (
-    Number.isSafeInteger(owner["pid"]) &&
-    (owner["pid"] as number) > 0 &&
-    (owner["startTime"] === null ||
-      (typeof owner["startTime"] === "string" && START_TIME_PATTERN.test(owner["startTime"]))) &&
-    typeof owner["token"] === "string" &&
-    TOKEN_PATTERN.test(owner["token"])
-  );
-}
-
-function readLock(path: string): LockContent | "absent" | "invalid" {
-  let text: string;
-  try {
-    text = readFileSync(path, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "absent";
-    return "invalid";
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return isOwner(parsed) ? (parsed as LockContent) : "invalid";
-  } catch {
-    return "invalid";
-  }
-}
-
-function isStaleLock(lock: LockContent): boolean {
-  if (isSelf(lock)) return !heldLocks.has(lock.token);
-  return !isDeliveryOwnerAlive(lock);
-}
-
-/**
- * Break the stale lock `stale` through the claim file `<lock>.break-<token>`.
- * Only one process can create the claim; it removes the lock only when the
- * lock still holds the stale token. No process other than the claim holder
- * removes a lock of a dead owner, and a removed token never comes back, so
- * a waiter that read the stale token long ago cannot remove a newer lock.
- */
-function breakStaleLock(lockPath: string, stale: LockContent, claimContent: string): boolean {
-  const claim = `${lockPath}.break-${stale.token}`;
-  if (!createExclusive(claim, claimContent)) return false;
-  try {
-    const again = readLock(lockPath);
-    if (again !== "absent" && again !== "invalid" && again.token === stale.token) {
-      unlinkSync(lockPath);
-    }
-    return true;
-  } finally {
-    rmSync(claim, { force: true });
-  }
-}
-
-function describeHolder(lockPath: string, holder: LockContent | "invalid" | undefined): string {
-  if (holder === undefined) return "by an unknown process";
-  if (holder === "invalid")
-    return `by a lock file that ao cannot read; remove ${lockPath} if no ao process runs`;
-  const alive = isDeliveryOwnerAlive(holder);
-  return alive
-    ? `by the live process ${holder.pid} since ${holder.at}`
-    : `by the dead process ${holder.pid}, and another process is breaking it; remove ${lockPath} and ${lockPath}.break-${holder.token} if no ao process runs`;
-}
-
-async function acquireLock(lockPath: string): Promise<string> {
-  mkdirSync(dirname(lockPath), { recursive: true });
-  const token = randomUUID();
-  const content = JSON.stringify({
-    pid: process.pid,
-    startTime: selfStartTime(),
-    token,
-    at: new Date().toISOString(),
-  } satisfies LockContent);
-  const deadline = Date.now() + DELIVERY_LOCK_WAIT_MS;
-  let holder: LockContent | "invalid" | undefined;
-  for (;;) {
-    if (createExclusive(lockPath, content)) {
-      heldLocks.add(token);
-      return token;
-    }
-    const current = readLock(lockPath);
-    if (current === "absent") {
-      // The holder released it between the create and the read: try again
-      // at once, but never past the bound.
-      if (Date.now() >= deadline) {
-        throw new DeliveryLedgerBusyError(lockPath, describeHolder(lockPath, holder));
-      }
-      continue;
-    }
-    holder = current;
-    if (
-      current !== "invalid" &&
-      isStaleLock(current) &&
-      breakStaleLock(lockPath, current, content)
-    ) {
-      continue;
-    }
-    if (Date.now() >= deadline)
-      throw new DeliveryLedgerBusyError(lockPath, describeHolder(lockPath, holder));
-    await new Promise((resolve) =>
-      setTimeout(
-        resolve,
-        DELIVERY_LOCK_POLL_MS + Math.floor(Math.random() * DELIVERY_LOCK_POLL_MS),
-      ),
+function requireLockSupport(path: string): void {
+  if (!isDeliveryLockSupported()) {
+    throw new DeliveryLedgerError(
+      `the delivery ledger ${path} needs a lock that the OS releases (a Linux abstract Unix socket), and ${process.platform} has none`,
+      path,
     );
-  }
-}
-
-function releaseLock(lockPath: string, token: string): void {
-  heldLocks.delete(token);
-  const current = readLock(lockPath);
-  if (current !== "absent" && current !== "invalid" && current.token === token) {
-    unlinkSync(lockPath);
   }
 }
 
@@ -382,6 +196,17 @@ export function deliveryLedgerPath(dir: string, key: string): string {
   return join(dir, `${key}.json`);
 }
 
+function isOwner(value: unknown): value is DeliveryOwner {
+  if (typeof value !== "object" || value === null) return false;
+  const owner = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(owner["pid"]) &&
+    (owner["pid"] as number) > 0 &&
+    typeof owner["token"] === "string" &&
+    TOKEN_PATTERN.test(owner["token"])
+  );
+}
+
 function invalidEntryDetail(value: unknown, index: number): string | null {
   if (typeof value !== "object" || value === null) return `entry ${index} is not an object`;
   const entry = value as Record<string, unknown>;
@@ -397,7 +222,7 @@ function invalidEntryDetail(value: unknown, index: number): string | null {
       return `entry ${index} has no valid ${field}`;
     }
   }
-  if (entry["state"] !== "sending" && entry["state"] !== "unknown") {
+  if (!["sending", "unknown", "admitted"].includes(entry["state"] as string)) {
     return `entry ${index} has no valid state`;
   }
   if (!isOwner(entry["owner"])) return `entry ${index} has no valid owner`;
@@ -450,6 +275,11 @@ export function readDeliveryLedger(dir: string, key: string): DeliveryEntry[] {
   return entries as DeliveryEntry[];
 }
 
+/** An entry that a change keeps: not `admitted`, and changed less than `DELIVERY_REUSE_MS` ago. */
+function isLive(entry: DeliveryEntry, now: number): boolean {
+  return entry.state !== "admitted" && now - Date.parse(entry.updatedAt) < DELIVERY_REUSE_MS;
+}
+
 function writeDeliveryLedger(path: string, key: string, entries: DeliveryEntry[]): void {
   if (entries.length === 0) {
     rmSync(path, { force: true });
@@ -463,29 +293,41 @@ function writeDeliveryLedger(path: string, key: string, entries: DeliveryEntry[]
 
 /**
  * Run `change` on the ledger of `key` under its lock: read and check the
- * file, remove entries older than `DELIVERY_REUSE_MS`, change, and write
- * (or remove the file when it is empty). A corrupt file throws before any
- * change, and the file stays as it is. `change` runs synchronously while
- * the lock is held.
+ * file, remove the `admitted` entries and the entries older than
+ * `DELIVERY_REUSE_MS`, change, and write (or remove the file when it is
+ * empty). A corrupt file throws before any change, and the file stays as it
+ * is. `beforeUnlock` runs while the lock is still held, after the write or
+ * after an error (`written` tells which).
  */
 export async function changeDeliveryLedger<T>(
   dir: string,
   key: string,
-  change: (entries: DeliveryEntry[], now: number) => { entries: DeliveryEntry[]; result: T },
+  change: (
+    entries: DeliveryEntry[],
+    now: number,
+  ) => { entries: DeliveryEntry[]; result: T } | Promise<{ entries: DeliveryEntry[]; result: T }>,
+  options: { beforeUnlock?: (written: boolean) => void } = {},
 ): Promise<T> {
   const path = deliveryLedgerPath(dir, key);
-  const lockPath = `${path}.lock`;
-  const lockToken = await acquireLock(lockPath);
+  requireLockSupport(path);
+  mkdirSync(dir, { recursive: true });
+  const lockName = deliveryLedgerLockName(dir, key);
+  const lock = await holdDeliveryLock(lockName, DELIVERY_LOCK_WAIT_MS);
+  if (!lock) throw new DeliveryLedgerBusyError(path, lockName);
+  let written = false;
   try {
     const now = Date.now();
-    const current = readDeliveryLedger(dir, key).filter(
-      (entry) => now - Date.parse(entry.updatedAt) < DELIVERY_REUSE_MS,
-    );
-    const { entries, result } = change(current, now);
+    const current = readDeliveryLedger(dir, key).filter((entry) => isLive(entry, now));
+    const { entries, result } = await change(current, now);
     writeDeliveryLedger(path, key, entries);
+    written = true;
     return result;
   } finally {
-    releaseLock(lockPath, lockToken);
+    try {
+      options.beforeUnlock?.(written);
+    } finally {
+      lock.release();
+    }
   }
 }
 
@@ -496,19 +338,48 @@ export async function changeDeliveryLedger<T>(
 export interface DeliveryAttempt {
   /** The input ID to send. */
   inputId: string;
-  /** The attempt token of this process, for `settleDelivery`. */
+  /** The attempt token; it names the attempt lock. */
   token: string;
   /** True when the ID is the one of an earlier attempt of the same text. */
   reused: boolean;
+  /** The attempt lock, held until `settleDelivery`. */
+  hold: DeliveryLock;
 }
 
 /**
- * Persist the input ID of one send before its API call: take the ID of the
- * newest reusable entry of the same text hash (see `isReusable`), and claim
- * it in the same locked change (owner: this attempt, state `sending`), or
- * add a new entry with the ID that `mint` gives. Throws `DeliveryLedgerError`
- * when the ID cannot be persisted (busy lock, corrupt file, a full ledger, a
- * failed write): then the caller sends nothing.
+ * The newest entry of `textSha256` whose ID a new attempt may take: an
+ * `unknown` entry, or a `sending` entry whose attempt lock no process holds
+ * (its attempt ended without a settle that wrote). Called under the ledger
+ * lock. Every settle writes and releases its attempt lock under the same
+ * lock, so a settle cannot run between a probe and the claim; an attempt
+ * lock, once free, is never held again (its token is used once).
+ */
+async function newestReusable(
+  dir: string,
+  key: string,
+  entries: DeliveryEntry[],
+  textSha256: string,
+): Promise<DeliveryEntry | undefined> {
+  const candidates = entries
+    .filter((entry) => entry.textSha256 === textSha256)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  for (const entry of candidates) {
+    if (entry.state === "admitted") continue;
+    if (entry.state === "unknown") return entry;
+    if (!(await isDeliveryLockHeld(deliveryAttemptLockName(dir, key, entry.owner.token))))
+      return entry;
+  }
+  return undefined;
+}
+
+/**
+ * Persist the input ID of one send before its API call. The attempt lock of
+ * a new token is held first, then, in one locked change: the ID of the
+ * newest reusable entry of the same text (see `newestReusable`), claimed
+ * for this attempt (state `sending`, owner: this attempt), or a new entry
+ * with the ID that `mint` gives. Throws `DeliveryLedgerError` when the ID
+ * cannot be persisted (no lock on this platform, a busy lock, a corrupt
+ * file, a full ledger, a failed write): then the caller sends nothing.
  */
 export async function beginDelivery(options: {
   dir: string;
@@ -521,18 +392,24 @@ export async function beginDelivery(options: {
   if (!SHA256_PATTERN.test(textSha256)) {
     throw new DeliveryLedgerError("the text hash is not a SHA-256 hex digest", path);
   }
+  requireLockSupport(path);
   const token = randomUUID();
-  const owner: DeliveryOwner = { pid: process.pid, startTime: selfStartTime(), token };
+  let hold: DeliveryLock | null = null;
   try {
-    return await changeDeliveryLedger<DeliveryAttempt>(dir, key, (entries, now) => {
+    mkdirSync(dir, { recursive: true });
+    // Held before the claim is written: no process can see the claim of a
+    // live attempt whose attempt lock is free.
+    hold = await tryHoldDeliveryLock(deliveryAttemptLockName(dir, key, token));
+    if (!hold) {
+      throw new DeliveryLedgerError(
+        `the attempt lock of a new token of the delivery ledger ${path} is held by another process`,
+        path,
+      );
+    }
+    const owner: DeliveryOwner = { pid: process.pid, token };
+    const { inputId, reused } = await changeDeliveryLedger(dir, key, async (entries, now) => {
       const at = new Date(now).toISOString();
-      const reusable = entries
-        .filter((entry) => entry.textSha256 === textSha256 && isReusable(entry))
-        .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
-        .at(-1);
-      // The token is in flight before the write, so no other send of this
-      // process can take the entry between the write and the return.
-      inFlight.add(token);
+      const reusable = await newestReusable(dir, key, entries, textSha256);
       if (reusable) {
         return {
           entries: entries.map((entry) =>
@@ -540,7 +417,7 @@ export async function beginDelivery(options: {
               ? { ...entry, state: "sending" as const, owner, updatedAt: at }
               : entry,
           ),
-          result: { inputId: reusable.inputId, token, reused: true },
+          result: { inputId: reusable.inputId, reused: true },
         };
       }
       if (entries.length >= DELIVERY_LEDGER_MAX_ENTRIES) {
@@ -549,28 +426,29 @@ export async function beginDelivery(options: {
           path,
         );
       }
-      const inputId = mint();
-      if (typeof inputId !== "string" || !INPUT_ID_PATTERN.test(inputId)) {
+      const minted = mint();
+      if (typeof minted !== "string" || !INPUT_ID_PATTERN.test(minted)) {
         throw new DeliveryLedgerError(
-          `the agent minted no valid input ID (${String(inputId)})`,
+          `the agent minted no valid input ID (${String(minted)})`,
           path,
         );
       }
-      if (entries.some((entry) => entry.inputId === inputId)) {
-        throw new DeliveryLedgerError(`the minted input ID ${inputId} is already in ${path}`, path);
+      if (entries.some((entry) => entry.inputId === minted)) {
+        throw new DeliveryLedgerError(`the minted input ID ${minted} is already in ${path}`, path);
       }
       const entry: DeliveryEntry = {
-        inputId,
+        inputId: minted,
         textSha256,
         createdAt: at,
         updatedAt: at,
         state: "sending",
         owner,
       };
-      return { entries: [...entries, entry], result: { inputId, token, reused: false } };
+      return { entries: [...entries, entry], result: { inputId: minted, reused: false } };
     });
+    return { inputId, token, reused, hold };
   } catch (err) {
-    inFlight.delete(token);
+    hold?.release();
     if (err instanceof DeliveryLedgerError) throw err;
     throw new DeliveryLedgerError(`could not write the delivery ledger ${path}`, path, {
       cause: err,
@@ -579,31 +457,39 @@ export async function beginDelivery(options: {
 }
 
 /**
- * End one attempt. `clear` (the send succeeded, or the service refused it):
- * remove the entry; the clear is tried again after a short wait, and when it
- * still fails this process never takes the entry again, while another
- * process can take it only after this one ends (a later equal send then
- * becomes a replay that admits nothing). `unknown`: set the state, so a
- * later send of the same text takes the ID. Only an entry that this attempt
- * owns changes. Never throws; returns false when the write failed.
+ * End one attempt. Never throws; returns true when the ledger records the
+ * outcome. Only the entry of this attempt (its input ID and token) changes.
+ *
+ * - `admitted` (the send succeeded): mark the entry `admitted` (tried again
+ *   after 200 ms and 1 s), release the attempt lock, then clear: any change
+ *   removes `admitted` entries, so a failed clear leaves an entry that no
+ *   send takes. When every mark fails, the entry stays `sending` and this
+ *   process keeps the attempt lock for `DELIVERY_UNRECORDED_HOLD_MS`, so no
+ *   send takes the ID while this process runs; the caller reports it.
+ * - `unknown` (the admission is unknown): set the state, so a later send of
+ *   the same text takes the ID. `none` (a definite refusal): remove the
+ *   entry. The attempt lock is released in both cases, also when the write
+ *   fails: the entry then stays `sending` with a free attempt lock, and a
+ *   later send of the same text from any process takes the ID (B-3).
  */
 export async function settleDelivery(options: {
   dir: string;
   key: string;
   attempt: DeliveryAttempt;
-  outcome: "clear" | "unknown";
+  outcome: "admitted" | "unknown" | "none";
 }): Promise<boolean> {
   const { dir, key, attempt, outcome } = options;
   const mine = (entry: DeliveryEntry) =>
     entry.inputId === attempt.inputId && entry.owner.token === attempt.token;
-  const delays = outcome === "clear" ? [0, ...CLEAR_RETRY_DELAYS_MS] : [0];
-  try {
-    for (const delayMs of delays) {
-      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-      try {
-        await changeDeliveryLedger(dir, key, (entries, now) => ({
+
+  if (outcome !== "admitted") {
+    try {
+      await changeDeliveryLedger(
+        dir,
+        key,
+        (entries, now) => ({
           entries:
-            outcome === "clear"
+            outcome === "none"
               ? entries.filter((entry) => !mine(entry))
               : entries.map((entry) =>
                   mine(entry)
@@ -615,30 +501,127 @@ export async function settleDelivery(options: {
                     : entry,
                 ),
           result: undefined,
-        }));
-        return true;
-      } catch {
-        // Try again (clear only); see the doc comment for what stays.
-      }
+        }),
+        { beforeUnlock: () => attempt.hold.release() },
+      );
+      return true;
+    } catch {
+      return false;
+    } finally {
+      attempt.hold.release();
     }
-    if (outcome === "clear") admittedNotCleared.add(attempt.token);
-    return false;
-  } finally {
-    inFlight.delete(attempt.token);
   }
+
+  for (const delayMs of [0, ...MARK_RETRY_DELAYS_MS]) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      await changeDeliveryLedger(
+        dir,
+        key,
+        (entries, now) => ({
+          entries: entries.map((entry) =>
+            mine(entry)
+              ? { ...entry, state: "admitted" as const, updatedAt: new Date(now).toISOString() }
+              : entry,
+          ),
+          result: undefined,
+        }),
+        {
+          beforeUnlock: (written) => {
+            if (written) attempt.hold.release();
+          },
+        },
+      );
+    } catch {
+      continue;
+    }
+    // The clear: the read of this change drops the `admitted` entry. A
+    // failure leaves the mark, which no send takes; a later change or
+    // `ao session cleanup` removes it.
+    await changeDeliveryLedger(dir, key, (entries) => ({ entries, result: undefined })).catch(
+      () => undefined,
+    );
+    return true;
+  }
+  setTimeout(() => attempt.hold.release(), DELIVERY_UNRECORDED_HOLD_MS).unref();
+  return false;
 }
 
 /**
  * Remove the ledger of `key` (its agent session was removed). Runs under the
- * lock, and removes also a corrupt file, which no send can use any more.
+ * ledger lock, and removes also a corrupt file, which no send can use any
+ * more. No file is no error.
  */
 export async function removeDeliveryLedger(dir: string, key: string): Promise<void> {
   const path = deliveryLedgerPath(dir, key);
-  const lockPath = `${path}.lock`;
-  const lockToken = await acquireLock(lockPath);
+  if (!existsSync(path)) return;
+  requireLockSupport(path);
+  const lockName = deliveryLedgerLockName(dir, key);
+  const lock = await holdDeliveryLock(lockName, DELIVERY_LOCK_WAIT_MS);
+  if (!lock) throw new DeliveryLedgerBusyError(path, lockName);
   try {
     rmSync(path, { force: true });
   } finally {
-    releaseLock(lockPath, lockToken);
+    lock.release();
   }
+}
+
+/** What `removeExpiredDeliveryLedgers` did. */
+export interface ExpiredLedgerSweep {
+  removed: string[];
+  failed: Array<{ path: string; error: string }>;
+}
+
+/**
+ * Remove each ledger in `dir` that has no live entry (every entry is
+ * `admitted` or older than `DELIVERY_REUSE_MS`) and whose lock no process
+ * holds now (no wait: a held lock is a change in progress), and the temp
+ * files of a failed write that are older than `DELIVERY_REUSE_MS`. A corrupt
+ * ledger stays: an operator decides about it. Never throws.
+ */
+export async function removeExpiredDeliveryLedgers(
+  dir: string,
+  now: number = Date.now(),
+): Promise<ExpiredLedgerSweep> {
+  const sweep: ExpiredLedgerSweep = { removed: [], failed: [] };
+  if (!isDeliveryLockSupported()) return sweep;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return sweep;
+  }
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      if (TEMP_FILE_PATTERN.test(name)) {
+        if (now - statSync(path).mtimeMs >= DELIVERY_REUSE_MS) {
+          rmSync(path, { force: true });
+          sweep.removed.push(path);
+        }
+        continue;
+      }
+      const key = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+      if (!KEY_PATTERN.test(key)) continue;
+      const lock = await tryHoldDeliveryLock(deliveryLedgerLockName(dir, key));
+      if (!lock) continue;
+      try {
+        let entries: DeliveryEntry[];
+        try {
+          entries = readDeliveryLedger(dir, key);
+        } catch (err) {
+          if (err instanceof DeliveryLedgerCorruptError) continue;
+          throw err;
+        }
+        if (entries.some((entry) => isLive(entry, now))) continue;
+        rmSync(path, { force: true });
+        sweep.removed.push(path);
+      } finally {
+        lock.release();
+      }
+    } catch (err) {
+      sweep.failed.push({ path, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return sweep;
 }

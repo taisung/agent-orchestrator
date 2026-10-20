@@ -431,14 +431,15 @@ export interface Agent {
    * `attempt.begin`: core persists that ID in the delivery ledger of the
    * agent session first, and gives back the ID of an earlier attempt of the
    * same text that may have been admitted (its admission stayed unknown, or
-   * its process ended during the call), so the service admits one logical
-   * send at most once. When `begin` throws, nothing may be sent. Without
-   * `attempt`, the hook mints an ID that nothing persists.
+   * the attempt ended without a settle that wrote, for example because its
+   * process ended), so the service admits one logical send at most once.
+   * When `begin` throws, nothing may be sent. Without `attempt`, the hook
+   * mints an ID that nothing persists.
    *
    * `AgentNotAttachedError` (thrown before `begin`) means that nothing was
    * delivered because the interactive agent process that the delivery needs
    * does not run on the session; core then restores the session once and
-   * calls the hook again. `restore` replaces the pane only when
+   * calls the hook again. Thrown after `begin`, it is final (no restore). `restore` replaces the pane only when
    * `isRestorable` is true (a terminal status or an exited agent, never
    * `merged`), so a pane under a `working` record that runs another agent
    * process stays, and the send fails; a live pane under a `killed` or `done`
@@ -586,14 +587,15 @@ export interface AgentMessageDelivery {
 
 /**
  * The input ID of one logical send (I-5). `begin` is called by the agent
- * right before its API call, with the agent's ID generator and `key`, the
- * agent session that gets the input (OpenCode: the stored `ses_...` ID).
- * Core keeps one delivery ledger per key, writes the entry (state
- * `sending`, owner: this process and attempt) under the ledger lock before
- * it resolves, and resolves the ID to use: the ID of an earlier attempt of
- * the same text to the same key that may have been admitted, or a new ID
- * from `mint`. It rejects when the ID cannot be persisted; then the agent
- * sends nothing.
+ * once, right before its API call, with the agent's ID generator and `key`,
+ * the agent session that gets the input (OpenCode: the stored `ses_...`
+ * ID). Core keeps one delivery ledger per key. Before it resolves, it holds
+ * the attempt lock of this attempt (a lock that the OS releases, held until
+ * the send ends) and writes the entry (state `sending`) under the ledger
+ * lock. It resolves the ID to use: the ID of an earlier attempt of the same
+ * text to the same key that may have been admitted and that is not in
+ * flight, or a new ID from `mint`. It rejects when the ID cannot be
+ * persisted; then the agent sends nothing.
  */
 export interface AgentDeliveryAttempt {
   begin(mint: () => string, key: string): Promise<string>;
@@ -601,7 +603,19 @@ export interface AgentDeliveryAttempt {
 
 /** How `SessionManager.deliver` sent one message. */
 export type SessionMessageDelivery =
-  | { route: "agent"; delivery: AgentMessageDelivery }
+  | {
+      route: "agent";
+      delivery: AgentMessageDelivery;
+      /**
+       * I-5 (M-5): the message was admitted, but the delivery ledger could
+       * not mark the entry `admitted` (the write failed three times). While
+       * this process runs (at most 11 min), a send of the same text gets a
+       * new ID; after this process ends, a send of the same text to the same
+       * agent session in the 10 min after this one can reuse the ID and
+       * admit nothing new. Absent when the ledger recorded the admission.
+       */
+      admissionUnrecorded?: true;
+    }
   | { route: "runtime" };
 
 export interface WorkspaceHooksConfig {

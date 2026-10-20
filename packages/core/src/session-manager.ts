@@ -87,10 +87,14 @@ import {
 } from "./paths.js";
 import {
   beginDelivery,
+  DELIVERY_UNRECORDED_HOLD_MS,
+  deliveryLedgerPath,
   removeDeliveryLedger,
+  removeExpiredDeliveryLedgers,
   settleDelivery,
   type DeliveryAttempt,
 } from "./delivery-ledger.js";
+import { isDeliveryLockSupported } from "./delivery-lock.js";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
   getOpenCodeSession,
@@ -2326,28 +2330,60 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     deleteMetadata(sessionsDir, sessionId, true);
     if (didPurgeOpenCodeSession) {
       markArchivedOpenCodeCleanup(sessionsDir, sessionId);
-      await removeLedgerOfRemovedSession(project, raw["opencodeSessionId"], sessionId);
+      await removeLedgerOfRemovedSession(project, sessionsDir, raw["opencodeSessionId"], sessionId);
     }
   }
 
   /**
    * I-5: the OpenCode session is removed, so no send can use its delivery
    * ledger any more. A kill without purge keeps the ledger (a restore keeps
-   * the stored session ID). Best effort: the entries expire after
-   * `DELIVERY_REUSE_MS` anyway.
+   * the stored session ID). The archive mark clears `opencodeSessionId`, so
+   * a removal that fails (m-2) writes the key to the archived record as
+   * `opencodeLedgerPending`; the next `ao session cleanup` tries again and
+   * clears that key only after the file is gone (`retry`).
    */
   async function removeLedgerOfRemovedSession(
     project: ProjectConfig,
+    sessionsDir: string,
     openCodeSessionId: string | undefined,
     aoSessionId: SessionId,
+    retry = false,
   ): Promise<void> {
     const key = asValidOpenCodeSessionId(openCodeSessionId);
     if (!key) return;
+    const dir = getDeliveryLedgerDir(config.configPath, project.path);
     try {
-      await removeDeliveryLedger(getDeliveryLedgerDir(config.configPath, project.path), key);
+      await removeDeliveryLedger(dir, key);
     } catch (err) {
+      let kept: boolean;
+      try {
+        kept = updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: key });
+      } catch {
+        kept = false;
+      }
+      const then = kept
+        ? "the next `ao session cleanup` tries again"
+        : "`ao session cleanup` removes it when its entries are older than 10 min";
       warnOperator(
-        `ao: could not remove the delivery ledger of OpenCode session ${key} of ${aoSessionId} (${shortErrorText(err)}); its entries expire after 10 min.`,
+        `ao: could not remove the delivery ledger ${deliveryLedgerPath(dir, key)} of OpenCode session ${key} of ${aoSessionId} (${shortErrorText(err)}); ${then}.`,
+      );
+      return;
+    }
+    if (retry) updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: "" });
+  }
+
+  /**
+   * I-5 (m-2): remove the ledgers of a project that have no live entry and
+   * whose lock is free, and old temp files of a failed write. A ledger that
+   * stays gets one line; the next `ao session cleanup` tries again.
+   */
+  async function removeExpiredLedgers(project: ProjectConfig): Promise<void> {
+    const sweep = await removeExpiredDeliveryLedgers(
+      getDeliveryLedgerDir(config.configPath, project.path),
+    );
+    for (const failure of sweep.failed) {
+      warnOperator(
+        `ao: could not remove the expired delivery ledger ${failure.path} (${shortErrorText(failure.error)}); the next \`ao session cleanup\` tries again.`,
       );
     }
   }
@@ -2497,6 +2533,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const cleanupAgent = resolveSelectionForSession(project, archivedId, archived).agentName;
         const mappedOpenCodeSessionId = asValidOpenCodeSessionId(archived["opencodeSessionId"]);
         if (cleanupAgent === "opencode" && archived["opencodeCleanedAt"]) {
+          // m-2: the OpenCode session is removed. A ledger removal that
+          // failed after that removal is tried again here, until the file
+          // is gone.
+          const pendingLedger = archived["opencodeLedgerPending"];
+          if (pendingLedger && !options?.dryRun) {
+            await removeLedgerOfRemovedSession(
+              project,
+              sessionsDir,
+              pendingLedger,
+              archivedId,
+              true,
+            );
+          }
           pushSkipped(projectKey, archivedId);
           continue;
         }
@@ -2521,7 +2570,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             try {
               await deleteOpenCodeSession(mappedOpenCodeSessionId);
               markArchivedOpenCodeCleanup(sessionsDir, archivedId);
-              await removeLedgerOfRemovedSession(project, mappedOpenCodeSessionId, archivedId);
+              await removeLedgerOfRemovedSession(
+                project,
+                sessionsDir,
+                mappedOpenCodeSessionId,
+                archivedId,
+              );
             } catch (err) {
               result.errors.push({
                 sessionId: archivedId,
@@ -2535,6 +2589,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
         }
       }
+
+      if (!options?.dryRun) await removeExpiredLedgers(project);
     }
 
     const allEntryKeys = [...killedKeys, ...skippedKeys];
@@ -2556,7 +2612,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function send(sessionId: SessionId, message: string): Promise<void> {
-    await deliver(sessionId, message);
+    const result = await deliver(sessionId, message);
+    // I-5 (M-5): the message was admitted, so the send succeeds; a lifecycle
+    // reaction that records its dispatch records a true delivery. The line
+    // tells the operator what the unrecorded admission can still cause.
+    if (result.route === "agent" && result.admissionUnrecorded) {
+      warnOperator(
+        `ao: input ${result.delivery.inputId} was admitted to ${sessionId}, but the delivery ledger could not record it. While this process runs (at most ${DELIVERY_UNRECORDED_HOLD_MS / 60_000} min), a send of the same text gets a new ID; after this process ends, a send of the same text in the 10 min after this one can reuse the ID and admit nothing new.`,
+      );
+    }
   }
 
   async function deliver(sessionId: SessionId, message: string): Promise<SessionMessageDelivery> {
@@ -2825,37 +2889,38 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // record is replaced (inherited behavior, not changed by I-5).
     const deliverMessage = agentPlugin.deliverMessage?.bind(agentPlugin);
 
-    // I-5 (B-1, B-2, M-2, M-3): one input ID per logical send. `begin`
-    // persists the ID in the delivery ledger of the agent session (a file of
-    // its own under a cross-process lock, keyed by the agent session, so a
-    // record write, a kill, the archive and a restore keep it) before the
-    // agent's API call. It gives back the ID of an earlier attempt of the
-    // same text that may have been admitted: its admission stayed `unknown`,
-    // or its process ended during the call, or this process failed to write
-    // its `unknown`. So a retry by any caller (CLI, lifecycle reaction,
-    // review-check) cannot admit the message twice. The `sending` entry of a
-    // live attempt is never taken: a concurrent send of the same text gets
-    // its own ID.
+    // I-5 (B-1, B-2, B-3, M-2, M-3, M-5): one input ID per logical send.
+    // `begin` persists the ID in the delivery ledger of the agent session (a
+    // file of its own under a lock that the OS releases, keyed by the agent
+    // session, so a record write, a kill, the archive and a restore keep it)
+    // before the agent's API call. It gives back the ID of an earlier
+    // attempt of the same text that may have been admitted: its admission
+    // stayed `unknown`, or the attempt ended (its process ended, or its
+    // settle could not write) while no process holds its attempt lock. So a
+    // retry by any caller (CLI, lifecycle reaction, review-check) in any
+    // process cannot admit the message twice. An attempt in flight holds its
+    // attempt lock, so a concurrent send of the same text gets its own ID.
     const ledgerDir = getDeliveryLedgerDir(config.configPath, project.path);
     const textSha256 = messageSha256(message);
     let begun: { key: string; attempt: DeliveryAttempt } | undefined;
-    const settleDeliveryAttempt = async (outcome: "clear" | "unknown"): Promise<void> => {
+    const settleDeliveryAttempt = async (
+      outcome: "admitted" | "unknown" | "none",
+    ): Promise<boolean> => {
       const current = begun;
-      if (!current) return;
+      if (!current) return true;
       begun = undefined;
-      // Never throws: the outcome of the API call is final at this point. A
-      // failed write of `unknown` leaves the entry `sending` with this
-      // process as its owner and the attempt out of flight, so a later send
-      // of the same text takes the ID (in this process at once, in another
-      // one after this process ends). A failed clear is tried again; see
-      // `settleDelivery`.
-      await settleDelivery({ dir: ledgerDir, key: current.key, attempt: current.attempt, outcome });
+      // Never throws: the outcome of the API call is final at this point.
+      // False only when the `admitted` mark or the write of the outcome
+      // failed; see `settleDelivery` for what stays.
+      return settleDelivery({
+        dir: ledgerDir,
+        key: current.key,
+        attempt: current.attempt,
+        outcome,
+      });
     };
     const attempt: AgentDeliveryAttempt = {
       async begin(mint: () => string, key: string): Promise<string> {
-        // A second begin in one send (after a restore) ends the first
-        // attempt as unknown, so the second takes its ID.
-        await settleDeliveryAttempt("unknown");
         try {
           const started = await beginDelivery({ dir: ledgerDir, key, textSha256, mint });
           begun = { key, attempt: started };
@@ -2884,8 +2949,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       } catch (err) {
         const restoredBySend =
           session.restoredAt !== undefined && session.restoredAt.getTime() >= sendStartedAt;
+        // A hook throws `AgentNotAttachedError` before `begin` (the OpenCode
+        // hook does). After `begin` it is final: the caller keeps the entry
+        // `unknown`, and there is no restore and no second `begin`.
         if (
           !isAgentNotAttachedError(err) ||
+          begun !== undefined ||
           restoredBySend ||
           NON_RESTORABLE_STATUSES.has(session.status)
         ) {
@@ -2914,6 +2983,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       deliverMessage &&
       agentPlugin.canDeliverMessage?.(metadataToSession(sessionId, raw, projectId)) === true
     ) {
+      // I-5 (M-4): the ledger needs a lock that the OS releases; without it
+      // (macOS) the agent route refuses before any restore.
+      if (!isDeliveryLockSupported()) {
+        throw new Error(
+          `Cannot send to session ${sessionId}: delivery through the ${selectedAgent} API needs a lock that the OS releases (a Linux abstract Unix socket), and ${process.platform} has none; nothing was sent`,
+        );
+      }
       agentPlugin.checkMessage?.(message);
     }
 
@@ -2927,12 +3003,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // A definite refusal admitted nothing; every other failure after
         // `begin` may have admitted the message, so its ID stays reusable.
         await settleDeliveryAttempt(
-          isAgentDeliveryError(err) && err.admission === "none" ? "clear" : "unknown",
+          isAgentDeliveryError(err) && err.admission === "none" ? "none" : "unknown",
         );
         throw err;
       }
-      await settleDeliveryAttempt("clear");
-      return { route: "agent", delivery };
+      const recorded = await settleDeliveryAttempt("admitted");
+      return {
+        route: "agent",
+        delivery,
+        ...(recorded ? {} : { admissionUnrecorded: true as const }),
+      };
     }
 
     try {
