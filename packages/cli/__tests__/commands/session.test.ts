@@ -555,6 +555,39 @@ describe("session attach", () => {
       program.parseAsync(["node", "test", "session", "attach", "unknown-1"]),
     ).rejects.toThrow("process.exit(1)");
   });
+
+  it("says that it cannot tell, and does not attach, when isAlive rejects", async () => {
+    mockSessionManager.get.mockResolvedValue({
+      id: "app-1",
+      projectId: "my-app",
+      status: "working",
+      activity: null,
+      branch: null,
+      issueId: null,
+      pr: null,
+      workspacePath: null,
+      runtimeHandle: { id: "tmux-target-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    } satisfies Session);
+    mockRuntime.isAlive.mockRejectedValueOnce(
+      new Error("tmux has-session -t tmux-target-1 could not answer: no server running"),
+    );
+
+    await expect(
+      program.parseAsync(["node", "test", "session", "attach", "app-1"]),
+    ).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => String(c[0]))
+      .join("\n");
+    expect(errors).toContain("Cannot tell whether session 'app-1' is running");
+    expect(errors).not.toContain("is not running");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
 });
 
 describe("session claim-pr", () => {

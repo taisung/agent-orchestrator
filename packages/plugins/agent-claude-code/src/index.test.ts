@@ -510,9 +510,35 @@ describe("isProcessRunning", () => {
     expect(mockExecFileAsync).not.toHaveBeenCalled();
   });
 
-  it("returns false when tmux command fails", async () => {
+  it("rejects when tmux command fails", async () => {
     mockExecFileAsync.mockRejectedValue(new Error("fail"));
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
+      "tmux list-panes -t test-session failed",
+    );
+  });
+
+  it("returns false when tmux answers that the pane does not exist", async () => {
+    // tmux 3.4: list-panes -t on a missing session prints "can't find window".
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "can't find window: test-session\n",
+      }),
+    );
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+
+  it("rejects with the ps failure as cause when ps cannot run", async () => {
+    const psFailure = Object.assign(new Error("Command failed: ps -eo pid,tty,args"), { code: 1 });
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys002\n", stderr: "" });
+      return Promise.reject(psFailure);
+    });
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toMatchObject({
+      message: "claude-code: ps -eo pid,tty,args failed",
+      cause: psFailure,
+    });
   });
 
   it("returns true when PID exists but throws EPERM", async () => {

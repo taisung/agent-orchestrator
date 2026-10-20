@@ -34,6 +34,7 @@ import {
   isIssueNotFoundError,
   isRestorable,
   NON_RESTORABLE_STATUSES,
+  RUNTIME_NO_SERVER_ERROR_CODE,
   SessionLaunchInProgressError,
   SessionNotFoundError,
   SessionNotRestorableError,
@@ -434,6 +435,30 @@ async function getTmuxForegroundCommand(sessionName: string): Promise<string | n
     return command.length > 0 ? command : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Liveness of an orchestrator record before `spawnOrchestrator` reuses or
+ * replaces it. A rejected probe is unknown, so the record is neither reused nor
+ * archived. The one exception is a runtime with no server at all
+ * (RUNTIME_NO_SERVER_ERROR_CODE): no session can exist then, as after a host
+ * restart, and `ao start` must be able to launch a new orchestrator.
+ */
+async function isOrchestratorRuntimeAlive(
+  runtime: Runtime,
+  handle: RuntimeHandle,
+  sessionId: SessionId,
+): Promise<boolean> {
+  try {
+    return await runtime.isAlive(handle);
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+    if (code === RUNTIME_NO_SERVER_ERROR_CODE) return false;
+    throw new Error(
+      `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
+      { cause: err },
+    );
   }
 }
 
@@ -1792,9 +1817,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ? metadataToSession(sessionId, existingRaw, orchestratorConfig.projectId)
         : null;
       if (existingOrchestrator?.runtimeHandle) {
-        const existingAlive = await plugins.runtime
-          .isAlive(existingOrchestrator.runtimeHandle)
-          .catch(() => false);
+        const existingAlive = await isOrchestratorRuntimeAlive(
+          plugins.runtime,
+          existingOrchestrator.runtimeHandle,
+          sessionId,
+        );
         if (
           existingAlive &&
           (orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore")
@@ -1831,9 +1858,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           ? metadataToSession(sessionId, concurrentRaw, orchestratorConfig.projectId)
           : null;
         if (concurrentSession?.runtimeHandle) {
-          const concurrentAlive = await plugins.runtime
-            .isAlive(concurrentSession.runtimeHandle)
-            .catch(() => false);
+          const concurrentAlive = await isOrchestratorRuntimeAlive(
+            plugins.runtime,
+            concurrentSession.runtimeHandle,
+            sessionId,
+          );
           if (
             concurrentAlive &&
             (orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore")

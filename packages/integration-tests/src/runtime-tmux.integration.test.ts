@@ -14,6 +14,15 @@ describe.skipIf(!tmuxOk)("runtime-tmux (integration)", () => {
 
   beforeAll(async () => {
     await killSessionsByPrefix(SESSION_PREFIX);
+    // A second session keeps the tmux server up after `destroy`. Without it, a
+    // server whose last session ends exits, and isAlive rejects ("no server
+    // running") instead of answering false.
+    await runtime.create({
+      sessionId: `${SESSION_PREFIX}keeper-${Date.now()}`,
+      workspacePath: "/tmp",
+      launchCommand: "cat",
+      environment: { AO_TEST: "1" },
+    });
   }, 30_000);
 
   afterAll(async () => {
@@ -73,6 +82,7 @@ describe.skipIf(!tmuxOk)("runtime-tmux (integration)", () => {
 
   it("destroy kills the session", async () => {
     await runtime.destroy(handle);
+    // tmux answers "can't find session": the one answer that means gone.
     expect(await runtime.isAlive(handle)).toBe(false);
   });
 

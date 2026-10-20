@@ -169,7 +169,15 @@ export function registerSession(program: Command): void {
         process.exit(1);
       }
 
-      if (!(await runtime.isAlive(handle))) {
+      // A rejected probe means the runtime cannot tell, not that the session is gone.
+      const alive = await runtime.isAlive(handle).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(
+          chalk.red(`Cannot tell whether session '${sessionName}' is running: ${reason}`),
+        );
+        process.exit(1);
+      });
+      if (!alive) {
         console.error(chalk.red(`Session '${sessionName}' is not running`));
         process.exit(1);
       }

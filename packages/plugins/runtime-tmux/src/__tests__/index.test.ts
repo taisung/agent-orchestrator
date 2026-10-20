@@ -39,6 +39,22 @@ function mockTmuxError(message: string) {
   mockExecFileCustom.mockRejectedValueOnce(new Error(message));
 }
 
+/** The error that execFile gives for a tmux command that exits with code 1. */
+function tmuxFailure(command: string, stderr: string): Error {
+  return Object.assign(new Error(`Command failed: tmux ${command}\n${stderr}`), {
+    code: 1,
+    killed: false,
+    signal: null,
+    stdout: "",
+    stderr,
+  });
+}
+
+/** Queue a tmux command that exits with code 1 and the given stderr. */
+function mockTmuxFailure(command: string, stderr: string) {
+  mockExecFileCustom.mockRejectedValueOnce(tmuxFailure(command, stderr));
+}
+
 /** Create a RuntimeHandle for testing. */
 function makeHandle(id: string, createdAt?: number): RuntimeHandle {
   return {
@@ -52,7 +68,7 @@ function makeHandle(id: string, createdAt?: number): RuntimeHandle {
 }
 
 // Import after mocks are set up
-import tmuxPlugin, { manifest, create } from "../index.js";
+import tmuxPlugin, { manifest, create, TmuxProbeError } from "../index.js";
 
 beforeEach(() => {
   // Reset, not only clear: a test that queues more once-values than create()
@@ -638,15 +654,75 @@ describe("runtime.isAlive()", () => {
     );
   });
 
-  it("returns false when has-session fails", async () => {
+  it("returns false when tmux answers that the session does not exist", async () => {
     const runtime = create();
     const handle = makeHandle("dead-test");
 
-    mockTmuxError("session not found");
+    // tmux 3.4 answers a missing session with this text and exit code 1.
+    mockTmuxFailure("has-session -t dead-test", "can't find session: dead-test\n");
 
     const alive = await runtime.isAlive(handle);
 
     expect(alive).toBe(false);
+  });
+
+  it.each(["can't find window: dead-test\n", "can't find pane: 5\n"])(
+    "returns false for the other tmux not-found answer %j",
+    async (stderr) => {
+      mockTmuxFailure("has-session -t dead-test", stderr);
+      await expect(create().isAlive(makeHandle("dead-test"))).resolves.toBe(false);
+    },
+  );
+
+  it.each([
+    {
+      failure: "no server running (stale socket)",
+      stderr: "no server running on /tmp/tmux-1000/default\n",
+      code: "ERR_RUNTIME_NO_SERVER",
+    },
+    {
+      failure: "no socket file",
+      stderr: "error connecting to /tmp/tmux-1000/default (No such file or directory)\n",
+      code: "ERR_RUNTIME_NO_SERVER",
+    },
+    {
+      failure: "socket not accessible",
+      stderr: "error connecting to /tmp/tmux-1000/default (Permission denied)\n",
+      code: "ERR_RUNTIME_PROBE",
+    },
+    { failure: "another text", stderr: "server exited unexpectedly\n", code: "ERR_RUNTIME_PROBE" },
+  ])("rejects with a typed error and a cause when $failure", async ({ stderr, code }) => {
+    const failure = tmuxFailure("has-session -t alive-test", stderr);
+    mockExecFileCustom.mockRejectedValueOnce(failure);
+
+    const outcome = await create()
+      .isAlive(makeHandle("alive-test"))
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+
+    expect(outcome).toBeInstanceOf(TmuxProbeError);
+    expect(outcome).toMatchObject({ code, cause: failure });
+    expect((outcome as Error).message).toContain(stderr.trim());
+  });
+
+  it("rejects when has-session times out", async () => {
+    const timeout = Object.assign(new Error("Command failed: tmux has-session -t alive-test\n"), {
+      code: null,
+      killed: true,
+      signal: "SIGTERM",
+      stdout: "",
+      stderr: "",
+    });
+    mockExecFileCustom.mockRejectedValueOnce(timeout);
+
+    await expect(create().isAlive(makeHandle("alive-test"))).rejects.toMatchObject({
+      name: "TmuxProbeError",
+      code: "ERR_RUNTIME_PROBE",
+      cause: timeout,
+      message: expect.stringContaining("timed out after 5000 ms"),
+    });
   });
 });
 

@@ -195,6 +195,47 @@ export function updateMetadata(
 }
 
 /**
+ * Compare-and-set update: merge `updates` only when the record still holds
+ * every value in `expected`. A missing key and an empty value are equal (the
+ * file never holds an empty value). Returns false and writes nothing when the
+ * record is gone or a value differs, so a writer that read an older version
+ * cannot overwrite a newer one (the lifecycle poll against a spawn or a
+ * restore). Same atomic replace as `updateMetadata` and, like it, no lock:
+ * only the read-compare-rename window remains.
+ */
+export function updateMetadataIf(
+  dataDir: string,
+  sessionId: SessionId,
+  expected: Readonly<Record<string, string | undefined>>,
+  updates: Partial<Record<string, string>>,
+): boolean {
+  const path = metadataPath(dataDir, sessionId);
+  let existing: Record<string, string>;
+  try {
+    existing = parseKeyValueContent(readFileSync(path, "utf-8"));
+  } catch {
+    return false;
+  }
+
+  for (const [key, value] of Object.entries(expected)) {
+    if ((existing[key] ?? "") !== (value ?? "")) return false;
+  }
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) continue;
+    if (value === "") {
+      const { [key]: _, ...rest } = existing;
+      existing = rest;
+    } else {
+      existing[key] = value;
+    }
+  }
+
+  atomicWriteFileSync(path, serializeMetadata(existing));
+  return true;
+}
+
+/**
  * Delete a session's metadata file.
  * Optionally archive it to an `archive/` subdirectory.
  */

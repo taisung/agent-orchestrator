@@ -13,6 +13,7 @@ import {
   type RuntimeMetrics,
   type AttachInfo,
   shellEscape,
+  RUNTIME_NO_SERVER_ERROR_CODE,
 } from "@aoagents/ao-core";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,51 @@ function writeLaunchScript(command: string): string {
   const content = `#!/usr/bin/env bash\nrm -- "$0" 2>/dev/null || true\n${command}\n`;
   writeFileSync(scriptPath, content, { encoding: "utf-8", mode: 0o700 });
   return `bash ${shellEscape(scriptPath)}`;
+}
+
+/**
+ * tmux 3.4 answers that a target does not exist with "can't find session: X"
+ * (has-session), "can't find window: X" (list-panes on a missing session) or
+ * "can't find pane: X". Only these mean "gone"; any other failure is unknown.
+ */
+const TMUX_TARGET_NOT_FOUND = /^can't find (?:session|window|pane): /m;
+
+/** tmux could not reach a server: a stale socket, or no socket file at all. */
+const TMUX_NO_SERVER =
+  /^(?:no server running on |error connecting to .* \(No such file or directory\)$)/m;
+
+/** A tmux probe that could not tell whether the session exists. */
+export class TmuxProbeError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string, options: { cause: unknown }) {
+    super(message, options);
+    this.name = "TmuxProbeError";
+    this.code = code;
+  }
+}
+
+function tmuxStderr(err: unknown): string {
+  if (err && typeof err === "object" && "stderr" in err && typeof err.stderr === "string") {
+    return err.stderr;
+  }
+  return "";
+}
+
+/** True when tmux answered that the target session, window or pane does not exist. */
+function isTmuxTargetNotFound(err: unknown): boolean {
+  return TMUX_TARGET_NOT_FOUND.test(tmuxStderr(err));
+}
+
+/** Wrap a failed tmux probe; the code tells "no server at all" from other failures. */
+function tmuxProbeError(command: string, err: unknown): TmuxProbeError {
+  const stderr = tmuxStderr(err).trim();
+  const timedOut = !!err && typeof err === "object" && "killed" in err && err.killed === true;
+  const detail = timedOut
+    ? `timed out after ${TMUX_COMMAND_TIMEOUT_MS} ms`
+    : stderr || (err instanceof Error ? err.message : String(err));
+  const code = TMUX_NO_SERVER.test(stderr) ? RUNTIME_NO_SERVER_ERROR_CODE : "ERR_RUNTIME_PROBE";
+  return new TmuxProbeError(`tmux ${command} could not answer: ${detail}`, code, { cause: err });
 }
 
 /** Run a tmux command and return stdout */
@@ -176,8 +222,11 @@ export function create(): Runtime {
       try {
         await tmux("has-session", "-t", handle.id);
         return true;
-      } catch {
-        return false;
+      } catch (err: unknown) {
+        // Only tmux's own "not found" answer is dead. An unreachable server, a
+        // timeout or any other failure rejects: callers keep the session.
+        if (isTmuxTargetNotFound(err)) return false;
+        throw tmuxProbeError(`has-session -t ${handle.id}`, err);
       }
     },
 

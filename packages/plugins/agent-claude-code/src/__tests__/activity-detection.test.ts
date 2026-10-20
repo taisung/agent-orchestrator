@@ -122,6 +122,11 @@ describe("Claude Code Activity Detection", () => {
       expect((await agent.getActivityState(makeSession()))?.state).toBe("exited");
     });
 
+    it("returns null, not 'exited', when the process check cannot run", async () => {
+      vi.spyOn(agent, "isProcessRunning").mockRejectedValue(new Error("ps failed"));
+      expect(await agent.getActivityState(makeSession())).toBeNull();
+    });
+
     it("returns 'exited' when no runtimeHandle", async () => {
       expect((await agent.getActivityState(makeSession({ runtimeHandle: undefined })))?.state).toBe(
         "exited",

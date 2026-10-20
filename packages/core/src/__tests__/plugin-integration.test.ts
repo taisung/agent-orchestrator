@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => {
 import { createPluginRegistry } from "../plugin-registry.js";
 import { createSessionManager } from "../session-manager.js";
 import { createLifecycleManager } from "../lifecycle-manager.js";
-import { writeMetadata } from "../metadata.js";
+import { writeMetadata, readMetadataRaw } from "../metadata.js";
 import { getSessionsDir, getProjectBaseDir } from "../paths.js";
 import trackerGithub from "@aoagents/ao-plugin-tracker-github";
 import scmGithub from "@aoagents/ao-plugin-scm-github";
@@ -465,18 +465,22 @@ describe("plugin integration", () => {
         ...(session.issueId ? { issue: session.issueId } : {}),
         runtimeHandle: JSON.stringify(session.runtimeHandle),
       });
+      // sessionManager.get() returns the record as session.metadata; the
+      // lifecycle probes only a stored handle and writes a status only into
+      // the record that it read.
+      session.metadata = readMetadataRaw(env.sessionsDir, session.id) ?? {};
 
       return session;
     }
 
     it("check() detects ci_failed via scm-github getCISummary()", async () => {
-      seedSession({ status: "pr_open", pr });
+      const seeded = seedSession({ status: "pr_open", pr });
 
       // Mock the sessionManager.list() to return our session
       const mockSM: SessionManager = {
         ...sm,
-        list: vi.fn().mockResolvedValue([makeSession({ status: "pr_open", pr })]),
-        get: vi.fn().mockResolvedValue(makeSession({ status: "pr_open", pr })),
+        list: vi.fn().mockResolvedValue([seeded]),
+        get: vi.fn().mockResolvedValue(seeded),
         kill: vi.fn().mockResolvedValue(undefined),
         send: vi.fn().mockResolvedValue(undefined),
         claimPR: vi.fn(),
@@ -502,12 +506,12 @@ describe("plugin integration", () => {
     });
 
     it("check() detects merged via scm-github getPRState()", async () => {
-      seedSession({ status: "pr_open", pr });
+      const seeded = seedSession({ status: "pr_open", pr });
 
       const mockSM: SessionManager = {
         ...sm,
-        list: vi.fn().mockResolvedValue([makeSession({ status: "pr_open", pr })]),
-        get: vi.fn().mockResolvedValue(makeSession({ status: "pr_open", pr })),
+        list: vi.fn().mockResolvedValue([seeded]),
+        get: vi.fn().mockResolvedValue(seeded),
         kill: vi.fn().mockResolvedValue(undefined),
         send: vi.fn().mockResolvedValue(undefined),
         claimPR: vi.fn(),
@@ -530,12 +534,12 @@ describe("plugin integration", () => {
     });
 
     it("check() detects changes_requested via scm-github getReviewDecision()", async () => {
-      seedSession({ status: "pr_open", pr });
+      const seeded = seedSession({ status: "pr_open", pr });
 
       const mockSM: SessionManager = {
         ...sm,
-        list: vi.fn().mockResolvedValue([makeSession({ status: "pr_open", pr })]),
-        get: vi.fn().mockResolvedValue(makeSession({ status: "pr_open", pr })),
+        list: vi.fn().mockResolvedValue([seeded]),
+        get: vi.fn().mockResolvedValue(seeded),
         kill: vi.fn().mockResolvedValue(undefined),
         send: vi.fn().mockResolvedValue(undefined),
         claimPR: vi.fn(),

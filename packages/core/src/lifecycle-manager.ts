@@ -16,6 +16,7 @@ import {
   PR_STATE,
   CI_STATUS,
   TERMINAL_STATUSES,
+  LAUNCH_GRACE_MS,
   type LifecycleManager,
   type SessionManager,
   type SessionId,
@@ -36,7 +37,8 @@ import {
   type PREnrichmentData,
   type CICheck,
 } from "./types.js";
-import { updateMetadata } from "./metadata.js";
+import { updateMetadata, updateMetadataIf } from "./metadata.js";
+import { validateStatus } from "./utils/validation.js";
 import { prIdentityKey } from "./utils/pr.js";
 import { getSessionsDir } from "./paths.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
@@ -178,6 +180,60 @@ function transitionLogLevel(status: SessionStatus): "info" | "warn" | "error" {
   return "info";
 }
 
+/** Why a session was persisted as killed (the record's `killedReason`). */
+type KilledReason = "runtime" | "agent-exited" | "pr-closed";
+
+/** determineStatus result: this poll has no evidence to change the status. */
+const KEEP_STATUS = Symbol("keep-status");
+
+/** What determineStatus learned from the liveness probes of one session. */
+interface ProbeResult {
+  /**
+   * "alive": the runtime answered that the session exists. "dead": a negative
+   * probe (runtime gone, or agent exited after the launch grace). Unset when
+   * no probe gave an answer (no stored handle, a rejected probe, a killed record).
+   */
+  liveness?: "alive" | "dead";
+  /** A probe could not run (isAlive rejected, or the agent check threw). */
+  failed?: boolean;
+  killedReason?: KilledReason;
+}
+
+/** What the probes of one poll say about the probes themselves. */
+interface ProbeOutage {
+  /** C2: nothing negative is persisted in this poll. */
+  persistNothing: boolean;
+  /** The worker health is `warn` for this poll. */
+  warn: boolean;
+  reason?: string;
+  sessionIds: SessionId[];
+}
+
+/** One session's status decision in a poll, before anything is persisted. */
+interface StatusEvaluation {
+  session: Session;
+  oldStatus: SessionStatus;
+  newStatus: SessionStatus;
+  probe: ProbeResult;
+}
+
+/**
+ * A killed record that the poll re-checks: the kill came from a liveness probe,
+ * or it predates `killedReason` and has no PR (a PR-driven kill always has one).
+ */
+function isRecoverableKill(metadata: Record<string, string>): boolean {
+  if (metadata["status"] !== SESSION_STATUS.KILLED) return false;
+  const reason = metadata["killedReason"];
+  if (reason === "runtime" || reason === "agent-exited") return true;
+  return !reason && !metadata["pr"];
+}
+
+/** True while the record's last launch or restore is younger than LAUNCH_GRACE_MS. */
+function isWithinLaunchGrace(metadata: Record<string, string>, now: number): boolean {
+  const launchedAt = Date.parse(metadata["restoredAt"] || metadata["createdAt"] || "");
+  return Number.isFinite(launchedAt) && now - launchedAt < LAUNCH_GRACE_MS;
+}
+
 export interface LifecycleManagerDeps {
   config: OrchestratorConfig;
   registry: PluginRegistry;
@@ -198,6 +254,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   const observer = createProjectObserver(config, "lifecycle-manager");
 
   const states = new Map<SessionId, SessionStatus>();
+  /**
+   * C1: sessions whose last poll gave a negative probe that is not yet
+   * persisted. A second negative poll in a row persists killed. In memory only:
+   * a restarted worker needs two negative polls again.
+   */
+  const pendingKills = new Set<SessionId>();
   const reactionTrackers = new Map<string, ReactionTracker>(); // "sessionId:reactionKey"
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let polling = false; // re-entrancy guard
@@ -361,9 +423,46 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return registry.get<Runtime>("runtime", name);
   }
 
-  async function determineStatus(session: Session): Promise<SessionStatus> {
+  /**
+   * C3: probe a recoverable killed record. Working only when the runtime
+   * answers alive AND the agent process runs AND the agent's activity is not
+   * "exited" (the signal that gave the kill; without it the two signals of an
+   * agent that disagree would move the record between killed and working).
+   * Any other answer, including a rejected probe, keeps it killed.
+   */
+  async function recoverKilledStatus(
+    session: Session,
+    project: ProjectConfig,
+    agent: Agent | null,
+  ): Promise<SessionStatus | typeof KEEP_STATUS> {
+    const handle = session.runtimeHandle;
+    const runtime = handle ? runtimeForSession(session, project) : null;
+    if (!handle || !runtime || !agent) return KEEP_STATUS;
+    // A rejection is unknown here; unknown never recovers (and never kills).
+    const alive = await runtime.isAlive(handle).catch(() => false);
+    if (!alive) return KEEP_STATUS;
+    const running = await agent.isProcessRunning(handle).catch(() => false);
+    if (!running) return KEEP_STATUS;
+    const activity = await agent
+      .getActivityState(session, config.readyThresholdMs)
+      .catch(() => null);
+    return activity?.state === "exited" ? KEEP_STATUS : SESSION_STATUS.WORKING;
+  }
+
+  async function determineStatus(
+    session: Session,
+    probe: ProbeResult,
+  ): Promise<SessionStatus | typeof KEEP_STATUS> {
     const project = config.projects[session.projectId];
     if (!project) return session.status;
+
+    // B: probe only a handle that the record stores (the enrichment rule,
+    // session-manager ensureHandleAndEnrich). A record without one is a spawn
+    // that has not written its handle yet; a handle made from the session ID
+    // probes the wrong tmux name and reads as dead.
+    if (!session.metadata["runtimeHandle"] && !session.metadata["tmuxName"]?.trim()) {
+      return KEEP_STATUS;
+    }
 
     const agentName = resolveAgentSelection({
       role: resolveSessionRole(
@@ -379,15 +478,31 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const agent = registry.get<Agent>("agent", agentName);
     const scm = project.scm?.plugin ? registry.get<SCM>("scm", project.scm.plugin) : null;
 
+    if (isRecoverableKill(session.metadata)) {
+      return recoverKilledStatus(session, project, agent);
+    }
+
     // Track activity state across steps so stuck detection can run after PR checks
     let detectedIdleTimestamp: Date | null = null;
 
-    // 1. Check if runtime is alive
+    // A: a just-launched agent is not visible for a while after its pane
+    // starts. While the runtime is not known dead, "exited" keeps the status.
+    const inLaunchGrace = isWithinLaunchGrace(session.metadata, Date.now());
+
+    // 1. Check if runtime is alive. A rejected probe is unknown, not dead.
     if (session.runtimeHandle) {
       const runtime = runtimeForSession(session, project);
       if (runtime) {
-        const alive = await runtime.isAlive(session.runtimeHandle).catch(() => true);
-        if (!alive) return "killed";
+        const alive = await runtime.isAlive(session.runtimeHandle).catch(() => {
+          probe.failed = true;
+          return undefined;
+        });
+        if (alive === false) {
+          probe.liveness = "dead";
+          probe.killedReason = "runtime";
+          return SESSION_STATUS.KILLED;
+        }
+        if (alive === true) probe.liveness = "alive";
       }
     }
 
@@ -414,7 +529,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         const activityState = await agent.getActivityState(session, config.readyThresholdMs);
         if (activityState) {
           if (activityState.state === "waiting_input") return "needs_input";
-          if (activityState.state === "exited") return "killed";
+          if (activityState.state === "exited") {
+            if (inLaunchGrace) return KEEP_STATUS;
+            probe.liveness = "dead";
+            probe.killedReason = "agent-exited";
+            return SESSION_STATUS.KILLED;
+          }
 
           if (
             (activityState.state === "idle" || activityState.state === "blocked") &&
@@ -434,10 +554,16 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             if (activity === "waiting_input") return "needs_input";
 
             const processAlive = await agent.isProcessRunning(session.runtimeHandle);
-            if (!processAlive) return "killed";
+            if (!processAlive) {
+              if (inLaunchGrace) return KEEP_STATUS;
+              probe.liveness = "dead";
+              probe.killedReason = "agent-exited";
+              return SESSION_STATUS.KILLED;
+            }
           }
         }
       } catch {
+        probe.failed = true;
         // On probe failure, preserve current stuck/needs_input state rather
         // than letting the fallback at the bottom coerce them to "working"
         if (
@@ -487,7 +613,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (cachedData) {
           // Use cached enrichment data - avoids individual API calls
           if (cachedData.state === PR_STATE.MERGED) return "merged";
-          if (cachedData.state === PR_STATE.CLOSED) return "killed";
+          if (cachedData.state === PR_STATE.CLOSED) {
+            probe.killedReason = "pr-closed";
+            return SESSION_STATUS.KILLED;
+          }
 
           // Check CI
           if (cachedData.ciStatus === CI_STATUS.FAILING) return "ci_failed";
@@ -518,7 +647,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // Fall back to individual API calls if no cached data
         const prState = await scm.getPRState(session.pr);
         if (prState === PR_STATE.MERGED) return "merged";
-        if (prState === PR_STATE.CLOSED) return "killed";
+        if (prState === PR_STATE.CLOSED) {
+          probe.killedReason = "pr-closed";
+          return SESSION_STATUS.KILLED;
+        }
 
         // Check CI
         const ciStatus = await scm.getCISummary(session.pr);
@@ -1177,22 +1309,116 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
   }
 
-  /** Poll a single session and handle state transitions. */
-  async function checkSession(session: Session): Promise<void> {
+  /**
+   * B: persist a status only when the record still holds the status and the
+   * runtime handle that this poll read. When the compare fails (a spawn, a
+   * restore or another writer changed the record during the probes), nothing
+   * is written and the next poll decides from the new record. C3: a killed
+   * status carries its `killedReason`; any other status removes it.
+   */
+  function persistStatus(
+    session: Session,
+    status: SessionStatus,
+    killedReason: KilledReason | undefined,
+  ): boolean {
+    const project = config.projects[session.projectId];
+    if (!project) return false;
+
+    const updates: Record<string, string> =
+      status === SESSION_STATUS.KILLED
+        ? { status, ...(killedReason && { killedReason }) }
+        : { status, killedReason: "" };
+    const written = updateMetadataIf(
+      getSessionsDir(config.configPath, project.path),
+      session.id,
+      {
+        status: session.metadata["status"],
+        runtimeHandle: session.metadata["runtimeHandle"],
+        tmuxName: session.metadata["tmuxName"],
+      },
+      updates,
+    );
+    if (!written) return false;
+
+    const { killedReason: _previousReason, ...rest } = session.metadata;
+    session.metadata = {
+      ...rest,
+      ...Object.fromEntries(Object.entries(updates).filter(([, v]) => v)),
+    };
+    return true;
+  }
+
+  /** Probe one session and decide its status; persists nothing. */
+  async function evaluateSession(listed: Session): Promise<StatusEvaluation> {
     // Use tracked state if available; otherwise use the persisted metadata status
     // (not session.status, which list() may have already overwritten for dead runtimes).
     // This ensures transitions are detected after a lifecycle manager restart.
-    const tracked = states.get(session.id);
+    const tracked = states.get(listed.id);
     const oldStatus =
-      tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
-    const newStatus = await determineStatus(session);
+      tracked ?? ((listed.metadata?.["status"] as SessionStatus | undefined) || listed.status);
+    // list() and get() set status=killed in memory when their own isAlive
+    // answered false. That answer is not confirmed, so this poll decides from
+    // its own probes and the persisted status (C1).
+    const session =
+      listed.status === SESSION_STATUS.KILLED && listed.metadata["status"] !== SESSION_STATUS.KILLED
+        ? { ...listed, status: validateStatus(listed.metadata["status"]) }
+        : listed;
+    const probe: ProbeResult = {};
+    const decided = await determineStatus(session, probe);
+    const newStatus = decided === KEEP_STATUS ? oldStatus : decided;
+    return { session, oldStatus, newStatus, probe };
+  }
+
+  /**
+   * C1 and C2: a negative probe persists killed only when the previous poll of
+   * this worker was negative too, and never in a probe outage.
+   */
+  function confirmNegativeProbe(evaluation: StatusEvaluation, outage: boolean): SessionStatus {
+    const { session, oldStatus, newStatus, probe } = evaluation;
+    if (probe.liveness !== "dead" || newStatus !== SESSION_STATUS.KILLED) {
+      pendingKills.delete(session.id);
+      return newStatus;
+    }
+    if (outage) {
+      pendingKills.delete(session.id);
+      return oldStatus;
+    }
+    if (!pendingKills.has(session.id)) {
+      pendingKills.add(session.id);
+      return oldStatus;
+    }
+    pendingKills.delete(session.id);
+    return newStatus;
+  }
+
+  /** Persist one session's evaluated status and handle the transition. */
+  async function applyEvaluation(evaluation: StatusEvaluation, outage: boolean): Promise<void> {
+    const { session, oldStatus, probe } = evaluation;
+    const newStatus = confirmNegativeProbe(evaluation, outage);
     let transitionReaction: { key: string; result: ReactionResult | null } | undefined;
 
     if (newStatus !== oldStatus) {
       const correlationId = createCorrelationId("lifecycle-transition");
+      if (!persistStatus(session, newStatus, probe.killedReason)) {
+        // The record changed under the poll: no transition happened. Forget the
+        // tracked status so the next poll compares against the new record.
+        states.delete(session.id);
+        pendingKills.delete(session.id);
+        observer.recordOperation({
+          metric: "lifecycle_poll",
+          operation: "lifecycle.transition",
+          outcome: "failure",
+          correlationId,
+          projectId: session.projectId,
+          sessionId: session.id,
+          reason: "record changed during the poll; status not written",
+          data: { oldStatus, newStatus },
+          level: "info",
+        });
+        return;
+      }
       // State transition detected
       states.set(session.id, newStatus);
-      updateSessionMetadata(session, { status: newStatus });
       observer.recordOperation({
         metric: "lifecycle_poll",
         operation: "lifecycle.transition",
@@ -1288,6 +1514,34 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     ]);
   }
 
+  /**
+   * C2: a poll in which every probed session (two or more) answered dead is a
+   * probe outage (an unreachable tmux socket or a failing `ps` looks like
+   * this), not a mass exit: nothing negative is persisted. The health is also
+   * `warn` when every probed session answered dead or had a probe that could
+   * not run (a rejected probe never persists anything by itself). Recoverable
+   * killed records are not counted: they are expected to answer dead.
+   */
+  function probeOutage(evaluations: StatusEvaluation[]): ProbeOutage {
+    const answered = evaluations.filter((e) => e.probe.liveness !== undefined);
+    const persistNothing =
+      answered.length >= 2 && answered.every((e) => e.probe.liveness === "dead");
+    const probed = evaluations.filter((e) => e.probe.liveness !== undefined || e.probe.failed);
+    const warn =
+      probed.length >= 2 && probed.every((e) => e.probe.liveness === "dead" || e.probe.failed);
+    if (!warn) return { persistNothing: false, warn: false, sessionIds: [] };
+    return {
+      persistNothing,
+      warn,
+      reason: persistNothing
+        ? "probe outage: every probed session answered dead in one poll; " +
+          "no status was written for them (check the tmux server and ps)"
+        : "probe outage: no probed session could be confirmed alive in one poll " +
+          "(answers dead or probes that could not run; check the tmux server and ps)",
+      sessionIds: probed.map((e) => e.session.id),
+    };
+  }
+
   /** Run one polling cycle across all sessions. */
   async function pollAll(): Promise<void> {
     const correlationId = createCorrelationId("lifecycle-poll");
@@ -1302,8 +1556,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // Include sessions that are active OR whose status changed from what we last saw
       // (e.g., list() detected a dead runtime and marked it "killed" — we need to
       // process that transition even though the new status is terminal)
+      // C3: also re-check a killed record whose kill came from a liveness probe.
       const sessionsToCheck = sessions.filter((s) => {
         if (!TERMINAL_STATUSES.has(s.status)) return true;
+        if (isRecoverableKill(s.metadata)) return true;
         const tracked = states.get(s.id);
         return tracked !== undefined && tracked !== s.status;
       });
@@ -1312,8 +1568,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // This reduces API calls from N×3 to 1 per poll cycle
       await populatePREnrichmentCache(sessionsToCheck);
 
-      // Poll all sessions concurrently
-      await Promise.allSettled(sessionsToCheck.map((s) => checkSession(s)));
+      // Probe all sessions concurrently, then persist: the outage check needs
+      // every probe of this poll before anything is written.
+      const evaluated = await Promise.allSettled(sessionsToCheck.map((s) => evaluateSession(s)));
+      const evaluations = evaluated
+        .filter((r): r is PromiseFulfilledResult<StatusEvaluation> => r.status === "fulfilled")
+        .map((r) => r.value);
+      const outage = probeOutage(evaluations);
+      await Promise.allSettled(evaluations.map((e) => applyEvaluation(e, outage.persistNothing)));
 
       // Prune stale entries from states, reactionTrackers, and lastReviewBacklogCheckAt
       // for sessions that no longer appear in the session list (e.g., after kill/cleanup)
@@ -1321,6 +1583,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       for (const trackedId of states.keys()) {
         if (!currentSessionIds.has(trackedId)) {
           states.delete(trackedId);
+        }
+      }
+      for (const pendingId of pendingKills) {
+        if (!currentSessionIds.has(pendingId)) {
+          pendingKills.delete(pendingId);
         }
       }
       for (const trackerKey of reactionTrackers.keys()) {
@@ -1364,13 +1631,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         });
         observer.setHealth({
           surface: "lifecycle.worker",
-          status: "ok",
+          status: outage.warn ? "warn" : "ok",
           projectId: scopedProjectId,
           correlationId,
+          ...(outage.reason && { reason: outage.reason }),
           details: {
             projectId: scopedProjectId,
             sessionCount: sessions.length,
             activeSessionCount: activeSessions.length,
+            ...(outage.warn && { probeOutageSessions: outage.sessionIds }),
           },
         });
       }
@@ -1421,7 +1690,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     async check(sessionId: SessionId): Promise<void> {
       const session = await sessionManager.get(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
-      await checkSession(session);
+      // One session cannot show an outage (C2 needs two); C1 still applies.
+      await applyEvaluation(await evaluateSession(session), false);
     },
   };
 }

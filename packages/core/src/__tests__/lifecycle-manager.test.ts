@@ -53,13 +53,29 @@ function setupCheck(
 ) {
   vi.mocked(mockSessionManager.get).mockResolvedValue(opts.session);
 
-  writeMetadata(env.sessionsDir, sessionId, {
+  const record = {
     worktree: "/tmp",
     branch: opts.session.branch ?? "main",
     status: opts.session.status,
     project: "my-app",
+    // A session's runtime handle comes from its record: the lifecycle probes
+    // only a handle that the record stores.
+    ...(opts.session.runtimeHandle && {
+      runtimeHandle: JSON.stringify(opts.session.runtimeHandle),
+    }),
     ...opts.metaOverrides,
-  });
+  };
+  writeMetadata(env.sessionsDir, sessionId, record);
+  // sessionManager.get() returns the record as session.metadata, and the
+  // lifecycle writes a status only when the record still holds what it read.
+  opts.session.metadata = {
+    ...Object.fromEntries(
+      Object.entries(record)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => [key, String(value)]),
+    ),
+    ...opts.session.metadata,
+  };
 
   return createLifecycleManager({
     config: opts.configOverride ?? config,
@@ -150,6 +166,9 @@ describe("check (single session)", () => {
     });
 
     await lm.check("app-1");
+    // One negative probe is not persisted; the next poll of the worker confirms it.
+    expect(lm.getStates().get("app-1")).toBe("working");
+    await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("killed");
   });
 
@@ -195,6 +214,9 @@ describe("check (single session)", () => {
     });
 
     await lm.check("app-1");
+    // One negative probe is not persisted; the next poll of the worker confirms it.
+    expect(lm.getStates().get("app-1")).toBe("working");
+    await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("killed");
   });
 
@@ -207,6 +229,9 @@ describe("check (single session)", () => {
       session: makeSession({ status: "working" }),
     });
 
+    await lm.check("app-1");
+    // One negative probe is not persisted; the next poll of the worker confirms it.
+    expect(lm.getStates().get("app-1")).toBe("working");
     await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("killed");
   });
@@ -1760,6 +1785,17 @@ describe("rate limiting optimizations", () => {
 
     // Start with pr_open state so that ci_failed transition happens on first poll
     const session = makeSession({ id: "s-2", status: "pr_open", pr });
+    // The record that list() read: the lifecycle probes only a stored handle
+    // and writes a status only into the record that it read.
+    writeMetadata(env.sessionsDir, "s-2", {
+      worktree: "/tmp",
+      branch: session.branch ?? "main",
+      status: "pr_open",
+      project: "my-app",
+      pr: pr.url,
+      runtimeHandle: JSON.stringify(session.runtimeHandle),
+    });
+    session.metadata = readMetadataRaw(env.sessionsDir, "s-2") ?? {};
     vi.mocked(mockSessionManager.list).mockResolvedValue([session]);
     vi.mocked(mockSessionManager.send).mockResolvedValue(undefined);
 

@@ -22,13 +22,14 @@ import { createLifecycleManager } from "../lifecycle-manager.js";
 import { createSessionManager } from "../session-manager.js";
 import { writeMetadata, readMetadataRaw, reserveSessionId, updateMetadata } from "../metadata.js";
 import { generateConfigHash } from "../paths.js";
-import type {
-  ActivityDetection,
-  LifecycleManager,
-  OrchestratorConfig,
-  PluginRegistry,
-  RuntimeHandle,
-  SessionManager,
+import {
+  LAUNCH_GRACE_MS,
+  type ActivityDetection,
+  type LifecycleManager,
+  type OrchestratorConfig,
+  type PluginRegistry,
+  type RuntimeHandle,
+  type SessionManager,
 } from "../types.js";
 import {
   createTestEnvironment,
@@ -146,24 +147,27 @@ describe("M3: poll of a record that has no runtime handle yet (F4, F5)", () => {
     lifecycle = createLifecycleManager({ config, registry, sessionManager, projectId: "my-app" });
     await lifecycle.check("app-2");
 
-    // The poll probed a handle made from the session ID, not the tmux name.
-    expect(plugins.runtime.isAlive).toHaveBeenCalledWith(expect.objectContaining({ id: "app-2" }));
+    // Before the fix the poll probed a handle made from the session ID, not the
+    // tmux name. It now probes only a handle that the record stores.
+    expect(plugins.runtime.isAlive).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "app-2" }),
+    );
     expect(statusOf("app-2")).not.toBe("killed");
   });
 
   it("does not merge killed into the launched record that the spawn writes during the probe", async () => {
     expect(reserveSessionId(env.sessionsDir, "app-2")).toBe(true);
     aliveOnlyUnderTmuxName("app-2");
-    const isAlive = vi.mocked(plugins.runtime.isAlive).getMockImplementation()!;
     let spawnWrote = false;
-    vi.mocked(plugins.runtime.isAlive).mockImplementation(async (handle: RuntimeHandle) => {
-      // The spawn finishes `runtime.create` and writes its record while the
-      // poll still probes the handle it built from the empty record.
-      if (!spawnWrote && handle.id === "app-2") {
+    vi.mocked(plugins.agent.getActivityState).mockImplementation(async () => {
+      // The spawn finishes `runtime.create` and writes its record after the
+      // poll read the empty record. (Before the fix this ran inside the probe
+      // of the made-up handle; the poll no longer makes that probe.)
+      if (!spawnWrote) {
         spawnWrote = true;
         writeLaunchedRecord("app-2", "spawning");
       }
-      return isAlive(handle);
+      return EXITED;
     });
 
     lifecycle = createLifecycleManager({ config, registry, sessionManager, projectId: "my-app" });
@@ -177,7 +181,11 @@ describe("M3: poll of a record that has no runtime handle yet (F4, F5)", () => {
 
 describe("M2: a killed record of a live session is never re-evaluated", () => {
   it("moves a killed record back to working once the agent process is visible (same worker)", async () => {
-    writeLaunchedRecord("app-orchestrator", "working", { role: "orchestrator" });
+    // Launched before the launch grace, so that the worker can still write killed.
+    writeLaunchedRecord("app-orchestrator", "working", {
+      role: "orchestrator",
+      createdAt: new Date(Date.now() - LAUNCH_GRACE_MS - 1_000).toISOString(),
+    });
     vi.mocked(plugins.runtime.isAlive).mockResolvedValue(true);
     vi.mocked(plugins.agent.getActivityState).mockResolvedValue(EXITED);
 

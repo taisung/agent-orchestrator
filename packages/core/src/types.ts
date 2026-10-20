@@ -88,6 +88,20 @@ export const DEFAULT_READY_THRESHOLD_MS = 300_000; // 5 minutes
 /** Default window (ms) for "active" state — activity newer than this is "active", older is "ready". */
 export const DEFAULT_ACTIVE_WINDOW_MS = 30_000; // 30 seconds
 
+/**
+ * Time (ms) after a launch or a restore during which an agent process that is
+ * not yet visible does not count as exited while its runtime is alive. The
+ * lifecycle measures it from the record's `restoredAt` (written by restore),
+ * else `createdAt` (written by spawn); a record with neither gets no grace.
+ */
+export const LAUNCH_GRACE_MS = 60_000; // 60 seconds
+
+/**
+ * `code` of a `Runtime.isAlive` rejection when no runtime server runs at all
+ * (tmux: "no server running on ...", or no socket file). See `Runtime.isAlive`.
+ */
+export const RUNTIME_NO_SERVER_ERROR_CODE = "ERR_RUNTIME_NO_SERVER";
+
 /** Session status constants */
 export const SESSION_STATUS = {
   SPAWNING: "spawning" as const,
@@ -265,7 +279,16 @@ export interface Runtime {
   /** Capture recent output from the session */
   getOutput(handle: RuntimeHandle, lines?: number): Promise<string>;
 
-  /** Check if the session environment is still alive */
+  /**
+   * Check if the session environment is still alive.
+   * Resolves `false` only when the runtime answers that the session does not
+   * exist. Rejects when it cannot tell (server unreachable, timeout, unknown
+   * failure), with the failure as `cause`; callers treat a rejection as
+   * "unknown", never as dead. A rejection whose `code` is
+   * RUNTIME_NO_SERVER_ERROR_CODE means that no runtime server runs at all, so
+   * no session can exist; only a caller that replaces a dead session on a
+   * human command (`spawnOrchestrator`) acts on it.
+   */
   isAlive(handle: RuntimeHandle): Promise<boolean>;
 
   /** Get resource metrics (uptime, memory, etc.) */
@@ -349,7 +372,13 @@ export interface Agent {
    */
   getActivityState(session: Session, readyThresholdMs?: number): Promise<ActivityDetection | null>;
 
-  /** Check if agent process is running (given runtime handle) */
+  /**
+   * Check if agent process is running (given runtime handle).
+   * Resolves `false` when the check ran and found no agent process (also when
+   * the runtime answers that the pane does not exist). Rejects when the check
+   * cannot run (for example `tmux` or `ps` fails); callers treat a rejection as
+   * "unknown", never as "not running".
+   */
   isProcessRunning(handle: RuntimeHandle): Promise<boolean>;
 
   /** Extract information from agent's internal data (summary, cost, session ID) */

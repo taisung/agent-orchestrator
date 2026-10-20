@@ -529,14 +529,26 @@ async function getCachedProcessList(): Promise<string> {
 
   try {
     return await promise;
-  } catch {
+  } catch (err: unknown) {
     // On failure, clear cache so the next caller retries — but only if
     // psCache still points to this request (avoid clobbering a newer entry)
     if (psCache?.promise === promise) {
       psCache = null;
     }
-    return "";
+    // A failed ps is not "no process": the caller cannot tell, so it rejects.
+    throw new Error("claude-code: ps -eo pid,tty,args failed", { cause: err });
   }
+}
+
+/** tmux 3.4 answers for a missing target ("can't find window: X" from list-panes). */
+const TMUX_TARGET_NOT_FOUND = /^can't find (?:session|window|pane): /m;
+
+function isTmuxTargetNotFound(err: unknown): boolean {
+  const stderr =
+    err && typeof err === "object" && "stderr" in err && typeof err.stderr === "string"
+      ? err.stderr
+      : "";
+  return TMUX_TARGET_NOT_FOUND.test(stderr);
 }
 
 /**
@@ -548,72 +560,76 @@ const CLAUDE_PROCESS_RE = /(?:^|\/)claude(?:\s|$)/;
 /**
  * Check if a process named "claude" is running in the given runtime handle's context.
  * Uses herdr's pane process list, ps by TTY (for tmux), or a stored PID.
+ * Returns null when the check ran and found none (or tmux answered that the
+ * pane does not exist); rejects when `tmux list-panes` or `ps` cannot run.
  */
 async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> {
-  try {
-    // herdr owns the PTY and reports a pane's foreground processes directly, so
-    // neither the tmux TTY scan nor the process-runtime PID applies. Without this
-    // a herdr handle falls through to the PID branch, finds none, and reports the
-    // session exited.
-    if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-      const processes = await getHerdrPaneProcesses(handle.id);
-      const match = processes.find(
-        (proc) => CLAUDE_PROCESS_RE.test(proc.cmdline) || CLAUDE_PROCESS_RE.test(proc.name),
-      );
-      return match ? (match.pid || null) : null;
-    }
+  // herdr owns the PTY and reports a pane's foreground processes directly, so
+  // neither the tmux TTY scan nor the process-runtime PID applies. Without this
+  // a herdr handle falls through to the PID branch, finds none, and reports the
+  // session exited.
+  if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+    const processes = await getHerdrPaneProcesses(handle.id);
+    const match = processes.find(
+      (proc) => CLAUDE_PROCESS_RE.test(proc.cmdline) || CLAUDE_PROCESS_RE.test(proc.name),
+    );
+    return match ? (match.pid || null) : null;
+  }
 
-    // For tmux runtime, get the pane TTY and find claude on it
-    if (handle.runtimeName === "tmux" && handle.id) {
-      const { stdout: ttyOut } = await execFileAsync(
+  // For tmux runtime, get the pane TTY and find claude on it
+  if (handle.runtimeName === "tmux" && handle.id) {
+    let ttyOut: string;
+    try {
+      ({ stdout: ttyOut } = await execFileAsync(
         "tmux",
         ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
         { timeout: 5_000 },
-      );
-      // Iterate all pane TTYs (multi-pane sessions) — succeed on any match
-      const ttys = ttyOut
-        .trim()
-        .split("\n")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      if (ttys.length === 0) return null;
+      ));
+    } catch (err: unknown) {
+      if (isTmuxTargetNotFound(err)) return null;
+      throw new Error(`claude-code: tmux list-panes -t ${handle.id} failed`, { cause: err });
+    }
+    // Iterate all pane TTYs (multi-pane sessions) — succeed on any match
+    const ttys = ttyOut
+      .trim()
+      .split("\n")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (ttys.length === 0) return null;
 
-      const psOut = await getCachedProcessList();
-      if (!psOut) return null;
+    const psOut = await getCachedProcessList();
+    if (!psOut) return null;
 
-      const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-      for (const line of psOut.split("\n")) {
-        const cols = line.trimStart().split(/\s+/);
-        if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
-        const args = cols.slice(2).join(" ");
-        if (CLAUDE_PROCESS_RE.test(args)) {
-          return parseInt(cols[0] ?? "0", 10);
-        }
+    const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
+    for (const line of psOut.split("\n")) {
+      const cols = line.trimStart().split(/\s+/);
+      if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
+      const args = cols.slice(2).join(" ");
+      if (CLAUDE_PROCESS_RE.test(args)) {
+        return parseInt(cols[0] ?? "0", 10);
+      }
+    }
+    return null;
+  }
+
+  // For process runtime, check if the PID stored in handle data is alive
+  const rawPid = handle.data["pid"];
+  const pid = typeof rawPid === "number" ? rawPid : Number(rawPid);
+  if (Number.isFinite(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0); // Signal 0 = check existence
+      return pid;
+    } catch (err: unknown) {
+      // EPERM means the process exists but we lack permission to signal it
+      if (err instanceof Error && "code" in err && err.code === "EPERM") {
+        return pid;
       }
       return null;
     }
-
-    // For process runtime, check if the PID stored in handle data is alive
-    const rawPid = handle.data["pid"];
-    const pid = typeof rawPid === "number" ? rawPid : Number(rawPid);
-    if (Number.isFinite(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0); // Signal 0 = check existence
-        return pid;
-      } catch (err: unknown) {
-        // EPERM means the process exists but we lack permission to signal it
-        if (err instanceof Error && "code" in err && err.code === "EPERM") {
-          return pid;
-        }
-        return null;
-      }
-    }
-
-    // No reliable way to identify the correct process for this session
-    return null;
-  } catch {
-    return null;
   }
+
+  // No reliable way to identify the correct process for this session
+  return null;
 }
 
 // =============================================================================
@@ -840,7 +856,13 @@ function createClaudeCodeAgent(): Agent {
       // Check if process is running first
       const exitedAt = new Date();
       if (!session.runtimeHandle) return { state: "exited", timestamp: exitedAt };
-      const running = await this.isProcessRunning(session.runtimeHandle);
+      let running: boolean;
+      try {
+        running = await this.isProcessRunning(session.runtimeHandle);
+      } catch {
+        // The process check could not run: no data, never "exited".
+        return null;
+      }
       if (!running) return { state: "exited", timestamp: exitedAt };
 
       // Process is running - check JSONL session file for activity
