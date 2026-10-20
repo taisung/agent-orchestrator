@@ -125,6 +125,14 @@ export {
   getNewestOpenCodeUserMessage,
   OpenCodeApiTimeoutError,
   OpenCodeApiIncompleteAnswerError,
+  OpenCodeApiRequestError,
+  OpenCodeApiUnexpectedAnswerError,
+  OPENCODE_PROMPT_MAX_BODY_BYTES,
+  OPENCODE_PROMPT_READBACK_SLACK_MS,
+  OpenCodePromptTooLargeError,
+  buildOpenCodePromptBody,
+  promptOpenCodeSession,
+  findOpenCodePromptInput,
 } from "./opencode-api.js";
 export type {
   OpenCodeApiSession,
@@ -135,6 +143,9 @@ export type {
   OpenCodeSessionCreateBody,
   OpenCodeSpawnCallOptions,
   OpenCodeUserMessageMark,
+  OpenCodePromptBody,
+  OpenCodeInboxItem,
+  OpenCodePromptInputMatch,
 } from "./opencode-api.js";
 export { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 

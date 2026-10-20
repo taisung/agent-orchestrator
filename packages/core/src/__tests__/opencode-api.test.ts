@@ -57,8 +57,15 @@ import {
   hasOpenCodeUserMessage,
   getNewestOpenCodeUserMessage,
   OPENCODE_SESSION_LIST_MAX_PAGES,
+  OPENCODE_PROMPT_MAX_BODY_BYTES,
   OpenCodeApiTimeoutError,
   OpenCodeApiIncompleteAnswerError,
+  OpenCodeApiRequestError,
+  OpenCodeApiUnexpectedAnswerError,
+  OpenCodePromptTooLargeError,
+  buildOpenCodePromptBody,
+  promptOpenCodeSession,
+  findOpenCodePromptInput,
   type OpenCodeApiModel,
 } from "../opencode-api.js";
 import {
@@ -898,5 +905,362 @@ describe("spawn calls with a real child process (fake opencode on PATH)", () => 
     const [entry] = readMockApiEnvLog(envLogPath);
     expect(entry?.op).toBe("session.create");
     expect(entry?.env["AO_SESSION"]).toBe("app-3");
+  });
+});
+
+describe("callOpenCodeApi HTTP errors (I-5)", () => {
+  it("throws OpenCodeApiRequestError with the status, tag and API message, and keeps the message", async () => {
+    const stdout = JSON.stringify({
+      _tag: "ConflictError",
+      message: "Prompt message ID conflicts with an existing durable record: msg_1",
+      resource: "msg_1",
+    });
+    mockExecFileAsync.mockRejectedValue(
+      execError("Command failed", stdout, "HTTP 409 Conflict\n", { code: 1 }),
+    );
+    const err = (await callOpenCodeApi("session.prompt").catch(
+      (e: unknown) => e,
+    )) as OpenCodeApiRequestError;
+
+    expect(err).toBeInstanceOf(OpenCodeApiRequestError);
+    expect(err.message).toBe("opencode api session.prompt failed: HTTP 409 Conflict");
+    expect(err.status).toBe(409);
+    expect(err.tag).toBe("ConflictError");
+    expect(err.apiMessage).toBe(
+      "Prompt message ID conflicts with an existing durable record: msg_1",
+    );
+    expect(err.cause).toBeInstanceOf(Error);
+  });
+
+  it("keeps null for a 404 by default, and throws it with the tag on notFound: throw", async () => {
+    const location = JSON.stringify({
+      _tag: "LocationNotFoundError",
+      location: { directory: "/tmp/gone" },
+      message: "Location not found: /tmp/gone",
+    });
+    mockExecFileAsync.mockRejectedValue(
+      execError("Command failed", location, "HTTP 404 Not Found\n"),
+    );
+    await expect(callOpenCodeApi("session.prompt")).resolves.toBeNull();
+
+    const err = (await callOpenCodeApi("session.prompt", { notFound: "throw" }).catch(
+      (e: unknown) => e,
+    )) as OpenCodeApiRequestError;
+    expect(err).toBeInstanceOf(OpenCodeApiRequestError);
+    expect([err.status, err.tag, err.apiMessage]).toEqual([
+      404,
+      "LocationNotFoundError",
+      "Location not found: /tmp/gone",
+    ]);
+  });
+
+  it("gives a plain error when the service gave no HTTP status", async () => {
+    mockExecFileAsync.mockRejectedValue(execError("Command failed", "", "Unable to connect\n"));
+    const err = (await callOpenCodeApi("session.get").catch((e: unknown) => e)) as Error;
+    expect(err).not.toBeInstanceOf(OpenCodeApiRequestError);
+    expect(err.message).toBe("opencode api session.get failed: Unable to connect");
+  });
+});
+
+describe("buildOpenCodePromptBody (I-5 size rule)", () => {
+  // `{"text":"","delivery":"queue"}` is 30 bytes.
+  const overhead = Buffer.byteLength(JSON.stringify({ text: "", delivery: "queue" }), "utf-8");
+
+  it("builds the queue body with the exact text", () => {
+    expect(buildOpenCodePromptBody("a\nb 'c' \"d\"")).toEqual({
+      text: "a\nb 'c' \"d\"",
+      delivery: "queue",
+    });
+  });
+
+  it("accepts a body of exactly the limit and refuses one byte more", () => {
+    expect(OPENCODE_PROMPT_MAX_BODY_BYTES).toBe(131_071);
+    const fits = "a".repeat(OPENCODE_PROMPT_MAX_BODY_BYTES - overhead);
+    expect(() => buildOpenCodePromptBody(fits)).not.toThrow();
+    const err = (() => {
+      try {
+        buildOpenCodePromptBody(`${fits}a`);
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })() as OpenCodePromptTooLargeError;
+    expect(err).toBeInstanceOf(OpenCodePromptTooLargeError);
+    expect(err.bodyBytes).toBe(OPENCODE_PROMPT_MAX_BODY_BYTES + 1);
+  });
+
+  it("counts UTF-8 bytes of the JSON, with its escapes", () => {
+    // "é" is 2 bytes, a newline is 2 bytes as "\n" in JSON.
+    const half = Math.floor((OPENCODE_PROMPT_MAX_BODY_BYTES - overhead) / 2);
+    expect(() => buildOpenCodePromptBody("é".repeat(half))).not.toThrow();
+    expect(() => buildOpenCodePromptBody("é".repeat(half + 1))).toThrow(
+      OpenCodePromptTooLargeError,
+    );
+    expect(() => buildOpenCodePromptBody("\n".repeat(half + 1))).toThrow(
+      OpenCodePromptTooLargeError,
+    );
+  });
+
+  it("refuses a 200 KB message and never cuts it", () => {
+    expect(() => buildOpenCodePromptBody("x".repeat(200 * 1024))).toThrow(
+      /has 204830 bytes, more than the 131071 bytes .*nothing was sent/,
+    );
+  });
+});
+
+describe("send calls with a real child process (fake opencode on PATH, I-5)", () => {
+  let tmpDir: string;
+  let statePath: string;
+  let logPath: string;
+  const originalPath = process.env["PATH"];
+  const ID = "ses_send";
+
+  /**
+   * A fake `opencode api` with the 2.0.32 answer shapes (measured on an
+   * isolated store): `session.prompt` answers the inbox item, or an error
+   * body on stdout with `HTTP <status>` on stderr and exit 1;
+   * `session.inbox.list` and `session.message.list` read the state file.
+   * `promptMode`: `ok`, `ok-idle` (the input becomes a user message), `hang`,
+   * `cut` (admitted, then a cut answer), `cut-lost` (a cut answer, nothing
+   * admitted), `other-session`, or `<status>:<tag>`.
+   */
+  function useFake(state: {
+    promptMode?: string;
+    inbox?: unknown[];
+    messages?: unknown[];
+    listMode?: string;
+  }) {
+    writeFileSync(statePath, JSON.stringify({ inbox: [], messages: [], ...state }));
+    const binDir = join(tmpDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = join(binDir, "opencode");
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(argv) + "\\n");
+const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf-8"));
+const save = () => fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+const params = {};
+for (let i = 0; i < argv.length; i++) if (argv[i] === "--param") { const [k, ...v] = argv[i + 1].split("="); params[k] = v.join("="); i++; }
+const op = argv[1];
+const fail = (status, tag, message) => { process.stdout.write(JSON.stringify({ _tag: tag, message })); process.stderr.write("HTTP " + status + " Error\\n"); process.exit(1); };
+if (op === "session.prompt") {
+  const body = JSON.parse(argv[argv.indexOf("-d") + 1]);
+  const mode = state.promptMode || "ok";
+  if (mode.includes(":")) { const [status, tag] = mode.split(":"); fail(Number(status), tag, tag + " for " + params.sessionID); }
+  if (mode === "hang") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000); process.exit(0); }
+  const item = { id: "msg_new", sessionID: mode === "other-session" ? "ses_other" : params.sessionID, time: { created: Date.now() }, type: "user", payload: { text: body.text }, delivery: body.delivery };
+  if (mode !== "cut-lost") {
+    if (mode === "ok-idle" || mode === "cut") state.messages.unshift({ id: item.id, type: "user", text: body.text, time: { created: Date.now() } });
+    else state.inbox.push(item);
+    save();
+  }
+  const answer = JSON.stringify({ data: item });
+  process.stdout.write(mode === "cut" || mode === "cut-lost" ? answer.slice(0, 40) : answer + "\\n");
+  process.exit(0);
+}
+if (state.listMode && state.listMode.startsWith(op + ":")) { const [, status, tag] = state.listMode.split(":"); fail(Number(status), tag, tag); }
+if (op === "session.inbox.list") { process.stdout.write(JSON.stringify({ data: state.inbox }) + "\\n"); process.exit(0); }
+if (op === "session.message.list") {
+  const data = params.limit ? state.messages.slice(0, Number(params.limit)) : state.messages;
+  process.stdout.write(JSON.stringify({ data, cursor: { previous: null, next: null } }) + "\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected " + argv.join(" ") + "\\n");
+process.exit(2);
+`,
+      "utf-8",
+    );
+    chmodSync(script, 0o755);
+    process.env["PATH"] = `${binDir}:${originalPath ?? ""}`;
+  }
+
+  function calls(): string[][] {
+    try {
+      return readFileSync(logPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+    } catch {
+      return [];
+    }
+  }
+
+  const prompts = () => calls().filter((argv) => argv[1] === "session.prompt");
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "ao-opencode-send-"));
+    statePath = join(tmpDir, "state.json");
+    logPath = join(tmpDir, "calls.log");
+    mockSpawn.mockImplementation((...args: unknown[]) => realSpawn.current!(...args));
+  });
+
+  afterEach(() => {
+    process.env["PATH"] = originalPath;
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("sends one session.prompt with the queue body and returns the inbox item", async () => {
+    useFake({});
+    const text = "line one\nline 'two' \"three\"";
+    const item = await promptOpenCodeSession(ID, text);
+
+    expect(item).toEqual(
+      expect.objectContaining({ id: "msg_new", sessionID: ID, delivery: "queue" }),
+    );
+    expect(prompts()).toEqual([
+      [
+        "api",
+        "session.prompt",
+        "--param",
+        `sessionID=${ID}`,
+        "-d",
+        JSON.stringify({ text, delivery: "queue" }),
+      ],
+    ]);
+    // The answer goes through a file descriptor, not a pipe.
+    const options = mockSpawn.mock.calls[0]![2] as { stdio: unknown[] };
+    expect(typeof options.stdio[1]).toBe("number");
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("refuses a 200 KB message before any process", async () => {
+    useFake({});
+    await expect(promptOpenCodeSession(ID, "x".repeat(200 * 1024))).rejects.toBeInstanceOf(
+      OpenCodePromptTooLargeError,
+    );
+    expect(calls()).toEqual([]);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("throws each declared error of session.prompt with its status and tag, once", async () => {
+    for (const [status, tag] of [
+      [404, "SessionNotFoundError"],
+      [404, "LocationNotFoundError"],
+      [409, "ConflictError"],
+      [400, "InvalidRequestError"],
+      [401, "UnauthorizedError"],
+    ] as const) {
+      rmSync(logPath, { force: true });
+      useFake({ promptMode: `${status}:${tag}` });
+      const err = (await promptOpenCodeSession(ID, "hi").catch(
+        (e: unknown) => e,
+      )) as OpenCodeApiRequestError;
+      expect(err).toBeInstanceOf(OpenCodeApiRequestError);
+      expect([err.status, err.tag, err.apiMessage]).toEqual([status, tag, `${tag} for ${ID}`]);
+      expect(prompts()).toHaveLength(1);
+    }
+  });
+
+  it("throws the timeout error at its bound, once", async () => {
+    useFake({ promptMode: "hang" });
+    await expect(promptOpenCodeSession(ID, "hi", { timeoutMs: 300 })).rejects.toBeInstanceOf(
+      OpenCodeApiTimeoutError,
+    );
+    expect(prompts()).toHaveLength(1);
+  });
+
+  it("throws the incomplete-answer error on a cut answer, once", async () => {
+    useFake({ promptMode: "cut" });
+    await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+      OpenCodeApiIncompleteAnswerError,
+    );
+    expect(prompts()).toHaveLength(1);
+  });
+
+  it("throws the unexpected-answer error for an item of another session", async () => {
+    useFake({ promptMode: "other-session" });
+    await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+      OpenCodeApiUnexpectedAnswerError,
+    );
+  });
+
+  describe("findOpenCodePromptInput", () => {
+    it("finds a queued input in the inbox by text and time, and reads the inbox first", async () => {
+      useFake({
+        inbox: [
+          {
+            id: "msg_old",
+            sessionID: ID,
+            type: "user",
+            time: { created: 1_000 },
+            payload: { text: "hi" },
+            delivery: "queue",
+          },
+          {
+            id: "msg_q",
+            sessionID: ID,
+            type: "user",
+            time: { created: 5_000 },
+            payload: { text: "hi" },
+            delivery: "queue",
+          },
+        ],
+      });
+      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toEqual({
+        id: "msg_q",
+        found: "inbox",
+        delivery: "queue",
+      });
+      expect(calls().map((argv) => argv[1])).toEqual(["session.inbox.list"]);
+    });
+
+    it("finds an input that became the newest user message", async () => {
+      useFake({ messages: [{ id: "msg_u", type: "user", text: "hi", time: { created: 5_000 } }] });
+      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toEqual({
+        id: "msg_u",
+        found: "message",
+      });
+      const last = calls().at(-1)!;
+      expect(last.slice(0, 2)).toEqual(["api", "session.message.list"]);
+      expect(last).toEqual(
+        expect.arrayContaining(["type=user", "order=desc", "limit=1", `sessionID=${ID}`]),
+      );
+      expect(calls().map((argv) => argv[1])).toEqual([
+        "session.inbox.list",
+        "session.message.list",
+      ]);
+    });
+
+    it("does not count an older message with the same text, or another text", async () => {
+      useFake({ messages: [{ id: "msg_u", type: "user", text: "hi", time: { created: 1_000 } }] });
+      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toBeNull();
+      useFake({
+        messages: [{ id: "msg_u", type: "user", text: "hello", time: { created: 5_000 } }],
+      });
+      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toBeNull();
+    });
+
+    it("throws when a read fails, also on a 404", async () => {
+      useFake({ listMode: "session.inbox.list:404:SessionNotFoundError" });
+      await expect(findOpenCodePromptInput(ID, "hi", 0)).rejects.toBeInstanceOf(
+        OpenCodeApiRequestError,
+      );
+    });
+
+    it("after a cut prompt answer, finds the admitted input once", async () => {
+      useFake({ promptMode: "cut" });
+      const started = Date.now();
+      await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+        OpenCodeApiIncompleteAnswerError,
+      );
+      await expect(findOpenCodePromptInput(ID, "hi", started - 1_000)).resolves.toEqual({
+        id: "msg_new",
+        found: "message",
+      });
+      expect(prompts()).toHaveLength(1);
+    });
+
+    it("after a cut answer that admitted nothing, finds nothing", async () => {
+      useFake({ promptMode: "cut-lost" });
+      const started = Date.now();
+      await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+        OpenCodeApiIncompleteAnswerError,
+      );
+      await expect(findOpenCodePromptInput(ID, "hi", started - 1_000)).resolves.toBeNull();
+    });
   });
 });
