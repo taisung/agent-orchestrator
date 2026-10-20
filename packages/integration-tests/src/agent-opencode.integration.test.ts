@@ -443,11 +443,21 @@ describe("send hook (I-5, integration)", () => {
     const opencode = opencodePlugin.create();
     expect(typeof opencode.canDeliverMessage).toBe("function");
     expect(typeof opencode.deliverMessage).toBe("function");
+    expect(typeof opencode.checkMessage).toBe("function");
     for (const plugin of [claudeCodePlugin, codexPlugin, geminiPlugin]) {
       const agent = plugin.create();
       expect(agent.canDeliverMessage, plugin.manifest.name).toBeUndefined();
       expect(agent.deliverMessage, plugin.manifest.name).toBeUndefined();
+      expect(agent.checkMessage, plugin.manifest.name).toBeUndefined();
     }
+  });
+
+  it("refuses with the real checkMessage a message that cannot go on the command line", () => {
+    const agent = opencodePlugin.create();
+    expect(() => agent.checkMessage?.("x".repeat(200 * 1024))).toThrow(
+      /more than the 131071 bytes .*nothing was sent/,
+    );
+    expect(() => agent.checkMessage?.("Fix the CI failures")).not.toThrow();
   });
 
   it("keeps an OpenCode session without a valid stored session ID on the runtime path", () => {
