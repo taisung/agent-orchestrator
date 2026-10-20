@@ -363,6 +363,17 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
     project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
     message reached the session, not that the turn succeeded (a failed turn reads `blocked` through I-4).
+- **I-5 in progress (`ao send` through `session.prompt`).** Owner 2026-10-19: "Push, then start I-5"
+  (`994394c9..592441d6` pushed at about 20:05 EDT). Author ao-41 (Claude Code, Opus 5.5, xhigh), spawned
+  20:11 EDT on `592441d6`, meter `5h 2%`, `wk 2%`; brief
+  `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-send.md`. Design given in the brief: an optional
+  `Agent` send hook; the OpenCode hook checks that the pane runs `opencode --session <stored id>` before
+  it sends (the TUI-ENV result), then one `session.prompt` with `delivery: queue`; a "no TUI" error
+  restores once, every other error is final (no second `session.prompt` after an unknown admission); a
+  pending permission or form gives a line; the 128 KiB argument limit is checked; no tmux paste for a
+  session with a stored ID; non-OpenCode agents unchanged. No model turn and no send to a real session;
+  the real-TUI check runs later on the owner's word. Reviewer after it: gpt-6.1-sol (Codex). Watcher
+  PID 484968 (watches ao-41).
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.
