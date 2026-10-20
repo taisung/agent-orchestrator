@@ -499,6 +499,30 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     ID"), with the same checks. Review file: `development/reviews/i5_review_r3_sol61.md`. ao-42 is idle,
     and its round-1 and round-2 reviews are on `main`. If ao-43 is stopped too, the owner decides on a
     reviewer of another family.
+  - **Review r3 (ao-43, 00:57 EDT, 21 min, 1.83 USD, no filter stop): NOT-LAND-SAFE, 1 B, 2 M, 1 m.**
+    - Status of earlier findings: M-1, m-1, M-2 and M-3 are fixed. B-1 and B-2 are partly fixed.
+    - Live results that now give one input each: a sender killed after or before the admission (no
+      replay line in the second case), a failed write of `unknown` in one long-lived process, the archive
+      restore, a paused record writer, two real lifecycle checks, and two AO records with one stored ID.
+    - B-3: a failed write of `unknown` while the owner process stays alive (a lifecycle worker), then a
+      retry from another process. The retry sees a live owner, mints a new ID, and gives 2 inputs (live).
+      The in-flight set is local to one process.
+    - M-4: a process killed after it creates the claim file `.break-<token>` leaves the lock and the
+      claim. No code reads the claim, so every later send to that session fails after 2 s, with no
+      expiry.
+    - M-5: a clear fails 3 times after a success, and the first process exits. A new lifecycle dispatch
+      of the same text inside 10 min is then a replay. The lifecycle writes the dispatch hash with no new
+      input, because `send` returns `void`.
+    - m-2: purge marks the archive `opencodeCleanedAt` before it removes the ledger. A failed removal is
+      never retried, and the warning says the entries expire, but expiry runs only on a change.
+    - Test gaps: the mutants "release ignores the token" and "stale rule ignores the start time" survive
+      (57/57).
+    - Advice: an OS-released lock (the reviewer showed that a kernel lock comes back after a SIGKILL on
+      this host). Remove the second-`begin` path (`session-manager.ts:2850-2853`). 3062 of the 4911
+      inserted lines are tests.
+    - Gates: full `pnpm test` 2526 passed. The ledger test file passed 6 runs, one under CPU load.
+      The wait does not block the event loop. The isolated store had 21 sessions, with tokens 0.
+    - Owner decision on round 4 pending.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
