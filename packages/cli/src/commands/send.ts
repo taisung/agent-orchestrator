@@ -5,8 +5,11 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import {
   type Agent,
+  type AgentMessageDelivery,
   type OpenCodeSessionManager,
   type Session,
+  type SessionManager,
+  type SessionMessageDelivery,
   loadConfig,
 } from "@aoagents/ao-core";
 import { exec, tmux } from "../lib/shell.js";
@@ -126,15 +129,83 @@ async function sendViaTmux(tmuxTarget: string, message: string): Promise<void> {
   await exec("tmux", ["send-keys", "-t", tmuxTarget, "Enter"]);
 }
 
+/** The line about pending human answers, or null when there are none. */
+function pendingInputLine(delivery: AgentMessageDelivery): string | null {
+  const waitsFor = delivery.waitsFor ?? [];
+  const names = [
+    ...(waitsFor.includes("permission") ? ["permission request"] : []),
+    ...(waitsFor.includes("question") ? ["question"] : []),
+  ];
+  if (names.length === 0) return null;
+  return `The message waits behind a pending ${names.join(" and a pending ")}: it runs after a human answers.`;
+}
+
+/**
+ * I-5: deliver through core `send`, which hands the message to the agent's
+ * own API (OpenCode: `session.prompt`, delivery `queue`). There is no idle
+ * wait, no tmux paste, no Enter and no screen check: the response is the
+ * admitted input. Exit 1 when the send fails.
+ */
+async function sendThroughAgent(
+  sessionName: string,
+  message: string,
+  sessionManager: SessionManager,
+): Promise<void> {
+  let result: SessionMessageDelivery | undefined;
+  try {
+    if (sessionManager.deliver) {
+      result = await sessionManager.deliver(sessionName, message);
+    } else {
+      await sessionManager.send(sessionName, message);
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(chalk.red(`Message not sent to ${sessionName}: ${detail}`));
+    process.exit(1);
+  }
+
+  if (!result || result.route === "runtime") {
+    console.log(chalk.green("Message sent and processing"));
+    return;
+  }
+  const delivery = result.delivery;
+  console.log(
+    chalk.green(
+      `Message admitted to ${sessionName} (input ${delivery.inputId}, delivery ${delivery.mode})`,
+    ),
+  );
+  if (delivery.recovered) {
+    console.log(
+      chalk.dim("The admission answer was lost; a read-back of the session found the message."),
+    );
+  }
+  if (delivery.busy) {
+    console.log(
+      chalk.dim(`${sessionName} is running a turn: the message goes in after its last answer.`),
+    );
+  }
+  const pending = pendingInputLine(delivery);
+  if (pending) console.log(chalk.yellow(pending));
+}
+
 export function registerSend(program: Command): void {
   program
     .command("send")
-    .description("Send a message to a session with busy detection and retry")
+    .description(
+      "Send a message to a session with busy detection and retry; an OpenCode session with a stored session ID gets it through the OpenCode API (session.prompt, delivery queue)",
+    )
     .argument("<session>", "Session name")
     .argument("[message...]", "Message to send")
     .option("-f, --file <path>", "Send contents of a file instead")
-    .option("--no-wait", "Don't wait for session to become idle before sending")
-    .option("--timeout <seconds>", "Max seconds to wait for idle", "600")
+    .option(
+      "--no-wait",
+      "Don't wait for session to become idle before sending (no effect for an OpenCode session with a stored session ID: the API queues the message)",
+    )
+    .option(
+      "--timeout <seconds>",
+      "Max seconds to wait for idle (no effect for an OpenCode session with a stored session ID)",
+      "600",
+    )
     .action(
       async (
         session: string,
@@ -151,6 +222,20 @@ export function registerSend(program: Command): void {
         } = await resolveSessionContext(session);
 
         const message = await readMessageInput(opts, messageParts);
+
+        // I-5: an agent that delivers through its own API (OpenCode with a
+        // stored session ID) gets the message from core `send`. The API
+        // queues a message for a busy session (0010 section 7), so
+        // --no-wait and --timeout have no effect on this path.
+        if (
+          existingSession &&
+          sessionManager &&
+          agent.deliverMessage &&
+          agent.canDeliverMessage?.(existingSession) === true
+        ) {
+          await sendThroughAgent(session, message, sessionManager);
+          return;
+        }
 
         const parsedTimeout = parseInt(opts.timeout || "600", 10);
         const timeoutMs = (isNaN(parsedTimeout) || parsedTimeout <= 0 ? 600 : parsedTimeout) * 1000;

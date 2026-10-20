@@ -9,12 +9,15 @@ const { mockTmux, mockExec, mockDetectActivity } = vi.hoisted(() => ({
   mockDetectActivity: vi.fn(),
 }));
 
-const { mockConfigRef, mockSessionManager } = vi.hoisted(() => ({
+const { mockConfigRef, mockSessionManager, mockAgentRef } = vi.hoisted(() => ({
   mockConfigRef: { current: null as Record<string, unknown> | null },
   mockSessionManager: {
     get: vi.fn(),
     send: vi.fn(),
+    deliver: vi.fn(),
   },
+  /** The agent that the registry lookup gives; null gives the Claude Code mock. */
+  mockAgentRef: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock("../../src/lib/shell.js", () => ({
@@ -36,11 +39,12 @@ vi.mock("../../src/lib/plugins.js", () => ({
     processName: "claude",
     detectActivity: mockDetectActivity,
   }),
-  getAgentByNameFromRegistry: () => ({
-    name: "claude-code",
-    processName: "claude",
-    detectActivity: mockDetectActivity,
-  }),
+  getAgentByNameFromRegistry: () =>
+    mockAgentRef.current ?? {
+      name: "claude-code",
+      processName: "claude",
+      detectActivity: mockDetectActivity,
+    },
 }));
 
 vi.mock("../../src/lib/session-utils.js", () => ({
@@ -84,7 +88,9 @@ beforeEach(() => {
   mockDetectActivity.mockReset();
   mockSessionManager.get.mockReset();
   mockSessionManager.send.mockReset();
+  mockSessionManager.deliver.mockReset();
   mockConfigRef.current = null;
+  mockAgentRef.current = null;
   mockExec.mockResolvedValue({ stdout: "", stderr: "" });
 });
 
@@ -455,5 +461,208 @@ describe("send command", () => {
         "from file",
       ]);
     });
+  });
+});
+
+describe("send through the OpenCode API (I-5)", () => {
+  function makeConfig(): Record<string, unknown> {
+    return {
+      configPath: "/tmp/agent-orchestrator.yaml",
+      defaults: { runtime: "tmux", agent: "opencode", workspace: "worktree", notifiers: [] },
+      projects: {
+        "my-app": {
+          name: "My App",
+          sessionPrefix: "app",
+          path: "/tmp/my-app",
+          defaultBranch: "main",
+          repo: "org/my-app",
+          agent: "opencode",
+          runtime: "tmux",
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    };
+  }
+
+  function openCodeSession(metadata: Record<string, string>) {
+    return {
+      id: "app-1",
+      projectId: "my-app",
+      status: "working",
+      activity: "active",
+      branch: null,
+      issueId: null,
+      pr: null,
+      workspacePath: null,
+      runtimeHandle: { id: "tmux-target-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: { agent: "opencode", ...metadata },
+    };
+  }
+
+  const deliverMessage = vi.fn();
+
+  /** An OpenCode-like agent: it delivers to a session with a stored ID. */
+  function useOpenCodeAgent() {
+    mockAgentRef.current = {
+      name: "opencode",
+      processName: "opencode",
+      detectActivity: mockDetectActivity,
+      canDeliverMessage: (session: { metadata: Record<string, string> }) =>
+        Boolean(session.metadata["opencodeSessionId"]),
+      deliverMessage,
+    };
+  }
+
+  const ADMITTED = {
+    route: "agent",
+    delivery: { inputId: "msg_admitted", mode: "queue", waitsFor: [], busy: false },
+  };
+
+  function logged(): string[] {
+    return consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+  }
+
+  beforeEach(() => {
+    mockConfigRef.current = makeConfig();
+    useOpenCodeAgent();
+    mockSessionManager.get.mockResolvedValue(openCodeSession({ opencodeSessionId: "ses_stored" }));
+  });
+
+  it("delegates to core deliver, prints the admitted ID, and makes no tmux call", async () => {
+    mockSessionManager.deliver.mockResolvedValue(ADMITTED);
+
+    await program.parseAsync(["node", "test", "send", "app-1", "hello", "opencode"]);
+
+    expect(mockSessionManager.deliver).toHaveBeenCalledTimes(1);
+    expect(mockSessionManager.deliver).toHaveBeenCalledWith("app-1", "hello opencode");
+    expect(mockSessionManager.send).not.toHaveBeenCalled();
+    expect(mockTmux).not.toHaveBeenCalled();
+    expect(mockExec).not.toHaveBeenCalled();
+    expect(mockDetectActivity).not.toHaveBeenCalled();
+    expect(deliverMessage).not.toHaveBeenCalled();
+    expect(logged()).toEqual([
+      expect.stringContaining("Message admitted to app-1 (input msg_admitted, delivery queue)"),
+    ]);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("prints the busy, pending-input and read-back lines", async () => {
+    mockSessionManager.deliver.mockResolvedValue({
+      route: "agent",
+      delivery: {
+        inputId: "msg_found",
+        mode: "queue",
+        waitsFor: ["permission", "question"],
+        busy: true,
+        recovered: true,
+      },
+    });
+
+    await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
+
+    const lines = logged().join("\n");
+    expect(lines).toContain("Message admitted to app-1 (input msg_found, delivery queue)");
+    expect(lines).toContain("a read-back of the session found the message");
+    expect(lines).toContain("app-1 is running a turn: the message goes in after its last answer.");
+    expect(lines).toContain(
+      "The message waits behind a pending permission request and a pending question: it runs after a human answers.",
+    );
+  });
+
+  it("prints the question line alone", async () => {
+    mockSessionManager.deliver.mockResolvedValue({
+      route: "agent",
+      delivery: { inputId: "msg_1", mode: "queue", waitsFor: ["question"], busy: false },
+    });
+
+    await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
+
+    const lines = logged().join("\n");
+    expect(lines).toContain(
+      "The message waits behind a pending question: it runs after a human answers.",
+    );
+    expect(lines).not.toContain("running a turn");
+  });
+
+  it("exits 1 with the error of a failed send, and makes no tmux call", async () => {
+    mockSessionManager.deliver.mockRejectedValue(
+      new Error("the OpenCode session ses_stored of app-1 does not exist"),
+    );
+
+    await expect(program.parseAsync(["node", "test", "send", "app-1", "hello"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Message not sent to app-1: the OpenCode session ses_stored of app-1 does not exist",
+      ),
+    );
+    expect(mockTmux).not.toHaveBeenCalled();
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("gives the same API call with --no-wait and with --timeout", async () => {
+    mockSessionManager.deliver.mockResolvedValue(ADMITTED);
+
+    await program.parseAsync(["node", "test", "send", "--no-wait", "app-1", "hello"]);
+    await program.parseAsync(["node", "test", "send", "--timeout", "5", "app-1", "hello"]);
+
+    expect(mockSessionManager.deliver.mock.calls).toEqual([
+      ["app-1", "hello"],
+      ["app-1", "hello"],
+    ]);
+    expect(mockTmux).not.toHaveBeenCalled();
+  });
+
+  it("sends file contents through the API", async () => {
+    mockSessionManager.deliver.mockResolvedValue(ADMITTED);
+    const filePath = join(tmpdir(), `ao-send-api-${Date.now()}.txt`);
+    writeFileSync(filePath, "from file\nline two");
+    try {
+      await program.parseAsync(["node", "test", "send", "app-1", "--file", filePath]);
+    } finally {
+      rmSync(filePath, { force: true });
+    }
+
+    expect(mockSessionManager.deliver).toHaveBeenCalledWith("app-1", "from file\nline two");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tmux path for an OpenCode session without a stored ID", async () => {
+    mockSessionManager.get.mockResolvedValue(openCodeSession({}));
+    mockTmux.mockImplementation(async (...args: string[]) => {
+      if (args[0] === "has-session") return "";
+      if (args[0] === "capture-pane") return "Working\nesc interrupt";
+      return "";
+    });
+    mockDetectActivity.mockReturnValueOnce("idle").mockReturnValueOnce("active");
+
+    await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
+
+    expect(mockSessionManager.deliver).not.toHaveBeenCalled();
+    expect(mockExec).toHaveBeenCalledWith("tmux", [
+      "send-keys",
+      "-t",
+      "tmux-target-1",
+      "-l",
+      "hello",
+    ]);
+  });
+
+  it("says in the help text that --no-wait and --timeout have no effect on this path", () => {
+    const send = program.commands.find((command) => command.name() === "send")!;
+    const help = send.helpInformation().replace(/\s+/g, " ");
+    expect(help).toContain(
+      "--no-wait Don't wait for session to become idle before sending (no effect for an OpenCode session with a stored session ID: the API queues the message)",
+    );
+    expect(help).toContain(
+      "--timeout <seconds> Max seconds to wait for idle (no effect for an OpenCode session with a stored session ID)",
+    );
   });
 });
