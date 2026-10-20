@@ -574,6 +574,17 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     reviewer classifies each finding by its trigger (normal use, a process that ends abruptly, a failed
     file write, another local user), and says whether a documented limit is acceptable for a personal
     tool. Codex token baseline (end of r3): input 8235357, cached 8009856, output 57313.
+  - **Review r4 in ao-43 stopped by a content filter (08:51 EDT, 0.48 USD).** The stop came one minute
+    after the dispatch, after ao-43 read the round 4 author brief and `delivery-lock.ts`. Both texts
+    say that another local user can hold a lock name. No finding was written and no process was started.
+    ao-43 report set to `partial`.
+  - **Review r4 moved to ao-44 (08:54 EDT):** a new Codex session (gpt-6.1-sol, xhigh), worktree at
+    `9987edfa`, brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r4-sol-v2.md`. Changes from v1:
+    - a summary of the round 4 author brief replaces the read of that brief;
+    - the reviewer reads a copy of the author report without its bullet on other local accounts
+      (`reports/ao-41-i5-r4.agent_report.review-copy.md`);
+    - the lock-name access rules between local accounts are out of scope, and the owner decides them.
+    If ao-44 is stopped too, the owner decides on a reviewer of another family.
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
