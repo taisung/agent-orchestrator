@@ -179,6 +179,13 @@ async function sendThroughAgent(
       chalk.dim("The admission answer was lost; a read-back of the session found the message."),
     );
   }
+  if (delivery.replayed) {
+    console.log(
+      chalk.dim(
+        `An earlier attempt of this send already admitted input ${delivery.inputId}; nothing new was admitted.`,
+      ),
+    );
+  }
   if (delivery.busy) {
     console.log(
       chalk.dim(`${sessionName} is running a turn: the message goes in after its last answer.`),
