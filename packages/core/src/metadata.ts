@@ -17,6 +17,18 @@
  *   tmuxName=a3b4c5d6e7f8-int-1
  *   pr=https://github.com/org/repo/pull/42
  *   issue=INT-1234
+ *   generation=7
+ *
+ * Writes (killed-status round 3, B-2): every writer in this file holds the
+ * record lock (record-lock.ts) for its read, compare, write and rename, and
+ * every write increments `generation`, so a reader can tell that any Node
+ * writer changed the record after its read (`updateMetadataIf`). Reads take
+ * no lock: the atomic rename always gives a whole file. The bash metadata
+ * helpers (`~/.ao/bin/ao-metadata-helper.sh`, the claude-code PostToolUse
+ * hook) write `pr`, `status` and `branch` with `sed` and `mv`, outside the
+ * lock and without a new generation; a Node write and a helper write can
+ * still overwrite each other between the read and the rename of either. On
+ * a platform without the lock (not Linux) the writers run unlocked.
  */
 
 import {
@@ -38,6 +50,10 @@ import { join, dirname } from "node:path";
 import type { SessionId, SessionMetadata } from "./types.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
 import { parseKeyValueContent } from "./key-value.js";
+import { withRecordLock } from "./record-lock.js";
+
+/** The record key that every locked write increments. */
+export const GENERATION_KEY = "generation";
 
 /**
  * Serialize a record back to key=value format.
@@ -160,12 +176,78 @@ export function writeMetadata(
   if (metadata.opencodeSessionId) data["opencodeSessionId"] = metadata.opencodeSessionId;
   if (metadata.pinnedSummary) data["pinnedSummary"] = metadata.pinnedSummary;
 
-  atomicWriteFileSync(path, serializeMetadata(data));
+  withRecordLock(dataDir, sessionId, () => {
+    commitRecord(dataDir, sessionId, path, readRecordFile(path), data);
+  });
+}
+
+/** The record's generation; 0 when it has none (a record written before the key). */
+function generationOf(record: Readonly<Record<string, string>> | null): number {
+  const value = Number.parseInt(record?.[GENERATION_KEY] ?? "", 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/** Read a record file; null when it does not exist. */
+function readRecordFile(path: string): Record<string, string> | null {
+  try {
+    return parseKeyValueContent(readFileSync(path, "utf-8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Merge `updates` into a record: an empty value removes the key. A
+ * `killedReason` describes a killed status only, so a record whose status is
+ * not killed after the merge loses it, whoever writes.
+ */
+function mergeUpdates(
+  existing: Readonly<Record<string, string>>,
+  updates: Partial<Record<string, string>>,
+): Record<string, string> {
+  let next: Record<string, string> = { ...existing };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) continue;
+    if (value === "") {
+      const { [key]: _, ...rest } = next;
+      next = rest;
+    } else {
+      next[key] = value;
+    }
+  }
+  if (next["status"] !== "killed" && "killedReason" in next) {
+    const { killedReason: _, ...rest } = next;
+    next = rest;
+  }
+  return next;
+}
+
+/**
+ * Write `next` as the record with the next generation (call it under the
+ * record lock). A record without a generation (a new record, an empty
+ * reservation, a record from before the key) continues from its latest
+ * archived copy, so an archive followed by a copy-back or a new record with
+ * the same ID never repeats a generation that a reader saw before.
+ */
+function commitRecord(
+  dataDir: string,
+  sessionId: SessionId,
+  path: string,
+  existing: Readonly<Record<string, string>> | null,
+  next: Record<string, string>,
+): Record<string, string> {
+  const base = generationOf(existing) || generationOf(readArchivedMetadataRaw(dataDir, sessionId));
+  const written = { ...next, [GENERATION_KEY]: String(base + 1) };
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWriteFileSync(path, serializeMetadata(written));
+  return written;
 }
 
 /**
  * Update specific fields in a session's metadata.
- * Reads existing file, merges updates, writes back.
+ * Reads existing file, merges updates, writes back (under the record lock,
+ * with the next generation). Creates the record when it does not exist.
  */
 export function updateMetadata(
   dataDir: string,
@@ -173,85 +255,67 @@ export function updateMetadata(
   updates: Partial<Record<string, string>>,
 ): void {
   const path = metadataPath(dataDir, sessionId);
-  let existing: Record<string, string> = {};
-
-  if (existsSync(path)) {
-    existing = parseKeyValueContent(readFileSync(path, "utf-8"));
-  }
-
-  // Merge updates — remove keys set to empty string
-  for (const [key, value] of Object.entries(updates)) {
-    if (value === undefined) continue;
-    if (value === "") {
-      const { [key]: _, ...rest } = existing;
-      existing = rest;
-    } else {
-      existing[key] = value;
-    }
-  }
-
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, serializeMetadata(existing));
+  // The lock name uses the real path of the directory, so it must exist first.
+  mkdirSync(dataDir, { recursive: true });
+  withRecordLock(dataDir, sessionId, () => {
+    const existing = readRecordFile(path);
+    commitRecord(dataDir, sessionId, path, existing, mergeUpdates(existing ?? {}, updates));
+  });
 }
 
 /**
  * Compare-and-set update: merge `updates` only when the record still holds
  * every value in `expected`. A missing key and an empty value are equal (the
- * file never holds an empty value). Returns false and writes nothing when the
- * record is gone or a value differs, so a writer that read an older version
- * cannot overwrite a newer one (the lifecycle poll against a spawn or a
- * restore). Same atomic replace as `updateMetadata` and, like it, no lock:
- * only the read-compare-rename window remains.
+ * file never holds an empty value). The read, the compare and the rename run
+ * under the record lock, so no other Node writer can change the record
+ * between them; expect `generation` to detect any Node write after your own
+ * read. Returns the written record, or null and writes nothing when the
+ * record is gone (never recreated) or a value differs.
  */
 export function updateMetadataIf(
   dataDir: string,
   sessionId: SessionId,
   expected: Readonly<Record<string, string | undefined>>,
   updates: Partial<Record<string, string>>,
-): boolean {
+): Record<string, string> | null {
   const path = metadataPath(dataDir, sessionId);
-  let existing: Record<string, string>;
-  try {
-    existing = parseKeyValueContent(readFileSync(path, "utf-8"));
-  } catch {
-    return false;
-  }
-
-  for (const [key, value] of Object.entries(expected)) {
-    if ((existing[key] ?? "") !== (value ?? "")) return false;
-  }
-
-  for (const [key, value] of Object.entries(updates)) {
-    if (value === undefined) continue;
-    if (value === "") {
-      const { [key]: _, ...rest } = existing;
-      existing = rest;
-    } else {
-      existing[key] = value;
+  return withRecordLock(dataDir, sessionId, () => {
+    const existing = readRecordFile(path);
+    if (!existing) return null;
+    for (const [key, value] of Object.entries(expected)) {
+      if ((existing[key] ?? "") !== (value ?? "")) return null;
     }
-  }
-
-  atomicWriteFileSync(path, serializeMetadata(existing));
-  return true;
+    return commitRecord(dataDir, sessionId, path, existing, mergeUpdates(existing, updates));
+  });
 }
 
 /**
  * Delete a session's metadata file.
- * Optionally archive it to an `archive/` subdirectory.
+ * Optionally archive it to an `archive/` subdirectory. The copy and the
+ * unlink run under the record lock.
  */
 export function deleteMetadata(dataDir: string, sessionId: SessionId, archive = true): void {
   const path = metadataPath(dataDir, sessionId);
-  if (!existsSync(path)) return;
+  if (!existsSync(dataDir)) return;
+  withRecordLock(dataDir, sessionId, () => {
+    let content: string;
+    try {
+      content = readFileSync(path, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
 
-  if (archive) {
-    const archiveDir = join(dataDir, "archive");
-    mkdirSync(archiveDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const archivePath = join(archiveDir, `${sessionId}_${timestamp}`);
-    writeFileSync(archivePath, readFileSync(path, "utf-8"));
-  }
+    if (archive) {
+      const archiveDir = join(dataDir, "archive");
+      mkdirSync(archiveDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const archivePath = join(archiveDir, `${sessionId}_${timestamp}`);
+      writeFileSync(archivePath, content);
+    }
 
-  unlinkSync(path);
+    unlinkSync(path);
+  });
 }
 
 /**
@@ -290,6 +354,11 @@ export function readArchivedMetadataRaw(
   }
 }
 
+/**
+ * Merge `updates` into the latest archived copy of a session record. It runs
+ * under the lock of the session record, so it never interleaves with an
+ * archive or a copy-back of the same session.
+ */
 export function updateArchivedMetadata(
   dataDir: string,
   sessionId: SessionId,
@@ -298,7 +367,16 @@ export function updateArchivedMetadata(
   validateSessionId(sessionId);
   const archiveDir = join(dataDir, "archive");
   if (!existsSync(archiveDir)) return false;
+  return withRecordLock(dataDir, sessionId, () =>
+    updateLatestArchive(archiveDir, sessionId, updates),
+  );
+}
 
+function updateLatestArchive(
+  archiveDir: string,
+  sessionId: SessionId,
+  updates: Partial<Record<string, string>>,
+): boolean {
   const prefix = `${sessionId}_`;
   let latest: string | null = null;
 
@@ -364,7 +442,8 @@ export function listMetadata(dataDir: string): SessionId[] {
  * other process can read the record, not even for one system call, without
  * the claim, and a kill or an orchestrator start always sees the launcher.
  * The temp file is removed in every case. With `initial`, an error other
- * than EEXIST throws.
+ * than EEXIST throws. The reservation runs under the record lock. A
+ * reservation has no `generation`; the first write gives it one.
  */
 export function reserveSessionId(
   dataDir: string,
@@ -373,6 +452,15 @@ export function reserveSessionId(
 ): boolean {
   const path = metadataPath(dataDir, sessionId);
   mkdirSync(dirname(path), { recursive: true });
+  return withRecordLock(dataDir, sessionId, () => reserveRecord(dataDir, sessionId, path, initial));
+}
+
+function reserveRecord(
+  dataDir: string,
+  sessionId: SessionId,
+  path: string,
+  initial?: Record<string, string>,
+): boolean {
   if (!initial || Object.keys(initial).length === 0) {
     try {
       const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);

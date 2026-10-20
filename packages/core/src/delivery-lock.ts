@@ -39,9 +39,10 @@ export function isDeliveryLockSupported(platform: string = process.platform): bo
  * of `subject`. The ledger gives as subject the real path of the ledger file
  * (so the state root, the project and the agent session key), plus the
  * attempt token for an attempt lock. Two state roots, two sessions, two
- * attempts and two users never share a name.
+ * attempts and two users never share a name. The session record lock
+ * (record-lock.ts) uses the kind "record" with the real path of the record.
  */
-export function deliveryLockName(kind: "ledger" | "attempt", subject: string): string {
+export function deliveryLockName(kind: "ledger" | "attempt" | "record", subject: string): string {
   const uid = typeof process.getuid === "function" ? String(process.getuid()) : "nouid";
   const hash = createHash("sha256").update(subject, "utf-8").digest("hex").slice(0, 32);
   return `\0ao-delivery-${uid}-${kind}-${hash}`;

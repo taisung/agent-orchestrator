@@ -3545,10 +3545,12 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
           issueId: "INT-42",
         }),
       ).rejects.toThrow("the launcher dies here");
+      // The claim plus the generation of the write that stored the reused ID.
       expect(orphan).toEqual({
         launchPid: String(process.pid),
         launchPidStart: startToken(process.pid),
         opencodeSessionId: "ses_old",
+        generation: "1",
       });
       const dead = await deadProcess();
       updateMetadata(sessionsDir, orphanId, {

@@ -233,7 +233,8 @@ describe("updateMetadata", () => {
     updateMetadata(dataDir, "upd-3", { status: "new", branch: "test" });
 
     const raw = readMetadataRaw(dataDir, "upd-3");
-    expect(raw).toEqual({ status: "new", branch: "test" });
+    // Every locked write sets the next generation; a new record starts at 1.
+    expect(raw).toEqual({ status: "new", branch: "test", generation: "1" });
   });
 
   it("ignores undefined values", () => {
@@ -643,7 +644,8 @@ describe("metadata value injection hardening", () => {
 
     const raw = readFileSync(join(dataDir, "app-1"), "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim() !== "");
-    expect(lines).toHaveLength(4);
+    // The four written keys plus the generation of the write.
+    expect(lines).toHaveLength(5);
   });
 
   it("still preserves '=' inside values", () => {
