@@ -457,6 +457,34 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     - Also: an `EPIPE`-unknown test, and the spec calls the 80 s a nominal sum.
     - Files: the I-5 list, plus the new ledger file, its test, and `paths.ts` with its test.
     ao-41 context at dispatch: 34%, 42.57 USD in total.
+  - **Author r3 done (2026-10-20 00:10 EDT, `56f8461c..72e5e59f`, 5 commits, 14.86 USD by
+    trial_cost).**
+    - The new file is `packages/core/src/delivery-ledger.ts`. The ledger is
+      `<state root>/<hash>-<project>/deliveries/<ses_id>.json` (`getDeliveryLedgerDir` in `paths.ts`).
+      The record key `pendingDeliveries` is removed.
+    - The lock is `<ledger>.lock`, published with `link`, and only the holder removes it, with its own
+      token. A stale lock (dead owner) is broken through an exclusive claim file
+      `<ledger>.lock.break-<token>`. A live holder gives a 2 s wait, then a definite refusal.
+    - The owner is `{pid, startTime, token}`. `EPERM` counts as dead, and an unreadable `/proc` counts as
+      alive. A `sending` entry is reused when its owner is dead, or when it is this process's entry and
+      its attempt is no longer in flight.
+    - A failed clear is retried after 200 ms and after 1 s. After that, this process never reuses the
+      entry, but another process can reuse it after this process ends. That send is then a replay with
+      the replay line.
+    - A corrupt ledger fails closed and names the file. `--purge-session` and `ao session cleanup` remove
+      the ledger. A ledger with 200 young entries refuses a new send.
+    - Gates: full `pnpm test` 2526 passed, 29 skipped. 10 mutants fail tests.
+    - D2 live: the 5 review r2 reproducers and the r1 reproducers give 1 input each, with tokens 0.
+    - Known limit from the author: a process that stops between the create and the remove of a claim
+      file leaves the lock and the claim. Every send to that session then fails after 2 s until an
+      operator removes both files.
+    - Whole I-5: 17 files, 4911 insertions. `lifecycle-manager.ts`, `metadata.ts` and `review-check.ts`
+      are unchanged. Report: `reports/ao-41-i5-r3.agent_report.md`.
+  - **Review r3 dispatched (00:12 EDT):** ao-42, same session (context 64% used at dispatch), worktree
+    moved to `72e5e59f` with `reset --keep`, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r3-sol.md`, review file
+    `development/reviews/i5_review_r3_sol61.md`. Codex token baseline (end of r2): input 15131597,
+    cached 14807040, output 88159.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
