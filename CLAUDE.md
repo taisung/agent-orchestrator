@@ -292,7 +292,7 @@ All retained agent plugins (claude-code, codex, gemini, and opencode) must imple
 | `getEnvironment`   | Env vars for agent process (must include `~/.ao/bin` in PATH)        | No                                  |
 | `detectActivity`   | Terminal output classification (deprecated, but required)            | No                                  |
 | `getActivityState` | JSONL/API-based activity detection (min 3 states: active/ready/idle) | Yes (if no data)                    |
-| `isProcessRunning` | Check process alive via tmux TTY or PID                              | No                                  |
+| `isProcessRunning` | Check process alive via tmux TTY or PID; rejects if it cannot check  | No                                  |
 | `getSessionInfo`   | Extract summary, cost, session ID from agent's data                  | Yes (if agent has no introspection) |
 
 **Optional methods (implement when the agent supports it):**
@@ -428,7 +428,7 @@ if (fallback) return fallback;
 
 - Resolve liveness through the session's persisted tmux or Herdr runtime evidence
 - Match BOTH the node wrapper name AND the actual binary name (some agents install as `.agentname` with a dot prefix — the regex must handle this)
-- Return `false` (not `null`) on error
+- Return `false` only when the check ran and found no agent process (or the runtime answered that the pane does not exist). Reject, with the failure as `cause`, when the check cannot run (`tmux` or `ps` fails, a timeout); never answer `false` or `null` for an error. Callers treat a rejection as unknown, never as exited (claude-code follows this; codex, gemini, opencode and runtime-herdr still answer `false` on error)
 
 ## Constraints
 
