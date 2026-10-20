@@ -41,7 +41,7 @@ import {
   type PREnrichmentData,
   type CICheck,
 } from "./types.js";
-import { GENERATION_KEY, updateMetadataIf } from "./metadata.js";
+import { GENERATION_KEY, launchIdentity, updateMetadataIf } from "./metadata.js";
 import { validateStatus } from "./utils/validation.js";
 import { prIdentityKey } from "./utils/pr.js";
 import { getSessionsDir } from "./paths.js";
@@ -234,15 +234,35 @@ function isNoServerRejection(err: unknown): boolean {
 }
 
 /**
- * Consecutive negative polls of one session in this worker. "negative":
- * "gone" or "ambiguous" answers (C1, and the C2 bound). "no-server": the
- * runtime reported no server (the NO_SERVER_BOUND_MS rule). `firstAt` is the
- * clock of the first poll of the run.
+ * Consecutive negative polls of one launch of a session in this worker.
+ * "negative": "gone" or "ambiguous" answers (C1, and the C2 bound).
+ * "no-server": the runtime reported no server (the NO_SERVER_BOUND_MS rule).
+ * `firstAt` is the clock of the first poll of the run. `launch` (M-1, round
+ * 4) is the launch key of the record in that poll; a poll of another launch
+ * of the same session ID starts a new run.
  */
 interface NegativeStreak {
   kind: "negative" | "no-server";
   firstAt: number;
   polls: number;
+  launch: string;
+}
+
+/**
+ * M-1 (round 4): the launch of a record as one key: its launch identity
+ * (`launchIdentity`: reservation ID, `runtimeHandle`, `tmuxName`,
+ * `createdAt`, `restoredAt`). A spawn, a restore or a new reservation of the
+ * session ID changes it; a status, PR or bookkeeping write (reactions,
+ * dispatch hashes, `generation`) does not.
+ */
+function launchKeyOf(metadata: Readonly<Record<string, string>>): string {
+  return JSON.stringify(launchIdentity(metadata));
+}
+
+/** The status that this worker last saw for one launch of a session. */
+interface TrackedStatus {
+  status: SessionStatus;
+  launch: string;
 }
 
 /** What the probes of one poll say about the probes themselves. */
@@ -342,14 +362,29 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   const { config, registry, sessionManager, projectId: scopedProjectId } = deps;
   const observer = createProjectObserver(config, "lifecycle-manager");
 
-  const states = new Map<SessionId, SessionStatus>();
   /**
-   * C1 and the bounds: the current run of negative polls of each session. A
-   * second negative poll in a row persists killed (C1), except for the bounded
-   * cases (see decideStatus). In memory only: a restarted worker needs two
-   * negative polls again.
+   * The status that this worker last saw for each session, with its launch
+   * (M-1, round 4): a tracked status of another launch of the same session
+   * ID does not count (see trackedStatus).
+   */
+  const states = new Map<SessionId, TrackedStatus>();
+  /**
+   * C1 and the bounds: the current run of negative polls of each session and
+   * launch. A second negative poll in a row persists killed (C1), except for
+   * the bounded cases (see decideStatus). In memory only: a restarted worker
+   * needs two negative polls again.
    */
   const negativeStreaks = new Map<SessionId, NegativeStreak>();
+
+  /** The tracked status of this launch of the session; undefined for another launch. */
+  function trackedStatus(session: Session): SessionStatus | undefined {
+    const tracked = states.get(session.id);
+    return tracked && tracked.launch === launchKeyOf(session.metadata) ? tracked.status : undefined;
+  }
+
+  function trackStatus(session: Session, status: SessionStatus): void {
+    states.set(session.id, { status, launch: launchKeyOf(session.metadata) });
+  }
   const reactionTrackers = new Map<string, ReactionTracker>(); // "sessionId:reactionKey"
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let polling = false; // re-entrancy guard
@@ -1468,7 +1503,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // Use tracked state if available; otherwise use the persisted metadata status
     // (not session.status, which list() may have already overwritten for dead runtimes).
     // This ensures transitions are detected after a lifecycle manager restart.
-    const tracked = states.get(listed.id);
+    const tracked = trackedStatus(listed);
     const oldStatus =
       tracked ?? ((listed.metadata?.["status"] as SessionStatus | undefined) || listed.status);
     // list() and get() set status=killed in memory when their own isAlive
@@ -1497,6 +1532,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
    * - Any other answer (alive, a failed probe, no answer) ends the run.
    * A session whose answers alternate between negative and positive or
    * unknown starts a new run each time, so it is never persisted as killed.
+   * M-1 (round 4): a run belongs to one launch (launchKeyOf). When the record
+   * names another launch (a restore, or an archive plus a new reservation
+   * and launch of the same ID), its first negative poll starts a new run:
+   * the replacement gets its own two polls and its own 5 minutes.
    */
   function decideStatus(
     evaluation: StatusEvaluation,
@@ -1505,7 +1544,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   ): { status: SessionStatus; killedReason?: KilledReason } {
     const { session, oldStatus, newStatus, probe } = evaluation;
     const outcome = probe.outcome;
-    const streak = negativeStreaks.get(session.id);
+    const launch = launchKeyOf(session.metadata);
+    const stored = negativeStreaks.get(session.id);
+    const streak = stored?.launch === launch ? stored : undefined;
 
     if (newStatus === SESSION_STATUS.KILLED && probe.killedReason === "pr-closed") {
       negativeStreaks.delete(session.id);
@@ -1516,7 +1557,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       const run: NegativeStreak =
         streak?.kind === "no-server"
           ? { ...streak, polls: streak.polls + 1 }
-          : { kind: "no-server", firstAt: now, polls: 1 };
+          : { kind: "no-server", firstAt: now, polls: 1, launch };
       if (run.polls >= 2 && now - run.firstAt >= NO_SERVER_BOUND_MS) {
         negativeStreaks.delete(session.id);
         return { status: SESSION_STATUS.KILLED, killedReason: "runtime" };
@@ -1529,7 +1570,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       const run: NegativeStreak =
         streak?.kind === "negative"
           ? { ...streak, polls: streak.polls + 1 }
-          : { kind: "negative", firstAt: now, polls: 1 };
+          : { kind: "negative", firstAt: now, polls: 1, launch };
       const held =
         outcome === "ambiguous" &&
         outage.holdAmbiguous &&
@@ -1579,7 +1620,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         return;
       }
       // State transition detected
-      states.set(session.id, newStatus);
+      trackStatus(session, newStatus);
       observer.recordOperation({
         metric: "lifecycle_poll",
         operation: "lifecycle.transition",
@@ -1649,7 +1690,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
     } else {
       // No transition but track current state
-      states.set(session.id, newStatus);
+      trackStatus(session, newStatus);
     }
 
     // Pin first quality summary for title stability
@@ -1731,7 +1772,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (s.metadata["status"] && !TERMINAL_STATUSES.has(validateStatus(s.metadata["status"]))) {
           return true;
         }
-        const tracked = states.get(s.id);
+        const tracked = trackedStatus(s);
         return tracked !== undefined && tracked !== s.status;
       });
 
@@ -1866,7 +1907,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     },
 
     getStates(): Map<SessionId, SessionStatus> {
-      return new Map(states);
+      return new Map([...states].map(([id, tracked]) => [id, tracked.status]));
     },
 
     async check(sessionId: SessionId): Promise<void> {

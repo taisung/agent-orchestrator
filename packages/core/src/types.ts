@@ -102,17 +102,27 @@ export const LAUNCH_GRACE_MS = 60_000; // 60 seconds
  * runtime-herdr `isAlive`, the Herdr pane reads answer `false` on an error)
  * in polls where no probed session answers alive (C2). When the same session
  * gives such answers in consecutive polls for this long, the lifecycle
- * persists `killed`. In memory per session, from the first such poll; a
- * positive or an unknown answer starts it again.
+ * persists `killed`. In memory per session and launch, from the first such
+ * poll; a positive or an unknown answer, or a new launch of the session ID,
+ * starts it again.
+ *
+ * The bound applies only in a poll in which two or more sessions gave a
+ * probe outcome and none of them answered alive. In any other poll (a single
+ * probed session, as in a single-session `check()` or a fleet of one, or a
+ * poll in which another session answers alive) such an answer follows the
+ * two-poll rule (C1): `killed` at the second negative poll in a row of the
+ * same launch, without this bound. Killed records that are only re-checked
+ * (C3) give no outcome and do not count.
  */
 export const AMBIGUOUS_NEGATIVE_BOUND_MS = 300_000; // 5 minutes
 
 /**
  * How long the lifecycle counts "no runtime server" (a `Runtime.isAlive`
  * rejection with RUNTIME_NO_SERVER_ERROR_CODE) as unknown. When the same
- * session gives this answer in consecutive polls for this long, the
- * lifecycle persists `killed` with `killedReason=runtime`. A short outage (a
- * hidden or unreachable socket) stays below it.
+ * session (the same launch of it) gives this answer in consecutive polls for
+ * this long, and in at least two polls, the lifecycle persists `killed` with
+ * `killedReason=runtime`. A short outage (a hidden or unreachable socket)
+ * stays below it. A new launch of the session ID starts it again.
  */
 export const NO_SERVER_BOUND_MS = 300_000; // 5 minutes
 

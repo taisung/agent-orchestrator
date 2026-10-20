@@ -12,6 +12,9 @@
  * - 1.2 item 3: the status write compares the record generation and `pr` (M-2).
  * - 1.3 item 3: a killed record goes back to working only when the live tmux
  *   session is the one that the record launched.
+ * - Round 4 (development/reviews/killed_status_review_r2_sol61.md): the
+ *   negative run, the bounds and the tracked status belong to one launch
+ *   (M-1); the identity tolerance is exact at its limits (m-1).
  *
  * Each test drives the real session manager over a scratch record directory;
  * only the plugins are mocks. The plugin names select the authority of their
@@ -23,7 +26,13 @@ import { join } from "node:path";
 import { createLifecycleManager } from "../lifecycle-manager.js";
 import { createSessionManager } from "../session-manager.js";
 import { readObservabilitySummary } from "../observability.js";
-import { writeMetadata, readMetadataRaw, updateMetadata, deleteMetadata } from "../metadata.js";
+import {
+  writeMetadata,
+  readMetadataRaw,
+  updateMetadata,
+  deleteMetadata,
+  reserveSessionId,
+} from "../metadata.js";
 import { generateConfigHash } from "../paths.js";
 import {
   AMBIGUOUS_NEGATIVE_BOUND_MS,
@@ -491,13 +500,42 @@ describe("1.1 item 5: the other non-converging paths", () => {
 
   it("never persists killed for a session whose answers alternate between dead and alive", async () => {
     writeRecord("app-1");
-    let calls = 0;
-    vi.mocked(runtime.isAlive).mockImplementation(async () => calls++ % 2 === 1);
+    // Round 4 (review r2): the answer alternates per poll, not per call. A
+    // check calls isAlive in get() and again in the evaluation, so a per-call
+    // toggle gave the evaluation the same answer in every poll.
+    let poll = 0;
     const lm = newLifecycle();
+    const evaluated: boolean[] = [];
+    vi.mocked(runtime.isAlive).mockImplementation(async () => {
+      const alive = poll % 2 === 0;
+      evaluated.push(alive);
+      return alive;
+    });
 
-    for (let i = 0; i < 6; i++) await lm.check("app-1");
+    for (poll = 1; poll <= 6; poll++) await lm.check("app-1");
 
+    // Every check saw one answer only: dead in polls 1, 3, 5, alive in 2, 4, 6.
+    expect(evaluated).toEqual([
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+    ]);
     expect(recordOf("app-1")["status"]).toBe("working");
+
+    // Control: the same fixture with two dead polls in a row persists killed.
+    poll = 7;
+    await lm.check("app-1");
+    await lm.check("app-1");
+    expect(recordOf("app-1")).toMatchObject({ status: "killed", killedReason: "runtime" });
   });
 });
 
@@ -685,5 +723,178 @@ describe("1.2 item 5: no lifecycle write recreates an archived record", () => {
 
     expect(send).toHaveBeenCalled();
     expect(readMetadataRaw(env.sessionsDir, "app-1")).toBeNull();
+  });
+});
+
+/** M-1 (round 4): an archive, a new reservation and a replacement launch of the session ID. */
+function replaceLaunch(
+  sessionId: string,
+  handleData: Record<string, unknown>,
+  fields: Record<string, string> = {},
+): void {
+  deleteMetadata(env.sessionsDir, sessionId, true);
+  expect(reserveSessionId(env.sessionsDir, sessionId)).toBe(true);
+  const handle = handleOf(sessionId, handleData);
+  expect(
+    updateMetadata(env.sessionsDir, sessionId, {
+      worktree: "/tmp",
+      branch: "main",
+      status: "spawning",
+      tmuxName: handle.id,
+      project: "my-app",
+      createdAt: new Date().toISOString(),
+      runtimeHandle: JSON.stringify(handle),
+      reservationId: "",
+      ...fields,
+    }),
+  ).toBe(true);
+}
+
+describe("M-1 (round 4): the negative run and the bounds belong to one launch", () => {
+  it("does not kill a replacement launch at its first 'no server' answer; it gets its own 5 minutes and two polls", async () => {
+    writeRecord("app-1", {}, { createdAt: 1 });
+    vi.mocked(runtime.isAlive).mockRejectedValue(noServer());
+    const at = useClock();
+    const lm = newLifecycle();
+
+    at(0);
+    await pollOnce(lm);
+    at(240_000);
+    await pollOnce(lm);
+    expect(recordOf("app-1")["status"]).toBe("working");
+
+    // T+270 s: the old launch is archived, the ID reserved again, and a
+    // replacement launch published (the review's fake-clock case).
+    at(270_000);
+    replaceLaunch("app-1", { createdAt: Date.now() });
+    const replacementHandle = recordOf("app-1")["runtimeHandle"];
+
+    at(300_000);
+    await pollOnce(lm);
+    expect(recordOf("app-1")["status"]).not.toBe("killed");
+    at(540_000);
+    await pollOnce(lm);
+    at(599_999);
+    await pollOnce(lm);
+    expect(recordOf("app-1")["status"]).not.toBe("killed");
+
+    // 5 minutes after the replacement's own first answer.
+    at(600_000);
+    await pollOnce(lm);
+    expect(recordOf("app-1")).toMatchObject({
+      status: "killed",
+      killedReason: "runtime",
+      runtimeHandle: replacementHandle,
+    });
+  });
+
+  it("does not kill a replacement launch whose first 'no server' answer comes after 5 minutes of the old launch's run", async () => {
+    writeRecord("app-1", {}, { createdAt: 1 });
+    vi.mocked(runtime.isAlive).mockRejectedValue(noServer());
+    const at = useClock();
+    const lm = newLifecycle();
+
+    at(0);
+    await lm.check("app-1");
+    at(200_000);
+    replaceLaunch("app-1", { createdAt: Date.now() });
+    // One poll of the replacement, 10 minutes after the old run started.
+    at(600_000);
+    await lm.check("app-1");
+    expect(recordOf("app-1")["status"]).not.toBe("killed");
+    // Its second poll, at least 5 minutes after its first: killed.
+    at(900_000);
+    await lm.check("app-1");
+    expect(recordOf("app-1")).toMatchObject({ status: "killed", killedReason: "runtime" });
+  });
+
+  it("needs two 'gone' polls of the replacement launch itself (C1 across a reused ID)", async () => {
+    writeRecord("app-1", {}, { createdAt: 1 });
+    aliveExcept("app-1");
+    const lm = newLifecycle();
+
+    await pollOnce(lm);
+    expect(recordOf("app-1")["status"]).toBe("working");
+
+    replaceLaunch("app-1", { createdAt: Date.now() }, { status: "working" });
+    const replacementHandle = recordOf("app-1")["runtimeHandle"];
+    await pollOnce(lm);
+    expect(recordOf("app-1")).toMatchObject({
+      status: "working",
+      runtimeHandle: replacementHandle,
+    });
+
+    await pollOnce(lm);
+    expect(recordOf("app-1")).toMatchObject({
+      status: "killed",
+      killedReason: "runtime",
+      runtimeHandle: replacementHandle,
+    });
+  });
+
+  it("keeps the run across a write that changes only bookkeeping keys and the generation", async () => {
+    writeRecord("app-1", {}, { createdAt: 1 });
+    aliveExcept("app-1");
+    const lm = newLifecycle();
+
+    await pollOnce(lm);
+    const before = recordOf("app-1")["generation"];
+    updateMetadata(env.sessionsDir, "app-1", {
+      lastCIFailureDispatchHash: "abc",
+      summary: "a summary",
+    });
+    expect(recordOf("app-1")["generation"]).not.toBe(before);
+
+    await pollOnce(lm);
+    expect(recordOf("app-1")).toMatchObject({ status: "killed", killedReason: "runtime" });
+  });
+
+  it("does not use the tracked status of the old launch for the replacement", async () => {
+    writeRecord("app-1");
+    const lm = newLifecycle();
+
+    // The worker tracks "working" for the old launch.
+    await pollOnce(lm);
+    expect(lm.getStates().get("app-1")).toBe("working");
+
+    // The replacement is persisted as spawning; its agent is active.
+    replaceLaunch("app-1", { createdAt: Date.now() }, { createdAt: LONG_AGO() });
+    expect(recordOf("app-1")["status"]).toBe("spawning");
+    await pollOnce(lm);
+
+    // spawning -> working is a transition of the replacement, and it is persisted.
+    expect(recordOf("app-1")["status"]).toBe("working");
+  });
+});
+
+describe("m-1 (round 4): the identity tolerance of C3 at its limits", () => {
+  const STORED = () => Date.now() - 60 * MINUTE;
+
+  /**
+   * A killed record whose handle stores `createdAt`, and a live tmux session
+   * created `lagMs` before it (negative: after it). isSameLaunch reads
+   * lag = stored createdAt - (now - uptime).
+   */
+  async function recoversWithLag(lagMs: number): Promise<boolean> {
+    useClock();
+    const stored = STORED();
+    writeRecord("app-1", { status: "killed", killedReason: "runtime" }, { createdAt: stored });
+    vi.mocked(runtime.getMetrics!).mockImplementation(async () => ({
+      uptimeMs: Date.now() - stored + lagMs,
+    }));
+    const lm = newLifecycle();
+    await pollOnce(lm);
+    return recordOf("app-1")["status"] === "working";
+  }
+
+  it.each([
+    { lagMs: -1001, recovers: false },
+    { lagMs: -1000, recovers: true },
+    { lagMs: -999, recovers: true },
+    { lagMs: 14_999, recovers: true },
+    { lagMs: 15_000, recovers: true },
+    { lagMs: 15_001, recovers: false },
+  ])("a lag of $lagMs ms: recovers=$recovers", async ({ lagMs, recovers }) => {
+    expect(await recoversWithLag(lagMs)).toBe(recovers);
   });
 });
