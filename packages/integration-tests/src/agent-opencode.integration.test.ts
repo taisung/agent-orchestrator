@@ -18,6 +18,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ActivityDetection, AgentSessionInfo } from "@aoagents/ao-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import claudeCodePlugin from "@aoagents/ao-plugin-agent-claude-code";
+import codexPlugin from "@aoagents/ao-plugin-agent-codex";
+import geminiPlugin from "@aoagents/ao-plugin-agent-gemini";
 import opencodePlugin from "@aoagents/ao-plugin-agent-opencode";
 import {
   isTmuxAvailable,
@@ -428,6 +431,38 @@ describe("getEnvironment (integration)", () => {
   it("does not set AO_PROJECT_ID (caller's responsibility)", () => {
     const env = agent.getEnvironment(baseConfig);
     expect(env["AO_PROJECT_ID"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// send hook tests (I-5)
+// ---------------------------------------------------------------------------
+
+describe("send hook (I-5, integration)", () => {
+  it("is in the OpenCode plugin only: Claude Code, Codex and Gemini keep the runtime path", () => {
+    const opencode = opencodePlugin.create();
+    expect(typeof opencode.canDeliverMessage).toBe("function");
+    expect(typeof opencode.deliverMessage).toBe("function");
+    for (const plugin of [claudeCodePlugin, codexPlugin, geminiPlugin]) {
+      const agent = plugin.create();
+      expect(agent.canDeliverMessage, plugin.manifest.name).toBeUndefined();
+      expect(agent.deliverMessage, plugin.manifest.name).toBeUndefined();
+    }
+  });
+
+  it("keeps an OpenCode session without a valid stored session ID on the runtime path", () => {
+    const agent = opencodePlugin.create();
+    const session = makeSession("ao-inttest-send", makeTmuxHandle("ao-inttest-send"), tmpdir());
+    expect(agent.canDeliverMessage?.(session)).toBe(false);
+    expect(
+      agent.canDeliverMessage?.({ ...session, metadata: { opencodeSessionId: "not-an-id" } }),
+    ).toBe(false);
+    expect(
+      agent.canDeliverMessage?.({
+        ...session,
+        metadata: { opencodeSessionId: "ses_ea933c29bffeFbxN7vNocDfbvl" },
+      }),
+    ).toBe(true);
   });
 });
 
