@@ -62,8 +62,10 @@ import {
   OpenCodeApiIncompleteAnswerError,
   OpenCodeApiRequestError,
   OpenCodeApiUnexpectedAnswerError,
+  OpenCodeApiSpawnError,
   OpenCodePromptTooLargeError,
   buildOpenCodePromptBody,
+  mintOpenCodeMessageId,
   promptOpenCodeSession,
   findOpenCodePromptInput,
   type OpenCodeApiModel,
@@ -962,24 +964,87 @@ describe("callOpenCodeApi HTTP errors (I-5)", () => {
   });
 });
 
-describe("buildOpenCodePromptBody (I-5 size rule)", () => {
-  // `{"text":"","delivery":"queue"}` is 30 bytes.
-  const overhead = Buffer.byteLength(JSON.stringify({ text: "", delivery: "queue" }), "utf-8");
+describe("mintOpenCodeMessageId (I-5, B-1)", () => {
+  // Real IDs that the isolated 2.0.32 service minted (ao-41, 2026-10-19): P1
+  // in ms 1792461018263 and P3 in ms 1792461018872, both with counter 1.
+  const SERVER_P1 = "msg_157009497001oRN0pU1l5sMD2J";
+  const SERVER_P3 = "msg_1570096f8001o4Kwva2CRzBKs6";
 
-  it("builds the queue body with the exact text", () => {
-    expect(buildOpenCodePromptBody("a\nb 'c' \"d\"")).toEqual({
+  it("has the form of a service ID: msg_, 12 hex digits, 14 base62 characters", () => {
+    for (let i = 0; i < 50; i++) {
+      expect(mintOpenCodeMessageId()).toMatch(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+    }
+    expect(mintOpenCodeMessageId()).toHaveLength(SERVER_P1.length);
+  });
+
+  it("sorts by time with the IDs that the service minted", () => {
+    const before = mintOpenCodeMessageId(1_792_461_018_262);
+    const between = mintOpenCodeMessageId(1_792_461_018_500);
+    const after = mintOpenCodeMessageId(1_792_461_018_873);
+    expect([after, SERVER_P3, between, SERVER_P1, before].sort()).toEqual([
+      before,
+      SERVER_P1,
+      between,
+      SERVER_P3,
+      after,
+    ]);
+    // The same ms as P1: the time digits match the service, the counter of ao's own
+    // process decides, and the random part differs.
+    expect(mintOpenCodeMessageId(1_792_461_018_263).slice(0, 13)).toBe(SERVER_P1.slice(0, 13));
+  });
+
+  it("sorts IDs of one ms by their counter, and never repeats one", () => {
+    const now = 1_792_461_020_000;
+    const ids = Array.from({ length: 200 }, () => mintOpenCodeMessageId(now));
+    expect([...ids].sort()).toEqual(ids);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("buildOpenCodePromptBody (I-5 size rule)", () => {
+  const ID = "msg_157009572001NJPQm5mQNVn3gG";
+  // `{"id":"msg_<26>","text":"","delivery":"queue"}`: the ID has a fixed length.
+  const overhead = Buffer.byteLength(
+    JSON.stringify({ id: ID, text: "", delivery: "queue" }),
+    "utf-8",
+  );
+
+  it("builds the queue body with the input ID and the exact text", () => {
+    expect(buildOpenCodePromptBody("a\nb 'c' \"d\"", ID)).toEqual({
+      id: ID,
       text: "a\nb 'c' \"d\"",
       delivery: "queue",
     });
   });
 
-  it("accepts a body of exactly the limit and refuses one byte more", () => {
-    expect(OPENCODE_PROMPT_MAX_BODY_BYTES).toBe(131_071);
+  it("checks the size with a stand-in ID of the same length before the ID exists", () => {
     const fits = "a".repeat(OPENCODE_PROMPT_MAX_BODY_BYTES - overhead);
     expect(() => buildOpenCodePromptBody(fits)).not.toThrow();
+    expect(() => buildOpenCodePromptBody(`${fits}a`)).toThrow(OpenCodePromptTooLargeError);
+    expect(() => buildOpenCodePromptBody(fits, mintOpenCodeMessageId())).not.toThrow();
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "the limit is the largest single argument that this host accepts",
+    () => {
+      const actual = vi.importActual<typeof ChildProcess>("node:child_process");
+      return actual.then(({ execFileSync }) => {
+        const run = (bytes: number) => () =>
+          execFileSync("/bin/true", ["x".repeat(bytes)], { env: {} });
+        expect(run(OPENCODE_PROMPT_MAX_BODY_BYTES)).not.toThrow();
+        expect(run(OPENCODE_PROMPT_MAX_BODY_BYTES + 1)).toThrow(/E2BIG/);
+      });
+    },
+  );
+
+  it("accepts a body of exactly the limit and refuses one byte more", () => {
+    const fits = "a".repeat(OPENCODE_PROMPT_MAX_BODY_BYTES - overhead);
+    expect(Buffer.byteLength(JSON.stringify(buildOpenCodePromptBody(fits, ID)))).toBe(
+      OPENCODE_PROMPT_MAX_BODY_BYTES,
+    );
     const err = (() => {
       try {
-        buildOpenCodePromptBody(`${fits}a`);
+        buildOpenCodePromptBody(`${fits}a`, ID);
       } catch (e) {
         return e;
       }
@@ -992,18 +1057,19 @@ describe("buildOpenCodePromptBody (I-5 size rule)", () => {
   it("counts UTF-8 bytes of the JSON, with its escapes", () => {
     // "é" is 2 bytes, a newline is 2 bytes as "\n" in JSON.
     const half = Math.floor((OPENCODE_PROMPT_MAX_BODY_BYTES - overhead) / 2);
-    expect(() => buildOpenCodePromptBody("é".repeat(half))).not.toThrow();
-    expect(() => buildOpenCodePromptBody("é".repeat(half + 1))).toThrow(
+    expect(() => buildOpenCodePromptBody("é".repeat(half), ID)).not.toThrow();
+    expect(() => buildOpenCodePromptBody("é".repeat(half + 1), ID)).toThrow(
       OpenCodePromptTooLargeError,
     );
-    expect(() => buildOpenCodePromptBody("\n".repeat(half + 1))).toThrow(
+    expect(() => buildOpenCodePromptBody("\n".repeat(half + 1), ID)).toThrow(
       OpenCodePromptTooLargeError,
     );
   });
 
   it("refuses a 200 KB message and never cuts it", () => {
-    expect(() => buildOpenCodePromptBody("x".repeat(200 * 1024))).toThrow(
-      /has 204830 bytes, more than the 131071 bytes .*nothing was sent/,
+    const bytes = 200 * 1024 + overhead;
+    expect(() => buildOpenCodePromptBody("x".repeat(200 * 1024), ID)).toThrow(
+      new RegExp(`has ${bytes} bytes, more than the 131071 bytes .*nothing was sent`),
     );
   });
 });
@@ -1014,15 +1080,18 @@ describe("send calls with a real child process (fake opencode on PATH, I-5)", ()
   let logPath: string;
   const originalPath = process.env["PATH"];
   const ID = "ses_send";
+  const INPUT = "msg_157009572001NJPQm5mQNVn3gG";
 
   /**
-   * A fake `opencode api` with the 2.0.32 answer shapes (measured on an
-   * isolated store): `session.prompt` answers the inbox item, or an error
-   * body on stdout with `HTTP <status>` on stderr and exit 1;
-   * `session.inbox.list` and `session.message.list` read the state file.
-   * `promptMode`: `ok`, `ok-idle` (the input becomes a user message), `hang`,
-   * `cut` (admitted, then a cut answer), `cut-lost` (a cut answer, nothing
-   * admitted), `other-session`, or `<status>:<tag>`.
+   * A fake `opencode api` with the 2.0.32 answer shapes and its client-ID rule
+   * (`SessionInbox.reconcile`, read in the binary and measured on an isolated
+   * store): `session.prompt` with an `id` that a `user` input of this session
+   * holds (inbox or message) answers that input and admits nothing; it does
+   * not compare the text. An error answer is a body on stdout with `HTTP
+   * <status>` on stderr and exit 1. `promptMode`: `ok`, `ok-idle` (the input
+   * becomes a user message), `hang`, `cut` (admitted, then a cut answer),
+   * `cut-lost` (a cut answer, nothing admitted), `other-session`, `other-id`,
+   * or `<status>:<tag>`. `listMode`: `<op>:<status>:<tag>` fails that read.
    */
   function useFake(state: {
     promptMode?: string;
@@ -1046,12 +1115,20 @@ const params = {};
 for (let i = 0; i < argv.length; i++) if (argv[i] === "--param") { const [k, ...v] = argv[i + 1].split("="); params[k] = v.join("="); i++; }
 const op = argv[1];
 const fail = (status, tag, message) => { process.stdout.write(JSON.stringify({ _tag: tag, message })); process.stderr.write("HTTP " + status + " Error\\n"); process.exit(1); };
+if (state.listMode && state.listMode.startsWith(op + ":")) { const [, status, tag] = state.listMode.split(":"); fail(Number(status), tag, tag); }
 if (op === "session.prompt") {
   const body = JSON.parse(argv[argv.indexOf("-d") + 1]);
   const mode = state.promptMode || "ok";
   if (mode.includes(":")) { const [status, tag] = mode.split(":"); fail(Number(status), tag, tag + " for " + params.sessionID); }
   if (mode === "hang") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000); process.exit(0); }
-  const item = { id: "msg_new", sessionID: mode === "other-session" ? "ses_other" : params.sessionID, time: { created: Date.now() }, type: "user", payload: { text: body.text }, delivery: body.delivery };
+  const known = state.inbox.find((i) => i.id === body.id) || state.messages.find((m) => m.id === body.id && m.type === "user");
+  if (body.id && known) {
+    const created = known.time.created;
+    process.stdout.write(JSON.stringify({ data: { id: body.id, sessionID: params.sessionID, time: { created }, type: "user", payload: { text: known.payload ? known.payload.text : known.text }, delivery: body.delivery } }) + "\\n");
+    process.exit(0);
+  }
+  const id = mode === "other-id" ? "msg_000000000001otherInputIdXX" : (body.id || "msg_new");
+  const item = { id, sessionID: mode === "other-session" ? "ses_other" : params.sessionID, time: { created: Date.now() }, type: "user", payload: { text: body.text }, delivery: body.delivery };
   if (mode !== "cut-lost") {
     if (mode === "ok-idle" || mode === "cut") state.messages.unshift({ id: item.id, type: "user", text: body.text, time: { created: Date.now() } });
     else state.inbox.push(item);
@@ -1061,11 +1138,11 @@ if (op === "session.prompt") {
   process.stdout.write(mode === "cut" || mode === "cut-lost" ? answer.slice(0, 40) : answer + "\\n");
   process.exit(0);
 }
-if (state.listMode && state.listMode.startsWith(op + ":")) { const [, status, tag] = state.listMode.split(":"); fail(Number(status), tag, tag); }
 if (op === "session.inbox.list") { process.stdout.write(JSON.stringify({ data: state.inbox }) + "\\n"); process.exit(0); }
-if (op === "session.message.list") {
-  const data = params.limit ? state.messages.slice(0, Number(params.limit)) : state.messages;
-  process.stdout.write(JSON.stringify({ data, cursor: { previous: null, next: null } }) + "\\n");
+if (op === "session.message.get") {
+  const message = state.messages.find((m) => m.id === params.messageID);
+  if (!message) fail(404, "MessageNotFoundError", "Message not found: " + params.messageID);
+  process.stdout.write(JSON.stringify({ data: message }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected " + argv.join(" ") + "\\n");
@@ -1090,6 +1167,16 @@ process.exit(2);
   }
 
   const prompts = () => calls().filter((argv) => argv[1] === "session.prompt");
+  const state = () =>
+    JSON.parse(readFileSync(statePath, "utf-8")) as { inbox: unknown[]; messages: unknown[] };
+  const queued = (id: string, text: string, created: number) => ({
+    id,
+    sessionID: ID,
+    type: "user",
+    time: { created },
+    payload: { text },
+    delivery: "queue",
+  });
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "ao-opencode-send-"));
@@ -1100,17 +1187,16 @@ process.exit(2);
 
   afterEach(() => {
     process.env["PATH"] = originalPath;
+    delete process.env["AO_TEST_LARGE_ENV"];
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("sends one session.prompt with the queue body and returns the inbox item", async () => {
+  it("sends one session.prompt with the client input ID and the queue body, and returns that input", async () => {
     useFake({});
     const text = "line one\nline 'two' \"three\"";
-    const item = await promptOpenCodeSession(ID, text);
+    const item = await promptOpenCodeSession(ID, text, INPUT);
 
-    expect(item).toEqual(
-      expect.objectContaining({ id: "msg_new", sessionID: ID, delivery: "queue" }),
-    );
+    expect(item).toEqual(expect.objectContaining({ id: INPUT, sessionID: ID, delivery: "queue" }));
     expect(prompts()).toEqual([
       [
         "api",
@@ -1118,7 +1204,7 @@ process.exit(2);
         "--param",
         `sessionID=${ID}`,
         "-d",
-        JSON.stringify({ text, delivery: "queue" }),
+        JSON.stringify({ id: INPUT, text, delivery: "queue" }),
       ],
     ]);
     // The answer goes through a file descriptor, not a pipe.
@@ -1127,13 +1213,61 @@ process.exit(2);
     expect(mockExecFileAsync).not.toHaveBeenCalled();
   });
 
+  it("a second prompt with the same ID admits nothing and answers the first input with its time", async () => {
+    useFake({});
+    const first = await promptOpenCodeSession(ID, "hi", INPUT);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const replay = await promptOpenCodeSession(ID, "hi", INPUT);
+
+    expect(replay.id).toBe(INPUT);
+    expect(replay.created).toBe(first.created);
+    expect(state().inbox).toHaveLength(1);
+    expect(prompts()).toHaveLength(2);
+  });
+
+  it("throws the unexpected-answer error for another input ID or another session", async () => {
+    useFake({ promptMode: "other-id" });
+    await expect(promptOpenCodeSession(ID, "hi", INPUT)).rejects.toBeInstanceOf(
+      OpenCodeApiUnexpectedAnswerError,
+    );
+    useFake({ promptMode: "other-session" });
+    await expect(promptOpenCodeSession(ID, "hi", INPUT)).rejects.toBeInstanceOf(
+      OpenCodeApiUnexpectedAnswerError,
+    );
+  });
+
   it("refuses a 200 KB message before any process", async () => {
     useFake({});
-    await expect(promptOpenCodeSession(ID, "x".repeat(200 * 1024))).rejects.toBeInstanceOf(
+    await expect(promptOpenCodeSession(ID, "x".repeat(200 * 1024), INPUT)).rejects.toBeInstanceOf(
       OpenCodePromptTooLargeError,
     );
     expect(calls()).toEqual([]);
     expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "gives OpenCodeApiSpawnError when the arguments and the environment together are too large (E2BIG)",
+    async () => {
+      useFake({});
+      // One argument under the per-argument limit, but the total with this
+      // environment is over ARG_MAX (2 MiB on Linux): the child never starts.
+      process.env["AO_TEST_LARGE_ENV"] = "x".repeat(2_000_000);
+      const err = (await promptOpenCodeSession(ID, "y".repeat(120_000), INPUT).catch(
+        (e: unknown) => e,
+      )) as OpenCodeApiSpawnError;
+      expect(err).toBeInstanceOf(OpenCodeApiSpawnError);
+      expect((err.cause as NodeJS.ErrnoException).code).toBe("E2BIG");
+      expect(calls()).toEqual([]);
+    },
+  );
+
+  it("gives OpenCodeApiSpawnError when no opencode is on PATH (ENOENT)", async () => {
+    process.env["PATH"] = join(tmpDir, "empty");
+    const err = (await promptOpenCodeSession(ID, "hi", INPUT).catch(
+      (e: unknown) => e,
+    )) as OpenCodeApiSpawnError;
+    expect(err).toBeInstanceOf(OpenCodeApiSpawnError);
+    expect((err.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
   it("throws each declared error of session.prompt with its status and tag, once", async () => {
@@ -1146,10 +1280,11 @@ process.exit(2);
     ] as const) {
       rmSync(logPath, { force: true });
       useFake({ promptMode: `${status}:${tag}` });
-      const err = (await promptOpenCodeSession(ID, "hi").catch(
+      const err = (await promptOpenCodeSession(ID, "hi", INPUT).catch(
         (e: unknown) => e,
       )) as OpenCodeApiRequestError;
       expect(err).toBeInstanceOf(OpenCodeApiRequestError);
+      expect(err).not.toBeInstanceOf(OpenCodeApiSpawnError);
       expect([err.status, err.tag, err.apiMessage]).toEqual([status, tag, `${tag} for ${ID}`]);
       expect(prompts()).toHaveLength(1);
     }
@@ -1157,7 +1292,7 @@ process.exit(2);
 
   it("throws the timeout error at its bound, once", async () => {
     useFake({ promptMode: "hang" });
-    await expect(promptOpenCodeSession(ID, "hi", { timeoutMs: 300 })).rejects.toBeInstanceOf(
+    await expect(promptOpenCodeSession(ID, "hi", INPUT, { timeoutMs: 300 })).rejects.toBeInstanceOf(
       OpenCodeApiTimeoutError,
     );
     expect(prompts()).toHaveLength(1);
@@ -1165,90 +1300,78 @@ process.exit(2);
 
   it("throws the incomplete-answer error on a cut answer, once", async () => {
     useFake({ promptMode: "cut" });
-    await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+    await expect(promptOpenCodeSession(ID, "hi", INPUT)).rejects.toBeInstanceOf(
       OpenCodeApiIncompleteAnswerError,
     );
     expect(prompts()).toHaveLength(1);
   });
 
-  it("throws the unexpected-answer error for an item of another session", async () => {
-    useFake({ promptMode: "other-session" });
-    await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
-      OpenCodeApiUnexpectedAnswerError,
-    );
-  });
-
-  describe("findOpenCodePromptInput", () => {
-    it("finds a queued input in the inbox by text and time, and reads the inbox first", async () => {
-      useFake({
-        inbox: [
-          {
-            id: "msg_old",
-            sessionID: ID,
-            type: "user",
-            time: { created: 1_000 },
-            payload: { text: "hi" },
-            delivery: "queue",
-          },
-          {
-            id: "msg_q",
-            sessionID: ID,
-            type: "user",
-            time: { created: 5_000 },
-            payload: { text: "hi" },
-            delivery: "queue",
-          },
-        ],
-      });
-      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toEqual({
-        id: "msg_q",
+  describe("findOpenCodePromptInput (by input ID only, M-1)", () => {
+    it("finds a queued input by its ID in the inbox, and reads the inbox first", async () => {
+      useFake({ inbox: [queued("msg_other", "hi", 9_000), queued(INPUT, "hi", 5_000)] });
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toEqual({
+        id: INPUT,
         found: "inbox",
         delivery: "queue",
       });
       expect(calls().map((argv) => argv[1])).toEqual(["session.inbox.list"]);
     });
 
-    it("finds an input that became the newest user message", async () => {
-      useFake({ messages: [{ id: "msg_u", type: "user", text: "hi", time: { created: 5_000 } }] });
-      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toEqual({
-        id: "msg_u",
+    it("finds an input that became a user message with session.message.get of its ID", async () => {
+      useFake({ messages: [{ id: INPUT, type: "user", text: "hi", time: { created: 5_000 } }] });
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toEqual({
+        id: INPUT,
         found: "message",
       });
       const last = calls().at(-1)!;
-      expect(last.slice(0, 2)).toEqual(["api", "session.message.list"]);
-      expect(last).toEqual(
-        expect.arrayContaining(["type=user", "order=desc", "limit=1", `sessionID=${ID}`]),
-      );
-      expect(calls().map((argv) => argv[1])).toEqual([
-        "session.inbox.list",
-        "session.message.list",
-      ]);
+      expect(last.slice(0, 2)).toEqual(["api", "session.message.get"]);
+      expect(last).toEqual(expect.arrayContaining([`sessionID=${ID}`, `messageID=${INPUT}`]));
     });
 
-    it("does not count an older message with the same text, or another text", async () => {
-      useFake({ messages: [{ id: "msg_u", type: "user", text: "hi", time: { created: 1_000 } }] });
-      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toBeNull();
+    it("never counts an earlier input with the same text: it has another ID", async () => {
+      // 13 ms before the send, as in the review reproducer, in the inbox and as a message.
+      const now = Date.now();
       useFake({
-        messages: [{ id: "msg_u", type: "user", text: "hello", time: { created: 5_000 } }],
+        inbox: [queued("msg_earlier_queued", "REPEAT CI DETAILS EXACTLY", now - 13)],
+        messages: [
+          {
+            id: "msg_earlier_user",
+            type: "user",
+            text: "REPEAT CI DETAILS EXACTLY",
+            time: { created: now },
+          },
+        ],
       });
-      await expect(findOpenCodePromptInput(ID, "hi", 4_000)).resolves.toBeNull();
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toBeNull();
     });
 
-    it("throws when a read fails, also on a 404", async () => {
+    it("gives null for a record of another type with the ID", async () => {
+      useFake({ messages: [{ id: INPUT, type: "idle", time: { created: 5_000 } }] });
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toBeNull();
+    });
+
+    it("throws when a read fails, also on a 404 of the session", async () => {
       useFake({ listMode: "session.inbox.list:404:SessionNotFoundError" });
-      await expect(findOpenCodePromptInput(ID, "hi", 0)).rejects.toBeInstanceOf(
+      await expect(findOpenCodePromptInput(ID, INPUT)).rejects.toBeInstanceOf(
+        OpenCodeApiRequestError,
+      );
+      useFake({ listMode: "session.message.get:404:SessionNotFoundError" });
+      await expect(findOpenCodePromptInput(ID, INPUT)).rejects.toBeInstanceOf(
+        OpenCodeApiRequestError,
+      );
+      useFake({ listMode: "session.inbox.list:503:ServiceUnavailable" });
+      await expect(findOpenCodePromptInput(ID, INPUT)).rejects.toBeInstanceOf(
         OpenCodeApiRequestError,
       );
     });
 
     it("after a cut prompt answer, finds the admitted input once", async () => {
       useFake({ promptMode: "cut" });
-      const started = Date.now();
-      await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+      await expect(promptOpenCodeSession(ID, "hi", INPUT)).rejects.toBeInstanceOf(
         OpenCodeApiIncompleteAnswerError,
       );
-      await expect(findOpenCodePromptInput(ID, "hi", started - 1_000)).resolves.toEqual({
-        id: "msg_new",
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toEqual({
+        id: INPUT,
         found: "message",
       });
       expect(prompts()).toHaveLength(1);
@@ -1256,11 +1379,10 @@ process.exit(2);
 
     it("after a cut answer that admitted nothing, finds nothing", async () => {
       useFake({ promptMode: "cut-lost" });
-      const started = Date.now();
-      await expect(promptOpenCodeSession(ID, "hi")).rejects.toBeInstanceOf(
+      await expect(promptOpenCodeSession(ID, "hi", INPUT)).rejects.toBeInstanceOf(
         OpenCodeApiIncompleteAnswerError,
       );
-      await expect(findOpenCodePromptInput(ID, "hi", started - 1_000)).resolves.toBeNull();
+      await expect(findOpenCodePromptInput(ID, INPUT)).resolves.toBeNull();
     });
   });
 });

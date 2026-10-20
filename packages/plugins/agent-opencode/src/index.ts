@@ -26,13 +26,16 @@ import {
   isHerdrProcessRunning,
   SessionNotRestorableError,
   AgentNotAttachedError,
+  AgentDeliveryError,
   OpenCodeApiRequestError,
+  OpenCodeApiSpawnError,
   OpenCodePromptTooLargeError,
-  OPENCODE_PROMPT_READBACK_SLACK_MS,
   buildOpenCodePromptBody,
+  mintOpenCodeMessageId,
   promptOpenCodeSession,
   findOpenCodePromptInput,
   type Agent,
+  type AgentDeliveryAttempt,
   type AgentMessageDelivery,
   type AgentSessionInfo,
   type AgentLaunchConfig,
@@ -815,9 +818,13 @@ function noTuiReason(sessionId: string, handle: RuntimeHandle, detail: string): 
  * herdr). Measured on 2.0.32 (ao-38, attempt 4): the tools of a turn get the
  * TUI environment only while a TUI is attached. A TUI younger than
  * `SEND_TUI_MIN_AGE_MS` gets the rest of that time, and must still run after
- * it. Polls for up to `SEND_TUI_WAIT_MS`. Throws `AgentNotAttachedError` when
- * no such TUI runs or the pane is gone, and another error when the pane
- * cannot be checked.
+ * it. Polls for up to `SEND_TUI_WAIT_MS`, and that is the bound of the whole
+ * check: each pane lookup (its `tmux`, `ps` or Herdr call has its own 5 s
+ * timeout) and the age wait are cut at the deadline, so a check ends within
+ * `SEND_TUI_WAIT_MS` plus one timer tick. A lookup that the deadline cut goes
+ * on until its own timeout, and its result is dropped. Throws
+ * `AgentNotAttachedError` when no such TUI runs or the pane is gone, and
+ * another error when the pane cannot be checked.
  */
 async function waitForSendTui(session: Session, sessionId: string): Promise<void> {
   const handle = session.runtimeHandle;
@@ -844,36 +851,63 @@ async function waitForSendTui(session: Session, sessionId: string): Promise<void
     }
   };
   const deadline = Date.now() + SEND_TUI_WAIT_MS;
+  const cutOff = Symbol("deadline");
+  const findBeforeDeadline = async (): Promise<number | null | typeof cutOff> => {
+    const leftMs = deadline - Date.now();
+    if (leftMs <= 0) return cutOff;
+    const lookup = find();
+    // The lookup may still fail after the deadline cut it; that result is dropped.
+    lookup.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        lookup,
+        new Promise<typeof cutOff>((resolve) => {
+          timer = setTimeout(() => resolve(cutOff), leftMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const notSeen = (detail: string): AgentNotAttachedError =>
+    new AgentNotAttachedError(session.id, noTuiReason(sessionId, handle, detail));
   for (;;) {
-    const pid = await find();
+    const pid = await findBeforeDeadline();
+    if (pid === cutOff) throw notSeen(`not seen within ${SEND_TUI_WAIT_MS / 1000} s`);
     if (pid !== null) {
       const ageMs = await readProcessAgeMs(pid);
       if (ageMs === null || ageMs >= SEND_TUI_MIN_AGE_MS) return;
-      await pause(SEND_TUI_MIN_AGE_MS - ageMs);
-      if ((await find()) === pid) return;
+      const settleMs = SEND_TUI_MIN_AGE_MS - ageMs;
+      if (Date.now() + settleMs > deadline) {
+        throw notSeen(
+          `the TUI ${pid} is younger than ${SEND_TUI_MIN_AGE_MS / 1000} s at the end of the ${SEND_TUI_WAIT_MS / 1000} s wait`,
+        );
+      }
+      await pause(settleMs);
+      const again = await findBeforeDeadline();
+      if (again === pid) return;
+      if (again === cutOff) throw notSeen(`not seen within ${SEND_TUI_WAIT_MS / 1000} s`);
     }
     const leftMs = deadline - Date.now();
-    if (leftMs <= 0) {
-      throw new AgentNotAttachedError(
-        session.id,
-        noTuiReason(sessionId, handle, `not seen within ${SEND_TUI_WAIT_MS / 1000} s`),
-      );
-    }
+    if (leftMs <= 0) throw notSeen(`not seen within ${SEND_TUI_WAIT_MS / 1000} s`);
     await pause(Math.min(PANE_POLL_MS, leftMs));
   }
 }
 
 /**
  * True when a failed `session.prompt` may still have admitted the message:
- * every failure except a refusal before any process (too large, `opencode`
- * not found) and an HTTP 4xx answer of the service. A 5xx answer counts as
- * unknown too: the service failed, but the record does not say before what.
+ * every failure except a refusal before any process (too large), a child
+ * that never started (`OpenCodeApiSpawnError`: E2BIG for the arguments and
+ * the environment together, ENOENT, EACCES), and an HTTP 4xx answer of the
+ * service. A 5xx answer counts as unknown: the service failed, but the record
+ * does not say before what.
  */
 function admissionUnknown(err: unknown): boolean {
   if (err instanceof OpenCodePromptTooLargeError) return false;
+  if (err instanceof OpenCodeApiSpawnError) return false;
   if (err instanceof OpenCodeApiRequestError) return err.status >= 500;
-  const cause = err instanceof Error ? (err.cause as NodeJS.ErrnoException | undefined) : undefined;
-  return cause?.code !== "ENOENT";
+  return true;
 }
 
 /** The final error of a `session.prompt` that the service refused, or that never ran. */
@@ -904,36 +938,38 @@ function sendRefusal(aoSessionId: string, sessionId: string, err: unknown): Erro
 }
 
 /**
- * I-5: the admission of one message is unknown (a timeout, a cut answer, an
- * unexpected answer). Read the session back once and never prompt again:
- * found gives the record with `recovered: true`, not found or a failed read
- * fails the send.
+ * I-5: the admission of the input `inputId` is unknown (a timeout, a cut
+ * answer, an unexpected answer, a 5xx answer, a signal). Read the session
+ * back once by that ID only (M-1: an earlier input with the same text has
+ * another ID) and never prompt again in this send: found gives the record
+ * with `recovered: true`; not found or a failed read throws
+ * `AgentDeliveryError` with `admission: "unknown"`, so core keeps the ID for
+ * a later send of the same text.
  */
 async function recoverUnknownAdmission(
   aoSessionId: string,
   sessionId: string,
-  message: string,
-  startedAt: number,
+  inputId: string,
   context: ApiSendContext,
   err: unknown,
 ): Promise<AgentMessageDelivery> {
-  const unknown = `the admission of the message to the OpenCode session ${sessionId} of ${aoSessionId} is unknown (${oneLine(err)})`;
+  const unknown = `the admission of the input ${inputId} to the OpenCode session ${sessionId} of ${aoSessionId} is unknown (${oneLine(err)})`;
   let match: Awaited<ReturnType<typeof findOpenCodePromptInput>>;
   try {
-    match = await findOpenCodePromptInput(
-      sessionId,
-      message,
-      startedAt - OPENCODE_PROMPT_READBACK_SLACK_MS,
-    );
+    match = await findOpenCodePromptInput(sessionId, inputId);
   } catch (readErr) {
-    throw new Error(
+    throw new AgentDeliveryError(
+      inputId,
+      "unknown",
       `${unknown}, and the read-back failed (${oneLine(readErr)}); the message was not sent again`,
       { cause: readErr },
     );
   }
   if (!match) {
-    throw new Error(
-      `${unknown}, and the read-back found it neither in the inbox nor as the newest user message; the message was not sent again`,
+    throw new AgentDeliveryError(
+      inputId,
+      "unknown",
+      `${unknown}, and the read-back found no input ${inputId} in the inbox or the messages; the message was not sent again`,
       { cause: err },
     );
   }
@@ -1091,17 +1127,30 @@ function createOpenCodeAgent(): Agent {
       return Boolean(asValidOpenCodeSessionId(session.metadata?.opencodeSessionId));
     },
 
+    /** I-5: the size check (`OpenCodePromptTooLargeError`); core calls it before any restore. */
+    checkMessage(message: string): void {
+      buildOpenCodePromptBody(message);
+    },
+
     /**
      * I-5 (0009 section 6, rows 14 and 15): deliver through `session.prompt`
      * with `delivery: "queue"` (owner Q5), so there is no pane paste, no
      * Enter and no screen check. In this order: the size check (a message
      * that can never go gets no TUI wait), the TUI check (`AgentNotAttachedError`
      * without a TUI: then nothing is sent), one read of the pending input and
-     * the busy state, then one `session.prompt`. The admitted inbox item is
-     * the record. A refused prompt fails the send; a prompt whose admission is
-     * unknown gets one read-back and is never sent again.
+     * the busy state, the input ID from `attempt.begin` (core persists it
+     * first, or gives back the ID of an earlier unknown send of the same
+     * text), then one `session.prompt` with that ID. The admitted inbox item
+     * is the record; an item created before this call is a replay of the
+     * earlier attempt. A refused prompt or a child that never started fails
+     * with `admission: "none"`; a prompt whose admission is unknown gets one
+     * read-back by its ID and is never sent again in this call.
      */
-    async deliverMessage(session: Session, message: string): Promise<AgentMessageDelivery> {
+    async deliverMessage(
+      session: Session,
+      message: string,
+      attempt?: AgentDeliveryAttempt,
+    ): Promise<AgentMessageDelivery> {
       const sessionId = asValidOpenCodeSessionId(session.metadata?.opencodeSessionId);
       if (!sessionId) {
         throw new Error(
@@ -1111,15 +1160,27 @@ function createOpenCodeAgent(): Agent {
       buildOpenCodePromptBody(message);
       await waitForSendTui(session, sessionId);
       const context = await getApiSendContext(sessionId);
+      const inputId = attempt
+        ? attempt.begin(() => mintOpenCodeMessageId())
+        : mintOpenCodeMessageId();
       const startedAt = Date.now();
       let item: OpenCodeInboxItem;
       try {
-        item = await promptOpenCodeSession(sessionId, message);
+        item = await promptOpenCodeSession(sessionId, message, inputId);
       } catch (err) {
-        if (!admissionUnknown(err)) throw sendRefusal(session.id, sessionId, err);
-        return recoverUnknownAdmission(session.id, sessionId, message, startedAt, context, err);
+        if (!admissionUnknown(err)) {
+          const refusal = sendRefusal(session.id, sessionId, err);
+          throw new AgentDeliveryError(inputId, "none", refusal.message, { cause: err });
+        }
+        return recoverUnknownAdmission(session.id, sessionId, inputId, context, err);
       }
-      return { inputId: item.id, mode: item.delivery, ...context };
+      const replayed = item.created !== undefined && item.created < startedAt;
+      return {
+        inputId: item.id,
+        mode: item.delivery,
+        ...context,
+        ...(replayed ? { replayed } : {}),
+      };
     },
 
     getEnvironment(config: AgentLaunchConfig): Record<string, string> {

@@ -27,8 +27,10 @@
  *     `promptDelivered: false`, and the spawn goes on.
  *   - The send calls (`promptOpenCodeSession`, `findOpenCodePromptInput`,
  *     I-5): throw; the OpenCode plugin's `deliverMessage` fails the send. A
- *     prompt whose admission is unknown gets one read-back, never a second
- *     prompt.
+ *     prompt carries a client input ID; one whose admission is unknown gets
+ *     one read-back by that ID, never a second prompt in the same send. A
+ *     later send of the same text reuses the ID, so the service admits it
+ *     once.
  * - The child's stderr is captured (`stdio` pipe) and never inherits the
  *   terminal. It is only used to build the thrown error message.
  * - Exit code 0 is never proof of a complete answer (0010 section 11.1):
@@ -50,6 +52,7 @@
  */
 
 import { execFile, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,6 +121,18 @@ export class OpenCodeApiUnexpectedAnswerError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "OpenCodeApiUnexpectedAnswerError";
+  }
+}
+
+/**
+ * An `opencode api` child that never started (`spawn` failed: E2BIG when the
+ * arguments and the environment together are over the host limit, ENOENT,
+ * EACCES). The service got nothing, so a write had no effect (I-5).
+ */
+export class OpenCodeApiSpawnError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "OpenCodeApiSpawnError";
   }
 }
 
@@ -386,10 +401,24 @@ async function callOpenCodeApiThroughFile(
     try {
       exit = await new Promise<FileAnswerExit>((resolve, reject) => {
         // As with `execFile`: with `env`, Node looks up `opencode` on that PATH.
-        const child = spawn("opencode", args, {
-          stdio: ["ignore", fd, "pipe"],
-          ...(options?.env ? { env: sessionChildEnvironment(options.env) } : {}),
-        });
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn("opencode", args, {
+            stdio: ["ignore", fd, "pipe"],
+            ...(options?.env ? { env: sessionChildEnvironment(options.env) } : {}),
+          });
+        } catch (err) {
+          // Node throws some spawn failures at once (E2BIG: the arguments and
+          // the environment together are over the host limit): the child
+          // never ran (I-5).
+          const detail = err instanceof Error ? err.message : String(err);
+          reject(
+            new OpenCodeApiSpawnError(`opencode api ${operation} failed: ${detail}`, {
+              cause: err,
+            }),
+          );
+          return;
+        }
         let stderr = "";
         let timedOut = false;
         let settled = false;
@@ -411,7 +440,10 @@ async function callOpenCodeApiThroughFile(
         child.once("error", (err) => {
           if (settled) return;
           settle();
-          reject(new Error(`opencode api ${operation} failed: ${err.message}`, { cause: err }));
+          // No PID: `spawn` failed (ENOENT, EACCES, EAGAIN, EMFILE and ENFILE
+          // come here), so the child never ran (I-5).
+          const failure = child.pid === undefined ? OpenCodeApiSpawnError : Error;
+          reject(new failure(`opencode api ${operation} failed: ${err.message}`, { cause: err }));
         });
         child.once("close", (code, signal) => {
           if (settled) return;
@@ -948,18 +980,73 @@ export class OpenCodePromptTooLargeError extends Error {
   }
 }
 
+/**
+ * The client input ID of `session.prompt` (I-5, B-1). 2.0.32 makes a message
+ * ID with `"msg_" + Hf()`, where `Hf()` is `gZ(!1)` (read in the binary):
+ *
+ *     function gZ(e,n=Date.now()){if(n!==m)m=n,d=0;d++;
+ *       let r=BigInt(n)*0x1000n+BigInt(d),a=e?~r:r,
+ *       c=Array.from({length:6},(l,D)=>Number(a>>BigInt(40-8*D)&0xffn)
+ *         .toString(16).padStart(2,"0")).join(""),
+ *       s=crypto.getRandomValues(new Uint8Array(F-12));      // F=26
+ *       return c+Array.from(s,(l)=>I[l%62]).join("")}       // I: base62
+ *
+ * So an ID is 12 hex digits of (ms * 4096 + a per-ms counter), low 48 bits,
+ * then 14 base62 characters. This function makes the same form, so an ID that
+ * ao mints sorts by time with the IDs that the service mints. `session.prompt`
+ * with an `id` first looks for that ID in the inbox and in the messages
+ * (`SessionInbox.reconcile`): when it finds a `user` input of this session, it
+ * answers with that input and admits nothing; it compares the session and the
+ * type, not the text. An ID that another session or a record of another type
+ * holds gives 409 `ConflictError`.
+ */
+const OPENCODE_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const OPENCODE_ID_RANDOM_CHARS = 14;
+let mintLastMs = 0;
+let mintCounter = 0;
+
+/** A new ascending OpenCode message ID, `msg_` + 26 characters (see above). */
+export function mintOpenCodeMessageId(now: number = Date.now()): string {
+  if (now !== mintLastMs) {
+    mintLastMs = now;
+    mintCounter = 0;
+  }
+  mintCounter++;
+  const value = BigInt(now) * 0x1000n + BigInt(mintCounter);
+  let time = "";
+  for (let byte = 0; byte < 6; byte++) {
+    time += Number((value >> BigInt(40 - 8 * byte)) & 0xffn)
+      .toString(16)
+      .padStart(2, "0");
+  }
+  let suffix = "";
+  for (const random of randomBytes(OPENCODE_ID_RANDOM_CHARS)) {
+    suffix += OPENCODE_ID_ALPHABET[random % OPENCODE_ID_ALPHABET.length];
+  }
+  return `msg_${time}${suffix}`;
+}
+
+/** A stand-in with the length of a minted ID, for the size check before an ID exists. */
+const OPENCODE_MESSAGE_ID_PLACEHOLDER = `msg_${"0".repeat(12 + OPENCODE_ID_RANDOM_CHARS)}`;
+
 /** The body of an `ao send` prompt: always `queue` (owner Q5, 0010 section 7.6). */
 export interface OpenCodePromptBody {
+  id: string;
   text: string;
   delivery: "queue";
 }
 
 /**
- * The prompt body for `text`. Throws `OpenCodePromptTooLargeError` when its
- * JSON is over the limit; the text is never cut.
+ * The prompt body for `text` with the client input ID `inputId` (without
+ * one: a stand-in of the same length, for the size check before the ID
+ * exists). Throws `OpenCodePromptTooLargeError` when its JSON is over the
+ * limit; the text is never cut.
  */
-export function buildOpenCodePromptBody(text: string): OpenCodePromptBody {
-  const body: OpenCodePromptBody = { text, delivery: "queue" };
+export function buildOpenCodePromptBody(
+  text: string,
+  inputId: string = OPENCODE_MESSAGE_ID_PLACEHOLDER,
+): OpenCodePromptBody {
+  const body: OpenCodePromptBody = { id: inputId, text, delivery: "queue" };
   const bytes = Buffer.byteLength(JSON.stringify(body), "utf-8");
   if (bytes > OPENCODE_PROMPT_MAX_BODY_BYTES) throw new OpenCodePromptTooLargeError(bytes);
   return body;
@@ -993,11 +1080,14 @@ function asInboxUserItem(value: unknown): OpenCodeInboxItem | null {
 }
 
 /**
- * `session.prompt --param sessionID=<id>` with `{text, delivery: "queue"}`
- * (0009 section 6). The service admits the input durably and answers with
- * the inbox item, so this is the positive delivery record. Its stdout goes to
- * a file: the answer holds the whole text, and a pipe can cut an answer with
- * exit 0 (0010 section 11.1).
+ * `session.prompt --param sessionID=<id>` with `{id: inputId, text,
+ * delivery: "queue"}` (0009 section 6). The service admits the input durably
+ * and answers with the inbox item, so this is the positive delivery record. A
+ * second call with the same `inputId` admits nothing and answers with the
+ * input of the first (see `mintOpenCodeMessageId`); its `time.created` is then
+ * the time of the first admission. Its stdout goes to a file: the answer
+ * holds the whole text, and a pipe can cut an answer with exit 0 (0010
+ * section 11.1).
  *
  * No `env`: the environment of the `opencode api` client never reaches the
  * model tool. With an attached TUI the tool gets the TUI environment, and
@@ -1006,6 +1096,8 @@ function asInboxUserItem(value: unknown): OpenCodeInboxItem | null {
  *
  * Throws, and never calls `session.prompt` twice:
  * - `OpenCodePromptTooLargeError` before any process;
+ * - `OpenCodeApiSpawnError` when the child never started (E2BIG for the
+ *   arguments and the environment together, ENOENT, EACCES): nothing was sent;
  * - `OpenCodeApiRequestError` when the service answered an HTTP error; the
  *   2.0.32 document declares 400 `InvalidRequestError`, 401
  *   `UnauthorizedError`, 404 `SessionNotFoundError` or
@@ -1013,15 +1105,16 @@ function asInboxUserItem(value: unknown): OpenCodeInboxItem | null {
  *   another durable record holds). A 404 is an error here, not null;
  * - `OpenCodeApiTimeoutError`, `OpenCodeApiIncompleteAnswerError` (a cut
  *   answer) and `OpenCodeApiUnexpectedAnswerError` (complete JSON that is not
- *   an inbox item of this session): the admission is then unknown;
+ *   the input `inputId` of this session): the admission is then unknown;
  * - another error for every other failure.
  */
 export async function promptOpenCodeSession(
   sessionId: string,
   text: string,
+  inputId: string,
   options?: { timeoutMs?: number },
 ): Promise<OpenCodeInboxItem> {
-  const body = buildOpenCodePromptBody(text);
+  const body = buildOpenCodePromptBody(text, inputId);
   const parsed = await callOpenCodeApiThroughFile("session.prompt", {
     params: { sessionID: sessionId },
     body,
@@ -1029,20 +1122,14 @@ export async function promptOpenCodeSession(
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
   const item = isRecord(parsed) ? asInboxUserItem(parsed["data"]) : null;
-  if (!item || item.sessionID !== sessionId) {
+  if (!item || item.sessionID !== sessionId || item.id !== inputId) {
     throw new OpenCodeApiUnexpectedAnswerError(
-      `opencode api session.prompt returned no inbox item of session ${sessionId}`,
+      `opencode api session.prompt returned no inbox item ${inputId} of session ${sessionId}`,
       { cause: new Error(JSON.stringify(parsed).slice(0, 500)) },
     );
   }
   return item;
 }
-
-/**
- * The slack on `time.created` for a read-back match: ao and the service run
- * on one host and use one clock, so a small slack covers the rounding.
- */
-export const OPENCODE_PROMPT_READBACK_SLACK_MS = 1_000;
 
 /** Where the read-back found an input. */
 export interface OpenCodePromptInputMatch {
@@ -1052,29 +1139,20 @@ export interface OpenCodePromptInputMatch {
   delivery?: string;
 }
 
-function createdOf(value: Record<string, unknown>): number | undefined {
-  const time = value["time"];
-  const created = isRecord(time) ? time["created"] : undefined;
-  return typeof created === "number" && Number.isFinite(created) ? created : undefined;
-}
-
 /**
  * The read-back after an unknown admission (a timeout, a cut answer or an
- * unexpected answer of `session.prompt`). It reads `session.inbox.list` once,
- * then the newest `user` message once (`session.message.list` with
- * `type=user`, `order=desc`, `limit=1`), both through a file. A queued input
- * waits in the inbox; an input to an idle session becomes a `user` message
- * with the same ID within milliseconds (measured on 2.0.32). The inbox goes
- * first, so an input that moves to the messages between the two reads is
- * still found. An entry counts only when its text equals `text` and its
- * `time.created` is not before `createdAtOrAfter`: an older message with the
- * same text does not count. Returns the match, or null. Throws when a read
- * fails (also on a 404).
+ * unexpected answer of `session.prompt`), by the client input ID only (M-1):
+ * `session.inbox.list` once, then `session.message.get` of `inputId` once,
+ * both through a file. A queued input waits in the inbox; an admitted input
+ * becomes a `user` message with the same ID. The inbox goes first, so an
+ * input that moves to the messages between the two reads is still found. An
+ * earlier input with the same text has another ID and never counts. Returns
+ * the match, or null (404 `MessageNotFoundError`, or a record of another
+ * type). Throws when a read fails, also on a 404 for the session.
  */
 export async function findOpenCodePromptInput(
   sessionId: string,
-  text: string,
-  createdAtOrAfter: number,
+  inputId: string,
   options?: { timeoutMs?: number },
 ): Promise<OpenCodePromptInputMatch | null> {
   const timeout = options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {};
@@ -1091,21 +1169,29 @@ export async function findOpenCodePromptInput(
   }
   for (const entry of inbox["data"] as unknown[]) {
     const item = asInboxUserItem(entry);
-    if (!item || !isRecord(entry) || !isRecord(entry["payload"])) continue;
-    if (entry["payload"]["text"] !== text) continue;
-    if ((item.created ?? -Infinity) < createdAtOrAfter) continue;
-    return { id: item.id, found: "inbox", delivery: item.delivery };
+    if (item && item.id === inputId && item.sessionID === sessionId) {
+      return { id: item.id, found: "inbox", delivery: item.delivery };
+    }
   }
 
-  const messages = await callOpenCodeApiThroughFile("session.message.list", {
-    params: { sessionID: sessionId, type: "user", order: "desc", limit: "1" },
-    notFound: "throw",
-    ...timeout,
-  });
-  const newest = messageListData(messages)[0];
-  if (!isRecord(newest) || newest["type"] !== "user" || newest["text"] !== text) return null;
-  const id = newest["id"];
-  if (typeof id !== "string" || id.length === 0) return null;
-  if ((createdOf(newest) ?? -Infinity) < createdAtOrAfter) return null;
-  return { id, found: "message" };
+  let message: unknown;
+  try {
+    message = await callOpenCodeApiThroughFile("session.message.get", {
+      params: { sessionID: sessionId, messageID: inputId },
+      notFound: "throw",
+      ...timeout,
+    });
+  } catch (err) {
+    if (
+      err instanceof OpenCodeApiRequestError &&
+      err.status === 404 &&
+      err.tag === "MessageNotFoundError"
+    ) {
+      return null;
+    }
+    throw err;
+  }
+  const data = isRecord(message) ? message["data"] : undefined;
+  if (!isRecord(data) || data["id"] !== inputId || data["type"] !== "user") return null;
+  return { id: inputId, found: "message" };
 }

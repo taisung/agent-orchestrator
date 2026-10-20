@@ -412,20 +412,44 @@ export interface Agent {
   canDeliverMessage?(session: Session): boolean;
 
   /**
+   * Optional (I-5): throws when `deliverMessage` can never deliver `message`
+   * (OpenCode: the `session.prompt` body is over the argument limit). Core
+   * calls it before it prepares the session, so a message that can never go
+   * causes no restore.
+   */
+  checkMessage?(message: string): void;
+
+  /**
    * Optional (I-5): deliver `message` through the agent's own API instead of
    * the runtime (OpenCode: `session.prompt`). Core calls it after it prepared
    * the session (a dead runtime or agent process is restored first, a
    * `spawning` session is waited for), and only when `canDeliverMessage` is
    * true. It replaces `runtime.sendMessage` and the screen-diff confirmation:
    * it returns the record of the admitted message, or throws.
-   * `AgentNotAttachedError` means that nothing was delivered because the
-   * interactive agent process that the delivery needs does not run on the
-   * session; core then restores the session once and calls the hook again
-   * (`restore` refuses a session whose agent process still runs, and the
-   * send then fails). Every other throw is final. The hook never delivers
-   * one message twice.
+   *
+   * Right before its API call, the hook gets the input ID from
+   * `attempt.begin`: core persists that ID first, and gives back the ID of an
+   * earlier send of the same text whose admission stayed unknown, so the
+   * service admits one logical send at most once. Without `attempt`, the hook
+   * mints an ID that nothing persists.
+   *
+   * `AgentNotAttachedError` (thrown before `begin`) means that nothing was
+   * delivered because the interactive agent process that the delivery needs
+   * does not run on the session; core then restores the session once and
+   * calls the hook again. `restore` replaces the pane only when
+   * `isRestorable` is true (a terminal status or an exited agent, never
+   * `merged`), so a pane under a `working` record that runs another agent
+   * process stays, and the send fails; a live pane under a `killed` or `done`
+   * record is replaced (inherited behavior).
+   * After `begin`, an `AgentDeliveryError` with `admission: "none"` means
+   * that the service admitted nothing; every other throw after `begin`
+   * leaves the admission unknown. The hook calls the API once per call.
    */
-  deliverMessage?(session: Session, message: string): Promise<AgentMessageDelivery>;
+  deliverMessage?(
+    session: Session,
+    message: string,
+    attempt?: AgentDeliveryAttempt,
+  ): Promise<AgentMessageDelivery>;
 
   /**
    * Optional: Set up agent-specific hooks/config in the workspace for automatic metadata updates.
@@ -551,6 +575,22 @@ export interface AgentMessageDelivery {
   waitsFor?: readonly AgentPendingInput[];
   /** True when the answer of the admission was lost and a read-back of the session found the input. */
   recovered?: boolean;
+  /**
+   * True when the service answered with an input that an earlier attempt with
+   * the same input ID admitted: this send admitted nothing new.
+   */
+  replayed?: boolean;
+}
+
+/**
+ * The input ID of one logical send (I-5). `begin` is called by the agent
+ * right before its API call, with the agent's ID generator. Core persists the
+ * pending entry (state `sending`) before it returns, and returns the ID to
+ * use: the ID of an earlier send of the same text to the same session whose
+ * admission stayed unknown, or a new ID from `mint`.
+ */
+export interface AgentDeliveryAttempt {
+  begin(mint: () => string): string;
 }
 
 /** How `SessionManager.deliver` sent one message. */
@@ -1729,6 +1769,43 @@ export function isAgentNotAttachedError(err: unknown): err is AgentNotAttachedEr
   return (
     err instanceof AgentNotAttachedError ||
     (err instanceof Error && err.name === "AgentNotAttachedError")
+  );
+}
+
+/**
+ * Whether a failed agent delivery admitted the message: `none` (the service
+ * refused it, or the call never started) or `unknown` (it may be admitted, now
+ * or later).
+ */
+export type AgentDeliveryAdmission = "none" | "unknown";
+
+/**
+ * Thrown by `Agent.deliverMessage` after `AgentDeliveryAttempt.begin`, for
+ * the input `inputId`. Core clears the pending entry for `admission: "none"`
+ * and keeps it as `unknown` otherwise, so a later send of the same text
+ * reuses the ID.
+ */
+export class AgentDeliveryError extends Error {
+  constructor(
+    public readonly inputId: string,
+    public readonly admission: AgentDeliveryAdmission,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "AgentDeliveryError";
+  }
+}
+
+/** True for `AgentDeliveryError`, also from another copy of this module. */
+export function isAgentDeliveryError(err: unknown): err is AgentDeliveryError {
+  return (
+    err instanceof AgentDeliveryError ||
+    (err instanceof Error &&
+      err.name === "AgentDeliveryError" &&
+      typeof (err as { inputId?: unknown }).inputId === "string" &&
+      ((err as { admission?: unknown }).admission === "none" ||
+        (err as { admission?: unknown }).admission === "unknown"))
   );
 }
 
