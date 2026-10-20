@@ -325,8 +325,12 @@ Durable progress record for this fork. Dated events only; the current state live
   five lifecycle workers restarted by exact PID at 09:52:22 to 09:52:34. **New lifecycle PIDs:**
   agent-skills 105049, agent-orchestrator 105142 (Nexus config) and 106285 (this config), Nexus 105154,
   VSF 106266. No OpenCode TUI ran on the host at the rollout, so no live worker changed its send path.
-  `~/.ao/bin` unchanged (no `WRAPPER_VERSION` change). Not done yet: the push and the real-TUI check
-  (one model turn), both on the owner's word. Follow-ups: m-4 (one warning text), the shared child
+  `~/.ao/bin` unchanged (no `WRAPPER_VERSION` change). Pushed on the owner's word (2026-10-20 about
+  09:58 EDT, "push; kill ao-41 and ao-44": `4a0f1f25..9618d83f`). Then `ao session kill` of ao-41 and
+  ao-44: both branches had 0 commits that `git cherry main` does not find, the review r5 file was equal
+  to `main`, the r4 original equals `reports/ao-44-i5-r4.review.md`, and both reports are saved.
+  Worktrees removed by the kill, branches kept, no process and no `ao-delivery-` name left. Not done
+  yet: the real-TUI check (model turns), on the owner's word. Follow-ups: m-4 (one warning text), the shared child
   runner of the lock and ledger tests. Costs: author 78.01 USD by trial_cost (19.81, 18.26, 14.86,
   20.05, 5.03); reviewers 8.15 USD (1.56, 1.45, 0.12, 1.83, 0.48, 2.07, 0.64; two content-filter stops).
 
@@ -388,7 +392,7 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
     project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
     message reached the session, not that the turn succeeded (a failed turn reads `blocked` through I-4).
-- **I-5 landed and rolled out 2026-10-20** (What Landed; push and real-TUI check wait for the owner).
+- **I-5 landed, rolled out and pushed 2026-10-20** (What Landed; the real-TUI check waits for the owner).
   The history follows. Owner 2026-10-19: "Push, then start I-5"
   (`994394c9..592441d6` pushed at about 20:05 EDT). Author ao-41 (Claude Code, Opus 5.5, xhigh), spawned
   20:11 EDT on `592441d6`, meter `5h 2%`, `wk 2%`; brief
