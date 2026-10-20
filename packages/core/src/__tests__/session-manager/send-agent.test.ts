@@ -577,6 +577,29 @@ describe("one input ID per logical send (I-5 round 2, B-1 and M-1)", () => {
     expect(pending()).toEqual([]);
   });
 
+  it("keeps an unknown entry across a restore of the active record, so the retry after the restore replays", async () => {
+    writeSession();
+    const { service } = withFakeOpenCode(["lose-answer-and-read-back"]);
+    const sm = createSessionManager({ config, registry: mockRegistry });
+
+    await expect(sm.send("app-1", "after a restore")).rejects.toBeInstanceOf(AgentDeliveryError);
+    const [first] = service.prompted;
+    // The TUI and its pane die before the next poll: the retry restores first.
+    deadRuntime();
+
+    const retry = await sm.deliver!("app-1", "after a restore");
+
+    expect(mockRuntime.create).toHaveBeenCalledTimes(1);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["restoredAt"]).toBeTruthy();
+    expect(retry).toEqual({
+      route: "agent",
+      delivery: { inputId: first, mode: "queue", replayed: true },
+    });
+    expect(service.prompted).toEqual([first, first]);
+    expect(service.admitted).toHaveLength(1);
+    expect(pending()).toEqual([]);
+  });
+
   it("two concurrent sends of the same text: two IDs and two admissions", async () => {
     writeSession();
     let release!: () => void;
