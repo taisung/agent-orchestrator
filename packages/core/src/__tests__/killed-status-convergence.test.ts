@@ -283,6 +283,22 @@ describe("1.1 item 2: an ambiguous negative of all sessions waits for the bound"
 
     expect(statuses("app-1", "app-2")).toEqual(["killed", "working"]);
   });
+
+  it("kills a session whose tmux session is gone at the second poll while another session's ambiguous answer is held (1.1 item 1)", async () => {
+    writeRecord("app-1");
+    writeRecord("app-2");
+    aliveExcept("app-1");
+    vi.mocked(agent.getActivityState).mockResolvedValue(EXITED);
+    const lm = newLifecycle();
+
+    await pollOnce(lm);
+    expect(statuses("app-1", "app-2")).toEqual(["working", "working"]);
+
+    await pollOnce(lm);
+    expect(recordOf("app-1")).toMatchObject({ status: "killed", killedReason: "runtime" });
+    expect(statuses("app-2")).toEqual(["working"]);
+    expect(workerHealth()?.status).toBe("warn");
+  });
 });
 
 describe("1.1 item 3: no tmux server is unknown for 5 minutes, then dead (M-1)", () => {
