@@ -1270,6 +1270,31 @@ process.exit(2);
     expect((err.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
+  it("keeps an I/O error of a child that started (EPIPE) out of OpenCodeApiSpawnError: the admission stays unknown", async () => {
+    useFake({ promptMode: "hang" });
+    const started: ChildProcess.ChildProcess[] = [];
+    mockSpawn.mockImplementation((...args: unknown[]) => {
+      const child = realSpawn.current!(...args) as ChildProcess.ChildProcess;
+      started.push(child);
+      // The child runs (it has a PID) when the I/O error comes.
+      child.once("spawn", () =>
+        child.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" })),
+      );
+      return child;
+    });
+    try {
+      const err = (await promptOpenCodeSession(ID, "hi", INPUT).catch((e: unknown) => e)) as Error;
+
+      expect(started[0]!.pid).toEqual(expect.any(Number));
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(OpenCodeApiSpawnError);
+      expect(err.message).toBe("opencode api session.prompt failed: write EPIPE");
+      expect((err.cause as NodeJS.ErrnoException).code).toBe("EPIPE");
+    } finally {
+      for (const child of started) child.kill("SIGKILL");
+    }
+  });
+
   it("throws each declared error of session.prompt with its status and tag, once", async () => {
     for (const [status, tag] of [
       [404, "SessionNotFoundError"],
