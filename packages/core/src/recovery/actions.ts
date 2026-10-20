@@ -169,6 +169,13 @@ export async function cleanupSession(
       }
     }
 
+    // B-1 (round 4): the destroy awaited; a new launch of the ID meanwhile
+    // uses the same worktree path, so stop before it is removed.
+    const afterDestroy = readMetadataRaw(sessionsDir, sessionId);
+    if (!afterDestroy || !holdsExpected(afterDestroy, assessedVersion(rawMetadata))) {
+      return { success: false, sessionId, action: "cleanup", error: RECORD_CHANGED };
+    }
+
     const workspacePath = rawMetadata["worktree"];
     if (workspacePath && workspaceExists && workspace) {
       try {

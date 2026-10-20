@@ -1034,6 +1034,34 @@ describe("1.1 item 3: the recovery actions write only the assessed version", () 
     },
   );
 
+  it("cleanup: a new launch during the runtime destroy keeps its worktree and record", async () => {
+    launchedRecord("app-1");
+    const assessed = assessment({ runtimeAlive: true, workspaceExists: true });
+    vi.mocked(ctx.mockRuntime.destroy).mockImplementation(async () => {
+      publishNewLaunch("app-1");
+    });
+
+    const result = await cleanupSession(assessed, config, ctx.mockRegistry, context());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/changed after the assessment; nothing was written/);
+    expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-app-1"));
+    expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
+    expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch", status: "spawning" });
+  });
+
+  it("control: cleanup of an unchanged record destroys, terminates and archives it", async () => {
+    launchedRecord("app-1");
+    const assessed = assessment({ runtimeAlive: true, workspaceExists: true });
+
+    const result = await cleanupSession(assessed, config, ctx.mockRegistry, context());
+
+    expect(result.success).toBe(true);
+    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(join(ctx.tmpDir, "ws-app-1"));
+    expect(recordOf("app-1")).toBeNull();
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({ status: "terminated" });
+  });
+
   it.each(["recover", "escalate", "cleanup"] as const)(
     "%s: an archived record is not recreated",
     async (action) => {
