@@ -26,6 +26,7 @@ import {
   getWorktreesDir,
   getFeedbackReportsDir,
   getArchiveDir,
+  getDeliveryLedgerDir,
   getOriginFilePath,
   generateSessionName,
   generateTmuxName,
@@ -283,6 +284,27 @@ describe("Path Construction", () => {
     const archiveDir = getArchiveDir(configPath, "/repos/integrator");
 
     expect(archiveDir).toMatch(/\.agent-orchestrator\/[a-f0-9]{12}-integrator\/sessions\/archive$/);
+  });
+
+  it("getDeliveryLedgerDir returns {baseDir}/deliveries, apart from the sessions", () => {
+    const ledgerDir = getDeliveryLedgerDir(configPath, "/repos/integrator");
+
+    expect(ledgerDir).toBe(join(getProjectBaseDir(configPath, "/repos/integrator"), "deliveries"));
+    expect(ledgerDir.startsWith(getSessionsDir(configPath, "/repos/integrator"))).toBe(false);
+  });
+
+  it("getDeliveryLedgerDir follows AO_STATE_ROOT", () => {
+    const previous = process.env["AO_STATE_ROOT"];
+    const override = join(tmpDir, "state-root");
+    process.env["AO_STATE_ROOT"] = override;
+    try {
+      expect(getDeliveryLedgerDir(configPath, "/repos/integrator")).toBe(
+        join(override, `${generateConfigHash(configPath)}-integrator`, "deliveries"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env["AO_STATE_ROOT"];
+      else process.env["AO_STATE_ROOT"] = previous;
+    }
   });
 
   it("getOriginFilePath returns {baseDir}/.origin", () => {

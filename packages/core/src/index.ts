@@ -219,6 +219,7 @@ export {
   getFeedbackReportsDir,
   getObservabilityBaseDir,
   getArchiveDir,
+  getDeliveryLedgerDir,
   getOriginFilePath,
   generateSessionName,
   generateTmuxName,

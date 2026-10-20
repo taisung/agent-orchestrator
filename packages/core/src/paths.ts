@@ -148,6 +148,15 @@ export function getArchiveDir(configPath: string, projectPath: string): string {
 }
 
 /**
+ * Get the delivery ledger directory for a project (I-5): one ledger file per
+ * agent session key, apart from the session records.
+ * Format: ~/.agent-orchestrator/{hash}-{projectId}/deliveries
+ */
+export function getDeliveryLedgerDir(configPath: string, projectPath: string): string {
+  return join(getProjectBaseDir(configPath, projectPath), "deliveries");
+}
+
+/**
  * Get the .origin file path for a project.
  * This file stores the config path for collision detection.
  */
