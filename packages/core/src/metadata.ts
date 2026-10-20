@@ -20,15 +20,25 @@
  *   generation=7
  *
  * Writes (killed-status round 3, B-2): every writer in this file holds the
- * record lock (below) for its read, compare, write and rename, and
- * every write increments `generation`, so a reader can tell that any Node
- * writer changed the record after its read (`updateMetadataIf`). Reads take
- * no lock: the atomic rename always gives a whole file. The bash metadata
+ * record lock (below) for its read, compare, write and rename, and every
+ * write of a record file (active or archived, a reservation too) increments
+ * `generation`, so a reader can tell that any Node writer changed the record
+ * after its read (`updateMetadataIf`). A caller cannot set `generation`. Reads
+ * take no lock: the atomic rename always gives a whole file. The bash metadata
  * helpers (`~/.ao/bin/ao-metadata-helper.sh`, the claude-code PostToolUse
  * hook) write `pr`, `status` and `branch` with `sed` and `mv`, outside the
  * lock and without a new generation; a Node write and a helper write can
  * still overwrite each other between the read and the rename of either. On
  * a platform without the lock (not Linux) the writers run unlocked.
+ *
+ * Creates (round 4, B-1): only `reserveSessionRecord` (a reservation, a launch
+ * claim, the archive copy-back of a restore; never over an existing record)
+ * and `writeMetadata` (an explicit full write) create a record. `updateMetadata`,
+ * `updateMetadataIf`, `deleteMetadata` and `updateArchivedMetadata` never
+ * create or recreate one. An operation that reads a record, waits (a
+ * checkout, a runtime create, a probe) and then writes passes the values that
+ * it decided from as `expected`: the generation, or the launch identity
+ * (`launchIdentity`) when only a new launch or reservation must stop it.
  */
 
 import {
@@ -44,7 +54,6 @@ import {
   linkSync,
   rmSync,
   realpathSync,
-  constants,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
@@ -165,7 +174,13 @@ function getLockHelper(): LockHelper {
   if (lockHelper) return lockHelper;
   const state = new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT);
   const errorText = new SharedArrayBuffer(LOCK_ERROR_TEXT_BYTES);
-  const worker = new Worker(LOCK_HELPER_SOURCE, { eval: true, workerData: { state, errorText } });
+  // m-2 (round 4): `execArgv: []`, so the helper is always CommonJS. It would
+  // inherit flags such as `--input-type=module` from the parent otherwise.
+  const worker = new Worker(LOCK_HELPER_SOURCE, {
+    eval: true,
+    execArgv: [],
+    workerData: { state, errorText },
+  });
   // The helper never keeps the process alive.
   worker.unref();
   const created: LockHelper = {
@@ -263,6 +278,55 @@ export function withRecordLock<T>(dataDir: string, sessionId: string, fn: () => 
 
 /** The record key that every locked write increments. */
 export const GENERATION_KEY = "generation";
+
+/**
+ * The record key of a reservation (round 4, B-1): a random ID that
+ * `reserveSessionRecord` writes and the first launch write removes. No two
+ * reservations of a session ID have the same one, so the owner of a
+ * reservation can tell its own record from a new reservation that another
+ * process made after an archive or a delete. Only `reserveSessionRecord`
+ * sets it; the other writers can only remove it.
+ */
+export const RESERVATION_KEY = "reservationId";
+
+/**
+ * The keys that name one launch of a session record (round 4, B-1 and M-1).
+ * A reservation (RESERVATION_KEY), a spawn (`createdAt`, `runtimeHandle`,
+ * `tmuxName`) and a restore (`runtimeHandle`, `restoredAt`) change at least
+ * one of them. A status, PR, branch, summary, mapping or bookkeeping write
+ * changes none of them, and neither does `generation`.
+ */
+export const LAUNCH_IDENTITY_KEYS: readonly string[] = [
+  RESERVATION_KEY,
+  "runtimeHandle",
+  "tmuxName",
+  "createdAt",
+  "restoredAt",
+];
+
+/** The launch identity of a record, as the expected values of a conditional write. */
+export function launchIdentity(
+  record: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  return Object.fromEntries(LAUNCH_IDENTITY_KEYS.map((key) => [key, record[key] ?? ""]));
+}
+
+/** True when `record` holds every value in `expected` (a missing key equals an empty value). */
+export function holdsExpected(
+  record: Readonly<Record<string, string | undefined>>,
+  expected: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return Object.entries(expected).every(([key, value]) => (record[key] ?? "") === (value ?? ""));
+}
+
+/**
+ * The updates without the keys that the writers set themselves: a
+ * `generation`, and a reservation ID other than its removal.
+ */
+function callerUpdates(updates: Partial<Record<string, string>>): Partial<Record<string, string>> {
+  const { [GENERATION_KEY]: _generation, [RESERVATION_KEY]: reservation, ...rest } = updates;
+  return reservation === "" ? { ...rest, [RESERVATION_KEY]: "" } : rest;
+}
 
 /**
  * Serialize a record back to key=value format.
@@ -434,10 +498,11 @@ function mergeUpdates(
 
 /**
  * Write `next` as the record with the next generation (call it under the
- * record lock). A record without a generation (a new record, an empty
- * reservation, a record from before the key) continues from its latest
- * archived copy, so an archive followed by a copy-back or a new record with
- * the same ID never repeats a generation that a reader saw before.
+ * record lock). A record without a generation (a new record of
+ * `writeMetadata`, a record from before the key or of an old build)
+ * continues from its latest archived copy, so an archive followed by a
+ * copy-back or a new record with the same ID never repeats a generation that
+ * a reader saw before.
  */
 function commitRecord(
   dataDir: string,
@@ -456,19 +521,30 @@ function commitRecord(
 /**
  * Update specific fields in a session's metadata.
  * Reads existing file, merges updates, writes back (under the record lock,
- * with the next generation). Creates the record when it does not exist.
+ * with the next generation). Round 4 (B-1): a record that does not exist is
+ * not created (it was archived or deleted, maybe after the caller's read);
+ * nothing is written and the result is false. Use `updateMetadataIf` when a
+ * newer launch or another write since your read must stop the write too.
  */
 export function updateMetadata(
   dataDir: string,
   sessionId: SessionId,
   updates: Partial<Record<string, string>>,
-): void {
+): boolean {
   const path = metadataPath(dataDir, sessionId);
-  // The lock name uses the real path of the directory, so it must exist first.
-  mkdirSync(dataDir, { recursive: true });
-  withRecordLock(dataDir, sessionId, () => {
+  // No directory, no record. The lock name uses the real path of the directory.
+  if (!existsSync(dataDir)) return false;
+  return withRecordLock(dataDir, sessionId, () => {
     const existing = readRecordFile(path);
-    commitRecord(dataDir, sessionId, path, existing, mergeUpdates(existing ?? {}, updates));
+    if (!existing) return false;
+    commitRecord(
+      dataDir,
+      sessionId,
+      path,
+      existing,
+      mergeUpdates(existing, callerUpdates(updates)),
+    );
+    return true;
   });
 }
 
@@ -478,8 +554,9 @@ export function updateMetadata(
  * file never holds an empty value). The read, the compare and the rename run
  * under the record lock, so no other Node writer can change the record
  * between them; expect `generation` to detect any Node write after your own
- * read. Returns the written record, or null and writes nothing when the
- * record is gone (never recreated) or a value differs.
+ * read, or the `launchIdentity` to detect a new launch or reservation only.
+ * Returns the written record, or null and writes nothing when the record is
+ * gone (never recreated) or a value differs.
  */
 export function updateMetadataIf(
   dataDir: string,
@@ -488,32 +565,44 @@ export function updateMetadataIf(
   updates: Partial<Record<string, string>>,
 ): Record<string, string> | null {
   const path = metadataPath(dataDir, sessionId);
+  if (!existsSync(dataDir)) return null;
   return withRecordLock(dataDir, sessionId, () => {
     const existing = readRecordFile(path);
-    if (!existing) return null;
-    for (const [key, value] of Object.entries(expected)) {
-      if ((existing[key] ?? "") !== (value ?? "")) return null;
-    }
-    return commitRecord(dataDir, sessionId, path, existing, mergeUpdates(existing, updates));
+    if (!existing || !holdsExpected(existing, expected)) return null;
+    return commitRecord(
+      dataDir,
+      sessionId,
+      path,
+      existing,
+      mergeUpdates(existing, callerUpdates(updates)),
+    );
   });
 }
 
 /**
  * Delete a session's metadata file.
  * Optionally archive it to an `archive/` subdirectory. The copy and the
- * unlink run under the record lock.
+ * unlink run under the record lock. With `expected` (round 4, B-1), only a
+ * record that still holds every expected value is deleted. Returns true when
+ * the record was deleted; false when it does not exist or a value differs.
  */
-export function deleteMetadata(dataDir: string, sessionId: SessionId, archive = true): void {
+export function deleteMetadata(
+  dataDir: string,
+  sessionId: SessionId,
+  archive = true,
+  expected?: Readonly<Record<string, string | undefined>>,
+): boolean {
   const path = metadataPath(dataDir, sessionId);
-  if (!existsSync(dataDir)) return;
-  withRecordLock(dataDir, sessionId, () => {
+  if (!existsSync(dataDir)) return false;
+  return withRecordLock(dataDir, sessionId, () => {
     let content: string;
     try {
       content = readFileSync(path, "utf-8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw err;
     }
+    if (expected && !holdsExpected(parseKeyValueContent(content), expected)) return false;
 
     if (archive) {
       const archiveDir = join(dataDir, "archive");
@@ -524,6 +613,7 @@ export function deleteMetadata(dataDir: string, sessionId: SessionId, archive = 
     }
 
     unlinkSync(path);
+    return true;
   });
 }
 
@@ -566,18 +656,23 @@ export function readArchivedMetadataRaw(
 /**
  * Merge `updates` into the latest archived copy of a session record. It runs
  * under the lock of the session record, so it never interleaves with an
- * archive or a copy-back of the same session.
+ * archive or a copy-back of the same session. The archive copy that
+ * `deleteMetadata` makes keeps the generation of the version that it copies;
+ * every write here increments it (m-3, round 4), so a later reservation or
+ * copy-back continues above it. With `expected`, only an archived copy that
+ * still holds every expected value is written. Returns true when written.
  */
 export function updateArchivedMetadata(
   dataDir: string,
   sessionId: SessionId,
   updates: Partial<Record<string, string>>,
+  expected?: Readonly<Record<string, string | undefined>>,
 ): boolean {
   validateSessionId(sessionId);
   const archiveDir = join(dataDir, "archive");
   if (!existsSync(archiveDir)) return false;
   return withRecordLock(dataDir, sessionId, () =>
-    updateLatestArchive(archiveDir, sessionId, updates),
+    updateLatestArchive(archiveDir, sessionId, callerUpdates(updates), expected),
   );
 }
 
@@ -585,6 +680,7 @@ function updateLatestArchive(
   archiveDir: string,
   sessionId: SessionId,
   updates: Partial<Record<string, string>>,
+  expected?: Readonly<Record<string, string | undefined>>,
 ): boolean {
   const prefix = `${sessionId}_`;
   let latest: string | null = null;
@@ -605,6 +701,7 @@ function updateLatestArchive(
   } catch {
     return false;
   }
+  if (expected && !holdsExpected(existing, expected)) return false;
 
   for (const [key, value] of Object.entries(updates)) {
     if (value === undefined) continue;
@@ -616,7 +713,8 @@ function updateLatestArchive(
     }
   }
 
-  atomicWriteFileSync(archivePath, serializeMetadata(existing));
+  const written = { ...existing, [GENERATION_KEY]: String(generationOf(existing) + 1) };
+  atomicWriteFileSync(archivePath, serializeMetadata(written));
   return true;
 }
 
@@ -639,54 +737,75 @@ export function listMetadata(dataDir: string): SessionId[] {
 }
 
 /**
- * Atomically reserve a session ID by creating its metadata file.
- * Returns true if the ID was successfully reserved, false if it already exists.
+ * Atomically create a session record that does not exist yet: a reservation
+ * of a session ID, a launch claim, or the archive copy-back of a restore.
+ * Returns the written record, or null when the record exists (or, with
+ * `expectedArchive`, when the latest archived copy no longer holds every
+ * expected value: a restore that read an archive must not copy back an older
+ * one).
  *
- * Without `initial`, the file is created empty with O_EXCL. With `initial`
- * (M-5: the launch claim of a spawn that prepares its agent session), the
- * record exists only with that content: the content goes into a dot-named
- * temp file in the same directory, which `listMetadata` skips and no session
- * ID can name, and `link` then publishes that complete file under the record
- * name. Like O_EXCL, `link` fails with EEXIST when the name exists. So no
- * other process can read the record, not even for one system call, without
- * the claim, and a kill or an orchestrator start always sees the launcher.
- * The temp file is removed in every case. With `initial`, an error other
- * than EEXIST throws. The reservation runs under the record lock. A
- * reservation has no `generation`; the first write gives it one.
+ * The record holds `initial` (M-5: the launch claim of a spawn that prepares
+ * its agent session) plus a new reservation ID (RESERVATION_KEY, round 4)
+ * and the next generation (it continues above the latest archived copy; a
+ * caller's `generation` or reservation ID is ignored, m-3). The content goes
+ * into a dot-named temp file in the same directory, which `listMetadata`
+ * skips and no session ID can name, and `link` then publishes that complete
+ * file under the record name. Like O_EXCL, `link` fails with EEXIST when the
+ * name exists. So no other process can read the record, not even for one
+ * system call, without its content, and a kill or an orchestrator start
+ * always sees the launcher. The temp file is removed in every case. An error
+ * other than EEXIST throws. The reservation runs under the record lock.
+ */
+export function reserveSessionRecord(
+  dataDir: string,
+  sessionId: SessionId,
+  initial?: Readonly<Record<string, string>>,
+  expectedArchive?: Readonly<Record<string, string | undefined>>,
+): Record<string, string> | null {
+  const path = metadataPath(dataDir, sessionId);
+  mkdirSync(dirname(path), { recursive: true });
+  return withRecordLock(dataDir, sessionId, () => {
+    const archived = readArchivedMetadataRaw(dataDir, sessionId);
+    if (expectedArchive && !(archived && holdsExpected(archived, expectedArchive))) return null;
+    const {
+      [GENERATION_KEY]: _generation,
+      [RESERVATION_KEY]: _reservation,
+      ...content
+    } = initial ?? {};
+    const record: Record<string, string> = {
+      ...content,
+      [RESERVATION_KEY]: randomUUID(),
+      [GENERATION_KEY]: String(generationOf(archived) + 1),
+    };
+    return createRecordFile(dataDir, sessionId, path, record) ? record : null;
+  });
+}
+
+/**
+ * Reserve a session ID (see `reserveSessionRecord`). Returns true if the ID
+ * was reserved, false if its record already exists.
  */
 export function reserveSessionId(
   dataDir: string,
   sessionId: SessionId,
-  initial?: Record<string, string>,
+  initial?: Readonly<Record<string, string>>,
 ): boolean {
-  const path = metadataPath(dataDir, sessionId);
-  mkdirSync(dirname(path), { recursive: true });
-  return withRecordLock(dataDir, sessionId, () => reserveRecord(dataDir, sessionId, path, initial));
+  return reserveSessionRecord(dataDir, sessionId, initial) !== null;
 }
 
-function reserveRecord(
+function createRecordFile(
   dataDir: string,
   sessionId: SessionId,
   path: string,
-  initial?: Record<string, string>,
+  record: Record<string, string>,
 ): boolean {
-  if (!initial || Object.keys(initial).length === 0) {
-    try {
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
-      closeSync(fd);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   const tempPath = join(dirname(path), `.${sessionId}.reserve-${process.pid}-${randomUUID()}`);
   let tempCreated = false;
   try {
     const fd = openSync(tempPath, "wx");
     tempCreated = true;
     try {
-      writeFileSync(fd, serializeMetadata(initial), "utf-8");
+      writeFileSync(fd, serializeMetadata(record), "utf-8");
     } finally {
       closeSync(fd);
     }

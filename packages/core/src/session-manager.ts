@@ -69,13 +69,14 @@ import {
   readMetadataRaw,
   readArchivedMetadataRaw,
   updateArchivedMetadata,
-  writeMetadata,
-  updateMetadata,
   updateMetadataIf,
   GENERATION_KEY,
+  RESERVATION_KEY,
   deleteMetadata,
+  holdsExpected,
+  launchIdentity,
   listMetadata,
-  reserveSessionId,
+  reserveSessionRecord,
 } from "./metadata.js";
 import { buildPrompt } from "./prompt-builder.js";
 import {
@@ -766,11 +767,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return repairSessionMetadataOnRead(sessionsDir, records, project.sessionPrefix);
   }
 
-  function markArchivedOpenCodeCleanup(sessionsDir: string, sessionId: SessionId): void {
-    updateArchivedMetadata(sessionsDir, sessionId, {
-      opencodeSessionId: "",
-      opencodeCleanedAt: new Date().toISOString(),
-    });
+  /**
+   * Mark the archived record whose OpenCode session was removed. B-1 (round
+   * 4): only an archive that still names that OpenCode session (a newer
+   * archive of the ID that names another one keeps its ID).
+   */
+  function markArchivedOpenCodeCleanup(
+    sessionsDir: string,
+    sessionId: SessionId,
+    removedOpenCodeSessionId: string,
+  ): void {
+    updateArchivedMetadata(
+      sessionsDir,
+      sessionId,
+      { opencodeSessionId: "", opencodeCleanedAt: new Date().toISOString() },
+      { opencodeSessionId: removedOpenCodeSessionId },
+    );
   }
 
   function sortSessionIdsForReuse(ids: string[]): string[] {
@@ -1038,6 +1050,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     num: number;
     sessionId: string;
     tmuxName: string | undefined;
+    record: Record<string, string>;
   }> {
     const usedNumbers = new Set<number>();
     for (const sessionName of [
@@ -1061,11 +1074,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ? generateTmuxName(config.configPath, project.sessionPrefix, num)
         : undefined;
 
-      if (
-        !usedNumbers.has(num) &&
-        reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined)
-      ) {
-        return { num, sessionId, tmuxName };
+      const record = usedNumbers.has(num)
+        ? null
+        : reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+      if (record) {
+        return { num, sessionId, tmuxName, record };
       }
 
       usedNumbers.add(num);
@@ -1085,7 +1098,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     project: ProjectConfig,
     sessionsDir: string,
     launchClaim: Record<string, string> | null,
-  ): { num: number; sessionId: string; tmuxName: string | undefined } {
+  ): {
+    num: number;
+    sessionId: string;
+    tmuxName: string | undefined;
+    record: Record<string, string>;
+  } {
     const orchestratorPrefix = `${project.sessionPrefix}-orchestrator`;
     const usedNumbers = new Set<number>();
 
@@ -1126,8 +1144,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const tmuxName = config.configPath
           ? generateTmuxName(config.configPath, orchestratorPrefix, num)
           : undefined;
-        if (reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined)) {
-          return { num, sessionId, tmuxName };
+        const record = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+        if (record) {
+          return { num, sessionId, tmuxName, record };
         }
       }
       num += 1;
@@ -1332,6 +1351,128 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
   }
 
+  /**
+   * B-1 (round 4): the error of an operation that read a record, waited, and
+   * then found that the record is no longer the version it decided from. A
+   * record that is gone was archived or deleted; a record that is there was
+   * replaced (a new reservation, another launch or restore of the ID) or,
+   * for a version compare, written by another process.
+   */
+  function recordChangedError(
+    sessionsDir: string,
+    sessionId: SessionId,
+    during: string,
+    outcome: string,
+  ): Error {
+    const gone = readMetadataRaw(sessionsDir, sessionId) === null;
+    return new Error(
+      gone
+        ? `Session ${sessionId} was removed (archived or deleted) while ${during}; ${outcome}`
+        : `Session ${sessionId} changed while ${during} (a new reservation, launch or restore of the ID, or another write); ${outcome}`,
+    );
+  }
+
+  /** True when the record's stored runtime handle names the runtime of `handle`. */
+  function recordNamesRuntime(
+    record: Readonly<Record<string, string>> | null,
+    handle: RuntimeHandle,
+  ): boolean {
+    const stored = record?.["runtimeHandle"]
+      ? safeJsonParse<RuntimeHandle>(record["runtimeHandle"])
+      : null;
+    return !!stored && stored.id === handle.id && stored.runtimeName === handle.runtimeName;
+  }
+
+  /**
+   * B-1 (round 4): the record of a launch in progress (a spawn or an
+   * orchestrator start), from its reservation on. Each write goes only into
+   * the version that this launch wrote last, compared by its launch identity
+   * (`launchIdentity`): when the record was archived or deleted, or another
+   * reservation, launch or restore of the ID replaced it, nothing is written
+   * and the write throws. Writes that keep the launch (a status write of the
+   * lifecycle, the repair on read, a bash helper) do not stop it.
+   */
+  function ownLaunchRecord(
+    sessionsDir: string,
+    sessionId: SessionId,
+    reserved: Record<string, string>,
+  ) {
+    let owned = reserved;
+    return {
+      write(updates: Partial<Record<string, string>>, during: string): void {
+        const written = updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), updates);
+        if (!written) {
+          throw recordChangedError(sessionsDir, sessionId, during, "its record was not written");
+        }
+        owned = written;
+      },
+      /** The record now, and whether it is still this launch, gone, or replaced. */
+      check(): { state: "own" | "gone" | "replaced"; current: Record<string, string> | null } {
+        const current = readMetadataRaw(sessionsDir, sessionId);
+        if (!current) return { state: "gone", current };
+        return {
+          state: holdsExpected(current, launchIdentity(owned)) ? "own" : "replaced",
+          current,
+        };
+      },
+      /** Delete the record without an archive, only while it is still this launch. */
+      release(): void {
+        deleteMetadata(sessionsDir, sessionId, false, launchIdentity(owned));
+      },
+    };
+  }
+
+  type OwnLaunchRecord = ReturnType<typeof ownLaunchRecord>;
+
+  /**
+   * B-1 (round 4): undo a launch that failed. The record and the workspace
+   * are removed only while the record is still this launch (or gone): a new
+   * reservation, launch or restore of the same ID uses the same worktree
+   * path and runtime name, so they stay for it. The runtime of this launch
+   * is stopped unless the record that replaced it names the same runtime (a
+   * restore after a kill reuses the tmux name; that runtime is the other
+   * launch's). The agent session that this launch prepared is always its own.
+   * Every step is best effort.
+   */
+  async function rollbackLaunch(rollback: {
+    own: OwnLaunchRecord;
+    runtime?: Runtime;
+    handle?: RuntimeHandle;
+    prepared?: PreparedAgentSession;
+    destroyWorkspace?: () => Promise<void>;
+  }): Promise<void> {
+    let checked: ReturnType<OwnLaunchRecord["check"]>;
+    try {
+      checked = rollback.own.check();
+    } catch {
+      checked = { state: "replaced", current: null };
+    }
+    if (rollback.runtime && rollback.handle) {
+      if (checked.state !== "replaced" || !recordNamesRuntime(checked.current, rollback.handle)) {
+        try {
+          await rollback.runtime.destroy(rollback.handle);
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+    await discardPreparedSession(rollback.prepared);
+    if (rollback.destroyWorkspace && checked.state !== "replaced") {
+      try {
+        await rollback.destroyWorkspace();
+      } catch {
+        /* best effort */
+      }
+    }
+    if (checked.state === "own") {
+      try {
+        rollback.own.release();
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
   // Define methods as local functions so `this` is not needed
   async function spawn(spawnConfig: SessionSpawnConfig): Promise<Session> {
     const project = config.projects[spawnConfig.projectId];
@@ -1394,11 +1535,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // Determine session ID — atomically reserve to prevent concurrent collisions
     const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
-    const { sessionId, tmuxName } = await reserveNextSessionIdentity(
-      project,
-      sessionsDir,
-      launchClaim,
-    );
+    const {
+      sessionId,
+      tmuxName,
+      record: reservedRecord,
+    } = await reserveNextSessionIdentity(project, sessionsDir, launchClaim);
+    // B-1 (round 4): every later write of this spawn goes only into its own record.
+    const own = ownLaunchRecord(sessionsDir, sessionId, reservedRecord);
 
     // Determine branch name — explicit branch always takes priority
     let branch: string;
@@ -1425,7 +1568,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // Create workspace (if workspace plugin is available)
     let workspacePath = project.path;
+    const destroySpawnWorkspace = async (): Promise<void> => {
+      if (
+        plugins.workspace &&
+        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
+      ) {
+        await plugins.workspace.destroy(workspacePath);
+      }
+    };
     if (plugins.workspace) {
+      let workspaceCreated = false;
       try {
         // m-13: refuse an external branch before any git runs. Inside the
         // try so a refusal deletes the reservation via the catch below.
@@ -1438,29 +1590,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           branch,
         });
         workspacePath = wsInfo.path;
+        workspaceCreated = true;
 
         // Run post-create hooks — clean up workspace on failure
         if (plugins.workspace.postCreate) {
-          try {
-            await plugins.workspace.postCreate(wsInfo, project);
-          } catch (err) {
-            if (shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)) {
-              try {
-                await plugins.workspace.destroy(workspacePath);
-              } catch {
-                /* best effort */
-              }
-            }
-            throw err;
-          }
+          await plugins.workspace.postCreate(wsInfo, project);
         }
       } catch (err) {
-        // Clean up reserved session ID on workspace failure
-        try {
-          deleteMetadata(sessionsDir, sessionId, false);
-        } catch {
-          /* best effort */
-        }
+        // Clean up the workspace and the reserved session ID on failure.
+        await rollbackLaunch({
+          own,
+          destroyWorkspace: workspaceCreated ? destroySpawnWorkspace : undefined,
+        });
         throw err;
       }
     }
@@ -1535,21 +1676,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             })
           : undefined;
     } catch (err) {
-      if (
-        plugins.workspace &&
-        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
-      ) {
-        try {
-          await plugins.workspace.destroy(workspacePath);
-        } catch {
-          /* best effort */
-        }
-      }
-      try {
-        deleteMetadata(sessionsDir, sessionId, false);
-      } catch {
-        /* best effort */
-      }
+      await rollbackLaunch({ own, destroyWorkspace: destroySpawnWorkspace });
       throw err;
     }
     const agentLaunchConfig: AgentLaunchConfig = {
@@ -1576,7 +1703,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // since the reservation, so the shared-ID guard does not take the
         // record for a dead holder while its pane does not exist yet.
         if (reusedOpenCodeSessionId) {
-          updateMetadata(sessionsDir, sessionId, { opencodeSessionId: reusedOpenCodeSessionId });
+          own.write(
+            { opencodeSessionId: reusedOpenCodeSessionId },
+            "the spawn stored its reused agent session",
+          );
         }
         // I-3: the agent makes its own session ready before the pane starts
         // (OpenCode: model check, then create or the switch of a reused
@@ -1588,19 +1718,23 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // Store the prepared values before the pane starts, so an `ao spawn`
         // that dies later leaves a record that names the agent session.
         preparedCreatedAt = new Date().toISOString();
-        updateMetadata(sessionsDir, sessionId, {
-          worktree: workspacePath,
-          branch,
-          status: "spawning",
-          tmuxName,
-          issue: spawnConfig.issueId,
-          project: spawnConfig.projectId,
-          agent: selection.agentName,
-          model: selection.model,
-          permissions: selection.permissions ?? "default",
-          createdAt: preparedCreatedAt,
-          ...prepared.metadata,
-        });
+        own.write(
+          {
+            worktree: workspacePath,
+            branch,
+            status: "spawning",
+            tmuxName,
+            issue: spawnConfig.issueId,
+            project: spawnConfig.projectId,
+            agent: selection.agentName,
+            model: selection.model,
+            permissions: selection.permissions ?? "default",
+            createdAt: preparedCreatedAt,
+            ...prepared.metadata,
+            [RESERVATION_KEY]: "",
+          },
+          "the spawn prepared its agent session",
+        );
         launchCommand = plugins.agent.getLaunchCommand(
           withPreparedAgentConfig(agentLaunchConfig, prepared),
         );
@@ -1616,24 +1750,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment,
       });
     } catch (err) {
-      // Remove only an agent session that this spawn created (never a reused one).
-      await discardPreparedSession(prepared);
-      // Clean up workspace and reserved ID if agent config or runtime creation failed
-      if (
-        plugins.workspace &&
-        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
-      ) {
-        try {
-          await plugins.workspace.destroy(workspacePath);
-        } catch {
-          /* best effort */
-        }
-      }
-      try {
-        deleteMetadata(sessionsDir, sessionId, false);
-      } catch {
-        /* best effort */
-      }
+      // Remove only an agent session that this spawn created (never a reused
+      // one), the workspace and the reserved ID.
+      await rollbackLaunch({ own, prepared, destroyWorkspace: destroySpawnWorkspace });
       throw err;
     }
 
@@ -1680,13 +1799,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
       };
-      if (prepared) {
-        // B-1: merge, so the launch keys stay until `confirmLaunch` proves
-        // that the pane runs the agent on its session.
-        updateMetadata(sessionsDir, sessionId, launchedRecord);
-      } else {
-        writeMetadata(sessionsDir, sessionId, launchedRecord);
-      }
+      // B-1: a merge (into the own record only), so the launch keys stay
+      // until `confirmLaunch` proves that the pane runs the agent on its
+      // session. The reservation ID goes: the launch identity now names it.
+      own.write({ ...launchedRecord, [RESERVATION_KEY]: "" }, "the spawn started its runtime");
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -1704,34 +1820,23 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
       if (prepared) {
         // B-1: the launch is confirmed; from now on the pane rule applies.
-        updateMetadata(sessionsDir, sessionId, { ...session.metadata, ...CLEARED_LAUNCH_CLAIM });
+        own.write(
+          { ...session.metadata, ...CLEARED_LAUNCH_CLAIM },
+          "the spawn confirmed its launch",
+        );
       } else if (Object.keys(session.metadata || {}).length > 0) {
-        updateMetadata(sessionsDir, sessionId, session.metadata);
+        own.write(session.metadata, "the spawn set up its agent");
       }
     } catch (err) {
       // Clean up runtime and workspace on post-launch failure. The runtime
       // goes first, so no pane still uses the agent session that is removed.
-      try {
-        await plugins.runtime.destroy(handle);
-      } catch {
-        /* best effort */
-      }
-      await discardPreparedSession(prepared);
-      if (
-        plugins.workspace &&
-        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
-      ) {
-        try {
-          await plugins.workspace.destroy(workspacePath);
-        } catch {
-          /* best effort */
-        }
-      }
-      try {
-        deleteMetadata(sessionsDir, sessionId, false);
-      } catch {
-        /* best effort */
-      }
+      await rollbackLaunch({
+        own,
+        runtime: plugins.runtime,
+        handle,
+        prepared,
+        destroyWorkspace: destroySpawnWorkspace,
+      });
       throw err;
     }
 
@@ -1778,7 +1883,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     if (session.metadata["promptDelivered"]) {
-      updateMetadata(sessionsDir, sessionId, session.metadata);
+      try {
+        own.write(session.metadata, "the spawn delivered its prompt");
+      } catch (err) {
+        // B-1: a kill, restore or new reservation replaced this launch after
+        // it started; its delivery note does not belong to that record.
+        if (own.check().state === "own") throw err;
+        warnOperator(`ao: ${shortErrorText(err)}`);
+      }
     }
 
     return session;
@@ -1821,6 +1933,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let tmuxName: string | undefined;
     let branch: string;
     let workspacePath: string;
+    // B-1 (round 4): the record that this start reserved; its writes go there only.
+    let own: OwnLaunchRecord;
     const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
 
     if (orchestratorWorkspaceMode === "project") {
@@ -1843,7 +1957,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const existingOrchestrator = existingRaw?.["runtimeHandle"]
         ? metadataToSession(sessionId, existingRaw, orchestratorConfig.projectId)
         : null;
-      if (existingOrchestrator?.runtimeHandle) {
+      // B-1 (round 4): the liveness check awaits; the old orchestrator is
+      // stopped and its record removed only while the record still names
+      // the launch that was checked. Another start that replaced it in the
+      // meantime keeps its record (the reservation below then fails, and
+      // the concurrent path decides again from the new record).
+      const stillNames = (read: Record<string, string>): boolean => {
+        const current = readMetadataRaw(sessionsDir, sessionId);
+        return !!current && holdsExpected(current, launchIdentity(read));
+      };
+      if (existingRaw && existingOrchestrator?.runtimeHandle) {
         const existingAlive = await isOrchestratorRuntimeAlive(
           plugins.runtime,
           existingOrchestrator.runtimeHandle,
@@ -1863,28 +1986,31 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             persisted.metadata["orchestratorSessionReused"] = "true";
             return persisted;
           }
-          await plugins.runtime.destroy(existingOrchestrator.runtimeHandle).catch(() => undefined);
-          deleteMetadata(sessionsDir, sessionId, false);
         } else if (existingAlive) {
-          await plugins.runtime.destroy(existingOrchestrator.runtimeHandle).catch(() => undefined);
-          deleteMetadata(sessionsDir, sessionId, false);
+          if (stillNames(existingRaw)) {
+            await plugins.runtime
+              .destroy(existingOrchestrator.runtimeHandle)
+              .catch(() => undefined);
+            deleteMetadata(sessionsDir, sessionId, false, launchIdentity(existingRaw));
+          }
         } else {
           deleteMetadata(
             sessionsDir,
             sessionId,
             orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
+            launchIdentity(existingRaw),
           );
         }
       }
 
-      let reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
-      if (!reserved) {
+      let reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+      if (!reservedRecord) {
         const concurrentRaw = readMetadataRaw(sessionsDir, sessionId);
         if (concurrentRaw) await assertNoLiveLauncher(sessionId, concurrentRaw, "replace");
         const concurrentSession = concurrentRaw?.["runtimeHandle"]
           ? metadataToSession(sessionId, concurrentRaw, orchestratorConfig.projectId)
           : null;
-        if (concurrentSession?.runtimeHandle) {
+        if (concurrentRaw && concurrentSession?.runtimeHandle) {
           const concurrentAlive = await isOrchestratorRuntimeAlive(
             plugins.runtime,
             concurrentSession.runtimeHandle,
@@ -1902,16 +2028,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               sessionsDir,
               sessionId,
               orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
+              launchIdentity(concurrentRaw),
             );
-            reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
+            reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
           }
         } else {
-          reserved = reserveSessionId(sessionsDir, sessionId, launchClaim ?? undefined);
+          reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
         }
-        if (!reserved) {
+        if (!reservedRecord) {
           throw new Error(`Session ${sessionId} already exists but is not in a reusable state`);
         }
       }
+      own = ownLaunchRecord(sessionsDir, sessionId, reservedRecord);
     } else {
       // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
       // Each isolated orchestrator gets its own numbered session and workspace.
@@ -1919,6 +2047,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       sessionId = identity.sessionId;
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
+      own = ownLaunchRecord(sessionsDir, sessionId, identity.record);
 
       try {
         // m-13: refuse an unsafe branch before any git runs. Inside the
@@ -1940,11 +2069,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         });
         workspacePath = wsInfo.path;
       } catch (err) {
-        try {
-          deleteMetadata(sessionsDir, sessionId, false);
-        } catch {
-          /* best effort */
-        }
+        await rollbackLaunch({ own });
         throw err;
       }
 
@@ -1953,33 +2078,31 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           await plugins.agent.setupWorkspaceHooks(workspacePath, { dataDir: sessionsDir });
         }
       } catch (err) {
-        try {
-          await plugins.workspace.destroy(workspacePath);
-        } catch {
-          /* best effort */
-        }
-        try {
-          deleteMetadata(sessionsDir, sessionId, false);
-        } catch {
-          /* best effort */
-        }
+        const isolatedWorkspace = plugins.workspace;
+        await rollbackLaunch({
+          own,
+          destroyWorkspace: () => isolatedWorkspace.destroy(workspacePath),
+        });
         throw err;
       }
     }
 
-    const cleanupOrchestratorMetadataAndWorkspace = async (promptFile?: string): Promise<void> => {
-      if (orchestratorWorkspaceMode === "isolated" && plugins.workspace) {
-        try {
-          await plugins.workspace.destroy(workspacePath);
-        } catch {
-          /* best effort */
-        }
-      }
-      try {
-        deleteMetadata(sessionsDir, sessionId, false);
-      } catch {
-        /* best effort */
-      }
+    const workspacePlugin = plugins.workspace;
+    // Undo a failed start (see rollbackLaunch) and remove its prompt file.
+    const rollbackOrchestratorLaunch = async (
+      promptFile: string | undefined,
+      failed: { handle?: RuntimeHandle; prepared?: PreparedAgentSession } = {},
+    ): Promise<void> => {
+      await rollbackLaunch({
+        own,
+        runtime: plugins.runtime ?? undefined,
+        handle: failed.handle,
+        prepared: failed.prepared,
+        destroyWorkspace:
+          orchestratorWorkspaceMode === "isolated" && workspacePlugin
+            ? () => workspacePlugin.destroy(workspacePath)
+            : undefined,
+      });
       if (promptFile) {
         try {
           unlinkSync(promptFile);
@@ -2000,7 +2123,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         systemPromptFile = join(baseDir, `orchestrator-prompt-${sessionId}.md`);
         writeFileSync(systemPromptFile, orchestratorConfig.systemPrompt, "utf-8");
       } catch (err) {
-        await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+        await rollbackOrchestratorLaunch(systemPromptFile);
         throw err;
       }
     }
@@ -2060,7 +2183,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         });
       }
     } catch (err) {
-      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      await rollbackOrchestratorLaunch(systemPromptFile);
       throw err;
     }
 
@@ -2089,24 +2212,31 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // I-3: the same claim, create, store and check as a worker spawn.
         environment = preparedEnvironment;
         if (reusableOpenCodeSessionId) {
-          updateMetadata(sessionsDir, sessionId, { opencodeSessionId: reusableOpenCodeSessionId });
+          own.write(
+            { opencodeSessionId: reusableOpenCodeSessionId },
+            "the start stored its reused agent session",
+          );
         }
         prepared = await plugins.agent.prepareAgentSession(agentLaunchConfig, {
           workspacePath,
           environment,
         });
         preparedCreatedAt = new Date().toISOString();
-        updateMetadata(sessionsDir, sessionId, {
-          worktree: workspacePath,
-          branch,
-          status: "working",
-          role: "orchestrator",
-          tmuxName,
-          project: orchestratorConfig.projectId,
-          agent: selection.agentName,
-          createdAt: preparedCreatedAt,
-          ...prepared.metadata,
-        });
+        own.write(
+          {
+            worktree: workspacePath,
+            branch,
+            status: "working",
+            role: "orchestrator",
+            tmuxName,
+            project: orchestratorConfig.projectId,
+            agent: selection.agentName,
+            createdAt: preparedCreatedAt,
+            ...prepared.metadata,
+            [RESERVATION_KEY]: "",
+          },
+          "the start prepared its agent session",
+        );
         launchCommand = plugins.agent.getLaunchCommand(
           withPreparedAgentConfig(agentLaunchConfig, prepared),
         );
@@ -2115,8 +2245,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
       }
     } catch (err) {
-      await discardPreparedSession(prepared);
-      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      await rollbackOrchestratorLaunch(systemPromptFile, { prepared });
       throw err;
     }
 
@@ -2129,8 +2258,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment,
       });
     } catch (err) {
-      await discardPreparedSession(prepared);
-      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      await rollbackOrchestratorLaunch(systemPromptFile, { prepared });
       throw err;
     }
 
@@ -2168,12 +2296,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
       };
-      if (prepared) {
-        // B-1: merge, so the launch keys stay until the launch is confirmed.
-        updateMetadata(sessionsDir, sessionId, launchedRecord);
-      } else {
-        writeMetadata(sessionsDir, sessionId, launchedRecord);
-      }
+      // B-1: a merge (into the own record only), so the launch keys stay
+      // until the launch is confirmed.
+      own.write({ ...launchedRecord, [RESERVATION_KEY]: "" }, "the start started its runtime");
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -2194,20 +2319,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
       if (prepared) {
         // B-1: the launch is confirmed; from now on the pane rule applies.
-        updateMetadata(sessionsDir, sessionId, { ...session.metadata, ...CLEARED_LAUNCH_CLAIM });
+        own.write(
+          { ...session.metadata, ...CLEARED_LAUNCH_CLAIM },
+          "the start confirmed its launch",
+        );
       } else if (Object.keys(session.metadata || {}).length > 0) {
-        updateMetadata(sessionsDir, sessionId, session.metadata);
+        own.write(session.metadata, "the start set up its agent");
       }
     } catch (err) {
       // Clean up runtime on post-launch failure. The runtime goes first, so no
       // pane still uses the agent session that is removed.
-      try {
-        await plugins.runtime.destroy(handle);
-      } catch {
-        /* best effort */
-      }
-      await discardPreparedSession(prepared);
-      await cleanupOrchestratorMetadataAndWorkspace(systemPromptFile);
+      await rollbackOrchestratorLaunch(systemPromptFile, { handle, prepared });
       throw err;
     }
 
@@ -2307,7 +2429,32 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function kill(sessionId: SessionId, options?: { purgeOpenCode?: boolean }): Promise<void> {
+    return killRecord(sessionId, options);
+  }
+
+  /**
+   * The kill. B-1 (round 4): the record is archived only while it still names
+   * the launch that this kill read (its launch identity), so a restore, a
+   * new launch or a new reservation of the ID during the kill keeps its
+   * record, and the kill throws. A status or PR write of another process
+   * does not stop it. `decidedFrom` (cleanup): the launch that a caller
+   * decided to kill before it awaited; a record that names another launch
+   * is not touched at all.
+   */
+  async function killRecord(
+    sessionId: SessionId,
+    options?: { purgeOpenCode?: boolean },
+    decidedFrom?: Readonly<Record<string, string>>,
+  ): Promise<void> {
     const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
+    if (decidedFrom && !holdsExpected(raw, launchIdentity(decidedFrom))) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        "it was checked for cleanup",
+        "it was not killed",
+      );
+    }
     // B-2: the launcher does not watch for a kill; it would go on and write
     // the record again, maybe with an agent session that this kill removed.
     await assertNoLiveLauncher(sessionId, raw, "kill");
@@ -2382,11 +2529,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    // Archive metadata
-    deleteMetadata(sessionsDir, sessionId, true);
+    // Archive metadata (B-1: only the launch that this kill read).
+    const archived = deleteMetadata(sessionsDir, sessionId, true, launchIdentity(raw));
     if (didPurgeOpenCodeSession) {
-      markArchivedOpenCodeCleanup(sessionsDir, sessionId);
+      const removedId = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
+      if (removedId) markArchivedOpenCodeCleanup(sessionsDir, sessionId, removedId);
       await removeLedgerOfRemovedSession(project, sessionsDir, raw["opencodeSessionId"], sessionId);
+    }
+    if (!archived && readMetadataRaw(sessionsDir, sessionId) !== null) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        "it was killed",
+        "its record was not archived; run the kill again",
+      );
     }
   }
 
@@ -2429,7 +2585,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
     if (!retry) return;
     try {
-      updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: "" });
+      // B-1 (round 4): only the archive whose pending key is this ledger.
+      updateArchivedMetadata(
+        sessionsDir,
+        aoSessionId,
+        { opencodeLedgerPending: "" },
+        { opencodeLedgerPending: key },
+      );
     } catch (err) {
       warnOperator(
         `ao: removed the delivery ledger ${deliveryLedgerPath(dir, key)} of ${aoSessionId}, but could not clear its key opencodeLedgerPending (${shortErrorText(err)}); the next \`ao session cleanup\` clears it.`,
@@ -2566,7 +2728,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
         if (shouldKill) {
           if (!options?.dryRun) {
-            await kill(session.id, { purgeOpenCode: shouldPurgeOpenCode });
+            // B-1 (round 4): the checks awaited; kill only the launch they read.
+            await killRecord(session.id, { purgeOpenCode: shouldPurgeOpenCode }, session.metadata);
           }
           pushKilled(session.projectId, session.id);
         } else {
@@ -2634,7 +2797,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           if (!options?.dryRun) {
             try {
               await deleteOpenCodeSession(mappedOpenCodeSessionId);
-              markArchivedOpenCodeCleanup(sessionsDir, archivedId);
+              markArchivedOpenCodeCleanup(sessionsDir, archivedId, mappedOpenCodeSessionId);
               await removeLedgerOfRemovedSession(
                 project,
                 sessionsDir,
@@ -3136,7 +3299,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Cannot claim PR #${pr.number} because it is ${prState}`);
     }
 
-    const conflictingSessions = new Set<SessionId>();
+    // B-1 (round 4): the version of each record that the takeover decision reads.
+    const conflictingSessions = new Map<SessionId, Record<string, string>>();
     const activeRecords = loadActiveSessionRecords(project).filter(
       (record) => record.sessionName !== sessionId,
     );
@@ -3150,11 +3314,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         otherRaw["branch"] === pr.branch && (otherRaw["prAutoDetect"] ?? "on") !== "off";
 
       if (samePr || sameBranch) {
-        conflictingSessions.add(sessionName);
+        conflictingSessions.set(sessionName, otherRaw);
       }
     }
 
-    const takenOverFrom = [...conflictingSessions];
+    const takenOverFrom = [...conflictingSessions.keys()];
 
     const workspacePath = raw["worktree"];
     if (!workspacePath) {
@@ -3164,27 +3328,42 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // m-13: refuse an external PR branch before any git runs.
     assertSafeBranchForSession(sessionId, pr.branch);
 
-    const branchChanged = await scm.checkoutPR(pr, workspacePath);
-
-    // 1.2: never recreate a record that a kill archived during the checkout.
-    const claimed = updateMetadataIf(
-      sessionsDir,
-      sessionId,
-      {},
-      { pr: pr.url, status: "pr_open", branch: pr.branch, prAutoDetect: "" },
-    );
-    if (!claimed) {
-      throw new Error(
-        `Session ${sessionId} was removed while PR #${pr.number} was claimed; its record was not written`,
+    // B-1 (round 4): the version that the claim writes into, read just before
+    // the checkout; it must still be the launch that the claim started from.
+    const beforeCheckout = readMetadataRaw(sessionsDir, sessionId);
+    if (!beforeCheckout || !holdsExpected(beforeCheckout, launchIdentity(raw))) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        `PR #${pr.number} was resolved`,
+        "nothing was checked out or written; check the session and claim again",
       );
     }
 
-    for (const previousSessionId of takenOverFrom) {
-      const previousRaw = readMetadataRaw(sessionsDir, previousSessionId);
-      if (!previousRaw) continue;
+    const branchChanged = await scm.checkoutPR(pr, workspacePath);
 
-      // Only into the version just read: a record that changed or was
-      // archived meanwhile keeps what it holds.
+    // B-1 (round 4): write only into that version: the same generation (any
+    // Node writer increments it) and the same launch. A record that a kill
+    // archived is not recreated; a new reservation, a newer launch or any
+    // other write during the checkout keeps its record, and the claim fails.
+    const claimed = updateMetadataIf(
+      sessionsDir,
+      sessionId,
+      { [GENERATION_KEY]: beforeCheckout[GENERATION_KEY], ...launchIdentity(beforeCheckout) },
+      { pr: pr.url, status: "pr_open", branch: pr.branch, prAutoDetect: "" },
+    );
+    if (!claimed) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        `PR #${pr.number} was claimed`,
+        "its record was not written; check the session and claim again",
+      );
+    }
+
+    for (const [previousSessionId, previousRaw] of conflictingSessions) {
+      // Only into the version that the takeover decision read: a record that
+      // changed or was archived meanwhile keeps what it holds.
       updateMetadataIf(
         sessionsDir,
         previousSessionId,
@@ -3296,15 +3475,31 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Cannot remap ${sessionId} to OpenCode session ${candidate.id}: ${holder}.`);
     }
 
-    if (active) {
-      updateMetadata(sessionsDir, sessionId, { opencodeSessionId: candidate.id });
-    } else {
-      // An archive purged earlier carries `opencodeCleanedAt`, and `cleanup`
-      // skips such a record; clear it so the new ID is removed in its turn.
-      updateArchivedMetadata(sessionsDir, sessionId, {
-        opencodeSessionId: candidate.id,
-        opencodeCleanedAt: "",
-      });
+    // B-1 (round 4): the discovery awaited; write only into the launch that
+    // remap read, while it still holds the mapping that remap replaces.
+    const decided = { ...launchIdentity(raw), opencodeSessionId: raw["opencodeSessionId"] };
+    const written = active
+      ? updateMetadataIf(sessionsDir, sessionId, decided, { opencodeSessionId: candidate.id }) !==
+        null
+      : // An archive purged earlier carries `opencodeCleanedAt`, and `cleanup`
+        // skips such a record; clear it so the new ID is removed in its turn.
+        updateArchivedMetadata(
+          sessionsDir,
+          sessionId,
+          { opencodeSessionId: candidate.id, opencodeCleanedAt: "" },
+          decided,
+        );
+    if (!written) {
+      throw active
+        ? recordChangedError(
+            sessionsDir,
+            sessionId,
+            "it was remapped",
+            "the mapping was not written; run the remap again",
+          )
+        : new Error(
+            `The archived record of ${sessionId} changed while it was remapped (a restore or a newer archive of the ID); the mapping was not written; run the remap again`,
+          );
     }
     return candidate.id;
   }
@@ -3425,9 +3620,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
+    // B-1 (round 4): the version that this restore owns. Every later write
+    // compares its launch identity: an archive, a new reservation, or another
+    // restore or launch of the ID stops the restore, and nothing is written.
+    let owned: Record<string, string> = raw;
     if (fromArchive) {
-      // Keep the stored spawn identity when copying the archive back.
-      writeMetadata(sessionsDir, sessionId, {
+      // Keep the stored spawn identity when copying the archive back. The
+      // copy-back is a reservation: it never writes over an active record
+      // (another restore or a new reservation), and only while the latest
+      // archive is still the one that this restore read.
+      const copyBack: Record<string, string | undefined> = {
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
         status: raw["status"] ?? "killed",
@@ -3446,8 +3648,26 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         runtimeHandle: raw["runtimeHandle"],
         opencodeSessionId: raw["opencodeSessionId"],
         pinnedSummary: raw["pinnedSummary"],
-      });
+      };
+      const reserved = reserveSessionRecord(
+        sessionsDir,
+        sessionId,
+        Object.fromEntries(
+          Object.entries(copyBack).filter((entry): entry is [string, string] => !!entry[1]),
+        ),
+        launchIdentity(raw),
+      );
+      if (!reserved) {
+        throw new Error(
+          `Session ${sessionId} changed while it was restored (another restore or a new reservation of the ID, or a newer archive); nothing was changed`,
+        );
+      }
+      owned = reserved;
     }
+    const stillOwned = (): boolean => {
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      return !!current && holdsExpected(current, launchIdentity(owned));
+    };
 
     // 6. Check workspace
     const workspaceExists = plugins.workspace?.exists
@@ -3489,6 +3709,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
+    // B-1 (round 4): the workspace step awaited. Stop before the old runtime
+    // is destroyed when another process changed the launch meanwhile (the
+    // runtime name is the same for every launch of the ID).
+    if (!stillOwned()) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        "it was restored",
+        "no runtime was destroyed or created",
+      );
+    }
+
     // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash)
     if (session.runtimeHandle) {
       try {
@@ -3517,13 +3749,34 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       },
     });
 
-    // 9. Update metadata — merge updates, preserving existing fields
+    // 9. Update metadata — merge updates, preserving existing fields. B-1
+    // (round 4): only into the version that this restore owns. When it was
+    // archived, or another reservation, restore or launch replaced it, the
+    // new runtime has no record that names it: it is stopped (best effort;
+    // it was created a moment ago, so no other launch can hold its runtime
+    // name yet), and the restore throws.
     const now = new Date().toISOString();
-    updateMetadata(sessionsDir, sessionId, {
+    const restoredRecord = updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), {
       status: "spawning",
       runtimeHandle: JSON.stringify(handle),
       restoredAt: now,
+      [RESERVATION_KEY]: "",
     });
+    if (!restoredRecord) {
+      const changed = recordChangedError(
+        sessionsDir,
+        sessionId,
+        "it was restored",
+        "its new runtime was stopped and its record was not written",
+      );
+      try {
+        await plugins.runtime.destroy(handle);
+      } catch {
+        /* best effort */
+      }
+      throw changed;
+    }
+    owned = restoredRecord;
 
     // 10. Run postLaunchSetup (non-fatal)
     const restoredSession: Session = {
@@ -3548,7 +3801,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         );
 
         if (Object.keys(metadataUpdates).length > 0) {
-          updateMetadata(sessionsDir, sessionId, metadataUpdates);
+          // B-1 (round 4): only while the record is still this restore's launch.
+          updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), metadataUpdates);
         }
       } catch {
         // Non-fatal — session is already running

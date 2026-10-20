@@ -13,6 +13,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,8 @@ import {
   readMetadataRaw,
   recordLockName,
   reserveSessionId,
+  reserveSessionRecord,
+  updateArchivedMetadata,
   updateMetadata,
   updateMetadataIf,
   writeMetadata,
@@ -269,8 +272,12 @@ describe("1.2 item 6: a second writer between the first writer's read and rename
     const { childFinishedInside } = await takeDuringRename("archive-reserve", read);
 
     expect(childFinishedInside).toBe(false);
-    // The archive holds the lifecycle's write; the live record is the new, empty reservation.
-    expect(readMetadataRaw(dir, "kr-1")).toEqual({});
+    // The archive holds the lifecycle's write (generation 3); the live record
+    // is the new reservation (round 4: its own reservation ID, generation 4).
+    expect(readMetadataRaw(dir, "kr-1")).toEqual({
+      reservationId: expect.any(String),
+      generation: "4",
+    });
     expect(readArchivedMetadataRaw(dir, "kr-1")).toMatchObject({ status: "killed" });
   }, 20_000);
 
@@ -279,7 +286,10 @@ describe("1.2 item 6: a second writer between the first writer's read and rename
     const { written } = await writeWhileHeld("archive-reserve", read);
 
     expect(written).toBeNull();
-    expect(readMetadataRaw(dir, "kr-1")).toEqual({});
+    expect(readMetadataRaw(dir, "kr-1")).toEqual({
+      reservationId: expect.any(String),
+      generation: "3",
+    });
     expect(readArchivedMetadataRaw(dir, "kr-1")).toMatchObject({ status: "working" });
   }, 20_000);
 
@@ -403,15 +413,18 @@ describe("1.2 item 3: the generation counter", () => {
     expect(readMetadataRaw(dir, "kr-1")!["generation"]).toBe("2");
     deleteMetadata(dir, "kr-1", true);
 
-    // An empty reservation has no generation; its first write continues from the archive.
+    // Round 4 (m-3): the reservation itself continues from the archive.
     expect(reserveSessionId(dir, "kr-1")).toBe(true);
-    expect(readMetadataRaw(dir, "kr-1")).toEqual({});
+    expect(readMetadataRaw(dir, "kr-1")).toEqual({
+      reservationId: expect.any(String),
+      generation: "3",
+    });
     updateMetadata(dir, "kr-1", { status: "spawning" });
-    expect(readMetadataRaw(dir, "kr-1")!["generation"]).toBe("3");
+    expect(readMetadataRaw(dir, "kr-1")!["generation"]).toBe("4");
 
     deleteMetadata(dir, "kr-1", true);
     writeMetadata(dir, "kr-1", { worktree: "/tmp", branch: "main", status: "killed" });
-    expect(readMetadataRaw(dir, "kr-1")!["generation"]).toBe("4");
+    expect(readMetadataRaw(dir, "kr-1")!["generation"]).toBe("5");
   });
 
   it("a conditional write against an older generation, or a gone record, writes nothing", () => {
@@ -433,4 +446,155 @@ describe("1.2 item 3: the generation counter", () => {
     expect(readMetadataRaw(dir, "kr-1")).toMatchObject({ status: "spawning" });
     expect(readMetadataRaw(dir, "kr-1")!["killedReason"]).toBeUndefined();
   });
+});
+
+describe("m-3 (round 4): no writer stores a caller's generation, and archive writes increment it", () => {
+  it("the review's reproducer: an archive bookkeeping write increments, a reservation ignores a caller's generation", () => {
+    writeMetadata(dir, "kr-1", { worktree: "", branch: "", status: "working" });
+    deleteMetadata(dir, "kr-1", true);
+    // The archived copy keeps the generation of the version it copies.
+    expect(readArchivedMetadataRaw(dir, "kr-1")!["generation"]).toBe("1");
+    expect(updateArchivedMetadata(dir, "kr-1", { summary: "archive bookkeeping" })).toBe(true);
+    expect(readArchivedMetadataRaw(dir, "kr-1")!["generation"]).toBe("2");
+
+    expect(reserveSessionId(dir, "kr-1", { generation: "99", launchPid: "fixture" })).toBe(true);
+    expect(readMetadataRaw(dir, "kr-1")).toEqual({
+      launchPid: "fixture",
+      reservationId: expect.any(String),
+      generation: "3",
+    });
+  });
+
+  it("every writer ignores a caller's generation and a caller's reservation ID (only its removal counts)", () => {
+    const reserved = reserveSessionRecord(dir, "kr-1", {
+      generation: "99",
+      reservationId: "chosen-by-caller",
+    })!;
+    expect(reserved["reservationId"]).not.toBe("chosen-by-caller");
+    expect(reserved["generation"]).toBe("1");
+
+    expect(
+      updateMetadataIf(dir, "kr-1", {}, { generation: "50", reservationId: "other", a: "1" }),
+    ).toMatchObject({ generation: "2", reservationId: reserved["reservationId"], a: "1" });
+    expect(updateMetadata(dir, "kr-1", { generation: "77", reservationId: "" })).toBe(true);
+    expect(readMetadataRaw(dir, "kr-1")).toEqual({ a: "1", generation: "3" });
+
+    deleteMetadata(dir, "kr-1", true);
+    updateArchivedMetadata(dir, "kr-1", { generation: "500", reservationId: "x", b: "2" });
+    expect(readArchivedMetadataRaw(dir, "kr-1")).toEqual({ a: "1", b: "2", generation: "4" });
+  });
+
+  it("a conditional archive write or copy-back needs the archived values it expects", () => {
+    writeMetadata(dir, "kr-1", {
+      worktree: "/tmp",
+      branch: "main",
+      status: "killed",
+      runtimeHandle: "old",
+    });
+    deleteMetadata(dir, "kr-1", true);
+
+    expect(updateArchivedMetadata(dir, "kr-1", { note: "x" }, { runtimeHandle: "other" })).toBe(
+      false,
+    );
+    expect(readArchivedMetadataRaw(dir, "kr-1")!["note"]).toBeUndefined();
+    expect(
+      reserveSessionRecord(dir, "kr-1", { status: "killed" }, { runtimeHandle: "other" }),
+    ).toBeNull();
+    expect(readMetadataRaw(dir, "kr-1")).toBeNull();
+
+    const copyBack = reserveSessionRecord(
+      dir,
+      "kr-1",
+      { status: "killed" },
+      { runtimeHandle: "old" },
+    );
+    expect(copyBack).toMatchObject({ status: "killed", generation: "2" });
+    // Never over an existing record.
+    expect(reserveSessionRecord(dir, "kr-1", { status: "x" }, { runtimeHandle: "old" })).toBeNull();
+  });
+});
+
+describe("m-2 (round 4): the exported metadata API works from an ES module caller", () => {
+  /** A script that uses the exported API, then holds one record lock for 1.5 s. */
+  function apiScript(): string {
+    const moduleUrl = pathToFileURL(join(childDir, "metadata.js")).href;
+    return `
+import { writeFileSync } from "node:fs";
+import {
+  writeMetadata, updateMetadata, updateMetadataIf, deleteMetadata, updateArchivedMetadata,
+  reserveSessionId, readMetadataRaw, readArchivedMetadataRaw, withRecordLock,
+} from ${JSON.stringify(moduleUrl)};
+const dir = ${JSON.stringify(dir)};
+const started = Date.now();
+writeMetadata(dir, "kr-1", { worktree: "/tmp", branch: "main", status: "working" });
+updateMetadata(dir, "kr-1", { summary: "esm" });
+const conditional = updateMetadataIf(dir, "kr-1", { generation: "2" }, { status: "killed" });
+deleteMetadata(dir, "kr-1", true);
+updateArchivedMetadata(dir, "kr-1", { note: "x" });
+const reserved = reserveSessionId(dir, "kr-1");
+const result = {
+  ms: Date.now() - started,
+  conditional: conditional && conditional.generation,
+  active: readMetadataRaw(dir, "kr-1"),
+  archived: readArchivedMetadataRaw(dir, "kr-1"),
+  reserved,
+};
+writeFileSync(${JSON.stringify(join(dir, ".result"))}, JSON.stringify(result));
+const sleeper = new Int32Array(new SharedArrayBuffer(4));
+withRecordLock(dir, "kr-2", () => {
+  writeFileSync(${JSON.stringify(join(dir, ".ready"))}, "");
+  const until = Date.now() + 1500;
+  while (Date.now() < until) Atomics.wait(sleeper, 0, 0, 5);
+});
+`;
+  }
+
+  async function runApiChild(args: (script: string) => string[]): Promise<void> {
+    const script = apiScript();
+    const child = spawn(process.execPath, args(script), {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: { PATH: process.env["PATH"] ?? "" },
+    });
+    children.push(child);
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const exited = new Promise<number | null>((resolve) =>
+      child.on("exit", (code) => resolve(code)),
+    );
+
+    await vi.waitFor(() => expect(existsSync(join(dir, ".ready")), stderr).toBe(true), {
+      timeout: 8_000,
+      interval: 5,
+    });
+    const result = JSON.parse(readFileSync(join(dir, ".result"), "utf-8"));
+    // Before round 4 the first write waited 10 s for a helper that never
+    // started (`require is not defined in ES module scope`), then threw.
+    expect(result.ms).toBeLessThan(4_000);
+    expect(result.conditional).toBe("3");
+    expect(result.archived).toMatchObject({ status: "killed", note: "x", generation: "4" });
+    expect(result.active).toEqual({ reservationId: expect.any(String), generation: "5" });
+    expect(result.reserved).toBe(true);
+
+    // The child really holds the kernel lock: a write here waits for it.
+    const started = Date.now();
+    writeMetadata(dir, "kr-2", { worktree: "/tmp", branch: "main", status: "working" });
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(500);
+    expect(readMetadataRaw(dir, "kr-2")).toMatchObject({ status: "working", generation: "1" });
+    expect(await exited, stderr).toBe(0);
+  }
+
+  it("from a child started with `node --input-type=module -e`", async () => {
+    await runApiChild((script) => ["--input-type=module", "-e", script]);
+  }, 20_000);
+
+  it("from a plain .mjs file", async () => {
+    const file = join(childDir, `api-${Date.now()}.mjs`);
+    await runApiChild((script) => {
+      writeFileSync(file, script);
+      return [file];
+    });
+  }, 20_000);
 });

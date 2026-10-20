@@ -501,7 +501,7 @@ describe("claimPR", () => {
     const sm = createSessionManager({ config, registry: registryWithSCM(mockSCM) });
 
     await expect(sm.claimPR("app-2", "42")).rejects.toThrow(
-      "Session app-2 was removed while PR #42 was claimed; its record was not written",
+      "Session app-2 was removed (archived or deleted) while PR #42 was claimed; its record was not written",
     );
     expect(readMetadataRaw(sessionsDir, "app-2")).toBeNull();
   });

@@ -1,9 +1,35 @@
 import type { OrchestratorConfig, PluginRegistry, Runtime, Workspace } from "../types.js";
-import { updateMetadata, deleteMetadata } from "../metadata.js";
+import {
+  GENERATION_KEY,
+  deleteMetadata,
+  holdsExpected,
+  launchIdentity,
+  readMetadataRaw,
+  updateMetadataIf,
+} from "../metadata.js";
 import { getSessionsDir } from "../paths.js";
 import { validateStatus } from "../utils/validation.js";
 import { sessionFromMetadata } from "../utils/session-from-metadata.js";
 import type { RecoveryAssessment, RecoveryResult, RecoveryContext } from "./types.js";
+
+/**
+ * B-1 (round 4): the version of the record that the assessment read. The
+ * probes of the assessment awaited, so an action writes or archives only
+ * while the record is still that version: the same generation (any Node
+ * writer increments it), status and PR (the bash helpers change those
+ * without a new generation), and launch. A kill, restore, new launch or new
+ * reservation in between keeps its record, and the action fails.
+ */
+function assessedVersion(rawMetadata: Record<string, string>): Record<string, string> {
+  return {
+    [GENERATION_KEY]: rawMetadata[GENERATION_KEY] ?? "",
+    status: rawMetadata["status"] ?? "",
+    pr: rawMetadata["pr"] ?? "",
+    ...launchIdentity(rawMetadata),
+  };
+}
+
+const RECORD_CHANGED = "the session record changed after the assessment; nothing was written";
 
 export async function recoverSession(
   assessment: RecoveryAssessment,
@@ -42,12 +68,15 @@ export async function recoverSession(
     const sessionsDir = getSessionsDir(config.configPath, project.path);
 
     if (recoveryCount > context.recoveryConfig.maxRecoveryAttempts) {
-      updateMetadata(sessionsDir, sessionId, {
+      const escalated = updateMetadataIf(sessionsDir, sessionId, assessedVersion(rawMetadata), {
         status: "stuck",
         escalatedAt: now,
         escalationReason: `Exceeded max recovery attempts (${context.recoveryConfig.maxRecoveryAttempts})`,
         recoveryCount: String(recoveryCount),
       });
+      if (!escalated) {
+        return { success: false, sessionId, action: "escalate", error: RECORD_CHANGED };
+      }
 
       return {
         success: true,
@@ -58,11 +87,14 @@ export async function recoverSession(
       };
     }
 
-    updateMetadata(sessionsDir, sessionId, {
+    const recovered = updateMetadataIf(sessionsDir, sessionId, assessedVersion(rawMetadata), {
       status: preservedStatus,
       restoredAt: now,
       recoveryCount: String(recoveryCount),
     });
+    if (!recovered) {
+      return { success: false, sessionId, action: "recover", error: RECORD_CHANGED };
+    }
 
     const updatedMetadata = {
       ...rawMetadata,
@@ -113,6 +145,14 @@ export async function cleanupSession(
 
   try {
     const project = config.projects[projectId];
+    const sessionsDir = getSessionsDir(config.configPath, project.path);
+    // B-1 (round 4): nothing is destroyed for a record that changed after
+    // the assessment (the runtime name and the worktree path are the same
+    // for every launch of the ID).
+    const current = readMetadataRaw(sessionsDir, sessionId);
+    if (!current || !holdsExpected(current, assessedVersion(rawMetadata))) {
+      return { success: false, sessionId, action: "cleanup", error: RECORD_CHANGED };
+    }
     // Prefer the runtime recorded on the handle — destroying a session with the
     // wrong runtime plugin silently leaves it running.
     const runtimeName =
@@ -138,15 +178,18 @@ export async function cleanupSession(
       }
     }
 
-    const sessionsDir = getSessionsDir(config.configPath, project.path);
-
-    updateMetadata(sessionsDir, sessionId, {
+    const terminated = updateMetadataIf(sessionsDir, sessionId, assessedVersion(rawMetadata), {
       status: "terminated",
       terminatedAt: new Date().toISOString(),
       terminationReason: "cleanup",
     });
+    if (!terminated) {
+      return { success: false, sessionId, action: "cleanup", error: RECORD_CHANGED };
+    }
 
-    deleteMetadata(sessionsDir, sessionId, true);
+    deleteMetadata(sessionsDir, sessionId, true, {
+      [GENERATION_KEY]: terminated[GENERATION_KEY],
+    });
 
     return {
       success: true,
@@ -169,7 +212,7 @@ export async function escalateSession(
   _registry: PluginRegistry,
   context: RecoveryContext,
 ): Promise<RecoveryResult> {
-  const { sessionId, projectId, reason } = assessment;
+  const { sessionId, projectId, reason, rawMetadata } = assessment;
 
   if (context.dryRun) {
     return {
@@ -185,11 +228,20 @@ export async function escalateSession(
     const project = config.projects[projectId];
     const sessionsDir = getSessionsDir(config.configPath, project.path);
 
-    updateMetadata(sessionsDir, sessionId, {
+    const escalated = updateMetadataIf(sessionsDir, sessionId, assessedVersion(rawMetadata), {
       status: "stuck",
       escalatedAt: new Date().toISOString(),
       escalationReason: reason,
     });
+    if (!escalated) {
+      return {
+        success: false,
+        sessionId,
+        action: "escalate",
+        error: RECORD_CHANGED,
+        requiresManualIntervention: true,
+      };
+    }
 
     return {
       success: true,

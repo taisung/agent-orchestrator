@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import { once } from "node:events";
 import type * as Metadata from "../../metadata.js";
@@ -66,10 +66,11 @@ vi.mock("../../opencode-api.js", async (importOriginal) => {
 });
 
 /**
- * M-5: `after` runs right after a `reserveSessionId` call of core returns
- * true, before the spawn takes its next step. m-6: `before` runs right
- * before such a call and `lost` right after one that returns false, so that
- * a test can stage a concurrent record.
+ * M-5: `after` runs right after a reservation call of core
+ * (`reserveSessionRecord`, round 4) returns a record, before the spawn takes
+ * its next step. m-6: `before` runs right before such a call and `lost`
+ * right after one that returns null, so that a test can stage a concurrent
+ * record.
  */
 const reservation = vi.hoisted(() => ({
   before: null as ((sessionId: string) => void) | null,
@@ -77,13 +78,24 @@ const reservation = vi.hoisted(() => ({
   lost: null as ((sessionId: string) => void) | null,
 }));
 
+/**
+ * Round 4 (B-1, m-3): a reservation holds its launch claim (if any) plus a
+ * reservation ID and the next generation.
+ */
+function reservedRecord(
+  claim: Record<string, string> = {},
+  generation: unknown = "1",
+): Record<string, unknown> {
+  return { ...claim, reservationId: expect.any(String), generation };
+}
+
 vi.mock("../../metadata.js", async (importOriginal) => {
   const actual = await importOriginal<typeof Metadata>();
   return {
     ...actual,
-    reserveSessionId: (...args: Parameters<typeof actual.reserveSessionId>) => {
+    reserveSessionRecord: (...args: Parameters<typeof actual.reserveSessionRecord>) => {
       reservation.before?.(args[1]);
-      const reserved = actual.reserveSessionId(...args);
+      const reserved = actual.reserveSessionRecord(...args);
       if (reserved) reservation.after?.(args[1]);
       else reservation.lost?.(args[1]);
       return reserved;
@@ -1110,8 +1122,9 @@ describe("spawn", () => {
       const session = await sm.spawn({ projectId: "my-app", prompt: "Go" });
 
       expect(order).toEqual(["getLaunchCommand", "getEnvironment", "runtime.create"]);
-      // The record is still the empty reservation when the pane starts.
-      expect(recordAtCreate).toEqual({});
+      // The record is still the reservation (round 4: its reservation ID and
+      // generation only) when the pane starts.
+      expect(recordAtCreate).toEqual(reservedRecord());
       expect(session.metadata["promptDelivered"]).toBe("true");
     });
   });
@@ -3181,10 +3194,12 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       const session = await sm.spawn({ projectId: "my-app" });
 
       // The reserved record holds the launch keys before the workspace exists.
-      expect(recordAtCreate).toEqual({
-        launchPid: String(process.pid),
-        launchPidStart: startToken(process.pid),
-      });
+      expect(recordAtCreate).toEqual(
+        reservedRecord({
+          launchPid: String(process.pid),
+          launchPidStart: startToken(process.pid),
+        }),
+      );
       expect((refused as Error).message).toBe(refusal("kill", "app-1"));
       expect(session.id).toBe("app-1");
       expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe("ses_created_1");
@@ -3304,10 +3319,12 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
         const session = await sm.spawn({ projectId: "my-app" });
         const outcome = await kill.outcome();
 
-        expect(kill.recordAtReservation()).toEqual({
-          launchPid: String(process.pid),
-          launchPidStart: startToken(process.pid),
-        });
+        expect(kill.recordAtReservation()).toEqual(
+          reservedRecord({
+            launchPid: String(process.pid),
+            launchPidStart: startToken(process.pid),
+          }),
+        );
         expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
         expect((outcome as Error).message).toBe(refusal("kill", "app-1"));
         expect(session.id).toBe("app-1");
@@ -3348,10 +3365,12 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
           const session = await sm.spawnOrchestrator({ projectId: "my-app" });
           const outcome = await kill.outcome();
 
-          expect(kill.recordAtReservation()).toEqual({
-            launchPid: String(process.pid),
-            launchPidStart: startToken(process.pid),
-          });
+          expect(kill.recordAtReservation()).toEqual(
+            reservedRecord({
+              launchPid: String(process.pid),
+              launchPidStart: startToken(process.pid),
+            }),
+          );
           expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
           expect((outcome as Error).message).toBe(refusal("kill", id));
           expect(session.id).toBe(id);
@@ -3416,10 +3435,16 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
           const outcome = await kill.outcome();
 
           expect(lostReservations).toEqual(["app-orchestrator"]);
-          expect(kill.recordAtReservation()).toEqual({
-            launchPid: String(process.pid),
-            launchPidStart: startToken(process.pid),
-          });
+          // The generation continues above an archive of the concurrent record.
+          expect(kill.recordAtReservation()).toEqual(
+            reservedRecord(
+              {
+                launchPid: String(process.pid),
+                launchPidStart: startToken(process.pid),
+              },
+              expect.stringMatching(/^[1-9]\d*$/),
+            ),
+          );
           expect(outcome).toBeInstanceOf(SessionLaunchInProgressError);
           expect((outcome as Error).message).toBe(refusal("kill", "app-orchestrator"));
           expect(session.id).toBe("app-orchestrator");
@@ -3463,7 +3488,7 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
         });
       });
 
-      it("an agent without preparation hooks still reserves an empty record", async () => {
+      it("an agent without preparation hooks reserves a record without launch keys", async () => {
         let recordAtReservation: Record<string, string> | null = { unread: "true" };
         reservation.after = (sessionId) => {
           reservation.after = null;
@@ -3473,7 +3498,7 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
 
         const session = await sm.spawn({ projectId: "my-app" });
 
-        expect(recordAtReservation).toEqual({});
+        expect(recordAtReservation).toEqual(reservedRecord());
         expect(session.id).toBe("app-1");
       });
     });
@@ -3545,12 +3570,14 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
           issueId: "INT-42",
         }),
       ).rejects.toThrow("the launcher dies here");
-      // The claim plus the generation of the write that stored the reused ID.
+      // The claim, its reservation ID, and the generation of the write that
+      // stored the reused ID (round 4: the reservation itself has generation 1).
       expect(orphan).toEqual({
         launchPid: String(process.pid),
         launchPidStart: startToken(process.pid),
         opencodeSessionId: "ses_old",
-        generation: "1",
+        reservationId: expect.any(String),
+        generation: "2",
       });
       const dead = await deadProcess();
       updateMetadata(sessionsDir, orphanId, {
@@ -3614,7 +3641,9 @@ describe("a launch in progress keeps its OpenCode session (B-1)", () => {
       useOpenCodeProject({ opencodeIssueSessionStrategy: "delete" });
       livePanes(agent);
       olderIssueRecord();
-      updateMetadata(sessionsDir, "app-9", { opencodeSessionId: "ses_old" });
+      // A record of an old build that holds only the mapping (round 4:
+      // updateMetadata no longer creates a record).
+      writeFileSync(join(sessionsDir, "app-9"), "opencodeSessionId=ses_old\n");
 
       const stderr = captureStderr();
       let warnings: string;

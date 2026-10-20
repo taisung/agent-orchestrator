@@ -139,19 +139,18 @@ describe("metadata lifecycle (real filesystem)", () => {
     expect(raw!["worktree"]).toBe("/w");
   });
 
-  it("updateMetadata creates file if it does not exist", () => {
+  it("updateMetadata does not create a record that does not exist (killed-status round 4, B-1)", () => {
     const sessionsDir = join(tmpDir, "test-update-create");
     mkdirSync(sessionsDir, { recursive: true });
 
-    updateMetadata(sessionsDir, "session-new", {
+    const written = updateMetadata(sessionsDir, "session-new", {
       worktree: "/w",
       branch: "main",
       status: "spawning",
     });
 
-    const result = readMetadata(sessionsDir, "session-new");
-    expect(result).not.toBeNull();
-    expect(result!.status).toBe("spawning");
+    expect(written).toBe(false);
+    expect(readMetadata(sessionsDir, "session-new")).toBeNull();
   });
 
   it("listMetadata returns session IDs, excluding archive directory", () => {

@@ -229,12 +229,18 @@ describe("updateMetadata", () => {
     expect(raw!["status"]).toBe("working");
   });
 
-  it("creates file if it does not exist", () => {
-    updateMetadata(dataDir, "upd-3", { status: "new", branch: "test" });
+  it("does not create a record that does not exist (B-1, round 4)", () => {
+    expect(updateMetadata(dataDir, "upd-3", { status: "new", branch: "test" })).toBe(false);
+    expect(readMetadataRaw(dataDir, "upd-3")).toBeNull();
+    expect(updateMetadata(join(dataDir, "missing-dir"), "upd-3", { status: "new" })).toBe(false);
+    expect(existsSync(join(dataDir, "missing-dir"))).toBe(false);
 
-    const raw = readMetadataRaw(dataDir, "upd-3");
-    // Every locked write sets the next generation; a new record starts at 1.
-    expect(raw).toEqual({ status: "new", branch: "test", generation: "1" });
+    // An archived record is not recreated either.
+    writeMetadata(dataDir, "upd-3", { worktree: "/tmp/w", branch: "main", status: "working" });
+    deleteMetadata(dataDir, "upd-3", true);
+    expect(updateMetadata(dataDir, "upd-3", { status: "killed" })).toBe(false);
+    expect(readMetadataRaw(dataDir, "upd-3")).toBeNull();
+    expect(readArchivedMetadataRaw(dataDir, "upd-3")?.["status"]).toBe("working");
   });
 
   it("ignores undefined values", () => {
@@ -551,7 +557,12 @@ describe("reserveSessionId (M-5)", () => {
     for (const view of views) {
       expect(view.listed).toEqual(view.raw === null ? [] : ["app-1"]);
     }
-    expect(readMetadataRaw(dataDir, "app-1")).toEqual(claim);
+    // Round 4: plus a reservation ID and the first generation.
+    expect(readMetadataRaw(dataDir, "app-1")).toEqual({
+      ...claim,
+      reservationId: expect.any(String),
+      generation: "1",
+    });
     expect(readdirSync(dataDir)).toEqual(["app-1"]);
   });
 
@@ -561,22 +572,31 @@ describe("reserveSessionId (M-5)", () => {
       false,
     );
     expect(reserveSessionId(dataDir, "app-1")).toBe(false);
-    expect(readMetadataRaw(dataDir, "app-1")).toEqual(claim);
+    expect(readMetadataRaw(dataDir, "app-1")).toEqual({
+      ...claim,
+      reservationId: expect.any(String),
+      generation: "1",
+    });
 
-    // A claim does not win over an empty reservation either.
+    // A claim does not win over a reservation without one either.
     expect(reserveSessionId(dataDir, "app-2")).toBe(true);
+    const plain = readMetadataRaw(dataDir, "app-2");
     expect(reserveSessionId(dataDir, "app-2", claim)).toBe(false);
-    expect(readFileSync(join(dataDir, "app-2"), "utf-8")).toBe("");
+    expect(readMetadataRaw(dataDir, "app-2")).toEqual(plain);
 
     expect(readdirSync(dataDir).sort()).toEqual(["app-1", "app-2"]);
   });
 
-  it("without a claim, makes the same empty record as before", () => {
+  it("without a claim, makes a record with only a reservation ID and a generation (round 4)", () => {
     expect(reserveSessionId(dataDir, "app-1")).toBe(true);
     expect(reserveSessionId(dataDir, "app-2", {})).toBe(true);
-    expect(readFileSync(join(dataDir, "app-1"), "utf-8")).toBe("");
-    expect(readFileSync(join(dataDir, "app-2"), "utf-8")).toBe("");
-    expect(readMetadataRaw(dataDir, "app-1")).toEqual({});
+    const first = readMetadataRaw(dataDir, "app-1");
+    const second = readMetadataRaw(dataDir, "app-2");
+    expect(first).toEqual({ reservationId: expect.any(String), generation: "1" });
+    expect(second).toEqual({ reservationId: expect.any(String), generation: "1" });
+    // No two reservations have the same ID.
+    expect(first?.["reservationId"]).not.toBe(second?.["reservationId"]);
+    expect(readMetadata(dataDir, "app-1")?.status).toBe("unknown");
     expect(reserveSessionId(dataDir, "app-1")).toBe(false);
     expect(readdirSync(dataDir).sort()).toEqual(["app-1", "app-2"]);
   });

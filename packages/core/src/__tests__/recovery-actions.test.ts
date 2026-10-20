@@ -84,6 +84,22 @@ function makeAssessment(overrides: Partial<RecoveryAssessment> = {}): RecoveryAs
   };
 }
 
+/**
+ * The record that the assessment read (round 4, B-1): an action writes only
+ * into that version, so the fixture puts it on disk as the scanner read it.
+ */
+function seedAssessedRecord(config: OrchestratorConfig, assessment: RecoveryAssessment): string {
+  const sessionsDir = getSessionsDir(config.configPath, config.projects.app.path);
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(
+    join(sessionsDir, assessment.sessionId),
+    Object.entries(assessment.rawMetadata)
+      .map(([key, value]) => `${key}=${value}\n`)
+      .join(""),
+  );
+  return sessionsDir;
+}
+
 function makeContext(rootDir: string, overrides: Partial<RecoveryContext> = {}): RecoveryContext {
   return {
     configPath: join(rootDir, "agent-orchestrator.yaml"),
@@ -121,9 +137,9 @@ describe("recoverSession", () => {
     const registry = makeRegistry();
     const assessment = makeAssessment();
     const context = makeContext(rootDir);
+    const sessionsDir = seedAssessedRecord(config, assessment);
 
     const result = await recoverSession(assessment, config, registry, context);
-    const sessionsDir = getSessionsDir(config.configPath, config.projects.app.path);
     const metadata = readMetadataRaw(sessionsDir, assessment.sessionId);
 
     expect(result.success).toBe(true);
@@ -148,6 +164,7 @@ describe("recoverSession", () => {
       },
     });
     const context = makeContext(rootDir);
+    seedAssessedRecord(config, assessment);
 
     const result = await recoverSession(assessment, config, registry, context);
 
@@ -176,6 +193,7 @@ describe("recoverSession", () => {
         maxRecoveryAttempts: 3,
       },
     });
+    seedAssessedRecord(config, assessment);
 
     const result = await recoverSession(assessment, config, registry, context);
 
@@ -306,9 +324,9 @@ describe("cleanupSession", () => {
       },
     });
     const context = makeContext(rootDir);
+    const sessionsDir = seedAssessedRecord(config, assessment);
 
     const result = await cleanupSession(assessment, config, registry, context);
-    const sessionsDir = getSessionsDir(config.configPath, config.projects.app.path);
 
     expect(mockWorkspace.destroy).toHaveBeenCalled();
     expect(result.success).toBe(true);
@@ -361,9 +379,9 @@ describe("cleanupSession", () => {
       },
     });
     const context = makeContext(rootDir);
+    const sessionsDir = seedAssessedRecord(config, assessment);
 
     const result = await cleanupSession(assessment, config, registry, context);
-    const sessionsDir = getSessionsDir(config.configPath, config.projects.app.path);
 
     expect(mockRuntime.destroy).toHaveBeenCalled();
     expect(mockWorkspace.destroy).toHaveBeenCalled();
