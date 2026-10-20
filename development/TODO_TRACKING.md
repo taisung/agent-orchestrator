@@ -886,6 +886,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     - Test isolation note (orchestrator): `record-lock.test.ts:150,556` start children with only `PATH`, so
       `os.homedir()` in a child is the real home; no real write seen.
     - R7: the Opus author failed a third review round. The next step is the owner's.
+  - **Fix round 5** (owner 2026-10-20, answers "1a 2a 3a"): ao-46 on Opus writes it; scope all five r3
+    findings (B-1, B-2, M-1, M-2, m-1) plus child processes of the tests get the fake `HOME`; two rules
+    for the whole round: each removal step re-checks ownership directly before it (no `await` between),
+    and `generation` never repeats for a session ID. The tmux-name destroy windows in `killRecord` and
+    restore step 7 go to the prefix-match round. Dispatched 19:35:11 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r5.md`, on top of `f35b665f`, no rebase.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
