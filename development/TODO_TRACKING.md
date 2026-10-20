@@ -639,6 +639,15 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     Brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r5-check-sol.md`: the diff scope, m-3, the
     reviewer's own four mutants against the new tests, the spec sentence, gates. Review file
     `development/reviews/i5_review_r5_sol61.md`. No live run.
+  - **Round 5 check (ao-44, 09:48 EDT, 8 min, 0.64 USD): LAND-SAFE** for `592441d6..034eb8fb` under the
+    accepted round 4 limits. m-3 fixed. Each of the reviewer's own four r4 mutants fails one new test
+    (1 failed, 81 passed), and the old warning text fails the m-3 test. The mocks pass every other call
+    through and reset. The spec sentence is complete. Gates: full `pnpm test` 2552 passed, 29 skipped;
+    lock and ledger files 3 runs each and one under CPU load. Scope: the five allowed files only.
+    - **m-4 (follow-up, not landed):** the new double-failure warning says that cleanup removes a valid
+      ledger only when all its entries are older than 10 min. The sweep also removes a valid ledger
+      whose entries are `admitted` (any age). Wording only, no delivery defect. Suggested text: "a valid
+      ledger with no live entry (each entry `admitted` or older than 10 min)".
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
