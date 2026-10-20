@@ -585,6 +585,13 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
       (`reports/ao-41-i5-r4.agent_report.review-copy.md`);
     - the lock-name access rules between local accounts are out of scope, and the owner decides them.
     If ao-44 is stopped too, the owner decides on a reviewer of another family.
+  - **Push and cleanup (2026-10-20 09:11 EDT; owner: "push; clean up ao-42 and ao-43").** `main` pushed
+    (`592441d6..7148647b`, 13 docs commits). Then `ao session kill` of ao-42 and ao-43. Before the
+    kill: both branches had 0 commits that are not on `main` or on the ao-41 branch, the review files
+    r1 to r3 were equal to the copies on `main`, and ao-42 had only a 680-byte start of review r3 with
+    no finding. Saved in `~/.cache/agent-skills-haiku55-arc/reports/`: `ao-42-i5-r3-partial.*` (report,
+    task, the review start) and `ao-43-i5-r4-partial.*` (report, task). Worktrees removed by the kill;
+    branches kept. The ao-42 scratch dir `/tmp/i5r3-ao42-20261020` and its marker removed.
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
