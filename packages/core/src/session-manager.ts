@@ -2369,7 +2369,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
       return;
     }
-    if (retry) updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: "" });
+    if (!retry) return;
+    try {
+      updateArchivedMetadata(sessionsDir, aoSessionId, { opencodeLedgerPending: "" });
+    } catch (err) {
+      warnOperator(
+        `ao: removed the delivery ledger ${deliveryLedgerPath(dir, key)} of ${aoSessionId}, but could not clear its key opencodeLedgerPending (${shortErrorText(err)}); the next \`ao session cleanup\` clears it.`,
+      );
+    }
   }
 
   /**

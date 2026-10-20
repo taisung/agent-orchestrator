@@ -759,6 +759,25 @@ describe("one input ID per logical send (I-5 rounds 2 to 4, B-1, M-1, B-2, B-3, 
       expect(existsSync(file)).toBe(true);
       expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeLedgerPending"]).toBe(STORED);
 
+      // The removal works, but the clear of the key fails: the cleanup does
+      // not stop, and the next one clears the key.
+      const archiveDir = join(sessionsDir, "archive");
+      chmodSync(archiveDir, 0o555);
+      try {
+        await sm.cleanup();
+      } finally {
+        chmodSync(archiveDir, 0o755);
+      }
+      expect(existsSync(file)).toBe(false);
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeLedgerPending"]).toBe(STORED);
+      expect(stderr.mock.calls.map((call) => String(call[0]))).toContainEqual(
+        expect.stringMatching(
+          new RegExp(
+            `^ao: removed the delivery ledger ${file} of app-1, but could not clear its key opencodeLedgerPending \\(.*EACCES.*\\); the next \`ao session cleanup\` clears it\\.\\n$`,
+          ),
+        ),
+      );
+
       await sm.cleanup();
 
       expect(
