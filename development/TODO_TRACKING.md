@@ -789,6 +789,28 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     persist `killed` only after a confirming poll, treat an all-negative poll as an outage, re-check
     probe-derived `killed` records; D probes reject on errors (runtime-tmux, claude-code). Files:
     `lifecycle-manager.ts`, `metadata.ts`, `runtime-tmux`, `agent-claude-code`; HIGH. Owner decision.
+  - **Fix round 2** (ao-46, owner 2026-10-20: A+B+C+D by ao-46): `e751a3ee..b8a43f5f` (round-1 tests
+    `0571fa12`, fix `34ea8624`, tests `0b54c4ac`, `CLAUDE.md` rule `b8a43f5f`); full run 2592 passed, 0
+    failed; 18.53 USD.
+  - **Review r1: NOT-LAND-SAFE** (ao-47, gpt-6.1-sol, `development/reviews/killed_status_review_r1_sol61.md`;
+    gates green, 2613 passed; all live runs in scratch):
+    - B-1: the outage rule C2 has no bound. When every recorded session of a project dies in one poll
+      (a tmux server kept up by an unrecorded session), each poll is another "outage": six polls stayed
+      `working`, health `warn`. One live recorded session (the orchestrator) is enough to converge.
+    - B-2: `updateMetadataIf` (`metadata.ts:215-234`) compares, then renames, with no lock. A second
+      process that restores (or archives and reserves the same ID) between the read and the rename
+      loses its write; both calls return `true`. The old unlocked updater had the same race.
+    - M-1: no tmux server (stopped, or a host restart) makes every check reject, so records stay
+      `working` for ever and cleanup skips them; `spawnOrchestrator` counts the same code as dead.
+    - M-2: `claimPR` changes `pr` and keeps `status` and the handle, so a poll that read the old closed PR
+      writes `killed`/`pr-closed` onto the new open PR. The compare must include the PR identity.
+    - M-3: a fresh worker never checks a `working` record whose runtime is already gone (the `pollAll`
+      filter needs a tracked status); pre-existing, named by the author.
+    - m-1: tmux 3.4 answers `no current target` for a missing session on an empty server with
+      `exit-empty off`; m-2: the dormant `recovery/validator.ts` still turns a rejection into cleanup.
+    - Also: C3 recovery checks only the tmux name and a `claude` process, so a new pane under an old
+      name revives an old record (live); the integration test keeper hides the last-session path.
+    - R7: an Opus author failed a review round, so the next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).

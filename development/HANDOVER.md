@@ -29,7 +29,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 | ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`. Round 2 done: `done|b8a43f5f` (fix `34ea8624`, tests `0b54c4ac`, docs `b8a43f5f`, on `e751a3ee`; the round-1 tests are `0571fa12`); full run 2592 passed, 0 failed; report `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r2.md`; 29.34 USD for both rounds | keep for the review findings; router rows closed `in-review` |
-| ao-47 | Codex gpt-6.1-sol, blind review r1 of `e751a3ee..b8a43f5f`, worktree moved to `b8a43f5f`, dispatched 14:09 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r1-sol.md`, review file `development/reviews/killed_status_review_r1_sol61.md` | wait for its verdict; router row open |
+| ao-47 | Codex gpt-6.1-sol, blind review r1 of `e751a3ee..b8a43f5f`: NOT-LAND-SAFE (B-1, B-2, M-1 to M-3, m-1, m-2), review on `main` as `development/reviews/killed_status_review_r1_sol61.md` | keep for the re-check of round 3; router row closed `in-review` |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
 equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
@@ -60,7 +60,7 @@ watching ao-46 and ao-47 (the first watcher, PID 337062, stopped by TERM at 14:0
 directory holds `--preseed.*` files from a call that read it as a session name). `--preseed` records
 the current first line as handled, so read a worker's report first.
 
-**Router log**: both ao-46 rows are closed `in-review` (10.81 USD and 18.53 USD); the ao-47 review row is open.
+**Router log**: both ao-46 rows and the ao-47 review row are closed `in-review` (10.81, 18.53 and about 1.5 USD).
 
 **Owner decisions of 2026-10-20**: fix A+B+C+D in one round by ao-46; the real records `ao-orchestrator`
 and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them). Eight rows of 2026-10-15 still have
