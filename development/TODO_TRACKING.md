@@ -304,6 +304,31 @@ Durable progress record for this fork. Dated events only; the current state live
   rejected, agents without preparation hooks, the `LocationNotFoundError` reuse failure, the project-mode
   orchestrator record drop, the `/proc` need. Costs: author about 60.17 USD (transcript); reviewer about
   1.41, 2.25, 1.65, 1.58 USD; tool-environment attempts about 1.06 and 1.2 USD.
+- `633c6c5f..5069e114` (28 commits, 2026-10-20, ao-41, Opus 5.5; owner 2026-10-20: "Small round 5, then
+  land") - **I-5**: `ao send` and the lifecycle reactions deliver to an OpenCode worker with a stored
+  session ID through `session.prompt` (`queue`), not through a tmux paste (cherry-picks of
+  `592441d6..034eb8fb`; 5 rounds). The send first checks that the pane runs `opencode --session <stored
+  id>` (one restore if not), refuses a body over 131071 bytes, and gives each send a client `msg_` input
+  ID. One ledger file per stored OpenCode session (`<project>/deliveries/<ses_id>.json`) keeps the ID of
+  an attempt whose admission is unknown, so that a retry of the same text inside 10 min reuses it and the
+  service admits once. Mutual exclusion: a Linux abstract Unix socket that the kernel frees when its
+  process ends; each attempt holds its own such lock until its settle. An admitted entry is marked
+  `admitted` before the clear and is never reused. `ao session cleanup` retries a failed ledger removal
+  and removes expired ledgers. Other agents and OpenCode sessions with no stored ID keep the pane path.
+  Limits in the spec (section 4, item 6): non-Linux platforms refuse the agent route; another local user
+  can hold a lock name (sends then fail after 2 s, nothing sent); after 3 failed ledger writes and the
+  end of the sender, a new equal lifecycle dispatch inside 10 min can be recorded with no new input.
+  Reviews: gpt-6.1-sol, `development/reviews/i5_review_r{1,2,3,4,5}_sol61.md` (ao-42 r1 and r2, ao-43 r3,
+  ao-44 r4 LAND-SAFE and the r5 check LAND-SAFE with m-4). Canonical check: `git diff 034eb8fb 5069e114`
+  outside `development/` is empty; core 1098, OpenCode plugin 298 and CLI 257 passed in the orchestrator's
+  run (fake HOME, no `AO_*`, no `opencode` on `PATH`). **Live:** `pnpm build` at 09:49 EDT (exit 0); the
+  five lifecycle workers restarted by exact PID at 09:52:22 to 09:52:34. **New lifecycle PIDs:**
+  agent-skills 105049, agent-orchestrator 105142 (Nexus config) and 106285 (this config), Nexus 105154,
+  VSF 106266. No OpenCode TUI ran on the host at the rollout, so no live worker changed its send path.
+  `~/.ao/bin` unchanged (no `WRAPPER_VERSION` change). Not done yet: the push and the real-TUI check
+  (one model turn), both on the owner's word. Follow-ups: m-4 (one warning text), the shared child
+  runner of the lock and ledger tests. Costs: author 78.01 USD by trial_cost (19.81, 18.26, 14.86,
+  20.05, 5.03); reviewers 8.15 USD (1.56, 1.45, 0.12, 1.83, 0.48, 2.07, 0.64; two content-filter stops).
 
 ## Decisions
 
@@ -363,7 +388,8 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
     project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
     message reached the session, not that the turn succeeded (a failed turn reads `blocked` through I-4).
-- **I-5 in progress (`ao send` through `session.prompt`).** Owner 2026-10-19: "Push, then start I-5"
+- **I-5 landed and rolled out 2026-10-20** (What Landed; push and real-TUI check wait for the owner).
+  The history follows. Owner 2026-10-19: "Push, then start I-5"
   (`994394c9..592441d6` pushed at about 20:05 EDT). Author ao-41 (Claude Code, Opus 5.5, xhigh), spawned
   20:11 EDT on `592441d6`, meter `5h 2%`, `wk 2%`; brief
   `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-send.md`. Design given in the brief: an optional
