@@ -329,8 +329,24 @@ Durable progress record for this fork. Dated events only; the current state live
   09:58 EDT, "push; kill ao-41 and ao-44": `4a0f1f25..9618d83f`). Then `ao session kill` of ao-41 and
   ao-44: both branches had 0 commits that `git cherry main` does not find, the review r5 file was equal
   to `main`, the r4 original equals `reports/ao-44-i5-r4.review.md`, and both reports are saved.
-  Worktrees removed by the kill, branches kept, no process and no `ao-delivery-` name left. Not done
-  yet: the real-TUI check (model turns), on the owner's word. Follow-ups: m-4 (one warning text), the shared child
+  Worktrees removed by the kill, branches kept, no process and no `ao-delivery-` name left.
+  **Real-TUI check passed** (owner 2026-10-20: "run the real-TUI check"; 10:09 to 10:12 EDT, two model
+  turns, status line `$0.00`):
+  - `ao spawn --agent opencode --model opencode-go/muse-spark-1.3-contributor` made ao-45. Its pane ran
+    `opencode --session ses_ea65a9742ffe2FfMyo0jJqmiFT --prompt ...`, the record stored that ID, and the
+    worker answered `READY` to its spawn prompt (no tool).
+  - One `ao send ao-45 "<message>"` from the live build: exit 0 in 1.25 s,
+    `Message admitted to ao-45 (input msg_159a62fa1001ncBByxdH2CopkT, delivery queue)`.
+  - `session.message.list` (type user) went from 1 message to 2, and the new one has the ID
+    `msg_159a62fa1001ncBByxdH2CopkT`. The inbox was empty. The TUI showed the message as a user turn,
+    and its input box stayed empty (no paste).
+  - The message asked for one shell command. The tool printed `ao-45|/home/taisung/.ao/bin/gh`: a tool
+    of an API-sent message runs with the worker's `AO_SESSION_ID` and the `~/.ao/bin` wrappers.
+  - After the success, the ledger dir `60756641ca25-agent-orchestrator/deliveries/` was empty and no
+    `ao-delivery-` name was bound.
+  - Cleanup: `ao session kill --purge-session ao-45`; `session.get` gives 404; TUI process, worktree and
+    lock names gone; the branch has no commit of its own and was not pushed. Service 15920 still has no
+    `AO_*`; `~/.ao/bin` unchanged. Follow-ups: m-4 (one warning text), the shared child
   runner of the lock and ledger tests. Costs: author 78.01 USD by trial_cost (19.81, 18.26, 14.86,
   20.05, 5.03); reviewers 8.15 USD (1.56, 1.45, 0.12, 1.83, 0.48, 2.07, 0.64; two content-filter stops).
 
@@ -392,7 +408,7 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     launching orchestrator; `recovery/actions.ts:149`; the `LocationNotFoundError` reuse failure; the
     project-mode orchestrator record drop. Design note from ao-38: `promptDelivered` means that a `user`
     message reached the session, not that the turn succeeded (a failed turn reads `blocked` through I-4).
-- **I-5 landed, rolled out and pushed 2026-10-20** (What Landed; the real-TUI check waits for the owner).
+- **I-5 landed, rolled out and pushed 2026-10-20; the real-TUI check passed at 10:12 EDT** (What Landed).
   The history follows. Owner 2026-10-19: "Push, then start I-5"
   (`994394c9..592441d6` pushed at about 20:05 EDT). Author ao-41 (Claude Code, Opus 5.5, xhigh), spawned
   20:11 EDT on `592441d6`, meter `5h 2%`, `wk 2%`; brief
