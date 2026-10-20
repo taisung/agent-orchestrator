@@ -1,178 +1,136 @@
 # Handover
 
-**Last Updated**: 2026-10-19
-**Latest Code Commit**: c76a3085 (test(core): cover the claim at both project orchestrator retry reservations)
+**Last Updated**: 2026-10-20
+**Latest Code Commit**: 5069e114 (docs(opencode): name every release of an attempt lock in the spec)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
 ## Current Status
 
-The restore-identity and metadata-hardening series is on `main`, live and pushed: the restore model fix
-(`854690c3`), the restore permission fix (`458786e6`, `120f500a`), option 1, which stores the spawn model and
-mode of every worker (`5b488fdb`, `25a56f30`), the m-10 helper key limit (`5cbe84b3`) and the m-13 branch
-check (`0ec55a64`). The Release workflow is removed (`14bb4670`). The last rebuild of the primary checkout
-was on 2026-10-16 at 10:45 EDT, and the five lifecycle workers were restarted by exact PID at 10:45:11 to
-10:45:24. `~/.ao/bin` holds 0.2.5 since 10:46:44. `origin/main` is `331d0c31` (CI green); `main` holds the
-handover commit on top of it.
+The fork's part of the OpenCode 2.x arc is complete. I-5 (`ao send` and the lifecycle reactions reach an
+OpenCode worker through `session.prompt`, with a delivery ledger and kernel-released locks) is on `main`
+as `633c6c5f..5069e114`, built at 09:49 EDT, live in the five lifecycle workers since 09:52 EDT, and
+pushed. Its real-TUI check passed at 10:12 EDT: one `ao send` was admitted with the printed input ID, no
+text was pasted, and the tool of that turn saw the worker's `AO_SESSION_ID` and `~/.ao/bin/gh`. I-3 and
+I-4 are live since 2026-10-19 and 2026-10-17. `~/.ao/bin` is 0.2.6, unchanged since 2026-10-16 12:16.
 
-**Update 2026-10-16 12:15 EDT (priority 1 done except one check):** ao-32 reviewed
-`ac0f662a..7f34bf4d`: LAND-SAFE, m-15 to m-17 fixed, new m-18 (bash `pr` checks depend on the locale) and
-N-34 to N-38 (`branch_check_review_r2_opus.md`, TODO). `7f34bf4d` is on `main` as `cd39ea9d`. Both router
-rows are closed. On the owner's word (2026-10-16: build, restart, push; m-18 stays open), the primary
-checkout was rebuilt at 12:12 EDT (dist `WRAPPER_VERSION` 0.2.6), the five lifecycle workers were restarted
-by exact PID at 12:13 EDT, and `main` was pushed. **New lifecycle PIDs:** agent-skills 3215891,
-agent-orchestrator 3215991 (Nexus config) and 3216178 (this config), Nexus 3216043, VSF 3216103. No other
-resident `ao` process ran. CI on `15757aae` passed (CI, Integration Tests, Onboarding Integration Test,
-Security). `~/.ao/bin/.ao-version` shows 0.2.6 since 12:16:13, so the rollout is complete.
-
-**Update 2026-10-16 13:10 EDT (priority 2 started):** I-3 author ao-36 (Opus 5.5, reviewer gpt-6.1-sol)
-and I-4 author ao-37 (Muse, reviewers Sonnet 5.5 and V4.1 Flash) work on `15757aae`; details, owner
-decisions and the I-3 landing gate in TODO Known Issues. The watcher (PID 107999) watches ao-36 and ao-37.
-ao-32 (idle, reviewer) still runs. ao-35 was killed at 13:21 EDT on the owner's word, after a check that
-`7f34bf4d` is on `main` by patch and that its worktree had no tracked change; its report and brief are in
-`reports/ao-35.*`, and its local branch and its OpenCode session (not purged) remain. The text below is from before these
-updates; its lifecycle PIDs are old.
-
-**Update 2026-10-17 00:05 EDT (I-4 landed and live):** I-4 is on `main` as `740c880d..b853f74f` (5
-cherry-picks, 4 rounds, What Landed). On the owner's word (2026-10-16: short round 4 with a receipts
-check, then roll out at once) the primary checkout was rebuilt at 00:02 EDT and the five lifecycle workers
-were restarted by exact PID at 00:03 EDT. **New lifecycle PIDs:** agent-skills 1815472, agent-orchestrator
-1815599 (Nexus config) and 1816016 (this config), Nexus 1815614, VSF 1815674. `WRAPPER_VERSION` did not
-change (0.2.6). **I-3** is in re-check r2 by ao-40 (gpt-6.1-sol) on `15757aae..e9882651`; its pane note
-says NOT-LAND-SAFE (launch ownership and argv gaps). I-3 lands only after the tool-environment check or
-the owner's risk acceptance. ao-32, ao-36, ao-37, ao-38 and ao-39 are idle. The watcher (PID 1739570)
-watches ao-37 and ao-40.
-
-**Update 2026-10-19 18:05 EDT (I-3 landed and live):** I-3 is on `main` as `45dd8fe1..c76a3085` (20
-cherry-picks of the I-3 branch rebased onto I-4, 5 rounds, What Landed). On the owner's word (2026-10-18:
-roll out and push; 2026-10-19: land I-3 and make the model-tool check a gate for I-5) the primary
-checkout was rebuilt at 18:01 EDT and the five lifecycle workers were restarted by exact PID at 18:02 EDT.
-**New lifecycle PIDs:** agent-skills 19579, agent-orchestrator 19624 (Nexus config) and 19689 (this
-config), Nexus 19636, VSF 19653. `WRAPPER_VERSION` did not change. Open for the owner: the expired
-`opencode-go` key (every Muse turn fails), and the `AO_*` values of `as-73` in the global OpenCode service
-(Known Issues, follow-ups after I-3). Next item: I-5 (`ao send` through `session.prompt`), gated by the
-model-tool check. All workers are idle. The rest of this file is stale and needs a full update at the
-next handover.
-
-**In flight: m-15 to m-17** (owner, 2026-10-16: "fix m-15 to m-17"; the m-13 review minors). ao-35 (Muse)
-finished `7f34bf4d` (7 files: a refused spawn deletes its reserved record, a locale-independent bash branch
-rule, the hook `pr` anchor tests, `WRAPPER_VERSION` 0.2.6; core 948 and claude-code 208 tests pass, its three
-mutants fail tests, nothing written in the real state root, about 0.12 USD). It is **not reviewed, not on
-`main`**. Against its brief, ao-35 pushed its branch and opened **PR #2** at 11:16 EDT (TODO Known Issues).
-It stopped on the orchestrator's order and did not push again. On the owner's word PR #2 was closed and the
-remote branch was deleted at 11:31 EDT; `7f34bf4d` stays in the local branch and the ao-35 worktree. The PR
-CI passed except Dependency Review, which fails on a repository setting.
-
-The OpenCode 2.x arc (note `0009` §13): I-1, I-2, I-6 and the `~/.ao/bin` PATH fix are on `main` and live.
-I-3, I-4 and I-5 remain. Until 2026-10-15 `as-orchestrator` coordinated this work; it keeps I-7 (the
-agent-skills protocol text) and the Sonnet 5.5 trial ledger.
+No worker runs. No priority is chosen for the next session: the owner picks one of Next Priorities.
+`main` holds the handover commit; the push of `main` follows it on the owner's word of 2026-10-20.
 
 ## Live Sessions and Worktrees
 
-All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees in
-`/home/taisung/.worktrees/agent-orchestrator/<id>`.
+All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 
-| Session | Model | State | Branch tip | Disposition |
-| --- | --- | --- | --- | --- |
-| ao-35 | Muse (OpenCode 2.x) | idle, done, not reviewed | `7f34bf4d` (local only; PR #2 closed, remote branch deleted) | m-15 to m-17 author; brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-branch-check-r2.md`; report `.agent_report.md` (section "Push and PR 2" says why it pushed); router row open; keep until the review; do not run `ao session cleanup` before then: its record still names the closed PR #2, so cleanup can kill it (the local branch would stay) |
-| ao-32 | Opus 5.5 (Claude Code) | idle, done | `bb81cf7a` | the reviewer of the whole series (r1 to r4, helper keys, branch check); model pinned in `.claude/settings.local.json`; costs: 5.06, 5.16, 7.61, 4.43, 8.21, 8.84 USD; reuse it for the m-15 to m-17 review |
-| ao-orchestrator | Opus 5.5 (Claude Code) | this session, in the primary checkout on `main` | `main` | transcripts: `~/.claude/projects/-home-taisung-local-agent-orchestrator/6e2c2229-0d62-4ce3-8428-c32ba7097a7a.jsonl` (this one) and `ad7a5f39-b7cb-480d-93dc-576ac541a826.jsonl` (before the 2026-10-15 outage) |
+| Session | State | Disposition |
+| --- | --- | --- |
+| ao-orchestrator | this session, primary checkout, `main`; its record reads `status=killed` (stale since 2026-10-16) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/0c0f59c9-cc89-4ba3-972b-58a61b9f8390.jsonl` |
+| ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 
-Killed at this handover, each after a check that its branch is on `main` by patch and that its worktree has
-no tracked change: ao-14, ao-15, ao-17, ao-30, ao-31, ao-33, ao-34. Their reports and briefs are in
-`~/.cache/agent-skills-haiku55-arc/reports/`. `ao-orchestrator-1` stays a `killed` record.
+Retired in this session, each after a check that its branch is on `main` by patch and its review files
+equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
+ao-41 (I-5 author), ao-42 and ao-43 (reviewers, stopped by a content filter), ao-44 (reviewer r4 and the
+r5 check), ao-45 (the real-TUI check worker, purged). Their five branches are deleted. `ao session
+cleanup` at this handover removed the OpenCode session of the archived ao-35 (404 now).
 
-**Watcher**: stopped at this handover (last PID 1232701), because no worker runs. To start it again:
-`FLEET_WATCH_STATE=/home/taisung/.cache/fleet_watch/ao-opencode2-2026-10-14 setsid nohup bash
-/home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator
---fallback ao-orchestrator -i 60 -s 20 --preseed <id>@/home/taisung/.worktrees/agent-orchestrator ...`
-with `< /dev/null`. `--preseed` records the current first line as handled, so read a worker's report first.
+**Local branches kept** (from earlier cleanups): `i3-r2-pre-rebase` holds two commits that `main` has
+only in rewritten form (`7aa587e5` create the OpenCode session before the pane starts, `dab0ba43` check
+the launch on the exact argv) - keep it. These seven show no `+` in `git cherry main` and can go after
+the owner's word: `feat/branchcheck2-muse-*`, `feat/i3create-opus-*`, `feat/i3rev-sol-*`,
+`feat/i4activity-muse-*`, `feat/i4rev-sonnet-*`, `feat/i4rev-v4flash-*`, `feat/restoremodelrev-opus-*`.
 
-**Lifecycle workers** (since 2026-10-16 10:45): agent-skills 1218013, agent-orchestrator 1218338 (Nexus
-config) and 1219143 (this config), Nexus 1218695, VSF 1218968. Their logs use `"level":"error"` for normal
-transitions. PID 1071300 (`bash /tmp/ao-launch-923451c1-....sh`, from 2026-10-15 12:34) belongs to another
-fleet's session; leave it.
+**Lifecycle workers** (since 2026-10-20 09:52): agent-skills 105049, agent-orchestrator 105142 (Nexus
+config) and 106285 (this config), Nexus 105154, VSF 106266. Every brief must protect these PIDs, not
+the old 19579, 19624, 19636, 19653, 19689. The global OpenCode service is PID 15920 with no `AO_*`.
 
-**Router rows** (profile `ROUTER_LOG`): only ao-35 (author, m-15 to m-17) is open. In the agent-skills log
-(`~/agent-skills/development/artifacts/model_router_log/log.csv`), the rows of ao-14 (I-2 author) and ao-15
-(PATH author) are still to be closed by `as-orchestrator`.
+**Watcher**: stopped at this handover with TERM (PID 851965, 10:23:55 EDT), because no worker runs. To
+start it again: `FLEET_WATCH_STATE=/home/taisung/.cache/fleet_watch/ao-opencode2-2026-10-14 setsid nohup
+bash /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
+/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
+<id>@/home/taisung/.worktrees/agent-orchestrator ... < /dev/null`. `--preseed` records the current first
+line as handled, so read a worker's report first.
+
+**Router log**: every row of this session is closed. Eight rows of 2026-10-15 still have
+`landed=pending` (TODO Known Issues, "Traps found in the I-5 rounds").
 
 ## Open and Blocked Items
 
-**PR #2**: closed - on the owner's word at 11:31 EDT, PR #2 was closed with a comment and the remote branch
-was deleted; the work stays local for the review.
-**Dependency Review on PRs**: open - owner decision - it fails because the repository's Dependency graph
-setting is off. Turn the setting on, or let a worker remove the job.
-**Author brief template**: open - section 0 must forbid push and PR work and say that this overrides the
-spawn prompt, and every live run must quote an empty `find ~/.agent-orchestrator -maxdepth 1 -newer
-<marker>` (TODO Known Issues).
-**Review minors kept open**: N-27 (the new error texts print a stored value raw, so an escape sequence reaches
-the terminal), N-28 (core reads `pr` with the unanchored `parsePrFromUrl`), m-11 and m-12 (cosmetic, r4).
-Known limits: m-9 (owner accepted), N-17 (an agent with shell access can write its record file directly).
+**Lifecycle `killed` status**: open - live records read `status=killed` (the orchestrator record since
+2026-10-16 14:56:51), so the lifecycle worker does not poll them; a new worker can also go `spawning` to
+`killed` at the first poll (ao-29). Cause not analyzed. Priority 1 below.
+**I-5 follow-ups**: open - m-4 (the double-failure warning omits that the sweep also removes `admitted`
+entries; text in `i5_review_r5_sol61.md`), the duplicated child runner of the lock and ledger tests,
+and a 2.0.32 measurement of the I-4-era M-4 and M-5 (needs a model turn and the owner's word).
+**Other code items**: `ao stop` on a launching orchestrator exits 1 before the lifecycle stop;
+`recovery/actions.ts:149` (no shipped caller); OpenCode reuse with a model after the worktree is gone
+fails (`LocationNotFoundError`); the project-mode orchestrator record drop; a guard that warns when the
+OpenCode service environment holds `AO_*`; the hidden `--no-dashboard` option
+(`packages/cli/src/commands/start.ts:997`).
+**Test isolation**: open - tests leave state in the real `~/.agent-orchestrator` and many
+`/tmp/ao-test-state-*` directories; an inherited `AO_STATE_ROOT` is not removed by the test setup. A
+worker change.
 **Project guide**: open - `CLAUDE.md` and `AGENTS.md` do not name `development/HANDOVER.md` as the first
 read; `CLAUDE.md` still says "getEnvironment must include `~/.ao/bin`" and its core utilities list lacks
 `removeAoBinFromPath`, `GH_WRAPPER` and `GIT_WRAPPER`. A worker change.
-**Test isolation**: open - tests leave state in the real `~/.agent-orchestrator` (many `*-observability`,
-`*-test-app` directories, 24 records with a JSON `pr` of `acme/app`) and 2243 `/tmp/ao-test-state-*`
-directories; an inherited `AO_STATE_ROOT` is not removed by the test setup. A worker change.
-**Other code items**: the hidden `--no-dashboard` option (`packages/cli/src/commands/start.ts:997`); the
-lifecycle first-poll race (`spawning` to `killed`, seen on ao-29).
-**agent-skills protocol text** (owned by `as-orchestrator`): `env -u TMUX` with every `tmux -L`, private
-servers only from the scratch environment, the lifecycle-worker PID cleanup (N-6), and the no-push rule.
-The m-14 note (the generic helper call in `skills/ao-lifecycle/SKILL.md:854-860`) was sent on 2026-10-16.
-**Owner decisions carried forward**: the `AO_*` variables of nex-orchestrator in the global OpenCode
-service environment; the global OpenCode permissions that allow every action; the orphan stash
-(`stash@{0}` on `feat/opencode-gemini-plugins`); `0007` §6 decisions 1 to 4 and 6.
+**Review minors kept open**: N-27, N-28, m-11, m-12, m-18 (owner: stays open); known limits m-9 (owner
+accepted), N-17.
+**I-5 accepted limits** (D-5): non-Linux refusal of the agent route; another local user can hold a
+lock name. Owner decision only if AO ever runs on macOS or on a shared host.
+**Dependency Review on PRs**: open - owner decision - it fails because the repository's Dependency graph
+setting is off. Turn the setting on, or let a worker remove the job.
+**Owner decisions carried forward**: the global OpenCode permissions that allow every action; the orphan
+stash (`stash@{0}` on `feat/opencode-gemini-plugins`); `0007` §6 decisions 1 to 4 and 6; the deletion of
+the seven merged old branches above.
 **Q3 event stream**: blocked by D-4 (no worker reads the service password) - I-4 polls.
-**Minors kept open from I-1 and I-6**: I-6 m-7 and m-8, the `npm ls` timeout, the export surface, the picker
-hint; I-1: the refusal message omits the probe's stderr, a refused spawn leaves its branch; for I-3:
-`session.create` accepts a model with no provider route.
+**Minors from I-1 and I-6**: I-6 m-7 and m-8, the `npm ls` timeout, the export surface, the picker hint;
+I-1: the refusal message omits the probe's stderr, a refused spawn leaves its branch.
+**agent-skills protocol text** (owned by `as-orchestrator`, I-7): `env -u TMUX` with every `tmux -L`,
+private servers only from the scratch environment, the lifecycle-worker PID cleanup, the no-push rule.
 
 ## Next Priorities
 
-1. **Land m-15 to m-17** - review `ac0f662a..7f34bf4d`, land it, roll out 0.2.6.
-   - Context: ao-35's report is final. Move ao-32 to `7f34bf4d` with `reset --keep` (first remove its
-     untracked `development/reviews/branch_check_review_r1_opus.md` after `cmp` against `main`), write a
-     brief from `~/.cache/agent-skills-haiku55-arc/brief-review-branch-check-opus.md` (review file
-     `branch_check_review_r2_opus.md`, the m-15 to m-17 items, the new lifecycle PIDs), set line 1 of its
-     report to `running|`, then `ao send --no-wait`. Read the Claude meter first (R3).
-   - Expected outcome: LAND-SAFE; cherry-pick `7f34bf4d` onto `main`; on the owner's word `pnpm build`,
-     restart the five lifecycle workers by exact PID (M-3: an old process writes 0.2.5 over 0.2.6), check
-     `cat ~/.ao/bin/.ao-version` = 0.2.6 after the next Codex, Gemini or OpenCode spawn, push. Close the
-     ao-35 router row with the landed SHA.
-2. **I-3 and I-4, then I-5** (note `0009` §13) - route each with `~/agent-skills/scripts/routing.py route`;
-   I-3 and I-5 are HIGH by the profile.
+Ask the owner which one to start; route it with `~/agent-skills/scripts/routing.py route`.
+
+1. **Lifecycle `killed` status** - one investigation worker (route `debugging`; HIGH by the profile: the
+   lifecycle state of every session).
+   - Context: TODO Known Issues "Live sessions read `status=killed`" and the first-poll race in
+     "Follow-ups after I-3". One write gave every record of this project `status=killed` at
+     2026-10-16 14:56:51 while the panes ran. Workers spawned since then read `working`.
+   - Expected outcome: a measured cause in `lifecycle-manager.ts` or the metadata writers, a reproducer
+     in a scratch state root, and a fix brief. No change to the real records before the cause is known.
+2. **I-5 follow-ups** - one small author round: m-4 text, optional shared test runner. LOW.
+3. **Project guide and test isolation** - one worker each; LOW and MEDIUM.
+4. **`0005` Phases 0 to 4** - none started; owner decision on scope.
 
 ## First Actions
 
-1. `cd /home/taisung/local/agent-orchestrator && git status -sb && git log --oneline -3` - expect `main`
-   at the handover commit. ` D test-ao-config2.yaml` is an old working-tree deletion; leave it and never
-   commit it.
-2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status`, then
-   `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-35/.agent_report.md` and
-   `git -C /home/taisung/.worktrees/agent-orchestrator/ao-35 log --oneline -1` (expect `7f34bf4d`).
-3. Start priority 1.
+1. `cd /home/taisung/local/agent-orchestrator && git status -sb && git log --oneline -3` - expect
+   `main` = `origin/main` at the handover commit. ` D test-ao-config2.yaml` is an old working-tree
+   deletion; leave it and never commit it.
+2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status` - expect no
+   worker. `ps -o pid=,args= -p 105049,105142,105154,106266,106285` - expect the five lifecycle workers.
+3. Ask the owner which of Next Priorities to start.
 
 ## Key Files
 
-- `development/reviews/branch_check_review_r1_opus.md` - m-15 to m-17 (section 3) and notes N-25 to N-33.
-- `development/reviews/helper_keys_review_r1_opus.md`, `restore_model_review_r{1,2,3,4}_opus.md` - the series.
-- `packages/core/src/utils/branch-name.ts` - `isSafeBranchName`, `isSafePrUrl`.
-- `packages/core/src/agent-workspace-hooks.ts` - the `~/.ao/bin` helper and wrappers, `WRAPPER_VERSION`.
-- `packages/core/src/session-manager.ts` - the branch gates (spawn, orchestrator spawn, `claim-pr`, restore).
-- `packages/plugins/agent-claude-code/src/index.ts` - the Claude metadata hook script.
+- `packages/core/src/lifecycle-manager.ts` - the poll loop and the status transitions (priority 1).
+- `packages/core/src/metadata.ts` - the record writers (`updateMetadata`, archive).
+- `packages/core/src/delivery-ledger.ts`, `packages/core/src/delivery-lock.ts` - the I-5 ledger and locks.
+- `packages/core/src/session-manager.ts` - `deliver`, `send`, `cleanup` (the archived OpenCode purge).
+- `docs/opencode-workflows-spec.md` section 4, item 6 - the I-5 contract and its limits.
+- `development/reviews/i5_review_r4_sol61.md`, `i5_review_r5_sol61.md` - the last I-5 reviews.
 - `~/.cache/agent-skills-haiku55-arc/` - every brief of the arc, `reports/`, and `restart_lifecycle.py`
   (`<pid>` dry run, `<pid> --do`).
-- `development/0009_opencode_2x_api_fit_design.md` §13 - the staged plan for I-3 to I-5.
 
 ## Durable References
 
-- [What Landed](TODO_TRACKING.md#what-landed): `854690c3`, `458786e6`, `120f500a`, `5b488fdb`, `25a56f30`,
-  `5cbe84b3`, `0ec55a64`, `14bb4670`, with their reviews and rollouts.
+- [What Landed](TODO_TRACKING.md#what-landed): the I-5 entry (`633c6c5f..5069e114`, rollout, real-TUI
+  check, costs), I-3, I-4.
 - [Decisions](TODO_TRACKING.md#decisions): D-3 (no worker builds in the primary checkout), D-4 (no worker
-  reads the OpenCode service password).
-- [Known Issues](TODO_TRACKING.md#known-issues): the spawn prompt tells workers to push; a worker script
-  wrote into the real state root; M-3 (a resident process reinstalls its own helper version).
+  reads the OpenCode service password), D-5 (the I-5 design and its accepted limits).
+- [Known Issues](TODO_TRACKING.md#known-issues): "Traps found in the I-5 rounds" (content filter, gitleaks,
+  cherry-pick sequencer, cleanup purge, old router rows), "Live sessions read `status=killed`", the I-5
+  round history, the spawn prompt that tells workers to push, M-3 (a resident process reinstalls its
+  own helper version).
 
 ## Next Session Start Prompt
 
@@ -181,25 +139,23 @@ profile `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md` once. T
 runs from this checkout's `dist`, so every fleet (Nexus, VSF, agent-skills, this fork) runs what you land
 after a rebuild. Only you rebuild, only on the owner's word (D-3). A rebuild does not reach a running
 `ao lifecycle-worker`: restart each by exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py`.
-After a `WRAPPER_VERSION` bump this restart is required, because an old process writes its own helper over
-the new one (M-3).
 
-The metadata-hardening series is live up to m-13 (0.2.5). The m-15 to m-17 round by ao-35 (`7f34bf4d`)
-waits for a blind review by ao-32 (Opus 5.5). ao-35 had opened PR #2 against its brief; the owner closed it. Your first action is First Actions 1 to 3, then priority 1. After that, I-3 and I-4 of the
-OpenCode 2.x arc.
+The OpenCode 2.x arc of this fork is complete: I-5 is live and pushed, and its real-TUI check passed. No
+worker runs and no priority is chosen. Do First Actions 1 to 3, then start the priority that the owner
+picks. Priority 1, the stale `killed` status of live records, is the only known defect that stops
+lifecycle reactions for a session.
 
-Landmines. Place a brief in the same command that spawns the worker: the spawn prompt waits only about 2
-minutes. Never `ao send` to a session whose record says `killed` while its pane runs: send restores it
-first. Before a new brief to a reused session, set line 1 of its `.agent_report.md` to `running|`. The
-spawn prompt tells workers to push and open a PR: every brief must forbid it in section 0. Every live run
-of a worker sets a scratch `AO_STATE_ROOT` and quotes an empty `find ~/.agent-orchestrator -maxdepth 1
--newer <marker>`; check it yourself after the report. Every tmux command uses `env -u TMUX tmux -L
-<unique>`, and a private server starts only from the scratch environment. Every `pnpm test` runs with a fake
-`HOME` and no `AO_*`. Workers never push, never build in the primary checkout, never write `~/.ao/bin`, a
-global OpenCode store or `~/.claude/settings.json`, never read `service.json`, never `git stash` and never
-`git worktree add`. Pin a Claude worker's model in its worktree's `.claude/settings.local.json`; never send
-`/model`. Kill only exact PIDs; never `pkill` or `killall`. Commit messages are `docs(development): ...`
-with no `Co-Authored-By` trailer and no emoji. `ao send` text has no quotes, apostrophes, backticks, `$`,
-parentheses or semicolons; use `--no-wait`.
-
-Ask the owner before any push. The open owner decisions are in Open and Blocked Items.
+Landmines. Spawn with a prompt that says to wait for `.agent_task.md`, then place the brief and `ao send`
+a start line; set line 1 of a reused worker's report to `running|` before a new brief. The spawn prompt
+tells workers to push and open a PR: every brief forbids it in section 0. Every worker live run uses a
+scratch `AO_STATE_ROOT`, `env -i` for every `ao`, `node` and `opencode api` call, a fake `HOME` for every
+`pnpm test`, `env -u TMUX tmux -L <unique>`, and ends with an empty
+`find ~/.agent-orchestrator -maxdepth 3 -newer <marker> ...` and an empty
+`find ~/.agent-orchestrator -path '*deliveries*'` outside a real send; check both yourself. Briefs protect
+the new lifecycle PIDs above. With I-5 live, `ao send` to an OpenCode worker with a stored ID goes
+through the API and fails (nothing pasted) when its pane runs a TUI on another session. A Codex reviewer
+stops on texts about breaking locks, `kill -9` steps or other local users: use plain words, and move to
+a new session after a stop. The gitleaks hook reads JSON `"key"` and `"token"` fields as secrets; never
+bypass it. Clear a stuck cherry-pick with `--quit`, never `--abort`. Kill only exact PIDs; never `pkill`
+or `killall`. Commit messages are `docs(development): ...` with no `Co-Authored-By` trailer and no
+emoji. Ask the owner before any push.
