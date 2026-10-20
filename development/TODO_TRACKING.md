@@ -857,6 +857,17 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     match gets its own round after this fix lands; the hidden socket over 5 minutes stays a follow-up.
     Dispatched 17:23:47 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r4.md`,
     on top of `e6e23c38` with no rebase.
+    Done 19:02 EDT at `f35b665f` (4 commits, `e6e23c38..f35b665f`; 25.78 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r4.md`). Each read-await-write path now writes
+    only into the version it decided from (generation compare for claimPR, lifecycle, repair, recovery;
+    launch-identity compare with a random `reservationId` for spawn, orchestrator start, restore, kill,
+    remap, cleanup); `updateMetadata` no longer creates a missing record (public API change, no production
+    caller); runs and bounds keyed to the launch. Full run 2709 passed. Open windows the author names: a
+    destroy by tmux name in `killRecord` and in `restore` step 7 can still hit another launch of the same ID.
+    New behavior: a stale claimPR, restore, kill, remap or recovery action fails and needs a re-run.
+  - **Review r3** (ao-47, dispatched 19:06:15 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r3-sol.md`, output
+    `development/reviews/killed_status_review_r3_sol61.md`): re-check of `e6e23c38..f35b665f`.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
