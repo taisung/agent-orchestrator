@@ -622,6 +622,23 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     argument). No redesign and no test refactor. Next: ao-44 runs its mutants against the new tests,
     then the orchestrator cherry-picks, builds and restarts the 5 lifecycle workers once. ao-41 context
     at dispatch: 31% (81.98 USD by its status line; trial_cost 72.98 USD).
+  - **Author r5 done (09:36 EDT, `db14706d`), addendum 09:39 (`034eb8fb`); 4 commits on `9987edfa`,
+    5.03 USD by trial_cost.**
+    - m-3: the double-failure warning now says that cleanup removes only a valid ledger after 10 min,
+      and that a corrupt one needs a check and a manual removal. Test with a `metadata.js` mock.
+    - New tests catch the four review r4 mutants: (a) probe error classes, with a `node:net` mock;
+      (b) attempt lock bound before the claim, with a child stopped just after its claim; (c) real-path
+      lock names, with a symbolic link; (d) a non-success settle keeps its attempt lock until its write
+      (an observable difference exists, but no production failure).
+    - Addendum: the spec sentence on the attempt lock now names all four releases (settle under the
+      ledger lock, process end, the `finally` of a settle that could not get the ledger lock, the 11 min
+      timer), each only from held to free.
+    - D3: each mutant fails exactly its new test. Full `pnpm test` 2552 passed, 29 skipped. 4 files plus
+      the spec, 216 lines added, 3 removed. Report: `reports/ao-41-i5-r5.agent_report.md`.
+  - **Round 5 check dispatched (09:40 EDT) to ao-44**, same session as review r4, worktree at `034eb8fb`.
+    Brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r5-check-sol.md`: the diff scope, m-3, the
+    reviewer's own four mutants against the new tests, the spec sentence, gates. Review file
+    `development/reviews/i5_review_r5_sol61.md`. No live run.
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
