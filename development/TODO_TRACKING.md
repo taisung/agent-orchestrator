@@ -372,8 +372,25 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   restores once, every other error is final (no second `session.prompt` after an unknown admission); a
   pending permission or form gives a line; the 128 KiB argument limit is checked; no tmux paste for a
   session with a stored ID; non-OpenCode agents unchanged. No model turn and no send to a real session;
-  the real-TUI check runs later on the owner's word. Reviewer after it: gpt-6.1-sol (Codex). Watcher
-  PID 484968 (watches ao-41).
+  the real-TUI check runs later on the owner's word. Reviewer after it: gpt-6.1-sol (Codex).
+  - **Author r1 done (21:21 EDT, `592441d6..a6b37297`, 6 commits, 19.81 USD by trial_cost).** Optional
+    `Agent.canDeliverMessage` and `deliverMessage`, optional `SessionManager.deliver` (`send` keeps
+    `Promise<void>`), `AgentNotAttachedError`. Order of one send: size check (131071 bytes, the Linux
+    one-argument limit; `opencode api` 2.0.32 takes the body only as `-d`), TUI check (the I-3 argv rule,
+    10 s wait, 3 s minimum age, not measured), one restore on `AgentNotAttachedError`, one read of the
+    permission, form and active lists, one `session.prompt` (`queue`), and a read-back only on an
+    unknown admission. Gates: full `pnpm test` 2454 passed, 29 skipped; lint, typecheck, build exit 0.
+    D2 on an isolated store with a stand-in TUI, tokens 0. Author findings for later: (1) a new isolated
+    store has about 10 enabled free `opencode` models that need no login, so a live check there must
+    set `disabled_providers: ["opencode"]` and a no-route model; (2) `opencode api` starts a service
+    with the caller's environment when none answers (the likely cause of the dirty global services);
+    (3) a client `id` makes `session.prompt` idempotent (not used); (4) the host OpenCode is now 2.0.32
+    (M-4 and M-5 are of 2.0.29); (5) a lifecycle reaction can now restore a session whose TUI exited,
+    and can wait up to 2 x 10 s per session. One read-only `tmux list-sessions` on the default server
+    (a breach of the brief, no change). Report: `reports/ao-41-i5-r1.agent_report.md`.
+  - **Review r1 dispatched (21:24 EDT):** ao-42 (Codex, gpt-6.1-sol, xhigh), worktree at `a6b37297`,
+    brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r1-sol.md`, review file
+    `development/reviews/i5_review_r1_sol61.md`. Watcher PID 851965 (watches ao-41 and ao-42).
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
