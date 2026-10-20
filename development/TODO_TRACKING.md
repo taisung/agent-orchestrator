@@ -391,6 +391,23 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   - **Review r1 dispatched (21:24 EDT):** ao-42 (Codex, gpt-6.1-sol, xhigh), worktree at `a6b37297`,
     brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r1-sol.md`, review file
     `development/reviews/i5_review_r1_sol61.md`. Watcher PID 851965 (watches ao-41 and ao-42).
+  - **Review r1 (21:40 EDT, 16 min, 1.56 USD): NOT-LAND-SAFE, 1 B, 1 M, 1 m.** B-1: after an unknown
+    admission (a failed read-back, or an admission after the read-back) the next lifecycle poll admits
+    the same dispatch a second time; shown with a controlled late completion and with two real
+    `createLifecycleManager().check()` runs (2 records of one CI text). M-1: the text and time read-back
+    acknowledges an earlier equal input as this send. m-1: the new prose says that a live pane is never
+    replaced, but `restore()` accepts a terminal status OR an exited agent (inherited). Also: the size
+    check runs after core's `prepareSession`, so a dead session can be restored for a message that is
+    then refused; `E2BIG` from a large environment reads as an unknown admission. The reviewer checked
+    that a client `id` makes `session.prompt` idempotent (one record after a replay). Gates pass (2454);
+    7 reviewer mutants killed; isolated store with the `opencode` provider disabled, tokens 0.
+  - **Round 2 dispatched (21:43 EDT) to ao-41:** brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-r2.md`. One client input ID per logical send in
+    OpenCode's ascending `msg_` format, written to the record before the prompt (state `sending`),
+    reused only for an `unknown` attempt of the same text inside a bound, cleared on success or a
+    definite refusal; read-back by ID only; m-1 prose fixed; the size refusal before any restore; spawn
+    errors (`E2BIG`, `ENOENT`) definite; TUI waits capped or documented. `lifecycle-manager.ts` stays
+    out of scope.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
