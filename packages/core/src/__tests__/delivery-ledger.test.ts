@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -97,8 +98,14 @@ export function renameSync(from, to) {
 const CHILD = `
 import { appendFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import net from "node:net";
 import { faults } from "./fault-fs.js";
-import { beginDelivery, changeDeliveryLedger, settleDelivery } from "./delivery-ledger.js";
+import {
+  beginDelivery,
+  changeDeliveryLedger,
+  deliveryLedgerLockName,
+  settleDelivery,
+} from "./delivery-ledger.js";
 const cmd = JSON.parse(process.argv[2]);
 const sha = (t) => createHash("sha256").update(t, "utf-8").digest("hex");
 const block = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -117,6 +124,21 @@ if (cmd.op === "begin-and-hang") {
   if (cmd.service) appendFileSync(cmd.service, a.inputId + "\\n");
   say({ began: a.inputId, token: a.token });
   idle();
+} else if (cmd.op === "begin-stop-after-claim") {
+  // Stop for good just after the ledger lock of the claim closes, before
+  // beginDelivery returns: the claim is in the file at this point.
+  const close = net.Server.prototype.close;
+  net.Server.prototype.close = function (...args) {
+    const name = this.address();
+    const result = close.apply(this, args);
+    if (name === deliveryLedgerLockName(cmd.dir, cmd.key)) {
+      say({ stopped: "after-claim" });
+      block();
+    }
+    return result;
+  };
+  await beginDelivery({ ...base, textSha256: sha(cmd.text), mint });
+  say({ returned: true });
 } else if (cmd.op === "begin-settle") {
   const a = await beginDelivery({ ...base, textSha256: sha(cmd.text), mint });
   say({ began: a.inputId, token: a.token });
@@ -488,6 +510,77 @@ describe("delivery ledger: one input ID per logical send (I-5 rounds 3 and 4)", 
           owner: { pid: later.child.pid, token },
         }),
       ]);
+    });
+
+    it("the attempt lock is held before the claim is in the file: a child stopped just after its claim keeps its ID", async () => {
+      const owner = runChild({
+        op: "begin-stop-after-claim",
+        dir,
+        key: KEY,
+        text: "CLAIM THEN STOP",
+      });
+      await owner.next((line) => line["stopped"] === "after-claim");
+      const [claim] = entries();
+      expect(claim).toMatchObject({ state: "sending", owner: { pid: owner.child.pid } });
+
+      const mine = await begin("CLAIM THEN STOP");
+      holds.push(mine.hold);
+      expect(mine.reused).toBe(false);
+      expect(mine.inputId).not.toBe(claim!.inputId);
+
+      // Once the owner ends, its claim is free, and the next attempt takes it.
+      await kill9(owner);
+      const retry = await begin("CLAIM THEN STOP");
+      holds.push(retry.hold);
+      expect(retry).toMatchObject({ inputId: claim!.inputId, reused: true });
+    });
+
+    it("two spellings of one ledger dir (a symbolic link) share the ledger lock and the attempt locks", async () => {
+      mkdirSync(dir, { recursive: true });
+      const alias = join(dir, "..", "alias-of-deliveries");
+      symlinkSync(dir, alias);
+
+      const held = await tryHoldDeliveryLock(deliveryLedgerLockName(dir, KEY));
+      expect(held).not.toBeNull();
+      holds.push(held!);
+      expect(await tryHoldDeliveryLock(deliveryLedgerLockName(alias, KEY))).toBeNull();
+      held!.release();
+
+      const owner = runChild({ op: "begin-and-hang", dir, key: KEY, text: "TWO SPELLINGS" });
+      const { began } = await owner.next((line) => typeof line["began"] === "string");
+      const mine = await beginDelivery({
+        dir: alias,
+        key: KEY,
+        textSha256: sha("TWO SPELLINGS"),
+        mint,
+      });
+      holds.push(mine.hold);
+
+      expect(mine.reused).toBe(false);
+      expect(mine.inputId).not.toBe(began);
+      expect(entries().map((e) => e.inputId)).toEqual([began, mine.inputId]);
+    });
+
+    it("a settle of unknown or of a definite refusal keeps its attempt lock until its write: while it waits for the ledger lock, the attempt stays held", async () => {
+      for (const outcome of ["unknown", "none"] as const) {
+        const attempt = await begin(`SETTLE WAITS ${outcome}`);
+        const attemptLock = deliveryAttemptLockName(dir, KEY, attempt.token);
+        const blocker = await tryHoldDeliveryLock(deliveryLedgerLockName(dir, KEY));
+        expect(blocker).not.toBeNull();
+        holds.push(blocker!);
+
+        const settling = settleDelivery({ dir, key: KEY, attempt, outcome });
+        // The settle cannot write while this test holds the ledger lock.
+        expect(await isDeliveryLockHeld(attemptLock), outcome).toBe(true);
+        expect(entries().find((e) => e.inputId === attempt.inputId)?.state, outcome).toBe(
+          "sending",
+        );
+
+        blocker!.release();
+        await expect(settling, outcome).resolves.toBe(true);
+        expect(await isDeliveryLockHeld(attemptLock), outcome).toBe(false);
+      }
+      expect(entries().map((e) => e.state)).toEqual(["unknown"]);
     });
   });
 
