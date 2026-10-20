@@ -522,7 +522,21 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
       inserted lines are tests.
     - Gates: full `pnpm test` 2526 passed. The ledger test file passed 6 runs, one under CPU load.
       The wait does not block the event loop. The isolated store had 21 sessions, with tokens 0.
-    - Owner decision on round 4 pending.
+  - **Round 4 dispatched (2026-10-20 07:37 EDT) to ao-41.** Owner 2026-10-20: "Full round 4, OS lock"
+    (answer about 05:10 EDT). Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-r4.md`:
+    - a mutual-exclusion primitive that the kernel releases when its holder ends (for example a Linux
+      abstract Unix socket), in place of the lock file, the stale rule and the claim file; a macOS
+      behavior, because the desktop notifier supports macOS; a lock name with the user ID and a hash of
+      the ledger path;
+    - a second OS-released primitive per attempt, held from the claim to the settle, so that another
+      process can see whether an attempt is still in flight (B-3);
+    - the state `admitted` written before the clear; when that write also fails, a CLI line and a
+      `deliver` field, and a core `send` behavior that stops a lifecycle record of a NEW dispatch with no
+      new input (M-5), with `lifecycle-manager.ts` unchanged;
+    - ledger cleanup that `ao session cleanup` retries, and a sweep of expired ledgers (m-2);
+    - removal of the second-`begin` path and of the dead lock code; no new dependency.
+    ao-41 context after a compaction: 9% (59.85 USD in total by its status line).
+  - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
