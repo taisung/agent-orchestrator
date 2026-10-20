@@ -828,6 +828,29 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     are in memory; after 5 minutes of a hidden socket core `send` restores a second agent on a new server
     (measured in scratch); a skipped bookkeeping write can repeat a reaction. Review r2 (re-check) by
     ao-47 dispatched about 16:02 EDT.
+  - **Review r2: NOT-LAND-SAFE** (ao-47, done 16:26 EDT, `development/reviews/killed_status_review_r2_sol61.md`;
+    gates green, 2663 passed; 8 of 9 own mutants caught). Round-1 B-1, M-1, M-3, m-1, m-2 fixed; round-1
+    B-2 fixed inside each metadata operation (own child-process races serialize; lock released at once
+    when the holder ends; abandoned requests, re-entry and the 5 s refusal work; CLI processes exit at
+    once); round-1 M-2 fixed for the lifecycle race.
+    - B-1: async session operations still commit stale decisions. `claimPR` writes its target with an
+      empty compare (`session-manager.ts:3170-3175`) and `restore` ends with an unconditional
+      `updateMetadata` (`:3522-3526`; `metadata.ts:461-470` creates a missing record). Reproduced with the
+      real API: an archive plus a new reservation during the claim checkout gets the old PR, a new launch
+      gets the old PR and branch, and a restore recreates an archived record or overwrites a new
+      reservation.
+    - M-1: the negative run and the 5-minute no-server bound are keyed by session ID only
+      (`lifecycle-manager.ts:242-245,1507-1525`). A replacement launch under the same ID inherits them and
+      was killed 30 s after its launch, at its first no-server answer.
+    - m-1: widening the identity tolerance to 60 s fails no test; m-2: `node --input-type=module -e`
+      callers cannot start the lock helper thread (write fails after 10 s); m-3: archive bookkeeping
+      keeps the old `generation` and `reserveSessionId` stores a caller's `generation`.
+    - Ratings of the stated limits: hidden socket over 5 minutes is a major operational risk but an
+      accepted policy follow-up; the tmux prefix match is a major destructive pre-existing bug for a
+      separate fix; in-memory runs, repeated reactions and the bash writers are accepted limits.
+    - Rollout note: old lifecycle workers neither take the lock nor increment `generation`, so restart
+      every old writer before relying on the new protocol.
+    - R7: the Opus author failed a second review round. The next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
@@ -859,8 +882,13 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   targets need `=name:`). runtime-tmux `isAlive`, `destroy`, `sendMessage` and the claude-code pane read
   use plain targets. Effect: a dead `<prefix>-ao-4` reads alive while exactly one live name starts with
   it (`ao-40` to `ao-49`), and a `destroy` on the dead name can end that other live session. The new
-  `getMetrics` of round 3 matches the name exactly. Severity and whether it blocks the landing: asked of
-  the review r2 (ao-47). Open; a worker change in every tmux call.
+  `getMetrics` of round 3 matches the name exactly. Review r2 (ao-47) confirmed it on a private server:
+  with only `kr-10` live, `isAlive` and claude-code `isProcessRunning` answered true for `kr-1`, and
+  `destroy` of `kr-1` ended `kr-10`. Plain targets also in runtime-tmux launch keys, paste, capture and
+  attach, the claude-code `list-panes` (`:589`), and CLI `lib/shell.ts:57`, `commands/session.ts:191`,
+  `commands/send.ts:108-349`. Rated major and destructive, present before the killed-status fix; it
+  needs its own round that changes every target (session targets `=name`, pane targets `=name:`).
+  Open; a worker change.
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.

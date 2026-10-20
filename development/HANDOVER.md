@@ -28,8 +28,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`, rebased by itself on `0e3eabc2`. Round 3 done 15:58 EDT at `e6e23c38`: whole fix `0e3eabc2..e6e23c38` (round 1 `fb424675`, round 2 `b2aaea61` `5ca35afe` `bdd5efa0`, round 3 `fcea1114..e6e23c38`, 7 commits). Full run 2641 passed, 0 failed; report `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r3.md`; 26.07 USD this round, 55.41 USD session. Orchestrator check 16:00 EDT: files in the allowed list, empty `find`s against `/tmp/ao46kr-r3-marker`, real records unchanged, no scratch process, `~/.ao/bin` unchanged, `delivery-lock.ts` only a name kind and a doc line | idle; keep for a round 4 if the re-check finds defects; router row r3 closed `in-review` |
-| ao-47 | Codex gpt-6.1-sol. Review r1 of `e751a3ee..b8a43f5f`: NOT-LAND-SAFE, on `main` as `development/reviews/killed_status_review_r1_sol61.md`. Re-check (review r2) of `0e3eabc2..e6e23c38` dispatched about 16:02 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r2-sol.md`, output `development/reviews/killed_status_review_r2_sol61.md`; worktree branch moved to `e6e23c38` (`reset --keep`; its untracked r1 copy, same as `main`, moved to the session scratchpad); Codex totals at dispatch 6,726,094 in / 46,771 out | wait for its report; router row r2 open |
+| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`, rebased by itself on `0e3eabc2`. Round 3 done 15:58 EDT at `e6e23c38`: whole fix `0e3eabc2..e6e23c38` (round 1 `fb424675`, round 2 `b2aaea61` `5ca35afe` `bdd5efa0`, round 3 `fcea1114..e6e23c38`, 7 commits). Full run 2641 passed, 0 failed; report `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r3.md`; 26.07 USD this round, 55.41 USD session by `trial_cost.py` (its status line shows 61.55 USD with its subagent). Context 37% | idle; review r2 is NOT-LAND-SAFE, round 4 waits for the owner (R7); router row r3 closed `in-review` |
+| ao-47 | Codex gpt-6.1-sol. Review r1 of `e751a3ee..b8a43f5f` and review r2 of `0e3eabc2..e6e23c38` (done 16:26 EDT): both NOT-LAND-SAFE, on `main` as `development/reviews/killed_status_review_r1_sol61.md` and `..._r2_sol61.md` (r2: B-1 stale async writes of `claimPR` and `restore`, M-1 negative run and bound keyed by session ID cross launches, m-1 to m-3). Worktree at `e6e23c38`; reports `~/.cache/agent-skills-haiku55-arc/reports/ao-47-killed-review-r{1,2}.md`; Codex totals 18,541,273 in / 109,595 out, context about 50% | idle; keep for the round-4 re-check; router rows r1 and r2 closed `in-review` |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
 equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
@@ -61,7 +61,7 @@ directory holds `--preseed.*` files from a call that read it as a session name).
 the current first line as handled, so read a worker's report first.
 
 **Router log**: the three ao-46 rows (r1, r2, r3) and the ao-47 review r1 row are closed `in-review`
-(10.81, 18.53, 26.07 and about 1.5 USD). The ao-47 review r2 row is open since about 16:02 EDT.
+(10.81, 18.53, 26.07 and about 1.5 USD). The ao-47 review r2 row is closed `in-review` (11,815,179 in / 62,824 out).
 
 **Owner decisions of 2026-10-20**: fix A+B+C+D in one round by ao-46; the real records `ao-orchestrator`
 and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them).
