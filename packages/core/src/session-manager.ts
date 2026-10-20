@@ -2361,9 +2361,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       } catch {
         kept = false;
       }
+      // m-3: without the key, only the sweep can remove the file, and the
+      // sweep keeps a ledger that is not valid (fail closed).
       const then = kept
         ? "the next `ao session cleanup` tries again"
-        : "`ao session cleanup` removes it when its entries are older than 10 min";
+        : "it could not be marked for a retry either. A later `ao session cleanup` removes it only when it is a valid ledger whose entries are all older than 10 min; if it is not valid, check that no ao process sends to this session, then remove the file by hand";
       warnOperator(
         `ao: could not remove the delivery ledger ${deliveryLedgerPath(dir, key)} of OpenCode session ${key} of ${aoSessionId} (${shortErrorText(err)}); ${then}.`,
       );

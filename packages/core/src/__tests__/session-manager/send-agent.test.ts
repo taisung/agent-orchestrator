@@ -10,6 +10,7 @@ import {
   updateMetadata,
   writeMetadata,
 } from "../../metadata.js";
+import type * as MetadataModule from "../../metadata.js";
 import { mintOpenCodeMessageId, OpenCodePromptTooLargeError } from "../../opencode-api.js";
 import { getDeliveryLedgerDir } from "../../paths.js";
 import {
@@ -40,6 +41,24 @@ import {
   teardownTestContext,
   type TestContext,
 } from "../test-utils.js";
+
+// m-3: a test can make the write of the `opencodeLedgerPending` key fail.
+// Every other metadata call runs as it is.
+const metadataFaults = vi.hoisted(() => ({ pendingKey: false }));
+vi.mock("../../metadata.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof MetadataModule>();
+  return {
+    ...actual,
+    updateArchivedMetadata: (...args: Parameters<typeof actual.updateArchivedMetadata>) => {
+      if (metadataFaults.pendingKey && args[2]["opencodeLedgerPending"]) {
+        throw Object.assign(new Error("EACCES: injected write fault of opencodeLedgerPending"), {
+          code: "EACCES",
+        });
+      }
+      return actual.updateArchivedMetadata(...args);
+    },
+  };
+});
 
 let ctx: TestContext;
 let tmpDir: string;
@@ -811,6 +830,53 @@ describe("one input ID per logical send (I-5 rounds 2 to 4, B-1, M-1, B-2, B-3, 
     await sm.cleanup();
 
     expect([existsSync(free), existsSync(held)]).toEqual([false, true]);
+  });
+
+  it("m-3: when the ledger removal and the write of its pending key both fail, the line says that only a valid ledger expires, and cleanup keeps a corrupt one", async () => {
+    const mockBin = installMockOpencodeApi(tmpDir, [
+      { id: STORED, title: "AO:app-1", directory: join(tmpDir, "ws-app-1") },
+    ]);
+    const originalPath = process.env["PATH"];
+    process.env["PATH"] = `${mockBin}:${originalPath ?? ""}`;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      writeSession({ agent: "opencode" });
+      mkdirSync(ledgerDir(), { recursive: true });
+      const file = deliveryLedgerPath(ledgerDir(), STORED);
+      writeFileSync(file, "[broken-json");
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      chmodSync(ledgerDir(), 0o555);
+      metadataFaults.pendingKey = true;
+      try {
+        await sm.kill("app-1", { purgeOpenCode: true });
+      } finally {
+        metadataFaults.pendingKey = false;
+        chmodSync(ledgerDir(), 0o755);
+      }
+
+      const archived = readArchivedMetadataRaw(sessionsDir, "app-1");
+      expect(archived?.["opencodeCleanedAt"]).toBeTruthy();
+      expect(archived?.["opencodeLedgerPending"]).toBeUndefined();
+      const lines = stderr.mock.calls.map((call) => String(call[0]));
+      const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(lines).toContainEqual(
+        expect.stringMatching(
+          new RegExp(
+            `^${escape(`ao: could not remove the delivery ledger ${file} of OpenCode session ${STORED} of app-1 (`)}.*EACCES.*${escape(
+              "); it could not be marked for a retry either. A later `ao session cleanup` removes it only when it is a valid ledger whose entries are all older than 10 min; if it is not valid, check that no ao process sends to this session, then remove the file by hand.",
+            )}\\n$`,
+          ),
+        ),
+      );
+
+      // The text is true: with writes restored, cleanup keeps the corrupt file.
+      await sm.cleanup();
+      expect(readFileSync(file, "utf-8")).toBe("[broken-json");
+    } finally {
+      stderr.mockRestore();
+      process.env["PATH"] = originalPath;
+    }
   });
 
   it("M-2: a record writer with an old snapshot does not touch the ledger: the retry replays, one admission", async () => {
