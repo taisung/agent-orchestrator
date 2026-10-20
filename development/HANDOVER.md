@@ -28,7 +28,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-46 | Priority 1 investigation done (`done|20b25e52`), Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`, 11 failing tests at `20b25e52`; record `working` | keep for the fix round (its context holds the analysis); router row closed `in-review` |
+| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`. Round 1 (investigation) done; its 11 failing tests are `ebf23185` after the orchestrator rebased the branch on `0926e619`. Round 2 (fix A+B+C+D, owner 2026-10-20) dispatched about 12:25 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r2.md`, meter `5h 1%`, `wk 8%` | wait for its report; then the gpt-6.1-sol review; router row r1 closed `in-review`, r2 open |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
 equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
@@ -59,7 +59,10 @@ watching ao-46. Start command: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
 directory holds `--preseed.*` files from a call that read it as a session name). `--preseed` records
 the current first line as handled, so read a worker's report first.
 
-**Router log**: the ao-46 row is closed `in-review` (2026-10-20, 10.81 USD). Eight rows of 2026-10-15 still have
+**Router log**: the ao-46 round 1 row is closed `in-review` (2026-10-20, 10.81 USD); the round 2 row is open.
+
+**Owner decisions of 2026-10-20**: fix A+B+C+D in one round by ao-46; the real records `ao-orchestrator`
+and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them). Eight rows of 2026-10-15 still have
 `landed=pending` (TODO Known Issues, "Traps found in the I-5 rounds").
 
 ## Open and Blocked Items
