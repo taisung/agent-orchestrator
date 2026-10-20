@@ -612,6 +612,16 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
       run under CPU load. Isolated store, 24 sessions, tokens 0. No write under the real state root.
     - Size advice: about 3798 of the inserted lines are tests; the child runner of the lock and ledger
       tests is duplicated.
+    - The copy on `main` replaces 42 scratch values (JSON `"key"` and `"token"`) with `<scratch-id>`,
+      because the gitleaks hook reads them as API keys. The original is
+      `~/.cache/agent-skills-haiku55-arc/reports/ao-44-i5-r4.review.md`.
+  - **Round 5 dispatched (2026-10-20 09:22 EDT) to ao-41.** Owner 2026-10-20: "Small round 5, then land".
+    Brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-r5.md`: the m-3 warning text, and tests that
+    catch the mutants (a) probe counts every error as free, (b) attempt lock bound after the claim,
+    (c) lock name from the path as given, (d) non-success release before the write (or an equivalence
+    argument). No redesign and no test refactor. Next: ao-44 runs its mutants against the new tests,
+    then the orchestrator cherry-picks, builds and restarts the 5 lifecycle workers once. ao-41 context
+    at dispatch: 31% (81.98 USD by its status line; trial_cost 72.98 USD).
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
