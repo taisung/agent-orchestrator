@@ -592,6 +592,26 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     no finding. Saved in `~/.cache/agent-skills-haiku55-arc/reports/`: `ao-42-i5-r3-partial.*` (report,
     task, the review start) and `ao-43-i5-r4-partial.*` (report, task). Worktrees removed by the kill;
     branches kept. The ao-42 scratch dir `/tmp/i5r3-ao42-20261020` and its marker removed.
+  - **Review r4 (ao-44, 09:18 EDT, 24 min, 2.07 USD, no filter stop): LAND-SAFE, 0 B, 0 M, 1 m.**
+    Review file `development/reviews/i5_review_r4_sol61.md`. The verdict holds for Linux, one user, one
+    network namespace, and the documented 10 min retry contract.
+    - Status: B-1, B-2, B-3, M-1, M-2, M-3, M-4 and m-1 fixed. m-2 fixed for its original defect. M-5
+      partly fixed: the reviewer reproduced the documented limit live (3 failed mark writes, the sender
+      ends, then a new equal lifecycle dispatch is recorded with no new input) and accepts it for a
+      personal tool. No simple core-only change removes it.
+    - m-3: when the purge cannot remove a corrupt ledger and cannot write the pending key either, the
+      warning says that cleanup removes the file after 10 min. The sweep keeps corrupt files, so the file
+      stays. Fix: one warning text that says to inspect and remove the file by hand.
+    - Test gaps (not defects): 4 reviewer mutants survive the checked-in tests: the probe counts every
+      error as free; the attempt lock bound after the claim; a lock name from the path as given, not
+      its real path; the release before the settle write for non-success. The reviewer's own probes
+      show that the current code is correct in each case.
+    - Waits are asynchronous (194 event-loop ticks during a 2 s refusal). The nominal ledger wait of one
+      success is 11.2 s, plus up to 1 s per equal-entry probe.
+    - Gates: full `pnpm test` 2547 passed, 29 skipped; lock and ledger test files 5 runs each and one
+      run under CPU load. Isolated store, 24 sessions, tokens 0. No write under the real state root.
+    - Size advice: about 3798 of the inserted lines are tests; the child runner of the lock and ledger
+      tests is duplicated.
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
