@@ -408,6 +408,26 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     definite refusal; read-back by ID only; m-1 prose fixed; the size refusal before any restore; spawn
     errors (`E2BIG`, `ENOENT`) definite; TUI waits capped or documented. `lifecycle-manager.ts` stays
     out of scope.
+  - **Author r2 done (22:45 EDT, `a6b37297..56f8461c`, 6 commits, 18.26 USD by trial_cost).** The
+    plugin sends a client `msg_` ID (a copy of the 2.0.32 generator `gZ(!1)`, quoted from the binary).
+    Core writes `pendingDeliveries` (`{inputId, textSha256, at, state}`, states `sending` and `unknown`,
+    at most 20) with `updateMetadata` before the prompt, through `attempt.begin`. A later send reuses the
+    ID only for an `unknown` entry of the same text hash younger than 10 min (lifecycle poll 30 s, one
+    poll send about 1 to 2 min). Read-back by ID only (inbox, then `session.message.get`). A replay sets
+    `replayed: true`, and `ao send` prints one line for it. New optional `Agent.checkMessage` runs the
+    size check before `prepareSession`. `OpenCodeApiSpawnError` (`E2BIG`, `ENOENT`, other spawn errors)
+    is a definite refusal. The TUI check is capped to its 10 s deadline; the spec gives 80 s plus the
+    restore as the bound of one send. m-1 prose fixed. Gates: full `pnpm test` exit 0 (core 1042,
+    opencode 294, cli 256); 7 brief mutants and 4 extra mutants fail tests. D2 live on an isolated store
+    with the `opencode` provider disabled: the review reproducers give one admission each, tokens 0.
+    Known limits from the author: a `sending` entry that a stopped process leaves is never reused, so a
+    retry before 10 min can admit a second time; `updateMetadata` has no lock; a kill and a restore
+    from the archive drops the entry; `session.message.list` is in timeline order, not ID order.
+    Report: `reports/ao-41-i5-r2.agent_report.md`.
+  - **Review r2 dispatched (22:48 EDT):** ao-42 (Codex, gpt-6.1-sol, xhigh), same session, worktree moved
+    to `56f8461c` with `reset --keep`, brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r2-sol.md`,
+    review file `development/reviews/i5_review_r2_sol61.md`. Codex token baseline before r2 (end of
+    r1): input 7056854, cached 6844672, output 45253.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
