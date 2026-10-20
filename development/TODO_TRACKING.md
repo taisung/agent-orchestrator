@@ -867,7 +867,25 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     New behavior: a stale claimPR, restore, kill, remap or recovery action fails and needs a re-run.
   - **Review r3** (ao-47, dispatched 19:06:15 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r3-sol.md`, output
-    `development/reviews/killed_status_review_r3_sol61.md`): re-check of `e6e23c38..f35b665f`.
+    `development/reviews/killed_status_review_r3_sol61.md`): re-check of `e6e23c38..f35b665f`. Done 19:25 EDT:
+    **NOT-LAND-SAFE**, 2 blockers, 2 majors, 1 minor. Fixed: r2 M-1 (live, shipped 5-minute bound), m-1,
+    m-3, the fixture; claimPR and restore record cases 1 to 3 now refuse.
+    - B-1 (new in round 4): the restore final-write failure handler destroys its returned handle by the
+      reused tmux name; a two-process private-tmux run ended a replacement launch whose record says working.
+    - B-2: `deleteMetadata(..., false)` (spawn rollback) plus a new reservation restarts `generation` at the
+      latest archive + 1, so the generation-only compares (lifecycle PR discovery, bookkeeping, repair) take
+      a stale PR and summary into the new launch (ABA, new writers only).
+    - M-1: `rollbackLaunch` reads ownership once (`session-manager.ts:1446`), awaits destroy and discard,
+      then removes the shared worktree of a replacement (`:1460-1462`).
+    - M-2: automatic cleanup compares launch identity only; a claimPR to an open PR during its closed-PR
+      query is killed and archived (`:2719-2721,2768`).
+    - m-1: `NODE_OPTIONS=--input-type=module` still makes the lock helper fail after 10 s.
+    - Rated major residual, pre-existing: the tmux-name destroy windows in `killRecord` and restore step 7
+      (need a runtime-incarnation check, related to the prefix-match round). Follow-up: claimPR fails when a
+      lifecycle write lands during its checkout (about d/30 for a d-second checkout) and leaves the checkout.
+    - Test isolation note (orchestrator): `record-lock.test.ts:150,556` start children with only `PATH`, so
+      `os.homedir()` in a child is the real home; no real write seen.
+    - R7: the Opus author failed a third review round. The next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
