@@ -28,7 +28,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`. Round 2 done: `done|b8a43f5f` (fix `34ea8624`, tests `0b54c4ac`, docs `b8a43f5f`, on `e751a3ee`; the round-1 tests are `0571fa12`); full run 2592 passed, 0 failed; report `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r2.md`; 29.34 USD for both rounds | keep for the review findings; router rows closed `in-review` |
+| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`, rebased on `9eb8ff71` (round-2 commits now `59d5f603`, `bdc8871a`, `ea816683`, `c516afdd`). Round 3 after review r1 NOT-LAND-SAFE dispatched about 14:50 EDT (owner 1a 2a 3a 4a), brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r3.md`, meter `5h 6%`, `wk 9%`; its context was near auto-compact at the start | wait for its report, then the ao-47 re-check; router row r3 open |
 | ao-47 | Codex gpt-6.1-sol, blind review r1 of `e751a3ee..b8a43f5f`: NOT-LAND-SAFE (B-1, B-2, M-1 to M-3, m-1, m-2), review on `main` as `development/reviews/killed_status_review_r1_sol61.md` | keep for the re-check of round 3; router row closed `in-review` |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
@@ -63,7 +63,12 @@ the current first line as handled, so read a worker's report first.
 **Router log**: both ao-46 rows and the ao-47 review row are closed `in-review` (10.81, 18.53 and about 1.5 USD).
 
 **Owner decisions of 2026-10-20**: fix A+B+C+D in one round by ao-46; the real records `ao-orchestrator`
-and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them). Eight rows of 2026-10-15 still have
+and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them).
+After review r1 (answers 1a 2a 3a 4a): ao-46 writes round 3; a tmux "not found" is a death that the
+outage rule never blocks, and the outage rule (only for plugins that answer false on an error) and "no
+tmux server" each turn into `killed` after 5 minutes; a per-record kernel-released lock and a generation
+counter for every Node writer, with `pr` in the compare, and the bash helper stays outside the lock (no
+`WRAPPER_VERSION` change); the minor items are in round 3. Eight rows of 2026-10-15 still have
 `landed=pending` (TODO Known Issues, "Traps found in the I-5 rounds").
 
 ## Open and Blocked Items
