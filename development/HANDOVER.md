@@ -28,7 +28,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`. Round 1 (investigation) done; its 11 failing tests are `ebf23185` after the orchestrator rebased the branch on `0926e619`. Round 2 (fix A+B+C+D, owner 2026-10-20) dispatched about 12:25 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r2.md`, meter `5h 1%`, `wk 8%` | wait for its report; then the gpt-6.1-sol review; router row r1 closed `in-review`, r2 open |
+| ao-46 | Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute`. Round 2 done: `done|b8a43f5f` (fix `34ea8624`, tests `0b54c4ac`, docs `b8a43f5f`, on `e751a3ee`; the round-1 tests are `0571fa12`); full run 2592 passed, 0 failed; report `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r2.md`; 29.34 USD for both rounds | keep for the review findings; router rows closed `in-review` |
+| ao-47 | Codex gpt-6.1-sol, blind review r1 of `e751a3ee..b8a43f5f`, worktree moved to `b8a43f5f`, dispatched 14:09 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r1-sol.md`, review file `development/reviews/killed_status_review_r1_sol61.md` | wait for its verdict; router row open |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
 equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
@@ -51,15 +52,15 @@ config of this fork do not run until their orchestrators run `ao start`. Every b
 live ones (check with `ps` at dispatch), not the old 105049, 105142, 105154, 106266, 106285. The global OpenCode service does not run (old PID 15920): an
 `opencode api` call starts one with the caller's environment.
 
-**Watcher**: PID 337062 since 11:26:06, state `/home/taisung/.cache/fleet_watch/ao-killed-2026-10-20`,
-watching ao-46. Start command: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
+**Watcher**: PID 3020940 since 14:09:50, state `/home/taisung/.cache/fleet_watch/ao-killed-2026-10-20`,
+watching ao-46 and ao-47 (the first watcher, PID 337062, stopped by TERM at 14:09:40 to add ao-47). Start command: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
 /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
 /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed <id> ...
 < /dev/null`. `--preseed` is a flag with no value; put the session names after all flags (the old state
 directory holds `--preseed.*` files from a call that read it as a session name). `--preseed` records
 the current first line as handled, so read a worker's report first.
 
-**Router log**: the ao-46 round 1 row is closed `in-review` (2026-10-20, 10.81 USD); the round 2 row is open.
+**Router log**: both ao-46 rows are closed `in-review` (10.81 USD and 18.53 USD); the ao-47 review row is open.
 
 **Owner decisions of 2026-10-20**: fix A+B+C+D in one round by ao-46; the real records `ao-orchestrator`
 and `as-orchestrator` stay `killed` until fix C is live (its first poll must correct them). Eight rows of 2026-10-15 still have
