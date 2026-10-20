@@ -428,6 +428,21 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     to `56f8461c` with `reset --keep`, brief `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r2-sol.md`,
     review file `development/reviews/i5_review_r2_sol61.md`. Codex token baseline before r2 (end of
     r1): input 7056854, cached 6844672, output 45253.
+  - **Review r2 (23:05 EDT, 17 min, 1.45 USD): NOT-LAND-SAFE, 1 B, 2 M, 0 m.** Round 1: B-1 partly
+    fixed, M-1 fixed, m-1 fixed. The normal unknown-admission retry, both late-admission orders and two
+    real lifecycle checks now give one admission. Each new finding below was reproduced live and gave 2
+    inputs of one text. B-2: a sender that stops (SIGKILL) during an admitted prompt, or a failed write of
+    state `unknown` (settlement errors are ignored), leaves the entry `sending`, and the retry mints a new
+    ID. M-2: `updateMetadata` has no cross-process lock, so a write of another process (a deterministic
+    two-process interleaving with `lastCIFailureDispatchHash`) erases the `unknown` entry. M-3: a kill and
+    a restore from the archive drop `pendingDeliveries` (the fixed-key rebuild at `session-manager.ts:3335`).
+    Also, not numbered: a corrupt `pendingDeliveries` value counts as empty (fail open); an
+    EPIPE-definite mutant survives (a test gap, the code is correct); the 80 s bound is a sum of waits,
+    not a hard bound. Gates pass (full `pnpm test` 2491 passed, 29 skipped); 6 reviewer mutants killed;
+    the ID generator copy matches the 2.0.32 binary, and no fork reader sorts by message ID; isolated
+    store, 14 sessions, tokens 0. Core has no cross-process lock (only the exclusive-create helper in
+    `metadata.ts`), so a fix for M-2 needs code outside the I-5 file list. Owner decision on round 3
+    pending.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
