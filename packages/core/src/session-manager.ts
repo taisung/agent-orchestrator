@@ -27,6 +27,8 @@ import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import {
+  AgentNotAttachedError,
+  isAgentNotAttachedError,
   isIssueNotFoundError,
   isRestorable,
   NON_RESTORABLE_STATUSES,
@@ -54,7 +56,9 @@ import {
   type Issue,
   type AgentLaunchConfig,
   type AgentLaunchConfirmation,
+  type AgentMessageDelivery,
   type PreparedAgentSession,
+  type SessionMessageDelivery,
   PR_STATE,
 } from "./types.js";
 import {
@@ -2513,6 +2517,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function send(sessionId: SessionId, message: string): Promise<void> {
+    await deliver(sessionId, message);
+  }
+
+  async function deliver(sessionId: SessionId, message: string): Promise<SessionMessageDelivery> {
+    const sendStartedAt = Date.now();
     const { raw, project } = requireSessionRecord(sessionId);
 
     const selection = resolveSelectionForSession(project, sessionId, raw);
@@ -2766,7 +2775,53 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       return;
     };
 
+    // I-5: the agent delivers the message itself (OpenCode: `session.prompt`
+    // after its TUI check), so `runtime.sendMessage` and the screen-diff
+    // confirmation do not run. Only `AgentNotAttachedError` (nothing was
+    // delivered) restores, and only once per send; every other error is
+    // final, because a retry after an unknown admission can deliver twice.
+    // `restore` refuses a session whose agent process still runs, so a pane
+    // that runs another agent process is never replaced: the send then fails
+    // with both reasons.
+    const deliverMessage = agentPlugin.deliverMessage?.bind(agentPlugin);
+    const deliverThroughAgent = async (
+      session: Session,
+      hook: (session: Session, message: string) => Promise<AgentMessageDelivery>,
+    ): Promise<AgentMessageDelivery> => {
+      let notAttached: Error & { reason?: string };
+      try {
+        return await hook(session, message);
+      } catch (err) {
+        const restoredBySend =
+          session.restoredAt !== undefined && session.restoredAt.getTime() >= sendStartedAt;
+        if (
+          !isAgentNotAttachedError(err) ||
+          restoredBySend ||
+          NON_RESTORABLE_STATUSES.has(session.status)
+        ) {
+          throw err;
+        }
+        notAttached = err;
+      }
+      let restored: Session;
+      try {
+        restored = await prepareSession(true);
+      } catch (restoreErr) {
+        const detail = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        throw new AgentNotAttachedError(
+          sessionId,
+          `${notAttached.reason ?? notAttached.message}; the restore for a second try failed (${detail})`,
+          { cause: restoreErr },
+        );
+      }
+      return hook(restored, message);
+    };
+
     let prepared = await prepareSession();
+
+    if (deliverMessage && agentPlugin.canDeliverMessage?.(prepared) === true) {
+      return { route: "agent", delivery: await deliverThroughAgent(prepared, deliverMessage) };
+    }
 
     try {
       await sendWithConfirmation(prepared);
@@ -2791,6 +2846,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         throw new Error(String(retryErr), { cause: retryErr });
       }
     }
+    return { route: "runtime" };
   }
 
   async function claimPR(
@@ -3228,5 +3284,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return restoredSession;
   }
 
-  return { spawn, spawnOrchestrator, restore, list, get, kill, cleanup, send, claimPR, remap };
+  return {
+    spawn,
+    spawnOrchestrator,
+    restore,
+    list,
+    get,
+    kill,
+    cleanup,
+    send,
+    deliver,
+    claimPR,
+    remap,
+  };
 }

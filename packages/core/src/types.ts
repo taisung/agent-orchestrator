@@ -404,6 +404,30 @@ export interface Agent {
   ): Promise<AgentLaunchConfirmation>;
 
   /**
+   * Optional (I-5): true when `deliverMessage` can deliver to this session
+   * (OpenCode: the record holds a valid stored session ID). Core and the CLI
+   * call it to choose the delivery path. When it is absent or false, the
+   * session keeps the runtime path (`runtime.sendMessage`).
+   */
+  canDeliverMessage?(session: Session): boolean;
+
+  /**
+   * Optional (I-5): deliver `message` through the agent's own API instead of
+   * the runtime (OpenCode: `session.prompt`). Core calls it after it prepared
+   * the session (a dead runtime or agent process is restored first, a
+   * `spawning` session is waited for), and only when `canDeliverMessage` is
+   * true. It replaces `runtime.sendMessage` and the screen-diff confirmation:
+   * it returns the record of the admitted message, or throws.
+   * `AgentNotAttachedError` means that nothing was delivered because the
+   * interactive agent process that the delivery needs does not run on the
+   * session; core then restores the session once and calls the hook again
+   * (`restore` refuses a session whose agent process still runs, and the
+   * send then fails). Every other throw is final. The hook never delivers
+   * one message twice.
+   */
+  deliverMessage?(session: Session, message: string): Promise<AgentMessageDelivery>;
+
+  /**
    * Optional: Set up agent-specific hooks/config in the workspace for automatic metadata updates.
    * Called once per workspace during ao init/start and when creating new worktrees.
    *
@@ -511,6 +535,28 @@ export interface AgentLaunchConfirmation {
   /** Whether the launch prompt reached the agent; absent when the agent cannot tell. */
   promptDelivered?: boolean;
 }
+
+/** A pending human answer that a delivered message waits behind. */
+export type AgentPendingInput = "permission" | "question";
+
+/** What `Agent.deliverMessage` reports for one admitted message (I-5). */
+export interface AgentMessageDelivery {
+  /** The agent's ID of the admitted input (OpenCode: the inbox item ID, `msg_...`). */
+  inputId: string;
+  /** How the agent schedules the input (OpenCode: `queue`, after the last answer of a running turn). */
+  mode: string;
+  /** True when the agent ran a turn at the send, so the input waits for that turn; absent when unknown. */
+  busy?: boolean;
+  /** The pending human answers that the input waits behind (empty: none); absent when unknown. */
+  waitsFor?: readonly AgentPendingInput[];
+  /** True when the answer of the admission was lost and a read-back of the session found the input. */
+  recovered?: boolean;
+}
+
+/** How `SessionManager.deliver` sent one message. */
+export type SessionMessageDelivery =
+  | { route: "agent"; delivery: AgentMessageDelivery }
+  | { route: "runtime" };
 
 export interface WorkspaceHooksConfig {
   /** Data directory where session metadata files are stored */
@@ -1502,6 +1548,12 @@ export interface SessionManager {
     options?: { dryRun?: boolean; purgeOpenCode?: boolean },
   ): Promise<CleanupResult>;
   send(sessionId: SessionId, message: string): Promise<void>;
+  /**
+   * Optional (I-5): `send` that also reports the route and, for an agent
+   * delivery, the record of `Agent.deliverMessage`. Same behavior and same
+   * errors as `send`.
+   */
+  deliver?(sessionId: SessionId, message: string): Promise<SessionMessageDelivery>;
   claimPR(sessionId: SessionId, prRef: string, options?: ClaimPROptions): Promise<ClaimPRResult>;
 }
 
@@ -1653,6 +1705,31 @@ export class SessionNotFoundError extends Error {
     super(`Session not found: ${sessionId}`);
     this.name = "SessionNotFoundError";
   }
+}
+
+/**
+ * Thrown by `Agent.deliverMessage` when the interactive agent process that
+ * the delivery needs does not run on the session (OpenCode: no TUI on the
+ * stored session ID). Nothing was delivered, so core can restore the session
+ * and try once more.
+ */
+export class AgentNotAttachedError extends Error {
+  constructor(
+    public readonly sessionId: string,
+    public readonly reason: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`Cannot deliver to session ${sessionId}: ${reason}`, options);
+    this.name = "AgentNotAttachedError";
+  }
+}
+
+/** True for `AgentNotAttachedError`, also from another copy of this module. */
+export function isAgentNotAttachedError(err: unknown): err is AgentNotAttachedError {
+  return (
+    err instanceof AgentNotAttachedError ||
+    (err instanceof Error && err.name === "AgentNotAttachedError")
+  );
 }
 
 /** Thrown when no agent-orchestrator.yaml config file can be found. */
