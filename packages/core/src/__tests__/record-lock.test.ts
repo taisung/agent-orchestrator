@@ -4,8 +4,9 @@
  * write increments `generation`.
  *
  * The two-process tests run a second writer in a real child process (the
- * pattern of the review's B-2 reproducer). The child runs the same metadata,
- * record-lock and delivery-lock code, compiled with the TypeScript compiler.
+ * pattern of the review's B-2 reproducer). The child runs the same metadata
+ * (with the record lock) and delivery-lock code, compiled with the TypeScript
+ * compiler.
  * "Takes": the child starts its write while the first writer is between its
  * read and its rename. "Holds": the child holds the lock while the first
  * writer starts. In both orders the second writer's record must end intact.
@@ -19,15 +20,16 @@ import ts from "typescript";
 import type * as AtomicWrite from "../atomic-write.js";
 import type * as DeliveryLock from "../delivery-lock.js";
 import {
+  RECORD_LOCK_WAIT_MS,
   deleteMetadata,
   readArchivedMetadataRaw,
   readMetadataRaw,
+  recordLockName,
   reserveSessionId,
   updateMetadata,
   updateMetadataIf,
   writeMetadata,
 } from "../metadata.js";
-import { RECORD_LOCK_WAIT_MS, recordLockName } from "../record-lock.js";
 import { isDeliveryLockHeld } from "../delivery-lock.js";
 
 // The first writer pauses inside its locked section, after its read and
@@ -58,12 +60,11 @@ vi.mock("../delivery-lock.js", async (importOriginal) => {
   };
 });
 
-const SOURCES = ["metadata", "record-lock", "delivery-lock", "atomic-write", "key-value"];
+const SOURCES = ["metadata", "delivery-lock", "atomic-write", "key-value"];
 
 const CHILD = `
 import { writeFileSync, existsSync } from "node:fs";
-import { updateMetadata, deleteMetadata, reserveSessionId } from "./metadata.js";
-import { withRecordLock } from "./record-lock.js";
+import { updateMetadata, deleteMetadata, reserveSessionId, withRecordLock } from "./metadata.js";
 const cmd = JSON.parse(process.argv[2]);
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 const sleep = (ms) => Atomics.wait(sleeper, 0, 0, ms);
