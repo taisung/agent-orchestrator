@@ -186,6 +186,13 @@ async function sendThroughAgent(
       ),
     );
   }
+  if (result.admissionUnrecorded) {
+    console.log(
+      chalk.yellow(
+        `The delivery ledger could not record that input ${delivery.inputId} was admitted: a send of the same text to ${sessionName} in the next 10 min can reuse that ID and admit nothing new.`,
+      ),
+    );
+  }
   if (delivery.busy) {
     console.log(
       chalk.dim(`${sessionName} is running a turn: the message goes in after its last answer.`),

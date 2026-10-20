@@ -599,6 +599,25 @@ describe("send through the OpenCode API (I-5)", () => {
     await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
 
     expect(logged().join("\n")).not.toContain("An earlier attempt");
+    expect(logged().join("\n")).not.toContain("could not record");
+  });
+
+  it("M-5: keeps the admission line and prints one line when the ledger could not record the admission", async () => {
+    mockSessionManager.deliver.mockResolvedValue({
+      route: "agent",
+      delivery: { inputId: "msg_unrecorded", mode: "queue" },
+      admissionUnrecorded: true,
+    });
+
+    await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
+
+    expect(logged()).toEqual([
+      expect.stringContaining("Message admitted to app-1 (input msg_unrecorded, delivery queue)"),
+      expect.stringContaining(
+        "The delivery ledger could not record that input msg_unrecorded was admitted: a send of the same text to app-1 in the next 10 min can reuse that ID and admit nothing new.",
+      ),
+    ]);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("prints the question line alone", async () => {
