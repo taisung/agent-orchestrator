@@ -441,8 +441,22 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     not a hard bound. Gates pass (full `pnpm test` 2491 passed, 29 skipped); 6 reviewer mutants killed;
     the ID generator copy matches the 2.0.32 binary, and no fork reader sorts by message ID; isolated
     store, 14 sessions, tokens 0. Core has no cross-process lock (only the exclusive-create helper in
-    `metadata.ts`), so a fix for M-2 needs code outside the I-5 file list. Owner decision on round 3
-    pending.
+    `metadata.ts`), so a fix for M-2 needs code outside the I-5 file list.
+  - **Round 3 dispatched (23:22 EDT) to ao-41.** Owner 2026-10-19: "Full fix, own ledger". Brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-i5-r3.md`. The design:
+    - One ledger file per stored OpenCode session ID under the project state directory (a new
+      `paths.ts` helper), so it survives a kill, the archive and a restore. `pendingDeliveries` leaves
+      the session record. `restore()`, `metadata.ts` and `lifecycle-manager.ts` do not change.
+    - A cross-process lock file in a new core file. It holds the owner PID, the start time and a token.
+      A dead owner's lock is broken safely. A live owner's lock gives a short wait, then a definite
+      refusal. The lock never covers `session.prompt`.
+    - Owner liveness: a `sending` entry is reused when its owner is dead (PID gone, or another start
+      time), or when its owner is this process and the attempt is not in flight.
+    - A failed write before the prompt is definite. A corrupt ledger fails closed and names the file.
+      `--purge-session` removes the ledger.
+    - Also: an `EPIPE`-unknown test, and the spec calls the 80 s a nominal sum.
+    - Files: the I-5 list, plus the new ledger file, its test, and `paths.ts` with its test.
+    ao-41 context at dispatch: 34%, 42.57 USD in total.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
   (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
