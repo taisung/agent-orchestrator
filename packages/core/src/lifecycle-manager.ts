@@ -1723,8 +1723,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // process that transition even though the new status is terminal)
       // C3: also re-check a killed record whose kill came from a liveness probe.
       // M-3: also a record whose persisted status is not terminal while list()
-      // reports it killed in memory, when this worker has no tracked status
-      // for it yet (a new worker over a session that died before it started).
+      // reports it killed in memory, also when this worker has no tracked
+      // status for it (a new worker over a session that died before it started).
       const sessionsToCheck = sessions.filter((s) => {
         if (!TERMINAL_STATUSES.has(s.status)) return true;
         if (isRecoverableKill(s.metadata)) return true;
