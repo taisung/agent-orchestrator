@@ -489,6 +489,15 @@ function pending(): DeliveryEntry[] {
   return readDeliveryLedger(ledgerDir(), STORED);
 }
 
+/** The ledger file of the stored session as text, or null when it is not there. */
+function ledgerTextOrNull(): string | null {
+  try {
+    return readFileSync(deliveryLedgerPath(ledgerDir(), STORED), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf-8").digest("hex");
 }
@@ -662,20 +671,23 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     await sm.kill("app-1");
     expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
     expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe(STORED);
-    expect(pending()).toEqual([expect.objectContaining({ inputId: first, state: "unknown" })]);
+    const ledgerAfterKill = ledgerTextOrNull();
 
     deadRuntime();
     await sm.restore("app-1");
     expect(readMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe(STORED);
-    expect(readMetadataRaw(sessionsDir, "app-1")?.["pendingDeliveries"]).toBeUndefined();
 
     const retry = await sm.deliver!("app-1", "ARCHIVE RETRY");
 
+    // The behavior first: one admission, and the retry is a replay.
+    expect(service.admitted).toHaveLength(1);
     expect(retry).toEqual({
       route: "agent",
       delivery: { inputId: first, mode: "queue", replayed: true },
     });
-    expect(service.admitted).toHaveLength(1);
+    // Then where the ID was: in the ledger across the kill, never in the record.
+    expect(ledgerAfterKill).toContain(first);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["pendingDeliveries"]).toBeUndefined();
     expect(pending()).toEqual([]);
   });
 
@@ -707,7 +719,7 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
     const snapshot = readMetadataRaw(sessionsDir, "app-1")!;
 
     await expect(sm.send("app-1", "RACE SAME TEXT")).rejects.toBeInstanceOf(AgentDeliveryError);
-    const ledgerBefore = readFileSync(deliveryLedgerPath(ledgerDir(), STORED), "utf-8");
+    const ledgerBefore = ledgerTextOrNull();
     // The old snapshot plus its own key, written whole (as `updateMetadata` of
     // another process writes the record that it read before the send).
     writeFileSync(
@@ -717,14 +729,16 @@ describe("one input ID per logical send (I-5 rounds 2 and 3, B-1, M-1, B-2, M-2,
         .join("\n") + "\n",
     );
     updateMetadata(sessionsDir, "app-1", { summary: "a later write" });
-
-    expect(readFileSync(deliveryLedgerPath(ledgerDir(), STORED), "utf-8")).toBe(ledgerBefore);
+    const ledgerAfterWrites = ledgerTextOrNull();
     await sm.send("app-1", "RACE SAME TEXT");
 
+    // The behavior first: one admission; then the ledger was not touched.
     expect(service.admitted).toHaveLength(1);
     expect(readMetadataRaw(sessionsDir, "app-1")?.["lastCIFailureDispatchHash"]).toBe(
       "EXTERNAL-HASH",
     );
+    expect(ledgerBefore).toContain(service.prompted[0]!);
+    expect(ledgerAfterWrites).toBe(ledgerBefore);
   });
 
   it("two concurrent sends of the same text: two IDs and two admissions", async () => {
