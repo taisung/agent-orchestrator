@@ -851,6 +851,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     - Rollout note: old lifecycle workers neither take the lock nor increment `generation`, so restart
       every old writer before relying on the new protocol.
     - R7: the Opus author failed a second review round. The next step is the owner's.
+  - **Fix round 4** (owner 2026-10-20, answers "1a 2a 3a"): ao-46 on Opus writes it; scope B-1 (with an
+    audit of every read-await-write path and of the generic create in `updateMetadata`), M-1 (run, bounds
+    and confirmation keyed by launch), m-1 to m-3 and the alternating-answer fixture; the tmux prefix
+    match gets its own round after this fix lands; the hidden socket over 5 minutes stays a follow-up.
+    Dispatched 17:23:47 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r4.md`,
+    on top of `e6e23c38` with no rebase.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
