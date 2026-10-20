@@ -212,3 +212,127 @@ describe("recovery validator", () => {
     expect(assessment.runtimeAlive).toBe(false);
   });
 });
+
+describe("recovery validator: a rejected probe is unknown (m-2)", () => {
+  let rootDir = "";
+
+  afterEach(() => {
+    if (rootDir) rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  function assess(probes: {
+    isAlive: () => Promise<boolean>;
+    isProcessRunning: () => Promise<boolean>;
+  }) {
+    rootDir = join(tmpdir(), `ao-recovery-validator-${randomUUID()}`);
+    const projectPath = join(rootDir, "project");
+    mkdirSync(projectPath, { recursive: true });
+    writeFileSync(join(rootDir, "agent-orchestrator.yaml"), "projects: {}\n", "utf-8");
+    const runtime: Runtime = {
+      name: "tmux",
+      create: vi.fn(),
+      destroy: vi.fn(),
+      sendMessage: vi.fn(),
+      getOutput: vi.fn(),
+      isAlive: vi.fn(probes.isAlive),
+    };
+    const workspace: Workspace = {
+      name: "worktree",
+      create: vi.fn(),
+      destroy: vi.fn(),
+      list: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
+    };
+    const agent: Agent = {
+      name: "claude-code",
+      processName: "claude",
+      getLaunchCommand: vi.fn(),
+      getEnvironment: vi.fn(),
+      detectActivity: vi.fn(),
+      getActivityState: vi.fn(),
+      isProcessRunning: vi.fn(probes.isProcessRunning),
+      getSessionInfo: vi.fn(),
+    };
+    const registry: PluginRegistry = {
+      register: vi.fn(),
+      get: vi
+        .fn()
+        .mockImplementation((slot: string) =>
+          slot === "runtime"
+            ? runtime
+            : slot === "workspace"
+              ? workspace
+              : slot === "agent"
+                ? agent
+                : null,
+        ),
+      list: vi.fn().mockReturnValue([]),
+      loadBuiltins: vi.fn().mockResolvedValue(undefined),
+      loadFromConfig: vi.fn().mockResolvedValue(undefined),
+    };
+    const config: OrchestratorConfig = {
+      configPath: join(rootDir, "agent-orchestrator.yaml"),
+      port: 3000,
+      readyThresholdMs: 300_000,
+      defaults: { runtime: "tmux", agent: "claude-code", workspace: "worktree", notifiers: [] },
+      projects: {
+        app: {
+          name: "app",
+          repo: "org/repo",
+          path: projectPath,
+          defaultBranch: "main",
+          sessionPrefix: "app",
+        },
+      },
+      notifiers: {},
+      notificationRouting: { urgent: [], action: [], warning: [], info: [] },
+      reactions: {},
+    };
+    const scanned: ScannedSession = {
+      sessionId: "app-1",
+      projectId: "app",
+      project: config.projects.app,
+      sessionsDir: getSessionsDir(config.configPath, projectPath),
+      rawMetadata: {
+        worktree: projectPath,
+        status: "working",
+        runtimeHandle: JSON.stringify({ id: "rt-1", runtimeName: "tmux", data: {} }),
+      },
+    };
+    return validateSession(scanned, config, registry);
+  }
+
+  const unreachable = () =>
+    Promise.reject(new Error("tmux has-session could not answer: timed out"));
+  const psFails = () => Promise.reject(new Error("claude-code: ps -eo pid,tty,args failed"));
+
+  it.each([
+    {
+      probe: "isAlive rejects",
+      isAlive: unreachable,
+      isProcessRunning: () => Promise.resolve(false),
+    },
+    {
+      probe: "isProcessRunning rejects",
+      isAlive: () => Promise.resolve(true),
+      isProcessRunning: psFails,
+    },
+    { probe: "both reject", isAlive: unreachable, isProcessRunning: psFails },
+  ])("gives no action, never cleanup, when $probe", async ({ isAlive, isProcessRunning }) => {
+    const assessment = await assess({ isAlive, isProcessRunning });
+
+    expect(assessment.action).toBe("skip");
+    expect(assessment.classification).toBe("partial");
+    expect(assessment.reason).toMatch(/^Liveness unknown \(/);
+  });
+
+  it("still gives cleanup for a runtime that answered dead (the default autoCleanup)", async () => {
+    const assessment = await assess({
+      isAlive: () => Promise.resolve(false),
+      isProcessRunning: () => Promise.resolve(false),
+    });
+
+    expect(assessment.classification).toBe("dead");
+    expect(assessment.action).toBe("cleanup");
+  });
+});

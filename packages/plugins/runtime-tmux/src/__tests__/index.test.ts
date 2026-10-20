@@ -674,6 +674,12 @@ describe("runtime.isAlive()", () => {
     },
   );
 
+  it("returns false when a server with no session answers 'no current target' (m-1)", async () => {
+    // tmux 3.4, `exit-empty off`, the last session ended: has-session prints this.
+    mockTmuxFailure("has-session -t dead-test", "no current target\n");
+    await expect(create().isAlive(makeHandle("dead-test"))).resolves.toBe(false);
+  });
+
   it.each([
     {
       failure: "no server running (stale socket)",
@@ -727,31 +733,52 @@ describe("runtime.isAlive()", () => {
 });
 
 describe("runtime.getMetrics()", () => {
-  it("returns uptimeMs based on createdAt", async () => {
-    const runtime = create();
+  /** `list-sessions -F '#{session_created} #{session_name}'` output. */
+  const sessionsCreated = (...rows: Array<[string, number]>) =>
+    rows.map(([name, ms]) => `${Math.floor(ms / 1000)} ${name}`).join("\n");
+
+  it("returns the age of the tmux session itself (#{session_created})", async () => {
     const now = Date.now();
-    const handle = makeHandle("metrics-test", now - 5000);
+    mockTmuxSuccess(sessionsCreated(["other", now - 7_200_000], ["metrics-test", now - 90_000]));
 
-    const metrics = await runtime.getMetrics!(handle);
+    const metrics = await create().getMetrics!(makeHandle("metrics-test", now - 5000));
 
-    // uptimeMs should be approximately 5000ms (allow some wiggle room)
-    expect(metrics.uptimeMs).toBeGreaterThanOrEqual(5000);
-    expect(metrics.uptimeMs).toBeLessThan(6000);
+    expect(mockExecFileCustom).toHaveBeenCalledWith(
+      "tmux",
+      ["list-sessions", "-F", "#{session_created} #{session_name}"],
+      expectedTmuxOptions,
+    );
+    // Whole seconds: the age is 90 s plus at most 1 s of rounding.
+    expect(metrics.uptimeMs).toBeGreaterThanOrEqual(90_000);
+    expect(metrics.uptimeMs).toBeLessThan(91_500);
   });
 
-  it("handles missing createdAt by using Date.now()", async () => {
-    const runtime = create();
-    const handle: RuntimeHandle = {
-      id: "metrics-no-created",
-      runtimeName: "tmux",
-      data: {},
-    };
+  it("reports a new session under an old name with its own age, not the handle's", async () => {
+    const now = Date.now();
+    mockTmuxSuccess(sessionsCreated(["metrics-test", now - 2_000]));
 
-    const metrics = await runtime.getMetrics!(handle);
+    const metrics = await create().getMetrics!(makeHandle("metrics-test", now - 3_600_000));
 
-    // uptimeMs should be very close to 0 since createdAt defaults to Date.now()
-    expect(metrics.uptimeMs).toBeGreaterThanOrEqual(0);
-    expect(metrics.uptimeMs).toBeLessThan(1000);
+    expect(metrics.uptimeMs).toBeLessThan(3_500);
+  });
+
+  it("matches the exact name, not a session whose name only starts with it", async () => {
+    mockTmuxSuccess(sessionsCreated(["metrics-test-10", Date.now() - 60_000]));
+
+    await expect(create().getMetrics!(makeHandle("metrics-test"))).rejects.toThrow(
+      "tmux session metrics-test not found",
+    );
+  });
+
+  it("rejects with a typed error when tmux cannot list its sessions", async () => {
+    mockTmuxFailure("list-sessions", "no server running on /tmp/tmux-1000/default\n");
+
+    const rejection = await create()
+      .getMetrics!(makeHandle("metrics-test"))
+      .catch((err: unknown) => err);
+
+    expect(rejection).toBeInstanceOf(TmuxProbeError);
+    expect((rejection as TmuxProbeError).code).toBe("ERR_RUNTIME_NO_SERVER");
   });
 });
 

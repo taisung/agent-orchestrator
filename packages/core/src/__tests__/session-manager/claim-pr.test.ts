@@ -7,6 +7,7 @@ import { createSessionManager } from "../../session-manager.js";
 import {
   writeMetadata,
   readMetadataRaw,
+  deleteMetadata,
 } from "../../metadata.js";
 import {
   type OrchestratorConfig,
@@ -480,5 +481,28 @@ describe("claimPR", () => {
 
     const oldOwner = readMetadataRaw(sessionsDir, "app-owner");
     expect(oldOwner!["pr"] ?? "").toBe("");
+  });
+
+  it("does not recreate a record that a kill archived during the checkout (1.2 item 5)", async () => {
+    const mockSCM = makeSCM({
+      checkoutPR: vi.fn(async () => {
+        deleteMetadata(sessionsDir, "app-2", true);
+        return true;
+      }),
+    });
+    writeMetadata(sessionsDir, "app-2", {
+      worktree: "/tmp/ws-app-2",
+      branch: "feat/old-branch",
+      status: "working",
+      project: "my-app",
+      runtimeHandle: JSON.stringify(makeHandle("rt-2")),
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithSCM(mockSCM) });
+
+    await expect(sm.claimPR("app-2", "42")).rejects.toThrow(
+      "Session app-2 was removed while PR #42 was claimed; its record was not written",
+    );
+    expect(readMetadataRaw(sessionsDir, "app-2")).toBeNull();
   });
 });

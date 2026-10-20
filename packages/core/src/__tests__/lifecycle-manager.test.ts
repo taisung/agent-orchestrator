@@ -66,14 +66,10 @@ function setupCheck(
     ...opts.metaOverrides,
   };
   writeMetadata(env.sessionsDir, sessionId, record);
-  // sessionManager.get() returns the record as session.metadata, and the
-  // lifecycle writes a status only when the record still holds what it read.
+  // sessionManager.get() returns the record as session.metadata (with its
+  // generation), and the lifecycle writes only into the version it read.
   opts.session.metadata = {
-    ...Object.fromEntries(
-      Object.entries(record)
-        .filter(([, value]) => value !== undefined)
-        .map(([key, value]) => [key, String(value)]),
-    ),
+    ...readMetadataRaw(env.sessionsDir, sessionId),
     ...opts.session.metadata,
   };
 

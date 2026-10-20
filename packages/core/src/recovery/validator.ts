@@ -60,12 +60,18 @@ export async function validateSession(
     ...(recoveryConfigInput ?? {}),
   };
 
+  // A rejected probe means "unknown", never dead (CLAUDE.md, the
+  // isProcessRunning rule): such a session gets no action (m-2).
+  let probeError: string | null = null;
+  const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
   let runtimeAlive = false;
   if (runtime && runtimeHandle) {
     try {
       runtimeAlive = await runtime.isAlive(runtimeHandle);
-    } catch {
+    } catch (err) {
       runtimeAlive = false;
+      probeError = `runtime probe could not run: ${describe(err)}`;
     }
   }
 
@@ -90,26 +96,30 @@ export async function validateSession(
   if (agent && runtimeHandle) {
     try {
       agentProcessRunning = await agent.isProcessRunning(runtimeHandle);
-    } catch {
+    } catch (err) {
       agentProcessRunning = false;
+      probeError ??= `agent process check could not run: ${describe(err)}`;
     }
   }
 
   const metadataValid = Object.keys(rawMetadata).length > 0;
-  const classification = classifySession(
-    runtimeAlive,
-    workspaceExists,
-    agentProcessRunning,
-    metadataStatus,
-  );
-  const action = determineAction(classification, metadataStatus, recoveryConfig);
+  // Unknown liveness: "partial" with no action, so no cleanup, no escalation
+  // write and no recovery acts on a probe that could not answer.
+  const classification = probeError
+    ? "partial"
+    : classifySession(runtimeAlive, workspaceExists, agentProcessRunning, metadataStatus);
+  const action = probeError
+    ? "skip"
+    : determineAction(classification, metadataStatus, recoveryConfig);
 
   return {
     sessionId,
     projectId,
     classification,
     action,
-    reason: getReason(classification, runtimeAlive, workspaceExists, agentProcessRunning),
+    reason: probeError
+      ? `Liveness unknown (${probeError}); no action`
+      : getReason(classification, runtimeAlive, workspaceExists, agentProcessRunning),
     runtimeAlive,
     runtimeHandle,
     workspaceExists,

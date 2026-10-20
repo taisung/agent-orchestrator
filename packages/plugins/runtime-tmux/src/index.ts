@@ -45,9 +45,11 @@ function writeLaunchScript(command: string): string {
 /**
  * tmux 3.4 answers that a target does not exist with "can't find session: X"
  * (has-session), "can't find window: X" (list-panes on a missing session) or
- * "can't find pane: X". Only these mean "gone"; any other failure is unknown.
+ * "can't find pane: X", and with "no current target" when its server runs
+ * with no session at all (`exit-empty off`). Only these mean "gone"; any
+ * other failure is unknown.
  */
-const TMUX_TARGET_NOT_FOUND = /^can't find (?:session|window|pane): /m;
+const TMUX_TARGET_NOT_FOUND = /^(?:can't find (?:session|window|pane): |no current target$)/m;
 
 /** tmux could not reach a server: a stale socket, or no socket file at all. */
 const TMUX_NO_SERVER =
@@ -231,10 +233,24 @@ export function create(): Runtime {
     },
 
     async getMetrics(handle: RuntimeHandle): Promise<RuntimeMetrics> {
-      const createdAt = (handle.data.createdAt as number) ?? Date.now();
-      return {
-        uptimeMs: Date.now() - createdAt,
-      };
+      // The age of the tmux session itself, so a new session under an old
+      // name shows its own age (the lifecycle compares it with the handle's
+      // createdAt). `list-sessions` and an exact name: a `-t` target also
+      // matches a session whose name only starts with this one. The number
+      // comes first (tmux prints a tab in a format as "_").
+      const listed = await tmux("list-sessions", "-F", "#{session_created} #{session_name}").catch(
+        (err: unknown) => {
+          throw tmuxProbeError("list-sessions", err);
+        },
+      );
+      for (const line of listed.split("\n")) {
+        const space = line.indexOf(" ");
+        const seconds = Number.parseInt(line.slice(0, space), 10);
+        if (space > 0 && line.slice(space + 1) === handle.id && Number.isFinite(seconds)) {
+          return { uptimeMs: Math.max(0, Date.now() - seconds * 1000) };
+        }
+      }
+      throw new Error(`tmux session ${handle.id} not found`);
     },
 
     async getAttachInfo(handle: RuntimeHandle): Promise<AttachInfo> {

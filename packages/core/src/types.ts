@@ -97,6 +97,26 @@ export const DEFAULT_ACTIVE_WINDOW_MS = 30_000; // 30 seconds
 export const LAUNCH_GRACE_MS = 60_000; // 60 seconds
 
 /**
+ * How long the lifecycle holds back a negative answer that cannot tell an
+ * error from an exit (codex, gemini and opencode `isProcessRunning`,
+ * runtime-herdr `isAlive`, the Herdr pane reads answer `false` on an error)
+ * in polls where no probed session answers alive (C2). When the same session
+ * gives such answers in consecutive polls for this long, the lifecycle
+ * persists `killed`. In memory per session, from the first such poll; a
+ * positive or an unknown answer starts it again.
+ */
+export const AMBIGUOUS_NEGATIVE_BOUND_MS = 300_000; // 5 minutes
+
+/**
+ * How long the lifecycle counts "no runtime server" (a `Runtime.isAlive`
+ * rejection with RUNTIME_NO_SERVER_ERROR_CODE) as unknown. When the same
+ * session gives this answer in consecutive polls for this long, the
+ * lifecycle persists `killed` with `killedReason=runtime`. A short outage (a
+ * hidden or unreachable socket) stays below it.
+ */
+export const NO_SERVER_BOUND_MS = 300_000; // 5 minutes
+
+/**
  * `code` of a `Runtime.isAlive` rejection when no runtime server runs at all
  * (tmux: "no server running on ...", or no socket file). See `Runtime.isAlive`.
  */
@@ -291,7 +311,12 @@ export interface Runtime {
    */
   isAlive(handle: RuntimeHandle): Promise<boolean>;
 
-  /** Get resource metrics (uptime, memory, etc.) */
+  /**
+   * Get resource metrics (uptime, memory, etc.). runtime-tmux reports the age
+   * of the tmux session itself (`#{session_created}`), so a new session under
+   * an old name shows its own age; the lifecycle compares it with the
+   * handle's `createdAt` before it moves a killed record back to working.
+   */
   getMetrics?(handle: RuntimeHandle): Promise<RuntimeMetrics>;
 
   /** Get info needed to attach a human to this session (for Terminal plugin) */

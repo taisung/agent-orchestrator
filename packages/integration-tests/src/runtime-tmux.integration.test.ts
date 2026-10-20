@@ -1,6 +1,21 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import tmuxPlugin from "@aoagents/ao-plugin-runtime-tmux";
-import type { RuntimeHandle } from "@aoagents/ao-core";
+import {
+  NO_SERVER_BOUND_MS,
+  RUNTIME_NO_SERVER_ERROR_CODE,
+  createLifecycleManager,
+  createSessionManager,
+  getSessionsDir,
+  readMetadataRaw,
+  writeMetadata,
+  type Agent,
+  type OrchestratorConfig,
+  type PluginRegistry,
+  type RuntimeHandle,
+} from "@aoagents/ao-core";
 import { isTmuxAvailable, killSessionsByPrefix } from "./helpers/tmux.js";
 import { sleep } from "./helpers/polling.js";
 
@@ -16,7 +31,7 @@ describe.skipIf(!tmuxOk)("runtime-tmux (integration)", () => {
     await killSessionsByPrefix(SESSION_PREFIX);
     // A second session keeps the tmux server up after `destroy`. Without it, a
     // server whose last session ends exits, and isAlive rejects ("no server
-    // running") instead of answering false.
+    // running") instead of answering false: the last describe block covers that.
     await runtime.create({
       sessionId: `${SESSION_PREFIX}keeper-${Date.now()}`,
       workspacePath: "/tmp",
@@ -89,5 +104,127 @@ describe.skipIf(!tmuxOk)("runtime-tmux (integration)", () => {
   it("destroy is idempotent", async () => {
     // Should not throw even though session is already dead
     await runtime.destroy(handle);
+  });
+});
+
+describe.skipIf(!tmuxOk)("runtime-tmux: the last session of a server ends (integration)", () => {
+  // A server of its own: its own socket directory and no TMUX variable (tmux
+  // ignores TMUX_TMPDIR while TMUX is set). The state root is scratch too.
+  const saved = {
+    TMUX: process.env["TMUX"],
+    TMUX_TMPDIR: process.env["TMUX_TMPDIR"],
+    AO_STATE_ROOT: process.env["AO_STATE_ROOT"],
+  };
+  let scratch: string;
+
+  beforeAll(() => {
+    scratch = mkdtempSync(join(tmpdir(), "ao-inttest-tmux-last-"));
+    mkdirSync(join(scratch, "sockets"));
+    delete process.env["TMUX"];
+    process.env["TMUX_TMPDIR"] = join(scratch, "sockets");
+    process.env["AO_STATE_ROOT"] = join(scratch, "state");
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+    if (saved.TMUX === undefined) delete process.env["TMUX"];
+    else process.env["TMUX"] = saved.TMUX;
+    if (saved.TMUX_TMPDIR === undefined) delete process.env["TMUX_TMPDIR"];
+    else process.env["TMUX_TMPDIR"] = saved.TMUX_TMPDIR;
+    if (saved.AO_STATE_ROOT === undefined) delete process.env["AO_STATE_ROOT"];
+    else process.env["AO_STATE_ROOT"] = saved.AO_STATE_ROOT;
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it("answers 'no server' after the server exits, and the lifecycle kills the record only after NO_SERVER_BOUND_MS", async () => {
+    const runtime = tmuxPlugin.create();
+    const handle = await runtime.create({
+      sessionId: `${SESSION_PREFIX}last-${Date.now()}`,
+      workspacePath: "/tmp",
+      launchCommand: "cat",
+      environment: { AO_TEST: "1" },
+    });
+    expect(await runtime.isAlive(handle)).toBe(true);
+
+    // The only session ends, so the server exits (exit-empty is on by default).
+    await runtime.destroy(handle);
+    await vi.waitFor(
+      async () =>
+        expect(await runtime.isAlive(handle).catch((err: unknown) => err)).toMatchObject({
+          code: RUNTIME_NO_SERVER_ERROR_CODE,
+        }),
+      { timeout: 5_000, interval: 50 },
+    );
+
+    // The 1.1 item 3 rule: unknown for NO_SERVER_BOUND_MS, then killed (runtime).
+    const projectPath = join(scratch, "project");
+    mkdirSync(projectPath, { recursive: true });
+    const configPath = join(scratch, "agent-orchestrator.yaml");
+    writeFileSync(configPath, "projects: {}\n");
+    const config: OrchestratorConfig = {
+      configPath,
+      port: 3000,
+      readyThresholdMs: 300_000,
+      defaults: { runtime: "tmux", agent: "claude-code", workspace: "worktree", notifiers: [] },
+      projects: {
+        kr: {
+          name: "kr",
+          repo: "org/kr",
+          path: projectPath,
+          defaultBranch: "main",
+          sessionPrefix: "kr",
+        },
+      },
+      notifiers: {},
+      notificationRouting: { urgent: [], action: [], warning: [], info: [] },
+      reactions: {},
+    };
+    const agent: Agent = {
+      name: "claude-code",
+      processName: "claude",
+      getLaunchCommand: () => "claude",
+      getEnvironment: () => ({}),
+      detectActivity: () => "active",
+      getActivityState: async () => null,
+      isProcessRunning: async () => true,
+      getSessionInfo: async () => null,
+    };
+    const registry: PluginRegistry = {
+      register: () => {},
+      get: ((slot: string) =>
+        slot === "runtime" ? runtime : slot === "agent" ? agent : null) as PluginRegistry["get"],
+      list: () => [],
+      loadBuiltins: async () => {},
+      loadFromConfig: async () => {},
+    };
+    const sessionsDir = getSessionsDir(configPath, projectPath);
+    writeMetadata(sessionsDir, "kr-1", {
+      worktree: "/tmp",
+      branch: "main",
+      status: "working",
+      project: "kr",
+      tmuxName: handle.id,
+      createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+      runtimeHandle: JSON.stringify(handle),
+    });
+    const lifecycle = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: createSessionManager({ config, registry }),
+    });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    for (const offset of [0, 2 * 60_000, NO_SERVER_BOUND_MS - 60_000]) {
+      vi.setSystemTime(start + offset);
+      await lifecycle.check("kr-1");
+      expect(readMetadataRaw(sessionsDir, "kr-1")?.["status"]).toBe("working");
+    }
+    vi.setSystemTime(start + NO_SERVER_BOUND_MS);
+    await lifecycle.check("kr-1");
+    expect(readMetadataRaw(sessionsDir, "kr-1")).toMatchObject({
+      status: "killed",
+      killedReason: "runtime",
+    });
   });
 });

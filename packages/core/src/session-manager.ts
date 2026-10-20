@@ -71,6 +71,8 @@ import {
   updateArchivedMetadata,
   writeMetadata,
   updateMetadata,
+  updateMetadataIf,
+  GENERATION_KEY,
   deleteMetadata,
   listMetadata,
   reserveSessionId,
@@ -596,12 +598,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return next;
   }
 
+  /**
+   * The repair on read. 1.2: it writes only into the record version that it
+   * read (`generation`, plus `pr` and `status`, which the bash metadata
+   * helpers change without a new generation); when the record changed or is
+   * gone, it writes nothing and the next read repairs again. Returns the
+   * written record, or null.
+   */
   function updateMetadataPreservingMtime(
     sessionsDir: string,
     sessionName: string,
+    readRaw: Readonly<Record<string, string>>,
     updates: Partial<Record<string, string>>,
     modifiedAt?: Date,
-  ): void {
+  ): Record<string, string> | null {
     const metaPath = join(sessionsDir, sessionName);
     let preservedMtime = modifiedAt;
     if (!preservedMtime) {
@@ -612,14 +622,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    updateMetadata(sessionsDir, sessionName, updates);
+    const written = updateMetadataIf(
+      sessionsDir,
+      sessionName,
+      {
+        [GENERATION_KEY]: readRaw[GENERATION_KEY],
+        pr: readRaw["pr"],
+        status: readRaw["status"],
+      },
+      updates,
+    );
 
-    if (!preservedMtime) return;
+    if (!written || !preservedMtime) return written;
     try {
       utimesSync(metaPath, preservedMtime, preservedMtime);
     } catch {
       void 0;
     }
+    return written;
   }
 
   function repairSingleSessionMetadataOnRead(
@@ -647,13 +667,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     if (Object.keys(updates).length > 0) {
-      updateMetadataPreservingMtime(
+      const written = updateMetadataPreservingMtime(
         sessionsDir,
         repaired.sessionName,
+        repaired.raw,
         updates,
         repaired.modifiedAt,
       );
-      repaired.raw = applyMetadataUpdatesToRaw(repaired.raw, updates);
+      repaired.raw = written ?? applyMetadataUpdatesToRaw(repaired.raw, updates);
     }
 
     return repaired;
@@ -710,8 +731,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           prAutoDetect: "off",
           ...(PR_TRACKING_STATUSES.has(record.raw["status"] ?? "") ? { status: "working" } : {}),
         };
-        updateMetadataPreservingMtime(sessionsDir, record.sessionName, updates, record.modifiedAt);
-        record.raw = applyMetadataUpdatesToRaw(record.raw, updates);
+        const written = updateMetadataPreservingMtime(
+          sessionsDir,
+          record.sessionName,
+          record.raw,
+          updates,
+          record.modifiedAt,
+        );
+        record.raw = written ?? applyMetadataUpdatesToRaw(record.raw, updates);
       }
     }
 
@@ -3139,22 +3166,39 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const branchChanged = await scm.checkoutPR(pr, workspacePath);
 
-    updateMetadata(sessionsDir, sessionId, {
-      pr: pr.url,
-      status: "pr_open",
-      branch: pr.branch,
-      prAutoDetect: "",
-    });
+    // 1.2: never recreate a record that a kill archived during the checkout.
+    const claimed = updateMetadataIf(
+      sessionsDir,
+      sessionId,
+      {},
+      { pr: pr.url, status: "pr_open", branch: pr.branch, prAutoDetect: "" },
+    );
+    if (!claimed) {
+      throw new Error(
+        `Session ${sessionId} was removed while PR #${pr.number} was claimed; its record was not written`,
+      );
+    }
 
     for (const previousSessionId of takenOverFrom) {
       const previousRaw = readMetadataRaw(sessionsDir, previousSessionId);
       if (!previousRaw) continue;
 
-      updateMetadata(sessionsDir, previousSessionId, {
-        pr: "",
-        prAutoDetect: "off",
-        ...(PR_TRACKING_STATUSES.has(previousRaw["status"] ?? "") ? { status: "working" } : {}),
-      });
+      // Only into the version just read: a record that changed or was
+      // archived meanwhile keeps what it holds.
+      updateMetadataIf(
+        sessionsDir,
+        previousSessionId,
+        {
+          [GENERATION_KEY]: previousRaw[GENERATION_KEY],
+          pr: previousRaw["pr"],
+          status: previousRaw["status"],
+        },
+        {
+          pr: "",
+          prAutoDetect: "off",
+          ...(PR_TRACKING_STATUSES.has(previousRaw["status"] ?? "") ? { status: "working" } : {}),
+        },
+      );
     }
 
     let githubAssigned = false;

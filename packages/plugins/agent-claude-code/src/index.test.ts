@@ -529,6 +529,17 @@ describe("isProcessRunning", () => {
     expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
   });
 
+  it("returns false when a server with no session answers 'no current target' (m-1)", async () => {
+    // tmux 3.4, `exit-empty off`, the last session ended: list-panes prints this.
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "no current target\n",
+      }),
+    );
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+  });
+
   it("rejects with the ps failure as cause when ps cannot run", async () => {
     const psFailure = Object.assign(new Error("Command failed: ps -eo pid,tty,args"), { code: 1 });
     mockExecFileAsync.mockImplementation((cmd: string) => {

@@ -17,6 +17,9 @@ import {
   CI_STATUS,
   TERMINAL_STATUSES,
   LAUNCH_GRACE_MS,
+  AMBIGUOUS_NEGATIVE_BOUND_MS,
+  NO_SERVER_BOUND_MS,
+  RUNTIME_NO_SERVER_ERROR_CODE,
   type LifecycleManager,
   type SessionManager,
   type SessionId,
@@ -28,6 +31,7 @@ import {
   type ReactionResult,
   type PluginRegistry,
   type Runtime,
+  type RuntimeHandle,
   type Agent,
   type SCM,
   type Notifier,
@@ -37,7 +41,7 @@ import {
   type PREnrichmentData,
   type CICheck,
 } from "./types.js";
-import { updateMetadata, updateMetadataIf } from "./metadata.js";
+import { GENERATION_KEY, updateMetadataIf } from "./metadata.js";
 import { validateStatus } from "./utils/validation.js";
 import { prIdentityKey } from "./utils/pr.js";
 import { getSessionsDir } from "./paths.js";
@@ -186,28 +190,78 @@ type KilledReason = "runtime" | "agent-exited" | "pr-closed";
 /** determineStatus result: this poll has no evidence to change the status. */
 const KEEP_STATUS = Symbol("keep-status");
 
+/**
+ * What the liveness probes of one session said in a poll:
+ * - "alive": the runtime answered that the session exists.
+ * - "gone": an authoritative negative: an authoritative runtime answered that
+ *   the session does not exist, or an authoritative agent found no agent
+ *   process after the launch grace (see AUTHORITATIVE_RUNTIMES).
+ * - "ambiguous": a negative from a plugin that also answers it on an error.
+ * - "no-server": the runtime reported that no server runs at all.
+ * - "failed": a probe could not run (any other rejection, a thrown agent
+ *   check, also after the runtime answered alive).
+ * Unset when no probe gave an answer (no stored handle, a killed record, an
+ * agent within the launch grace).
+ */
+type ProbeOutcome = "alive" | "gone" | "ambiguous" | "no-server" | "failed";
+
 /** What determineStatus learned from the liveness probes of one session. */
 interface ProbeResult {
-  /**
-   * "alive": the runtime answered that the session exists. "dead": a negative
-   * probe (runtime gone, or agent exited after the launch grace). Unset when
-   * no probe gave an answer (no stored handle, a rejected probe, a killed record).
-   */
-  liveness?: "alive" | "dead";
-  /** A probe could not run (isAlive rejected, or the agent check threw). */
-  failed?: boolean;
+  outcome?: ProbeOutcome;
   killedReason?: KilledReason;
+}
+
+/**
+ * The runtimes and agents whose negative answer is authoritative: they answer
+ * false only when the check ran and found nothing, and reject when it could
+ * not run (CLAUDE.md, the `isProcessRunning` rule). An agent's answer counts
+ * as authoritative only on an authoritative runtime: claude-code reads Herdr
+ * panes through core `herdr.ts`, which answers "no process" on an error.
+ * codex, gemini and opencode `isProcessRunning` and runtime-herdr `isAlive`
+ * still answer false on an error, so their negatives are "ambiguous".
+ */
+const AUTHORITATIVE_RUNTIMES: ReadonlySet<string> = new Set(["tmux"]);
+const AUTHORITATIVE_AGENTS: ReadonlySet<string> = new Set(["claude-code"]);
+
+/** A rejection of Runtime.isAlive that reports that no runtime server runs. */
+function isNoServerRejection(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === RUNTIME_NO_SERVER_ERROR_CODE
+  );
+}
+
+/**
+ * Consecutive negative polls of one session in this worker. "negative":
+ * "gone" or "ambiguous" answers (C1, and the C2 bound). "no-server": the
+ * runtime reported no server (the NO_SERVER_BOUND_MS rule). `firstAt` is the
+ * clock of the first poll of the run.
+ */
+interface NegativeStreak {
+  kind: "negative" | "no-server";
+  firstAt: number;
+  polls: number;
 }
 
 /** What the probes of one poll say about the probes themselves. */
 interface ProbeOutage {
-  /** C2: nothing negative is persisted in this poll. */
-  persistNothing: boolean;
+  /**
+   * C2: two or more sessions were probed and none answered alive. An
+   * "ambiguous" negative is then not persisted until the same session gave
+   * such answers for AMBIGUOUS_NEGATIVE_BOUND_MS. A "gone" answer is never
+   * held back.
+   */
+  holdAmbiguous: boolean;
   /** The worker health is `warn` for this poll. */
   warn: boolean;
   reason?: string;
-  sessionIds: SessionId[];
+  outcomes: Record<SessionId, ProbeOutcome>;
 }
+
+/** No probe outage (a single-session check). */
+const NO_OUTAGE: ProbeOutage = { holdAmbiguous: false, warn: false, outcomes: {} };
 
 /** One session's status decision in a poll, before anything is persisted. */
 interface StatusEvaluation {
@@ -228,10 +282,45 @@ function isRecoverableKill(metadata: Record<string, string>): boolean {
   return !reason && !metadata["pr"];
 }
 
-/** True while the record's last launch or restore is younger than LAUNCH_GRACE_MS. */
+/** The record's last launch: a valid `restoredAt`, else `createdAt`; NaN when neither parses. */
+function launchedAt(metadata: Record<string, string>): number {
+  const restoredAt = Date.parse(metadata["restoredAt"] ?? "");
+  return Number.isFinite(restoredAt) ? restoredAt : Date.parse(metadata["createdAt"] ?? "");
+}
+
+/**
+ * True while the record's last launch or restore is younger than
+ * LAUNCH_GRACE_MS. A launch time in the future (a clock that went back, a
+ * wrong value) gives no grace, so no value can extend it.
+ */
 function isWithinLaunchGrace(metadata: Record<string, string>, now: number): boolean {
-  const launchedAt = Date.parse(metadata["restoredAt"] || metadata["createdAt"] || "");
-  return Number.isFinite(launchedAt) && now - launchedAt < LAUNCH_GRACE_MS;
+  const at = launchedAt(metadata);
+  return Number.isFinite(at) && at <= now && now - at < LAUNCH_GRACE_MS;
+}
+
+/** Tolerance of the C3 identity check: see isSameLaunch. */
+const LAUNCH_IDENTITY_BEFORE_MS = 15_000;
+const LAUNCH_IDENTITY_AFTER_MS = 1_000;
+
+/**
+ * C3 identity: true when the live tmux session is the one that the stored
+ * handle launched. runtime-tmux writes `createdAt` (ms) into the handle after
+ * its `new-session` and launch keys, and its getMetrics reports the age of
+ * the tmux session (`#{session_created}`, whole seconds). The tmux session
+ * must be created at most 15 s before and at most 1 s after the stored time;
+ * a new session under the old name is younger and fails. A handle without
+ * `createdAt`, no getMetrics, or a failed report gives false. A non-tmux
+ * runtime gives true: runtime-herdr `isAlive` already refuses a pane whose
+ * terminal ID differs from the stored one.
+ */
+async function isSameLaunch(runtime: Runtime, handle: RuntimeHandle): Promise<boolean> {
+  if (runtime.name !== "tmux") return true;
+  const stored = handle.data["createdAt"];
+  if (typeof stored !== "number" || !Number.isFinite(stored) || !runtime.getMetrics) return false;
+  const metrics = await runtime.getMetrics(handle).catch(() => null);
+  if (!metrics || !Number.isFinite(metrics.uptimeMs)) return false;
+  const lag = stored - (Date.now() - metrics.uptimeMs);
+  return lag >= -LAUNCH_IDENTITY_AFTER_MS && lag <= LAUNCH_IDENTITY_BEFORE_MS;
 }
 
 export interface LifecycleManagerDeps {
@@ -255,11 +344,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
   const states = new Map<SessionId, SessionStatus>();
   /**
-   * C1: sessions whose last poll gave a negative probe that is not yet
-   * persisted. A second negative poll in a row persists killed. In memory only:
-   * a restarted worker needs two negative polls again.
+   * C1 and the bounds: the current run of negative polls of each session. A
+   * second negative poll in a row persists killed (C1), except for the bounded
+   * cases (see decideStatus). In memory only: a restarted worker needs two
+   * negative polls again.
    */
-  const pendingKills = new Set<SessionId>();
+  const negativeStreaks = new Map<SessionId, NegativeStreak>();
   const reactionTrackers = new Map<string, ReactionTracker>(); // "sessionId:reactionKey"
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let polling = false; // re-entrancy guard
@@ -425,7 +515,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
   /**
    * C3: probe a recoverable killed record. Working only when the runtime
-   * answers alive AND the agent process runs AND the agent's activity is not
+   * answers alive AND the live session is the one that the record launched
+   * (isSameLaunch) AND the agent process runs AND the agent's activity is not
    * "exited" (the signal that gave the kill; without it the two signals of an
    * agent that disagree would move the record between killed and working).
    * Any other answer, including a rejected probe, keeps it killed.
@@ -441,6 +532,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // A rejection is unknown here; unknown never recovers (and never kills).
     const alive = await runtime.isAlive(handle).catch(() => false);
     if (!alive) return KEEP_STATUS;
+    // A new session under the old name is not this record's launch.
+    if (!(await isSameLaunch(runtime, handle))) return KEEP_STATUS;
     const running = await agent.isProcessRunning(handle).catch(() => false);
     if (!running) return KEEP_STATUS;
     const activity = await agent
@@ -489,25 +582,32 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // starts. While the runtime is not known dead, "exited" keeps the status.
     const inLaunchGrace = isWithinLaunchGrace(session.metadata, Date.now());
 
-    // 1. Check if runtime is alive. A rejected probe is unknown, not dead.
-    if (session.runtimeHandle) {
-      const runtime = runtimeForSession(session, project);
-      if (runtime) {
-        const alive = await runtime.isAlive(session.runtimeHandle).catch(() => {
-          probe.failed = true;
-          return undefined;
-        });
-        if (alive === false) {
-          probe.liveness = "dead";
-          probe.killedReason = "runtime";
-          return SESSION_STATUS.KILLED;
-        }
-        if (alive === true) probe.liveness = "alive";
+    // 1. Check if runtime is alive. A rejected probe is unknown, not dead;
+    // "no server" counts as unknown for NO_SERVER_BOUND_MS (decideStatus).
+    const runtime = session.runtimeHandle ? runtimeForSession(session, project) : null;
+    const runtimeAuthoritative = !!runtime && AUTHORITATIVE_RUNTIMES.has(runtime.name);
+    if (session.runtimeHandle && runtime) {
+      let alive: boolean | undefined;
+      try {
+        alive = await runtime.isAlive(session.runtimeHandle);
+      } catch (err) {
+        probe.outcome = isNoServerRejection(err) ? "no-server" : "failed";
       }
+      if (alive === false) {
+        probe.outcome = runtimeAuthoritative ? "gone" : "ambiguous";
+        probe.killedReason = "runtime";
+        return SESSION_STATUS.KILLED;
+      }
+      if (alive === true) probe.outcome = "alive";
     }
+    const agentNegative: ProbeOutcome =
+      runtimeAuthoritative && !!agent && AUTHORITATIVE_AGENTS.has(agent.name)
+        ? "gone"
+        : "ambiguous";
 
-    // 2. Check agent activity — prefer JSONL-based detection (runtime-agnostic)
-    if (agent && session.runtimeHandle) {
+    // 2. Check agent activity — prefer JSONL-based detection (runtime-agnostic).
+    // With no runtime server there is no pane to read: skip it.
+    if (agent && session.runtimeHandle && probe.outcome !== "no-server") {
       try {
         // If the agent implements recordActivity, capture terminal output and record
         // BEFORE calling getActivityState so the JSONL has fresh data to read.
@@ -531,7 +631,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (activityState.state === "waiting_input") return "needs_input";
           if (activityState.state === "exited") {
             if (inLaunchGrace) return KEEP_STATUS;
-            probe.liveness = "dead";
+            probe.outcome = agentNegative;
             probe.killedReason = "agent-exited";
             return SESSION_STATUS.KILLED;
           }
@@ -556,14 +656,16 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             const processAlive = await agent.isProcessRunning(session.runtimeHandle);
             if (!processAlive) {
               if (inLaunchGrace) return KEEP_STATUS;
-              probe.liveness = "dead";
+              probe.outcome = agentNegative;
               probe.killedReason = "agent-exited";
               return SESSION_STATUS.KILLED;
             }
           }
         }
       } catch {
-        probe.failed = true;
+        // The agent check could not run (a failing `ps`): the session is not
+        // confirmed alive, also when its runtime answered alive.
+        probe.outcome = "failed";
         // On probe failure, preserve current stuck/needs_input state rather
         // than letting the fallback at the bottom coerce them to "working"
         if (
@@ -595,8 +697,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // Persist PR URL so subsequent polls don't need to re-query.
           // Don't write status here — step 4 below will determine the
           // correct status (merged, ci_failed, etc.) on this same cycle.
+          // 1.2: only into the record version that this poll read.
           const sessionsDir = getSessionsDir(config.configPath, project.path);
-          updateMetadata(sessionsDir, session.id, { pr: detectedPR.url });
+          const written = updateMetadataIf(
+            sessionsDir,
+            session.id,
+            { [GENERATION_KEY]: session.metadata[GENERATION_KEY] },
+            { pr: detectedPR.url },
+          );
+          if (written) session.metadata = written;
         }
       } catch {
         // SCM detection failed — will retry next poll
@@ -845,24 +954,24 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return reactionConfig ? (reactionConfig as ReactionConfig) : null;
   }
 
+  /**
+   * Merge lifecycle bookkeeping keys into the record. 1.2: only into the
+   * record version that this poll read or last wrote (its generation), so no
+   * archived or reserved record is recreated and no newer launch is changed.
+   * When the record changed, nothing is written; the next poll reads it again.
+   */
   function updateSessionMetadata(session: Session, updates: Partial<Record<string, string>>): void {
     const project = config.projects[session.projectId];
     if (!project) return;
 
     const sessionsDir = getSessionsDir(config.configPath, project.path);
-    updateMetadata(sessionsDir, session.id, updates);
-
-    const cleaned = Object.fromEntries(
-      Object.entries(session.metadata).filter(([key]) => {
-        const update = updates[key];
-        return update === undefined || update !== "";
-      }),
+    const written = updateMetadataIf(
+      sessionsDir,
+      session.id,
+      { [GENERATION_KEY]: session.metadata[GENERATION_KEY] },
+      updates,
     );
-    for (const [key, value] of Object.entries(updates)) {
-      if (value === undefined || value === "") continue;
-      cleaned[key] = value;
-    }
-    session.metadata = cleaned;
+    if (written) session.metadata = written;
   }
 
   function makeFingerprint(ids: string[]): string {
@@ -1310,42 +1419,48 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   }
 
   /**
-   * B: persist a status only when the record still holds the status and the
-   * runtime handle that this poll read. When the compare fails (a spawn, a
-   * restore or another writer changed the record during the probes), nothing
-   * is written and the next poll decides from the new record. C3: a killed
-   * status carries its `killedReason`; any other status removes it.
+   * B and 1.2: persist a status only when the record is still the version
+   * that this poll read: the same `generation` (any Node writer increments
+   * it), `status`, handle and `pr` (the bash metadata helpers change `pr` and
+   * `status` without a new generation). The read, the compare and the rename
+   * run under the record lock. When the compare fails (a spawn, a restore, a
+   * claim or an archive changed the record during the probes) or the lock is
+   * not free, nothing is written and the next poll decides from the new
+   * record. C3: a killed status carries its `killedReason`; any other status
+   * removes it. Returns null when written, else the reason.
    */
   function persistStatus(
     session: Session,
     status: SessionStatus,
     killedReason: KilledReason | undefined,
-  ): boolean {
+  ): string | null {
     const project = config.projects[session.projectId];
-    if (!project) return false;
+    if (!project) return "project not configured";
 
     const updates: Record<string, string> =
       status === SESSION_STATUS.KILLED
         ? { status, ...(killedReason && { killedReason }) }
         : { status, killedReason: "" };
-    const written = updateMetadataIf(
-      getSessionsDir(config.configPath, project.path),
-      session.id,
-      {
-        status: session.metadata["status"],
-        runtimeHandle: session.metadata["runtimeHandle"],
-        tmuxName: session.metadata["tmuxName"],
-      },
-      updates,
-    );
-    if (!written) return false;
-
-    const { killedReason: _previousReason, ...rest } = session.metadata;
-    session.metadata = {
-      ...rest,
-      ...Object.fromEntries(Object.entries(updates).filter(([, v]) => v)),
-    };
-    return true;
+    let written: Record<string, string> | null;
+    try {
+      written = updateMetadataIf(
+        getSessionsDir(config.configPath, project.path),
+        session.id,
+        {
+          [GENERATION_KEY]: session.metadata[GENERATION_KEY],
+          status: session.metadata["status"],
+          runtimeHandle: session.metadata["runtimeHandle"],
+          tmuxName: session.metadata["tmuxName"],
+          pr: session.metadata["pr"],
+        },
+        updates,
+      );
+    } catch (err) {
+      return `record not written: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (!written) return "record changed during the poll; status not written";
+    session.metadata = written;
+    return null;
   }
 
   /** Probe one session and decide its status; persists nothing. */
@@ -1370,40 +1485,86 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   }
 
   /**
-   * C1 and C2: a negative probe persists killed only when the previous poll of
-   * this worker was negative too, and never in a probe outage.
+   * C1, C2 and the bounds (1.1): which status this poll may persist.
+   * - A PR-driven kill (`pr-closed`) is persisted at once.
+   * - "gone" (authoritative) persists killed at the second negative poll in a
+   *   row of this worker; no outage holds it back.
+   * - "ambiguous" does the same, except in a poll where no probed session
+   *   answered alive (C2): then only after AMBIGUOUS_NEGATIVE_BOUND_MS of
+   *   such answers from the first negative poll of the run.
+   * - "no-server" keeps the status until the same session reported no server
+   *   in consecutive polls for NO_SERVER_BOUND_MS, then killed (`runtime`).
+   * - Any other answer (alive, a failed probe, no answer) ends the run.
+   * A session whose answers alternate between negative and positive or
+   * unknown starts a new run each time, so it is never persisted as killed.
    */
-  function confirmNegativeProbe(evaluation: StatusEvaluation, outage: boolean): SessionStatus {
+  function decideStatus(
+    evaluation: StatusEvaluation,
+    outage: ProbeOutage,
+    now: number,
+  ): { status: SessionStatus; killedReason?: KilledReason } {
     const { session, oldStatus, newStatus, probe } = evaluation;
-    if (probe.liveness !== "dead" || newStatus !== SESSION_STATUS.KILLED) {
-      pendingKills.delete(session.id);
-      return newStatus;
+    const outcome = probe.outcome;
+    const streak = negativeStreaks.get(session.id);
+
+    if (newStatus === SESSION_STATUS.KILLED && probe.killedReason === "pr-closed") {
+      negativeStreaks.delete(session.id);
+      return { status: newStatus, killedReason: "pr-closed" };
     }
-    if (outage) {
-      pendingKills.delete(session.id);
-      return oldStatus;
+
+    if (outcome === "no-server") {
+      const run: NegativeStreak =
+        streak?.kind === "no-server"
+          ? { ...streak, polls: streak.polls + 1 }
+          : { kind: "no-server", firstAt: now, polls: 1 };
+      if (run.polls >= 2 && now - run.firstAt >= NO_SERVER_BOUND_MS) {
+        negativeStreaks.delete(session.id);
+        return { status: SESSION_STATUS.KILLED, killedReason: "runtime" };
+      }
+      negativeStreaks.set(session.id, run);
+      return { status: newStatus === SESSION_STATUS.KILLED ? oldStatus : newStatus };
     }
-    if (!pendingKills.has(session.id)) {
-      pendingKills.add(session.id);
-      return oldStatus;
+
+    if ((outcome === "gone" || outcome === "ambiguous") && newStatus === SESSION_STATUS.KILLED) {
+      const run: NegativeStreak =
+        streak?.kind === "negative"
+          ? { ...streak, polls: streak.polls + 1 }
+          : { kind: "negative", firstAt: now, polls: 1 };
+      const held =
+        outcome === "ambiguous" &&
+        outage.holdAmbiguous &&
+        now - run.firstAt < AMBIGUOUS_NEGATIVE_BOUND_MS;
+      if (run.polls >= 2 && !held) {
+        negativeStreaks.delete(session.id);
+        return { status: newStatus, killedReason: probe.killedReason };
+      }
+      negativeStreaks.set(session.id, run);
+      return { status: oldStatus };
     }
-    pendingKills.delete(session.id);
-    return newStatus;
+
+    negativeStreaks.delete(session.id);
+    return { status: newStatus, killedReason: probe.killedReason };
   }
 
   /** Persist one session's evaluated status and handle the transition. */
-  async function applyEvaluation(evaluation: StatusEvaluation, outage: boolean): Promise<void> {
-    const { session, oldStatus, probe } = evaluation;
-    const newStatus = confirmNegativeProbe(evaluation, outage);
+  async function applyEvaluation(
+    evaluation: StatusEvaluation,
+    outage: ProbeOutage,
+    now: number,
+  ): Promise<void> {
+    const { session, oldStatus } = evaluation;
+    const { status: newStatus, killedReason } = decideStatus(evaluation, outage, now);
     let transitionReaction: { key: string; result: ReactionResult | null } | undefined;
 
     if (newStatus !== oldStatus) {
       const correlationId = createCorrelationId("lifecycle-transition");
-      if (!persistStatus(session, newStatus, probe.killedReason)) {
-        // The record changed under the poll: no transition happened. Forget the
-        // tracked status so the next poll compares against the new record.
+      const notWritten = persistStatus(session, newStatus, killedReason);
+      if (notWritten) {
+        // The record changed under the poll (or its lock was not free): no
+        // transition happened. Forget the tracked status and the negative run
+        // so the next poll decides from the new record.
         states.delete(session.id);
-        pendingKills.delete(session.id);
+        negativeStreaks.delete(session.id);
         observer.recordOperation({
           metric: "lifecycle_poll",
           operation: "lifecycle.transition",
@@ -1411,7 +1572,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           correlationId,
           projectId: session.projectId,
           sessionId: session.id,
-          reason: "record changed during the poll; status not written",
+          reason: notWritten,
           data: { oldStatus, newStatus },
           level: "info",
         });
@@ -1515,30 +1676,34 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   }
 
   /**
-   * C2: a poll in which every probed session (two or more) answered dead is a
-   * probe outage (an unreachable tmux socket or a failing `ps` looks like
-   * this), not a mass exit: nothing negative is persisted. The health is also
-   * `warn` when every probed session answered dead or had a probe that could
-   * not run (a rejected probe never persists anything by itself). Recoverable
-   * killed records are not counted: they are expected to answer dead.
+   * C2: a poll in which two or more sessions were probed and none answered
+   * alive can be a probe outage (an unreachable tmux socket or a failing `ps`
+   * looks like this) and not a mass exit. Only "ambiguous" negatives are then
+   * held back (bounded, see decideStatus): after D, an outage of tmux or `ps`
+   * gives rejections or "no server", never an authoritative "gone". The health
+   * is `warn` in such a poll unless every answer is an authoritative "gone"
+   * (a real mass exit). Recoverable killed records are not counted: they are
+   * expected to answer dead, and their probes set no outcome.
    */
   function probeOutage(evaluations: StatusEvaluation[]): ProbeOutage {
-    const answered = evaluations.filter((e) => e.probe.liveness !== undefined);
-    const persistNothing =
-      answered.length >= 2 && answered.every((e) => e.probe.liveness === "dead");
-    const probed = evaluations.filter((e) => e.probe.liveness !== undefined || e.probe.failed);
-    const warn =
-      probed.length >= 2 && probed.every((e) => e.probe.liveness === "dead" || e.probe.failed);
-    if (!warn) return { persistNothing: false, warn: false, sessionIds: [] };
+    const probed = evaluations.filter((e) => e.probe.outcome !== undefined);
+    const noneAlive = probed.length >= 2 && probed.every((e) => e.probe.outcome !== "alive");
+    if (!noneAlive) return NO_OUTAGE;
+    const outcomes = Object.fromEntries(
+      probed.map((e) => [e.session.id, e.probe.outcome as ProbeOutcome]),
+    );
+    const holdAmbiguous = probed.some((e) => e.probe.outcome === "ambiguous");
+    const warn = probed.some((e) => e.probe.outcome !== "gone");
+    if (!warn) return { holdAmbiguous, warn, outcomes };
     return {
-      persistNothing,
+      holdAmbiguous,
       warn,
-      reason: persistNothing
-        ? "probe outage: every probed session answered dead in one poll; " +
-          "no status was written for them (check the tmux server and ps)"
-        : "probe outage: no probed session could be confirmed alive in one poll " +
-          "(answers dead or probes that could not run; check the tmux server and ps)",
-      sessionIds: probed.map((e) => e.session.id),
+      reason:
+        "probe outage: no probed session could be confirmed alive in one poll " +
+        "(probes that could not run, no runtime server, or answers that cannot tell an " +
+        "error from an exit; check the tmux server and ps); such answers persist killed " +
+        "only after 5 minutes",
+      outcomes,
     };
   }
 
@@ -1557,9 +1722,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // (e.g., list() detected a dead runtime and marked it "killed" — we need to
       // process that transition even though the new status is terminal)
       // C3: also re-check a killed record whose kill came from a liveness probe.
+      // M-3: also a record whose persisted status is not terminal while list()
+      // reports it killed in memory, when this worker has no tracked status
+      // for it yet (a new worker over a session that died before it started).
       const sessionsToCheck = sessions.filter((s) => {
         if (!TERMINAL_STATUSES.has(s.status)) return true;
         if (isRecoverableKill(s.metadata)) return true;
+        if (s.metadata["status"] && !TERMINAL_STATUSES.has(validateStatus(s.metadata["status"]))) {
+          return true;
+        }
         const tracked = states.get(s.id);
         return tracked !== undefined && tracked !== s.status;
       });
@@ -1571,11 +1742,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // Probe all sessions concurrently, then persist: the outage check needs
       // every probe of this poll before anything is written.
       const evaluated = await Promise.allSettled(sessionsToCheck.map((s) => evaluateSession(s)));
-      const evaluations = evaluated
-        .filter((r): r is PromiseFulfilledResult<StatusEvaluation> => r.status === "fulfilled")
-        .map((r) => r.value);
+      const evaluations: StatusEvaluation[] = [];
+      evaluated.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          evaluations.push(result.value);
+        } else {
+          // An evaluation that failed is no negative answer: end the session's run.
+          const failedId = sessionsToCheck[index]?.id;
+          if (failedId) negativeStreaks.delete(failedId);
+        }
+      });
       const outage = probeOutage(evaluations);
-      await Promise.allSettled(evaluations.map((e) => applyEvaluation(e, outage.persistNothing)));
+      const now = Date.now();
+      await Promise.allSettled(evaluations.map((e) => applyEvaluation(e, outage, now)));
 
       // Prune stale entries from states, reactionTrackers, and lastReviewBacklogCheckAt
       // for sessions that no longer appear in the session list (e.g., after kill/cleanup)
@@ -1585,9 +1764,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           states.delete(trackedId);
         }
       }
-      for (const pendingId of pendingKills) {
-        if (!currentSessionIds.has(pendingId)) {
-          pendingKills.delete(pendingId);
+      for (const streakId of negativeStreaks.keys()) {
+        if (!currentSessionIds.has(streakId)) {
+          negativeStreaks.delete(streakId);
         }
       }
       for (const trackerKey of reactionTrackers.keys()) {
@@ -1639,7 +1818,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             projectId: scopedProjectId,
             sessionCount: sessions.length,
             activeSessionCount: activeSessions.length,
-            ...(outage.warn && { probeOutageSessions: outage.sessionIds }),
+            ...(outage.warn && {
+              probeOutageSessions: Object.keys(outage.outcomes),
+              probeOutcomes: outage.outcomes,
+            }),
           },
         });
       }
@@ -1690,8 +1872,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     async check(sessionId: SessionId): Promise<void> {
       const session = await sessionManager.get(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
-      // One session cannot show an outage (C2 needs two); C1 still applies.
-      await applyEvaluation(await evaluateSession(session), false);
+      // One session cannot show an outage (C2 needs two); C1 and the
+      // no-server bound still apply.
+      await applyEvaluation(await evaluateSession(session), NO_OUTAGE, Date.now());
     },
   };
 }

@@ -540,8 +540,12 @@ async function getCachedProcessList(): Promise<string> {
   }
 }
 
-/** tmux 3.4 answers for a missing target ("can't find window: X" from list-panes). */
-const TMUX_TARGET_NOT_FOUND = /^can't find (?:session|window|pane): /m;
+/**
+ * tmux 3.4 answers for a missing target: "can't find window: X" from
+ * list-panes, and "no current target" from a server with no session at all
+ * (`exit-empty off`).
+ */
+const TMUX_TARGET_NOT_FOUND = /^(?:can't find (?:session|window|pane): |no current target$)/m;
 
 function isTmuxTargetNotFound(err: unknown): boolean {
   const stderr =
