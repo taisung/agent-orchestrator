@@ -762,9 +762,45 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     started 11:25:30. A CLI `ao send` to that record at 11:27:38 (15:27:38Z) delivered the text and did not
     restore the pane or change the record: the CLI pastes through tmux while the tmux session lives
     (`send.ts:318-327`), so the restore risk is in core `send` (lifecycle reactions, `review-check`).
-  - **In progress**: ao-46 (Claude Code, Opus 5.5, owner Priority 1, 2026-10-20) measures the cause, adds
-    failing tests and writes `development/reviews/killed_status_r1_opus.md`. No source change in this
-    round; no change to real records.
+  - **Cause measured** (ao-46, Claude Code, Opus 5.5, owner Priority 1, 2026-10-20, 10.81 USD; analysis
+    `development/reviews/killed_status_r1_opus.md`). Every `killed` write for a live session goes through
+    `checkSession` (`lifecycle-manager.ts:1195`); `list()` and `get()` set it only in memory. Four
+    mechanisms:
+    - **M1** first poll before the agent process is visible: `determineStatus` maps the agent's `exited`
+      to `killed` with no launch grace (`:415-417`); `ao start` starts a fresh worker just before the
+      orchestrator spawn, and `claude` needs about 1 s after `send-keys` into a login shell. F1 and F1b.
+      The orchestrator checked the trace: worker 271579's last transition of `ao-orchestrator` is
+      15:19:56.246Z.
+    - **M3** poll of a reserved record with no runtime handle yet: a handle made from the session ID is
+      probed, `has-session` fails, and `killed` is merged into the record (before or after the spawn's
+      full write). F4, F5.
+    - **M4** one poll in which every probe fails: runtime-tmux `isAlive` answers `false` for any tmux
+      error, claude-code answers "no process" when `ps` fails. F3 (2026-10-16) was a host-wide probe
+      outage of at least 12.5 s that workers 3216178 and 3215891 each turned into `killed` for every
+      session in one poll.
+    - **M2** the sink: `pollAll` skips a terminal record (`:1305-1309`), so no path moves it back.
+    - The F6 reading of the brief was wrong: `session-manager.ts:3360` is the archive copy-back writer of
+      `restore()`; a record with no `status` line reads as `spawning`.
+  - **11 failing tests** on the ao-46 branch, commit `20b25e52` (not on `main`: they stay red until the
+    fix): `packages/core/src/__tests__/killed-status-race.test.ts` (8) and
+    `packages/cli/__tests__/killed-status-probe-errors.test.ts` (3). The orchestrator re-ran both files:
+    all 11 fail for the stated reason. Full run of the worker: 2531 passed, 11 failed, 50 skipped.
+  - **Fix proposal**: A launch grace, B no probe without a stored handle plus a compare-and-set write, C
+    persist `killed` only after a confirming poll, treat an all-negative poll as an outage, re-check
+    probe-derived `killed` records; D probes reject on errors (runtime-tmux, claude-code). Files:
+    `lifecycle-manager.ts`, `metadata.ts`, `runtime-tmux`, `agent-claude-code`; HIGH. Owner decision.
+  - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
+    correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
+    with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
+    With fix C the next poll corrects them. Owner decision; not run.
+- **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
+  scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
+  B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;
+  `ao send` relaunched a session as a second pane on B; `ao spawn` and `ao start` started panes and a
+  lifecycle worker on B. `ao status`, `ao session ls` and a fresh worker wrote nothing. Cause: every
+  probe reads "no tmux session" as "dead" (M4 root). The cleanup case is CRITICAL by the profile (it
+  removes work). Fix D of the killed-status proposal removes the false "dead" for a server error, but
+  not for a reachable wrong server. Open; a worker change.
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.
