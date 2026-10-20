@@ -811,6 +811,23 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     - Also: C3 recovery checks only the tmux name and a `claude` process, so a new pane under an old
       name revives an old record (live); the integration test keeper hides the last-session path.
     - R7: an Opus author failed a review round, so the next step is the owner's.
+  - **Fix round 3** (ao-46, owner answers 1a 2a 3a 4a; done 15:58 EDT, 26.07 USD): whole fix
+    `0e3eabc2..e6e23c38`, round 3 `bdd5efa0..e6e23c38` (lock and generation `fcea1114`, convergence and
+    compare `8aafa06c`, tests `468c70bb` `d490efbf`, docs `19bf2cd0` `2517ad85`, lock code moved into
+    `metadata.ts` `e6e23c38`). Probe outcomes `alive`, `gone`, `ambiguous`, `no-server`, `failed`: `gone`
+    (tmux not found, claude-code on tmux with no agent) persists `killed` at the second poll and is never
+    held; `ambiguous` (codex, gemini, opencode, runtime-herdr) and `no-server` persist `killed` after 5
+    minutes (`AMBIGUOUS_NEGATIVE_BOUND_MS`, `NO_SERVER_BOUND_MS`); the `pollAll` filter also takes records
+    that `list()` reports dead. Record lock: an abstract socket (`deliveryLockName("record", <path>)`)
+    bound by a helper `worker_threads` Worker while the synchronous writer waits with `Atomics.wait`
+    (at most 5 s, then the write throws); `generation` increments on every locked write; the lifecycle
+    compare covers `generation`, `status`, handle and `pr`. m-1, m-2 (`skip`), C3 identity
+    (`#{session_created}` within -1 s to +15 s of the handle `createdAt`), last-session integration test.
+    Full run 2641 passed, 0 failed; all review live cases repeated in scratch with the shipped 5 minutes.
+    Limits the author states: the bash helper and the claude-code hook script stay unlocked; the bounds
+    are in memory; after 5 minutes of a hidden socket core `send` restores a second agent on a new server
+    (measured in scratch); a skipped bookkeeping write can repeat a reaction. Review r2 (re-check) by
+    ao-47 dispatched about 16:02 EDT.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
@@ -836,6 +853,14 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   probe reads "no tmux session" as "dead" (M4 root). The cleanup case is CRITICAL by the profile (it
   removes work). Fix D of the killed-status proposal removes the false "dead" for a server error, but
   not for a reachable wrong server. Open; a worker change.
+- **tmux `-t` targets match by prefix** (found 2026-10-20 by ao-46 in round 3 of the killed-status fix,
+  private server, tmux 3.4; not changed by any round). With only `kr-10` live, `has-session -t kr-1` exits
+  0; with `kr-10` and `kr-11` live it prints `can't find session: kr-1`; `-t =kr-1` matches exactly (pane
+  targets need `=name:`). runtime-tmux `isAlive`, `destroy`, `sendMessage` and the claude-code pane read
+  use plain targets. Effect: a dead `<prefix>-ao-4` reads alive while exactly one live name starts with
+  it (`ao-40` to `ao-49`), and a `destroy` on the dead name can end that other live session. The new
+  `getMetrics` of round 3 matches the name exactly. Severity and whether it blocks the landing: asked of
+  the review r2 (ao-47). Open; a worker change in every tmux call.
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.
