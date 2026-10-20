@@ -374,6 +374,20 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
   session with a stored ID; non-OpenCode agents unchanged. No model turn and no send to a real session;
   the real-TUI check runs later on the owner's word. Reviewer after it: gpt-6.1-sol (Codex). Watcher
   PID 484968 (watches ao-41).
+- **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
+  `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
+  (their OpenCode sessions `ses_eba4e6e11ffe0naaqTrf5GJeg2` and `ses_eba3ac87dffeGiDC5kjl34itRW` now give
+  404). Before the kill: every branch had 0 commits that `git cherry main` does not find on `main`, and
+  every untracked review file was equal to its copy on `main`; the newest reports are in
+  `~/.cache/agent-skills-haiku55-arc/reports/` (`ao-32-branchcheck-r2`, `ao-37-i4-r4` added). Branches
+  kept. 91 socket files with no server, older than 2026-10-19, removed from `/tmp/tmux-44402`. Not
+  touched: ao-41, ao-orchestrator, the stale `ao-orchestrator-1` record (no worktree, no branch), the
+  service and the lifecycle workers.
+- **Live sessions read `status=killed` (found 2026-10-19).** Every record of this project except ao-41
+  had `status=killed` with an mtime of 2026-10-16 14:56:51, ao-orchestrator too, while their panes ran.
+  So `ao session ls` shows `[killed]` for live sessions, and the lifecycle worker does not poll them (no
+  reactions for those sessions). Cause not analyzed (one write for all records at one second; related to
+  the first-poll `killed` race?). The orchestrator record still reads `killed`.
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.
