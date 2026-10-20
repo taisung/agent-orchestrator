@@ -748,6 +748,17 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   So `ao session ls` shows `[killed]` for live sessions, and the lifecycle worker does not poll them (no
   reactions for those sessions). Cause not analyzed (one write for all records at one second; related to
   the first-poll `killed` race?). The orchestrator record still reads `killed`.
+  - **Reproduced live 2026-10-20** after the host restart of 10:42:25. `ao start` at 11:19:55 (lifecycle
+    worker 271579 and the tmux `new-session` both started 11:19:55) archived the old record at
+    11:19:56.027 and wrote a new one with `createdAt=2026-10-20T15:19:56.073Z`; at 11:19:56.244 it read
+    `status=killed` while the pane ran. The archived records of 10-15 and 10-16 also read `killed`.
+  - **A new record has no `status` line for about 390 ms** (2026-10-20, read-only 50 ms loop during the
+    spawn of ao-46): mtime 11:25:23.333 no `status=`, 11:25:23.720 `spawning`, 11:25:26.737 `working`;
+    ao-46 did not go to `killed`. A reader in that window gets `killed` from the default of
+    `session-manager.ts:3360` (`raw["status"] ?? "killed"`).
+  - **In progress**: ao-46 (Claude Code, Opus 5.5, owner Priority 1, 2026-10-20) measures the cause, adds
+    failing tests and writes `development/reviews/killed_status_r1_opus.md`. No source change in this
+    round; no change to real records.
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.

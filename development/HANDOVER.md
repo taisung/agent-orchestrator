@@ -14,8 +14,11 @@ pushed. Its real-TUI check passed at 10:12 EDT: one `ao send` was admitted with 
 text was pasted, and the tool of that turn saw the worker's `AO_SESSION_ID` and `~/.ao/bin/gh`. I-3 and
 I-4 are live since 2026-10-19 and 2026-10-17. `~/.ao/bin` is 0.2.6, unchanged since 2026-10-16 12:16.
 
-No worker runs. No priority is chosen for the next session: the owner picks one of Next Priorities.
-`main` holds the handover commit; the push of `main` follows it on the owner's word of 2026-10-20.
+**Update 2026-10-20 11:30 EDT.** The host restarted at 10:42:25 EDT. The five lifecycle workers and the
+global OpenCode service (PID 15920) of this handover stopped then. The owner ran `ao start` at 11:19:55;
+its new orchestrator record read `status=killed` 171 ms after its `createdAt` (Priority 1, live). The
+owner chose Priority 1: ao-46 (Claude Code, Opus 5.5) investigates it, dispatched 11:26 EDT, brief
+`~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-status.md`, meter `5h 6%`, `wk 6%`.
 
 ## Live Sessions and Worktrees
 
@@ -23,8 +26,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 
 | Session | State | Disposition |
 | --- | --- | --- |
-| ao-orchestrator | this session, primary checkout, `main`; its record reads `status=killed` (stale since 2026-10-16) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/0c0f59c9-cc89-4ba3-972b-58a61b9f8390.jsonl` |
+| ao-orchestrator | this session, primary checkout, `main`; new record since `ao start` at 11:19:56, reads `status=killed` (mtime 11:19:56.244) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
+| ao-46 | Priority 1 investigation, Claude Code Opus 5.5, branch `feat/killed-race-read-agent-task-md-in-your-worktree-and-execute` at `654b3d28`; record `working` | wait for its report; router row open |
 
 Retired in this session, each after a check that its branch is on `main` by patch and its review files
 equal `main` (reports, briefs and review originals in `~/.cache/agent-skills-haiku55-arc/reports/`):
@@ -41,18 +45,21 @@ the seven older worker branches with no `+` in `git cherry main` and no merge co
 `i3-r2-pre-rebase` are the only local branches. `git worktree list` shows only the primary checkout, and
 `/home/taisung/.worktrees/agent-orchestrator/` is empty.
 
-**Lifecycle workers** (since 2026-10-20 09:52): agent-skills 105049, agent-orchestrator 105142 (Nexus
-config) and 106285 (this config), Nexus 105154, VSF 106266. Every brief must protect these PIDs, not
-the old 19579, 19624, 19636, 19653, 19689. The global OpenCode service is PID 15920 with no `AO_*`.
+**Lifecycle workers** (since the host restart of 2026-10-20 10:42): only 271579 (this config, started by
+`ao start` at 11:19:55). The workers of agent-skills, Nexus, VSF and the Nexus config of this fork do
+not run until their orchestrators run `ao start`. Every brief must protect 271579, not the old 105049,
+105142, 105154, 106266, 106285. The global OpenCode service does not run (old PID 15920): an
+`opencode api` call starts one with the caller's environment.
 
-**Watcher**: stopped at this handover with TERM (PID 851965, 10:23:55 EDT), because no worker runs. To
-start it again: `FLEET_WATCH_STATE=/home/taisung/.cache/fleet_watch/ao-opencode2-2026-10-14 setsid nohup
-bash /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
-/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed
-<id>@/home/taisung/.worktrees/agent-orchestrator ... < /dev/null`. `--preseed` records the current first
-line as handled, so read a worker's report first.
+**Watcher**: PID 337062 since 11:26:06, state `/home/taisung/.cache/fleet_watch/ao-killed-2026-10-20`,
+watching ao-46. Start command: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
+/home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
+/home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed <id> ...
+< /dev/null`. `--preseed` is a flag with no value; put the session names after all flags (the old state
+directory holds `--preseed.*` files from a call that read it as a session name). `--preseed` records
+the current first line as handled, so read a worker's report first.
 
-**Router log**: every row of this session is closed. Eight rows of 2026-10-15 still have
+**Router log**: the ao-46 row is open (2026-10-20). Eight rows of 2026-10-15 still have
 `landed=pending` (TODO Known Issues, "Traps found in the I-5 rounds").
 
 ## Open and Blocked Items
