@@ -536,6 +536,44 @@ in `~/agent-skills/development/TODO_TRACKING.md`.
     - ledger cleanup that `ao session cleanup` retries, and a sweep of expired ledgers (m-2);
     - removal of the second-`begin` path and of the dead lock code; no new dependency.
     ao-41 context after a compaction: 9% (59.85 USD in total by its status line).
+  - **Author r4 done (2026-10-20 08:47 EDT, `72e5e59f..9987edfa`, 7 commits, 20.05 USD by
+    trial_cost).**
+    - New file `packages/core/src/delivery-lock.ts`: a Linux abstract Unix socket, bound with an
+      exclusive `listen`. `EADDRINUSE` means held. The kernel frees the name when the holder ends, also
+      on `kill -9`. The name is `\0ao-delivery-<uid>-<ledger|attempt>-<32 hex of sha256>`, from the real
+      ledger path (plus `#<token>` for an attempt). The lock file, the stale rule, the claim file, the
+      PID and start-time liveness, and the in-process sets are removed. Ledger format version 2 (a
+      version 1 file counts as corrupt and fails closed).
+    - B-3: each attempt holds its own attempt lock from before its claim to its settle. A `sending`
+      entry is reused only when a `connect` probe finds its attempt lock free. The probes run inside
+      the ledger lock.
+    - M-5: after a success the entry is marked `admitted`, then cleared. Every change removes `admitted`
+      entries. When the mark fails 3 times: `deliver` returns `admissionUnrecorded: true`, the CLI prints
+      one more line, core `send` resolves with one operator line, and the process keeps the attempt lock
+      for 11 min. Stated limit: that process ends inside 10 min, and a later equal send from another
+      process is a replay.
+    - m-2: a failed ledger removal writes `opencodeLedgerPending=<ses_id>` to the archived record, and
+      `ao session cleanup` retries it. Cleanup also removes expired ledgers whose lock is free, and old
+      temp files.
+    - Other platforms (macOS): core `deliver` refuses the agent route with a clear error before any
+      restore. Before I-5 such a send used the pane path. The author says that the owner can decide this
+      if AO runs on macOS.
+    - Another local user can bind a name first. The sends to that session then fail after 2 s, nothing
+      sent. The author accepts this for a personal host.
+    - The second-`begin` path is removed. An `AgentNotAttachedError` after `begin` is final.
+    - Gates: full `pnpm test` 2547 passed, 29 skipped. The ledger test file passed 5 runs and 2 runs
+      under CPU load. D3: 11 mutants, all fail tests except ii-a (equivalent; the dead flag is removed).
+    - D2 live: the review r3, r2 and r1 reproducers give the expected input counts, with tokens 0.
+    - Whole I-5: 19 files, 5879 insertions, 28 deletions. Round 4 alone: 10 files, 1613 insertions,
+      645 deletions. `lifecycle-manager.ts`, `metadata.ts` and `restore()` are unchanged. Report:
+      `reports/ao-41-i5-r4.agent_report.md`.
+  - **Review r4 dispatched (2026-10-20 08:50 EDT) to ao-43**, the same session as review r3
+    (context 47% used at dispatch). Worktree moved to `9987edfa` with `reset --keep`. Brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-i5-r4-sol.md`, in plain words as v2. Review file
+    `development/reviews/i5_review_r4_sol61.md`. New finding IDs continue at B-4, M-6, m-3. The
+    reviewer classifies each finding by its trigger (normal use, a process that ends abruptly, a failed
+    file write, another local user), and says whether a documented limit is acceptable for a personal
+    tool. Codex token baseline (end of r3): input 8235357, cached 8009856, output 57313.
   - ao-42 report set to `partial` (review r3 not done, moved to ao-43). ao-42 and ao-43 are idle.
 - **Fleet cleanup (2026-10-19, about 20:50 EDT; owner: "Kill all six and purge", dead sockets only).**
   `ao session kill` of ao-32, ao-36, ao-38, ao-40, and `ao session kill --purge-session` of ao-37 and ao-39
