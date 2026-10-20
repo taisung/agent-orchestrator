@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type * as NetModule from "node:net";
 import ts from "typescript";
 import {
   deliveryLockName,
@@ -13,6 +14,23 @@ import {
   tryHoldDeliveryLock,
   type DeliveryLock,
 } from "../delivery-lock.js";
+
+// A test can replace the socket that `connect` gives to the probe, to inject
+// an error or no answer. Every other `node:net` call runs as it is.
+const probeFaults = vi.hoisted(() => ({
+  connect: undefined as undefined | ((socket: NetModule.Socket) => void),
+}));
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof NetModule>();
+  const connect = (...args: unknown[]) => {
+    const fault = probeFaults.connect;
+    if (!fault) return (actual.connect as (...a: unknown[]) => NetModule.Socket)(...args);
+    const socket = new actual.Socket();
+    fault(socket);
+    return socket;
+  };
+  return { ...actual, connect, default: { ...actual, connect } };
+});
 
 // ---------------------------------------------------------------------------
 // Real child processes run the same code: the test compiles delivery-lock.ts
@@ -217,6 +235,40 @@ describe("a lock that the OS releases (I-5 round 4, M-4)", () => {
     earlier.release();
     expect(await tryHoldDeliveryLock(name)).toBeNull();
     later.release();
+    expect(await isDeliveryLockHeld(name)).toBe(false);
+  });
+
+  it("a probe counts only a refusal as free: every other error and no answer in 1 s count as held", async () => {
+    const name = nameFor("probe-errors");
+    const probeWith = (code: string) => {
+      probeFaults.connect = (socket) =>
+        process.nextTick(() =>
+          socket.emit("error", Object.assign(new Error(`connect ${code}`), { code })),
+        );
+      return isDeliveryLockHeld(name);
+    };
+    try {
+      for (const code of ["ECONNREFUSED", "ENOENT"]) {
+        expect(await probeWith(code), code).toBe(false);
+      }
+      for (const code of ["EAGAIN", "EACCES", "EMFILE", "ECONNRESET", "ETIMEDOUT"]) {
+        expect(await probeWith(code), code).toBe(true);
+      }
+
+      // No answer: the socket never connects and never fails.
+      probeFaults.connect = () => {};
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let result: boolean | undefined;
+      void isDeliveryLockHeld(name).then((held) => (result = held));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      probeFaults.connect = undefined;
+    }
+    // The real probe again: nobody holds this name.
     expect(await isDeliveryLockHeld(name)).toBe(false);
   });
 
