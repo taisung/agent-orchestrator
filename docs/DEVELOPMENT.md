@@ -443,6 +443,8 @@ Store secrets outside tracked files. Never commit real values.
 **Why flat metadata files instead of a database?**
 Debuggability: `cat ~/.agent-orchestrator/a3b4-myapp/sessions/ao-1` shows full state. No database to spin up, no schema to migrate, survives crashes.
 
+Record writes (`packages/core/src/metadata.ts`): every Node writer holds the record lock (`record-lock.ts`, a Linux abstract Unix socket that the kernel frees when the process ends, so no lock file can stay behind) for its read, compare, write and rename, and every write increments the record key `generation`. A writer that decided from an older read (the lifecycle poll, the repair on read, a PR claim) writes only when the record still holds the generation it read, and never recreates an archived record. Two limits: the bash metadata helpers (`~/.ao/bin/ao-metadata-helper.sh` and the claude-code PostToolUse hook) write `pr`, `status` and `branch` with `sed` and `mv` outside the lock and without a new generation, so a helper write and a Node write can still overwrite each other between the read and the rename of either (the lifecycle compares `pr` and `status` too, which catches a helper write that came before its locked read). On a platform without abstract sockets (not Linux) the writers run without the lock.
+
 **Why polling instead of webhooks?**
 Simpler local setup (no ngrok), survives orchestrator restarts, works offline. CI/review state is fetched, not pushed.
 
