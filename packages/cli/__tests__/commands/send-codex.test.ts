@@ -1,8 +1,9 @@
 /**
  * `ao send` to a tmux Codex pane: the verify loop reads the Codex 0.163.0
- * screens of `agent-codex/src/__fixtures__/panes-0.163.0.ts` through the real
- * Codex `detectActivity`. tmux is mocked; every key that the command sends is
- * kept in `keys` in order.
+ * screens of `agent-codex/src/__fixtures__/panes-0.163.0.ts` with the screen
+ * parser of the Codex plugin, sends no key after the message, and reports one
+ * of three lines. tmux is mocked; every key that the command sends is kept in
+ * `keys` in order.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import codexPlugin from "@aoagents/ao-plugin-agent-codex";
@@ -11,6 +12,12 @@ import {
   DERIVED_SUBMITTED_RUNNING_0163,
   REAL_IDLE_EMPTY_0163,
   REAL_UNSUBMITTED_PASTE_0163,
+  REVIEW_B1_FOREIGN_DRAFT,
+  REVIEW_B1_FOREIGN_PASTE,
+  REVIEW_B2_NESTED_PROMPT,
+  REVIEW_M1B_COMPOSER,
+  REVIEW_M1B_FIRST_ROW,
+  REVIEW_M2_NUMBERED_MESSAGE,
   UNSUBMITTED_NOTICE_0163,
 } from "../../../plugins/agent-codex/src/__fixtures__/panes-0.163.0.js";
 
@@ -58,12 +65,13 @@ import { registerSend } from "../../src/commands/send.js";
 const PANE = "=codex-1:";
 const ENTER = ["send-keys", "-t", PANE, "Enter"];
 const CLEAR = ["send-keys", "-t", PANE, "C-u"];
-const PASTE = ["paste-buffer", "-p", "-t", PANE];
+/** The paste call with its flags left out: the tests hold with and without `-p` (ccec6ee4). */
+const PASTE = ["paste-buffer", PANE];
 
 const PROCESSING = "Message sent and processing";
 const NOT_CONFIRMED = "Message sent — could not confirm it was received";
-const EMPTY_NOT_CONFIRMED =
-  "Message sent — the input box is empty but no turn is running: could not confirm it was received";
+const NOT_SUBMITTED =
+  "Message not submitted: the text is still in the input box of codex-1 (tmux pane =codex-1:); check the pane and press Enter";
 
 let program: Command;
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -133,6 +141,15 @@ function retryKeys(): string[][] {
   return keys.slice(firstEnter + 1);
 }
 
+/** The vectors of a send of `message` with no key after it: clear, paste or type, Enter. */
+function sendOnly(message: string): string[][] {
+  const text =
+    message.includes("\n") || message.length > 200
+      ? PASTE
+      : ["send-keys", "-t", PANE, "-l", message];
+  return [CLEAR, text, ENTER];
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   program = new Command();
@@ -150,7 +167,8 @@ beforeEach(() => {
   mockSessionManager.get.mockReset().mockResolvedValue(codexSession());
   mockSessionManager.send.mockReset();
   mockExec.mockReset().mockImplementation(async (_cmd: string, args: string[]) => {
-    if (args[0] !== "load-buffer") keys.push(args);
+    if (args[0] === "paste-buffer") keys.push(["paste-buffer", args[args.indexOf("-t") + 1] ?? ""]);
+    else if (args[0] !== "load-buffer") keys.push(args);
     return { stdout: "", stderr: "" };
   });
   mockTmux.mockReset().mockImplementation(async (...args: string[]) => {
@@ -167,79 +185,117 @@ afterEach(() => {
 });
 
 describe("ao send to a Codex 0.163.0 pane", () => {
-  it("sends one more Enter to the unsubmitted paste and prints processing once the turn runs", async () => {
+  it("reports a message that stays in the composer as not submitted, and sends no key", async () => {
+    screens = [REAL_UNSUBMITTED_PASTE_0163];
+
+    await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
+
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("prints processing when a running turn shows at a later check, and sends no key", async () => {
     screens = [REAL_UNSUBMITTED_PASTE_0163, DERIVED_SUBMITTED_RUNNING_0163];
 
     await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
 
-    expect(keys).toEqual([CLEAR, PASTE, ENTER, ENTER]);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
     expect(printed()).toEqual([PROCESSING]);
   });
 
-  it("prints processing when the composer is empty after its Enter (Codex took the message)", async () => {
+  it("M-1 A: an emptied composer with no running turn is not processing", async () => {
     screens = [REAL_UNSUBMITTED_PASTE_0163, REAL_IDLE_EMPTY_0163];
 
     await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
 
-    expect(keys).toEqual([CLEAR, PASTE, ENTER, ENTER]);
-    expect(printed()).toEqual([PROCESSING]);
-  });
-
-  it("prints the could-not-confirm line when the paste stays in the composer", async () => {
-    screens = [REAL_UNSUBMITTED_PASTE_0163];
-
-    await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
-
-    // Two retry Enters (after checks 1 and 2); check 3 still shows the paste.
-    expect(retryKeys()).toEqual([ENTER, ENTER]);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
     expect(printed()).toEqual([NOT_CONFIRMED]);
   });
 
-  it("sends no Enter and does not print processing for an idle empty composer", async () => {
+  it("M-1 B: a message row that starts with '? for shortcuts' does not make the composer empty", async () => {
+    const message = "Describe this UI\n? for shortcuts means help";
+    screens = [REVIEW_M1B_FIRST_ROW, REVIEW_M1B_COMPOSER];
+
+    await send("--no-wait", "codex-1", message);
+
+    expect(keys).toEqual(sendOnly(message));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("prints the could-not-confirm line for a composer that is empty at every check", async () => {
     screens = [REAL_IDLE_EMPTY_0163];
 
     await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
 
-    expect(keys).toEqual([CLEAR, PASTE, ENTER]);
-    expect(printed()).toEqual([EMPTY_NOT_CONFIRMED]);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+    expect(printed()).toEqual([NOT_CONFIRMED]);
   });
 
-  it("keeps the mid-turn case: a running turn above the paste prints processing with no Enter", async () => {
+  it("keeps the mid-turn case: a running turn above the paste prints processing", async () => {
     screens = [DERIVED_MID_TURN_PASTE_0163];
 
     await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
 
-    expect(keys).toEqual([CLEAR, PASTE, ENTER]);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
     expect(printed()).toEqual([PROCESSING]);
   });
 
-  it("sends no Enter to composer text that is not this message", async () => {
+  it("B-2: reports a running turn whose composer quotes a transcript as processing", async () => {
+    screens = [REVIEW_B2_NESTED_PROMPT];
+
+    await send("--no-wait", "codex-1", "examine this transcript");
+
+    expect(keys).toEqual(sendOnly("examine this transcript"));
+    expect(printed()).toEqual([PROCESSING]);
+  });
+
+  it("M-2: reports a numbered message in the composer as not submitted, not processing", async () => {
+    screens = [REVIEW_M2_NUMBERED_MESSAGE];
+
+    await send("--no-wait", "codex-1", "1. Summarize the test failures");
+
+    expect(keys).toEqual(sendOnly("1. Summarize the test failures"));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("prints the could-not-confirm line for composer text that is not this message", async () => {
     screens = [REAL_UNSUBMITTED_PASTE_0163];
 
     await send("--no-wait", "codex-1", "Rebase onto main and run the gates again.");
 
-    expect(keys).toEqual([
-      CLEAR,
-      ["send-keys", "-t", PANE, "-l", "Rebase onto main and run the gates again."],
-      ENTER,
-    ]);
+    expect(keys).toEqual(sendOnly("Rebase onto main and run the gates again."));
     expect(printed()).toEqual([NOT_CONFIRMED]);
   });
 
-  it("sends one more Enter to a paste that Codex shows as [Pasted Content ...]", async () => {
-    const lines = REAL_UNSUBMITTED_PASTE_0163.split("\n");
-    const composer = lines.findIndex((line) => line.startsWith("› "));
-    const placeholder = [
-      ...lines.slice(0, composer),
-      "› [Pasted Content 1204 chars]",
-      ...lines.slice(composer + 3),
+  it("B-1: sends no key to a draft or a paste of another sender (the text match chooses only the words)", async () => {
+    screens = [REVIEW_B1_FOREIGN_DRAFT];
+    await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+
+    keys = [];
+    logSpy.mockClear();
+    screens = [REVIEW_B1_FOREIGN_PASTE];
+    await send("--no-wait", "codex-1", "hello");
+    expect(keys).toEqual(sendOnly("hello"));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("prints the could-not-confirm line when no composer is in view, and sends no key", async () => {
+    const approvalView = [
+      "  Would you like to run the following command?",
+      "",
+      "  $ pnpm test",
+      "",
+      "› 1. Yes, proceed (y)",
+      "  2. No, and tell Codex what to do differently (esc)",
     ].join("\n");
-    screens = [placeholder, DERIVED_SUBMITTED_RUNNING_0163];
+    screens = [approvalView];
 
-    await send("--no-wait", "codex-1", "x".repeat(1204));
+    await send("--no-wait", "codex-1", "hello");
 
-    expect(retryKeys()).toEqual([ENTER]);
-    expect(printed()).toEqual([PROCESSING]);
+    expect(keys).toEqual(sendOnly("hello"));
+    expect(printed()).toEqual([NOT_CONFIRMED]);
   });
 
   it("does not wait for an idle Codex pane before it sends", async () => {
@@ -248,11 +304,13 @@ describe("ao send to a Codex 0.163.0 pane", () => {
     await send("codex-1", UNSUBMITTED_NOTICE_0163);
 
     expect(printed()).not.toContain("Waiting for codex-1 to become idle...");
-    expect(keys).toEqual([CLEAR, PASTE, ENTER]);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
     expect(printed()).toEqual([PROCESSING]);
   });
+});
 
-  it("keeps the retry of other agents: an idle Claude Code screen gets two retry Enters", async () => {
+describe("ao send to another agent: the loop of 09546110", () => {
+  beforeEach(() => {
     mockConfigRef.current = config("claude-code");
     mockSessionManager.get.mockResolvedValue({ ...codexSession(), metadata: {} });
     mockAgentRef.current = {
@@ -260,11 +318,37 @@ describe("ao send to a Codex 0.163.0 pane", () => {
       processName: "claude",
       detectActivity: () => "idle",
     };
+  });
+
+  it("sends two retry Enters to a screen with no running turn", async () => {
     screens = [REAL_IDLE_EMPTY_0163];
 
     await send("--no-wait", "codex-1", "hello");
 
     expect(retryKeys()).toEqual([ENTER, ENTER]);
     expect(printed()).toEqual([NOT_CONFIRMED]);
+  });
+
+  it("sends an Enter at each check to a prompt with text and 'tab to queue message'", async () => {
+    screens = ["output\n› draft\ntab to queue message"];
+
+    await send("--no-wait", "codex-1", "hello");
+
+    expect(retryKeys()).toEqual([ENTER, ENTER, ENTER]);
+    expect(printed()).toEqual([NOT_CONFIRMED]);
+  });
+
+  it("prints processing with no retry when the agent reads the screen as active", async () => {
+    mockAgentRef.current = {
+      name: "claude-code",
+      processName: "claude",
+      detectActivity: () => "active",
+    };
+    screens = [REAL_IDLE_EMPTY_0163];
+
+    await send("--no-wait", "codex-1", "hello");
+
+    expect(retryKeys()).toEqual([]);
+    expect(printed()).toEqual([PROCESSING]);
   });
 });
