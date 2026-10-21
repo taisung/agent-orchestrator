@@ -262,8 +262,10 @@ function launchKeyOf(metadata: Readonly<Record<string, string>>): string {
 /**
  * The version of a record that a poll read, for a write that any other Node
  * write must cancel: its generation plus its launch identity (round 5, B-2).
- * Generations never repeat for an ID, so the generation alone tells versions
- * apart among records of this build. The launch identity also rejects a new
+ * The active records of an ID never repeat a generation (an archived copy has
+ * its own series; this compare reads the active record), so the generation
+ * alone tells versions apart among active records of this build. The launch
+ * identity also rejects a new
  * launch whose record has no generation (an earlier build wrote it).
  */
 function readVersionOf(metadata: Readonly<Record<string, string>>): Record<string, string> {

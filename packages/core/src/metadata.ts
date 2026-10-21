@@ -40,15 +40,25 @@
  * it decided from as `expected`: the generation, or the launch identity
  * (`launchIdentity`) when only a new launch or reservation must stop it.
  *
- * Generations never repeat for a session ID (round 5, B-2). Within one record
+ * Generations (round 5, B-2; the exact rule, round 6, m-1). The series of
+ * active records of a session ID never repeats a number. Within one record
  * each write adds 1. A record that starts (a reservation, a copy-back, a full
  * write over a missing record or over one without a generation) starts above
  * the generation floor of the ID: the larger of its latest archived copy and
  * the floor file `<dataDir>/.generations/<id>`, which every delete (with or
  * without an archive) raises to the deleted record's generation before it
  * removes the file. So a delete without an archive (a launch rollback), an
- * archive, a copy-back or a new reservation never brings back a generation
- * that an earlier version of the ID had. No reader lists the floor directory
+ * archive, a copy-back, a new reservation or a removal of the archive files
+ * never brings back a number that an earlier active record of the ID had.
+ * Each archived copy has its own series: it starts at the generation of the
+ * version that it copies, and each archive write (`updateArchivedMetadata`)
+ * adds 1 without the floor and without the active record, so a number can be
+ * both an active record's and an archived copy's (or two copies'). A compare
+ * reads one file (`updateMetadataIf` and `deleteMetadata` the active record;
+ * `updateArchivedMetadata` and the `expectedArchive` of
+ * `reserveSessionRecord` the latest archived copy), so it compares within
+ * one series; every compare that uses the generation reads the active
+ * record. No reader lists the floor directory
  * as a session: `listMetadata` (this build and earlier builds) skips names
  * that start with a dot, the archive readers need `<id>_<digit>`, and the
  * bash helper and hook write only `<dataDir>/<id>`. An earlier build does not
@@ -729,9 +739,13 @@ export function readArchivedMetadataRaw(
  * under the lock of the session record, so it never interleaves with an
  * archive or a copy-back of the same session. The archive copy that
  * `deleteMetadata` makes keeps the generation of the version that it copies;
- * every write here increments it (m-3, round 4), so a later reservation or
- * copy-back continues above it. With `expected`, only an archived copy that
- * still holds every expected value is written. Returns true when written.
+ * every write here adds 1 to that copy's own series (m-3, round 4). Round 6
+ * (m-1): it does not raise the floor and does not read the active record, so
+ * its numbers can repeat numbers of the active series (see the file header).
+ * While the copy exists, a reservation or copy-back starts above it. With
+ * `expected`, only an archived copy that still holds every expected value is
+ * written (a compare within this copy's series; no caller passes a
+ * `generation` in it). Returns true when written.
  */
 export function updateArchivedMetadata(
   dataDir: string,
