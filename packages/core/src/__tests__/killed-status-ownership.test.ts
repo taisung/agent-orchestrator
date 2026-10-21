@@ -11,7 +11,7 @@
  * step changes the record as another process would.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -1062,11 +1062,11 @@ describe("M-1 (round 6): each OpenCode removal attempt has its own ownership che
   });
 
   describe("round 7 (review r5, M-1): the orchestrator delete strategy and its own ID", () => {
-    /** A project-mode orchestrator with the delete strategy, and an archive that names ses_shared. */
-    function orchestratorDeleteRegistry(): PluginRegistry {
+    /** A project-mode orchestrator with the delete strategy, and an archive that names `openCodeId`. */
+    function orchestratorDeleteRegistry(openCodeId = "ses_shared"): PluginRegistry {
       ctx.config.projects["my-app"]!.orchestratorWorkspaceMode = "project";
       ctx.config.projects["my-app"]!.orchestratorSessionStrategy = "delete";
-      launchedRecord("app-orchestrator", { agent: "opencode", opencodeSessionId: "ses_shared" });
+      launchedRecord("app-orchestrator", { agent: "opencode", opencodeSessionId: openCodeId });
       deleteMetadata(sessionsDir, "app-orchestrator", true);
       vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-orch"));
       return createMockRegistry({
@@ -1107,6 +1107,95 @@ describe("M-1 (round 6): each OpenCode removal attempt has its own ownership che
       ).rejects.toThrow(/Session app-orchestrator was removed/);
       expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
     });
+
+    it("round 8 (review r6, m-1): the gone-reservation case names the kept ses_retained and its removal command", async () => {
+      const registry = orchestratorDeleteRegistry("ses_retained");
+      failFirstRemoveAfter(() => {
+        // Another operation archives the start's reservation: the newest
+        // archive of the ID is an empty reservation, and the older archive
+        // that names ses_retained is hidden from the next start.
+        deleteMetadata(sessionsDir, "app-orchestrator", true);
+      });
+      const sm = createSessionManager({ config: ctx.config, registry });
+
+      const first = await withWarnings(() =>
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }).then(
+          () => "started",
+          (err: unknown) => String(err),
+        ),
+      );
+
+      expect(first.value).toMatch(/Session app-orchestrator was removed/);
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+      expect(readArchivedMetadataRaw(sessionsDir, "app-orchestrator")).not.toHaveProperty(
+        "opencodeSessionId",
+      );
+      expect(first.text).toContain(
+        "kept OpenCode session ses_retained of app-orchestrator: the record of app-orchestrator that this start reserved is gone (archived or deleted)",
+      );
+      expect(first.text).toContain(
+        "remove it with `opencode api session.remove --param sessionID=ses_retained`",
+      );
+      // The limit that the message is for: the next start does not find it.
+      failFirstRemoveAfter(() => undefined);
+      await sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" });
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      "round 8 (M-1): the start's record becomes unreadable during a failed attempt: no second attempt, the session is named",
+      async () => {
+        const registry = orchestratorDeleteRegistry();
+        const recordFile = join(sessionsDir, "app-orchestrator");
+        failFirstRemoveAfter(() => chmodSync(recordFile, 0o000));
+        const sm = createSessionManager({ config: ctx.config, registry });
+
+        try {
+          const first = await withWarnings(() =>
+            sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }).then(
+              () => "started",
+              (err: unknown) => String(err),
+            ),
+          );
+
+          expect(first.value).not.toBe("started");
+          expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+          expect(first.text).toMatch(
+            /kept OpenCode session ses_shared of app-orchestrator: the record of app-orchestrator could not be read \(EACCES/,
+          );
+          expect(first.text).toContain("opencode api session.remove --param sessionID=ses_shared");
+        } finally {
+          chmodSync(recordFile, 0o644);
+        }
+      },
+    );
+
+    it.skipIf(process.getuid?.() === 0)(
+      "round 8 (M-1): another record becomes unreadable during a failed attempt: no second attempt, the session is named",
+      async () => {
+        const registry = orchestratorDeleteRegistry();
+        launchedRecord("app-3", { agent: "opencode", opencodeSessionId: "ses_other" });
+        const otherFile = join(sessionsDir, "app-3");
+        failFirstRemoveAfter(() => chmodSync(otherFile, 0o000));
+        const sm = createSessionManager({ config: ctx.config, registry });
+
+        try {
+          const first = await withWarnings(() =>
+            sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }).then(
+              () => "started",
+              (err: unknown) => String(err),
+            ),
+          );
+
+          expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+          expect(first.text).toMatch(
+            /kept OpenCode session ses_shared of app-orchestrator: the records that may name it could not be read \(EACCES/,
+          );
+        } finally {
+          chmodSync(otherFile, 0o644);
+        }
+      },
+    );
 
     it("control: the start still owns its reservation, the second attempt removes ses_shared", async () => {
       const registry = orchestratorDeleteRegistry();

@@ -1090,15 +1090,42 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // (M-1): the compare skips the orchestrator's own ID, so a new
         // reservation or launch of that ID is seen only through `own`: the
         // session stays unless the ID's record is still this start's (a
-        // record that is gone keeps it too; the archive still names it, so
-        // the next start with this strategy decides again).
-        await deleteOpenCodeSession(
-          openCodeSessionId,
-          () =>
-            (!own || own.check().state === "own") &&
-            openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) === namers,
-          env,
-        );
+        // record that is gone or cannot be read keeps it too). Round 8
+        // (m-1): a later start finds a kept session only while a record or
+        // the latest archive of an ID names it, and another archive of the
+        // ID (an archived empty reservation) hides an older one. So each
+        // kept session is named to the operator with the removal command.
+        // Why the last check kept the session; `takenMeanwhile` when another
+        // record took the ID (that record names it, so it stays findable).
+        const takenMeanwhile = "another session took the ID during the check";
+        let keptBecause: string | undefined;
+        const stillUnheld = (): boolean => {
+          const checked = own?.checkOrUnknown();
+          if (checked?.state === "unknown") {
+            keptBecause = `the record of ${criteria.sessionId} could not be read (${shortErrorText(checked.error)})`;
+          } else if (checked?.state === "gone") {
+            keptBecause = `the record of ${criteria.sessionId} that this start reserved is gone (archived or deleted)`;
+          } else if (checked?.state === "replaced") {
+            keptBecause = `another reservation, launch or restore of ${criteria.sessionId} replaced the record that this start reserved`;
+          } else {
+            try {
+              keptBecause =
+                openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) === namers
+                  ? undefined
+                  : takenMeanwhile;
+            } catch (err) {
+              keptBecause = `the records that may name it could not be read (${shortErrorText(err)})`;
+            }
+          }
+          return keptBecause === undefined;
+        };
+        const removed = await deleteOpenCodeSession(openCodeSessionId, stillUnheld, env);
+        if (!removed && keptBecause !== undefined && keptBecause !== takenMeanwhile) {
+          const of = criteria.sessionId ?? `issue ${criteria.issueId ?? "?"}`;
+          warnOperator(
+            `ao: kept OpenCode session ${openCodeSessionId} of ${of}: ${keptBecause}. A later start may not find it; remove it with \`opencode api session.remove --param sessionID=${openCodeSessionId}\` if no session uses it.`,
+          );
+        }
       }
       return undefined;
     }
