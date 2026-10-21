@@ -224,6 +224,26 @@ session. Both helpers throw for a name outside `[a-zA-Z0-9_-]` (also the empty n
 a dot or a colon in a target as a separator. For a target that does not exist, `display-message` prints
 empty values and exits 0, so its callers read empty output as "gone", not as "unknown".
 
+### `ao send` to a tmux pane
+
+`ao send` clears the input line with `C-u`, types a message of up to 200 characters with no line break
+with `send-keys -l`, and pastes a longer one with `load-buffer` and `paste-buffer -p`. `-p` puts the
+bracketed-paste markers around the text when the pane's program asked for them (Claude Code, Codex and
+Gemini do), so a line break in the text is not an Enter. `Enter` follows 300 ms later. Then the command
+reads the pane up to three times. It prints "Message sent and processing" only when the agent's
+`detectActivity` answers `active`, or when a Codex composer that held the message is empty after an
+`Enter` of this check. For a Codex pane with no running turn, it reads the composer (the last line that
+starts with `›`, with only indented or blank lines below it):
+
+- Text that starts the sent message (or `[Pasted Content ...]`) is not submitted: one more `Enter`, at
+  most two.
+- Other text gets no key: an `Enter` would submit text that another sender typed.
+- An empty composer (the placeholder `Ask Codex to do anything` or the footer `? for shortcuts`) gets no
+  key. When it never showed the message, the command says that it could not confirm the delivery.
+
+The Codex `detectActivity` reads a running turn only in the 8 lines above the composer, and stops at the
+`Worked for` line of a finished turn. The composer text and the footer never count as activity.
+
 ---
 
 ## Plugin Pattern
