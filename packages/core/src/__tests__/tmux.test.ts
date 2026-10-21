@@ -193,6 +193,37 @@ describe("newSession", () => {
     expect(args).toContain("50");
   });
 
+  it.each([
+    ["bad name", undefined],
+    ["bad name", "echo MARKER"],
+    ["a.b", undefined],
+    ["a.b", "echo MARKER"],
+    ["c:d", "echo MARKER"],
+    ["", "echo MARKER"],
+  ])("refuses the name %j (command %j) before any tmux call", async (name, command) => {
+    mockTmuxSuccess("");
+
+    await expect(newSession({ name, cwd: "/tmp", command })).rejects.toThrow(
+      `Invalid tmux session name "${name}": must match /^[a-zA-Z0-9_-]+$/`,
+    );
+
+    // No new-session: a session made first could not be removed by name.
+    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([]);
+  });
+
+  it("creates a session with a valid name and then sends its command to the exact pane", async () => {
+    mockTmuxSequence([{ stdout: "" }, { stdout: "" }, { stdout: "" }, { stdout: "" }]);
+
+    await newSession({ name: "kr-1", cwd: "/tmp", command: "echo MARKER" });
+
+    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
+      ["new-session", "-d", "-s", "kr-1", "-c", "/tmp"],
+      ["send-keys", "-t", "=kr-1:", "Escape"],
+      ["send-keys", "-t", "=kr-1:", "-l", "echo MARKER"],
+      ["send-keys", "-t", "=kr-1:", "Enter"],
+    ]);
+  });
+
   it("sends initial command after creation", async () => {
     // Calls: new-session, send-keys Escape, send-keys text, send-keys Enter
     mockTmuxSequence([{ stdout: "" }, { stdout: "" }, { stdout: "" }, { stdout: "" }]);

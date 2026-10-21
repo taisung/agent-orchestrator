@@ -127,6 +127,10 @@ export interface NewSessionOptions {
 
 /** Create a new tmux session (detached). */
 export async function newSession(opts: NewSessionOptions): Promise<void> {
+  // Refuse the name before `new-session`: the exact-target helpers refuse it
+  // later, so a session made first could not be reached or removed through
+  // this API.
+  assertSafeTmuxName(opts.name);
   const args = ["new-session", "-d", "-s", opts.name, "-c", opts.cwd];
 
   // Add environment variables
