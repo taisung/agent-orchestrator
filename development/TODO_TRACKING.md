@@ -966,6 +966,23 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r6-astra.md`, output
     `development/reviews/killed_status_review_r6_astra6.md`): re-check of `7294d978..0d3c05fe` and a
     whole-fix land-safe statement.
+    Done 00:20 EDT: **NOT-LAND-SAFE**, 0 blockers, 5 majors, 1 minor. r5 M-1 and M-2 fixed, r5 M-3 partly.
+    - M-1 (code of this fix): rollback `check()` (`session-manager.ts:1533-1544`) turns a read error into
+      `replaced` with `current=null`; the prepared discard and the runtime destroy read that as "no owner"
+      and remove (chmod 000 reproducer). A failed read must keep the resource.
+    - M-2 (code of this fix): the prepared discard decision (`:1556-1567`) checks only its own ID and the
+      latest archive, not another AO session that reuses the OpenCode ID by issue reuse.
+    - M-3 (regression of round 7): `Workspace.destroy` now returns `Promise<"kept" | undefined>`; an old
+      plugin or caller typed `Promise<void>` fails TS2322. Compatible form: keep `Promise<void>` and report
+      the refusal through the callback.
+    - M-4 (older code, not changed by this fix): worktree `create` checkout-failure cleanup
+      (`workspace-worktree/src/index.ts:140-146`) removes a replacement worktree after its awaits.
+    - M-5 (older code, not changed by this fix): spawn and restore call `postCreate` after an unchecked
+      await (`session-manager.ts:1699-1710`, `:3954-3966`); its symlink target removal (`:372` of the
+      plugin) deletes replacement files.
+    - m-1: a kept orchestrator OpenCode session is hidden when the newest archive is an empty reservation;
+      the next start does not find it, and no message names it.
+    - R7: the Opus author failed a sixth review round. The next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
