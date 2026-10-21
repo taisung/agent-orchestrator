@@ -100,3 +100,36 @@ export const REVIEW_B1_FOREIGN_DRAFT =
 /** REVIEW B-1: a paste of another sender, shown as a placeholder, in an idle composer. */
 export const REVIEW_B1_FOREIGN_PASTE =
   "  Worked for 15m 54s • 12:24 PM\n\n› [Pasted Content 900 chars]\n\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";
+
+/*
+ * REVIEW R2 screens: quoted verbatim from the re-check r2 of the round-2 change
+ * (development/reviews/codex_send_idle_review_r2_astra6.md, ao-56). The
+ * reviewer derived them; they are not captures. Each one printed "Message sent
+ * and processing" at 4128c5a8, and no turn runs on any of them.
+ */
+
+/**
+ * REVIEW R2 M-1: an idle screen whose composer holds REVIEW_R2_M1_MESSAGE. The
+ * quoted prompt row "  › draft" is message text, and "Working tree clean." is
+ * a row of a finished turn above its "Worked for" row.
+ */
+export const REVIEW_R2_M1_QUOTED_PROMPT =
+  "  Working tree clean.\n  Worked for 1s\n\n› examine this transcript\n  › draft\n\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";
+
+/** The message of REVIEW R2 M-1. */
+export const REVIEW_R2_M1_MESSAGE = "examine this transcript\n› draft";
+
+/**
+ * REVIEW R2 M-2: an idle composer that holds the two-item numbered message
+ * REVIEW_R2_M2_MESSAGE. No approval question or picker is on the screen, and
+ * "Running" is a word of the message.
+ */
+export const REVIEW_R2_M2_NUMBERED_LIST =
+  "  Worked for 1s\n› 1. Inspect the failure\n  2. Explain why Running tests failed\n\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";
+
+/** The message of REVIEW R2 M-2. */
+export const REVIEW_R2_M2_MESSAGE = "1. Inspect the failure\n2. Explain why Running tests failed";
+
+/** REVIEW R2 M-3: an approval prompt below earlier "Working" prose; `detectActivity` reads waiting_input. */
+export const REVIEW_R2_M3_APPROVAL =
+  "Working on the requested change\napproval required\nRun pnpm test? (y)es / (n)o\n";

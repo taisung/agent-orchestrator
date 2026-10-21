@@ -85,6 +85,7 @@ import {
   manifest,
   default as defaultExport,
   resolveCodexBinary,
+  readCodexScreen,
   _resetSessionFileCache,
 } from "./index.js";
 import {
@@ -94,6 +95,9 @@ import {
   REAL_UNSUBMITTED_PASTE_0163,
   REVIEW_B2_NESTED_PROMPT,
   REVIEW_M2_NUMBERED_MESSAGE,
+  REVIEW_R2_M1_QUOTED_PROMPT,
+  REVIEW_R2_M2_NUMBERED_LIST,
+  REVIEW_R2_M3_APPROVAL,
   RUNNING_ROW_0163,
 } from "./__fixtures__/panes-0.163.0.js";
 
@@ -674,6 +678,11 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     return [...transcript, ...IDLE_BOTTOM].join("\n");
   }
 
+  /** The screen as `detectActivity` reads it, and the parser's answer: the two must agree. */
+  function readBoth(screen: string): [string, boolean] {
+    return [agent.detectActivity(screen), readCodexScreen(screen).runningTurn];
+  }
+
   it("returns idle for the real idle screen (placeholder and '? for shortcuts' footer)", () => {
     expect(agent.detectActivity(REAL_IDLE_EMPTY_0163)).toBe("idle");
   });
@@ -708,13 +717,13 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     expect(agent.detectActivity(`${RUNNING_ROW_0163}\n${REAL_IDLE_EMPTY_0163}`)).toBe("idle");
   });
 
-  it("reads the running-turn row only in the 8 lines above the composer", () => {
+  it("reads the running-turn row only directly above the composer", () => {
     expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 1))).toBe("active");
-    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 8))).toBe("active");
-    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 9))).toBe("idle");
+    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 2))).toBe("idle");
+    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 8))).toBe("idle");
   });
 
-  it("stops at the 'Worked for' line: the text of a finished turn is not a running turn", () => {
+  it("never reads the words of transcript rows as a running turn, with or without a 'Worked for' line", () => {
     const working = REAL_IDLE_EMPTY_0163.replace(
       "  were cleaned up. No commit or PR created, as required by the brief.",
       "  Working tree clean. Running the suite again changed nothing.",
@@ -722,10 +731,9 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     expect(working).not.toBe(REAL_IDLE_EMPTY_0163);
     expect(agent.detectActivity(working)).toBe("idle");
 
-    // Without the "Worked for" line the same words are in the 8-line window.
     const noTurnEnd = working.replace(/\n {2}Worked for 18m 30s • 1:56 PM\n/, "\n");
     expect(noTurnEnd).not.toBe(working);
-    expect(agent.detectActivity(noTurnEnd)).toBe("active");
+    expect(agent.detectActivity(noTurnEnd)).toBe("idle");
   });
 
   it("never reads the composer text or the footer as activity", () => {
@@ -783,23 +791,44 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     expect(agent.detectActivity(quoted)).toBe("idle");
   });
 
-  it("a running turn wins when the composer text copies screen rows and a 'Worked for' row is above the composer", () => {
-    // Derived to show the rule, not seen on a screen: with an indented prompt
-    // row in the composer text the layout leaves a doubt, so the running-turn
-    // row counts also above the "Worked for" row.
-    const doubt = [
+  it("reads no running turn above a 'Worked for' row, also when the composer text quotes a prompt row", () => {
+    // Derived: the running-turn row is a row of the transcript here, not the
+    // status row directly above the composer. A quoted prompt row in the
+    // composer text does not change that.
+    const quoted = [
       RUNNING_ROW_0163,
       "  Worked for 1s",
       "› examine this transcript",
       "  › examine this transcript",
       "  tab to queue message",
     ].join("\n");
-    expect(agent.detectActivity(doubt)).toBe("active");
+    expect(agent.detectActivity(quoted)).toBe("idle");
 
-    // Control: the same rows with no copied screen row in the composer text.
-    const plain = doubt.replace("  › examine this transcript", "  and say what it shows");
-    expect(plain).not.toBe(doubt);
+    const plain = quoted.replace("  › examine this transcript", "  and say what it shows");
+    expect(plain).not.toBe(quoted);
     expect(agent.detectActivity(plain)).toBe("idle");
+  });
+
+  it("review r2 M-1: returns idle for a composer that quotes a prompt row below a finished turn", () => {
+    expect(readBoth(REVIEW_R2_M1_QUOTED_PROMPT)).toEqual(["idle", false]);
+  });
+
+  it("review r2 M-2: returns idle for a composer that holds a two-item numbered message", () => {
+    expect(readBoth(REVIEW_R2_M2_NUMBERED_LIST)).toEqual(["idle", false]);
+  });
+
+  it("review r2 M-3: returns waiting_input for an approval prompt, and the parser reads no running turn", () => {
+    // detectActivity gave waiting_input at 4128c5a8 too; the parser that
+    // `ao send` also reads gave a running turn there.
+    expect(readBoth(REVIEW_R2_M3_APPROVAL)).toEqual(["waiting_input", false]);
+  });
+
+  it("keeps the controls: the B-2 screen, the real running row and the two captured idle screens", () => {
+    expect(readBoth(REVIEW_B2_NESTED_PROMPT)).toEqual(["active", true]);
+    expect(readBoth(DERIVED_MID_TURN_PASTE_0163)).toEqual(["active", true]);
+    expect(readBoth(DERIVED_SUBMITTED_RUNNING_0163)).toEqual(["active", true]);
+    expect(readBoth(REAL_IDLE_EMPTY_0163)).toEqual(["idle", false]);
+    expect(readBoth(REAL_UNSUBMITTED_PASTE_0163)).toEqual(["idle", false]);
   });
 
   it("keeps the older forms: a bare prompt and the 'tab to queue message' footer", () => {

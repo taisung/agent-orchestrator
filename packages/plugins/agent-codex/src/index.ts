@@ -413,11 +413,12 @@ function createCodexAgent(): Agent {
 
       // Codex 0.163.0 draws its footer below the composer, so the prompt is
       // not the last line, and "tab to queue message" shows only during a
-      // turn. A running turn draws its status row directly above the
-      // composer. Without that row no turn runs: the composer is empty, or it
-      // holds text that nobody submitted (an unsubmitted paste is not a
-      // running turn). The composer text and the footer never count as
-      // activity, so a message that says "Working" cannot look busy.
+      // turn. A running turn draws its status row ("◦ Working (5m 47s • esc
+      // to interrupt)") directly above the composer, and only that row is a
+      // running turn. Without it the composer is empty, or it holds text that
+      // nobody submitted (an unsubmitted paste is not a running turn). Words
+      // in the composer text or in older transcript rows never count, so a
+      // message or a finished turn that says "Working" cannot look busy.
       // `ao send` reads the screen with the same parser (codex-screen.ts).
       const screen = readCodexScreen(terminalOutput);
       if (screen.composer !== null) {
@@ -428,9 +429,9 @@ function createCodexAgent(): Agent {
       // queue the next message.  Prefer explicit active indicators over the
       // modern footer-style prompt detection below; otherwise ao send can race
       // a live response and leave the pasted report in the input box.
-      // With no composer in view, the parser reads the running words and
-      // "esc to interrupt" in the last 8 lines.
-      if (screen.runningTurn) return "active";
+      // These older rules apply only when no composer is in view.
+      if (/\b(Working|Thinking|Running|Osmosing)\b/i.test(tail)) return "active";
+      if (/esc to interrupt/i.test(tail)) return "active";
 
       // Modern Codex uses a Unicode prompt ("›"/"❯") plus a
       // "tab to queue message" footer rather than a bare ">" line.

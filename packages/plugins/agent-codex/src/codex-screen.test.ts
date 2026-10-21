@@ -9,6 +9,9 @@ import {
   REVIEW_B2_NESTED_PROMPT,
   REVIEW_M1B_COMPOSER,
   REVIEW_M2_NUMBERED_MESSAGE,
+  REVIEW_R2_M1_QUOTED_PROMPT,
+  REVIEW_R2_M2_NUMBERED_LIST,
+  REVIEW_R2_M3_APPROVAL,
   RUNNING_ROW_0163,
 } from "./__fixtures__/panes-0.163.0.js";
 
@@ -84,6 +87,47 @@ describe("readCodexScreen on Codex 0.163.0 screens", () => {
     expect(readCodexScreen(selection)).toEqual({ composer: null, runningTurn: false });
   });
 
+  it("review r2 M-2: a two-item numbered message is a composer, and its word 'Running' is no running turn", () => {
+    expect(readCodexScreen(REVIEW_R2_M2_NUMBERED_LIST)).toEqual({
+      composer: { empty: false, firstLine: "1. Inspect the failure" },
+      runningTurn: false,
+    });
+  });
+
+  it("reads a numbered list as a selection list only with a key hint or a hint row below it", () => {
+    // Derived: the hint rows are strings of the 0.163.0 binary ("Press … to
+    // confirm or … to go back", "Press a number to choose · esc to dismiss").
+    const picker = [
+      "  Select a model",
+      "",
+      "› 1. gpt-6-astra (current)",
+      "  2. gpt-6.1-sol",
+      "",
+      "  Press enter to confirm or esc to go back",
+    ].join("\n");
+    expect(readCodexScreen(picker)).toEqual({ composer: null, runningTurn: false });
+    const numberPicker = picker.replace(
+      "Press enter to confirm or esc to go back",
+      "Press a number to choose · esc to dismiss · type to continue",
+    );
+    expect(numberPicker).not.toBe(picker);
+    expect(readCodexScreen(numberPicker).composer).toBeNull();
+
+    // Control: the same two numbered rows with the composer's status line and
+    // footer below them are a composer.
+    const message = [
+      "› 1. gpt-6-astra (current)",
+      "  2. gpt-6.1-sol",
+      "",
+      "  Context 68% used",
+      "  ⚠ 2 warnings · f2 to view",
+    ].join("\n");
+    expect(readCodexScreen(message).composer).toEqual({
+      empty: false,
+      firstLine: "1. gpt-6-astra (current)",
+    });
+  });
+
   it("reads a paste placeholder as composer text", () => {
     expect(readCodexScreen(REVIEW_B1_FOREIGN_PASTE).composer).toEqual({
       empty: false,
@@ -96,10 +140,43 @@ describe("readCodexScreen on Codex 0.163.0 screens", () => {
       composer: null,
       runningTurn: false,
     });
+    // A running word or the status row with no composer below it is no
+    // running turn that the parser can confirm.
     expect(readCodexScreen(`› old message\n${RUNNING_ROW_0163}\n  still going`)).toEqual({
       composer: null,
-      runningTurn: true,
+      runningTurn: false,
     });
+  });
+
+  it("review r2 M-3: an approval prompt below 'Working' prose is no running turn", () => {
+    expect(readCodexScreen(REVIEW_R2_M3_APPROVAL)).toEqual({ composer: null, runningTurn: false });
+  });
+
+  it("review r2 M-1: a quoted prompt row does not make the rows of a finished turn a running turn", () => {
+    expect(readCodexScreen(REVIEW_R2_M1_QUOTED_PROMPT)).toEqual({
+      composer: { empty: false, firstLine: "examine this transcript" },
+      runningTurn: false,
+    });
+  });
+
+  it("reads a running turn only from the status row directly above the composer", () => {
+    const bottom = REAL_IDLE_EMPTY_0163.trimEnd().split("\n").slice(-4);
+    const screen = (...above: string[]): string =>
+      ["  transcript line", ...above, ...bottom].join("\n");
+
+    expect(readCodexScreen(screen(RUNNING_ROW_0163)).runningTurn).toBe(true);
+    expect(readCodexScreen(screen(RUNNING_ROW_0163, "")).runningTurn).toBe(true);
+    expect(readCodexScreen(screen("• Working (8s • esc to interrupt)", "")).runningTurn).toBe(true);
+
+    // A row between the status row and the composer, or two blank rows.
+    expect(readCodexScreen(screen(RUNNING_ROW_0163, "  transcript line")).runningTurn).toBe(false);
+    expect(readCodexScreen(screen(RUNNING_ROW_0163, "", "")).runningTurn).toBe(false);
+    // Running words and "esc to interrupt" outside the status row form.
+    expect(readCodexScreen(screen("  Working (5m 47s • esc to interrupt)")).runningTurn).toBe(
+      false,
+    );
+    expect(readCodexScreen(screen("• Running the suite again")).runningTurn).toBe(false);
+    expect(readCodexScreen(screen("Working on task (esc to interrupt)")).runningTurn).toBe(false);
   });
 
   it("reads no running turn when a bare prompt is on the last line", () => {
