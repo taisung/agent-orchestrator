@@ -32,8 +32,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | ao-orchestrator | this session, primary checkout, `main`; record `working`/`stuck` since 2026-10-21 10:24:59 (`generation=1`) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` since about 12:00 EDT (the earlier part: `aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl`) |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 | ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT. DONE 12:27 EDT: R2 NOT-SOUND, R3 NOT-SOUND, R4 SOUND-WITH-CHANGES (B-1 to B-7, M-1 to M-4), no R1 notes; review on `main` (`bee93ab3`); router row closed `in-review`. Idle; `weekly 81% left`, context 68% used RE-CHECK r2 of design r2 dispatched 13:37 EDT (branch fast-forwarded to `628e0fbf`; brief `brief-review-same-id-design-r2-astra.md`; review file `same_id_design_review_r2_astra6.md`; it also checks the effect of a name per launch on `fleet_watch.sh`, `ao_relaunch.py` and pane captures); DONE 13:55 EDT: R2a, R2b, R3a, R3b NOT-SOUND, R4 SOUND-WITH-CHANGES; 5 B, 3 M, 1 m (`same_id_design_review_r2_astra6.md`, on `main` at `3843a025`); router row closed `in-review` | keep for a round-3 re-check; the owner chooses the next step |
-| ao-52 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-52`, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex`, moved to `c516cead`. Design revision r2 for R2 to R4 (owner "1a"): answers B-1 to B-7, M-1 to M-4, OD-13 to OD-16, a revised round plan, failing tests for the new counterexamples in new files only; design file `development/reviews/same_id_design_r2_opus.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-design-r2.md`, scratch `/tmp/aosd2`; dispatched 12:38 EDT. DONE 13:33 EDT at `628e0fbf` (`c516cead..628e0fbf`, 50 new tests in 4 new files; full run 2933 passed, 25 expected fail, 29 skipped): all 11 findings accepted, new N-1 to N-3, a tmux name per launch `<base>-r<8 hex>` (OD-17), plan R2a, R2b, R4, R3a, R3b; design on `main` (`8e15bbbc`); router row closed `in-review`; 20.11 USD | keep: author of a design r3 if the re-check needs one |
+| ao-52 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-52`, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex`. Design r2 DONE (`628e0fbf`, on `main` as `development/reviews/same_id_design_r2_opus.md`; report `reports/ao-52_same_id_design_r2.report.md`). Branch moved with `reset --keep` to `cbfbc182` (= `main` + its two test commits as cherry-picks; its untracked design r2 copy was identical to `main` and was removed first). DESIGN r3 (owner "2a 3a 4a", 2026-10-21): R2b, R3a, R3b and the Herdr close; OD-17 (b) stable name plus a launch token that tmux checks before every pane mutation; the review table is the basis for OD-2 to OD-16; brief `brief-aofork-same-id-design-r3.md`, design file `same_id_design_r3_opus.md`, marker `/tmp/aosd3-marker`, servers `aosd3-*`. Brief and `running|` line written 14:13 EDT; the notice WAITS because the owner's client (`tmux a`, pid 3657573, attached 13:50:50) was active 220 s before (background check `bach31xl0` ends at detach or 10 min idle); router row open | on its `done`: copy the design to `main`, then ao-51 re-checks (round 3) |
 | ao-54 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-54`, branch `feat/codex-send-idle-read-agent-task-md-in-your-worktree-and-exec`, base `09546110` (source equal to `main`). The Codex send fix (owner "4a"; brief `brief-aofork-codex-send-idle.md`, fixtures in `~/.cache/agent-skills-haiku55-arc/fixtures/`, marker `/tmp/aocs-marker`). Dispatched 14:04 EDT; the notice arrived (`ao send` printed "could not confirm" for the Claude Code spinner `Cultivating…`, but the turn ran); router row open | on its `done`: a cross-family review (Codex gpt-6-astra), then land |
+| ao-55 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-55`, branch `feat/same-id-r2a-read-agent-task-md-in-your-worktree-and-execute`, base `cbfbc182` (`09546110` + `73fb5b13` = `a5d57b41` + `cbfbc182` = `628e0fbf`, clean cherry-picks by the orchestrator). SAME-ID R2a core subset (owner "1a", 2026-10-21): `RuntimeStopOutcome`, optional `Runtime.stop`, `stopRuntime`, refusal in every destructive caller (N-2 included), CLI kill exit 1, the lifecycle gate, tmux `destroy` stops its swallow; Herdr `stop` answers `unknown` and closes nothing (B-2 goes to design r3). Brief `brief-aofork-same-id-r2a.md`, marker `/tmp/aor2a-marker`, servers `aor2a-*`. Dispatched 14:10 EDT; the notice arrived; router row open | on its `done`: a review by a new Codex gpt-6-astra session, then land; R4 (with m-1) after R2a lands |
 
 Closed by this handover (2026-10-21 11:40 EDT): ao-46 (the killed-status author) and ao-47 (its
 reviewer). Before the kills: their final reports are saved, and every review copy in ao-47 equals its
@@ -62,7 +63,8 @@ workers of Nexus, VSF and the Nexus config of this fork do not run until their o
 `ao start`. The global OpenCode service does not run: an `opencode api` call starts one with the
 caller's environment.
 
-**Watchers**: PID 3760585 watches ao-54 since 14:04, state `~/.cache/fleet_watch/ao-codexsend-2026-10-21`.
+**Watchers**: PID 3845635 watches ao-55 since 14:11, state `~/.cache/fleet_watch/ao-sameid-r2a-2026-10-21`.
+PID 3760585 watches ao-54 since 14:04, state `~/.cache/fleet_watch/ao-codexsend-2026-10-21`.
 PID 3636904 watches ao-51 since 13:48:13, state `~/.cache/fleet_watch/ao-sameid-d2rev-2026-10-21`. PID 2833081 watches ao-52 since 12:38:07, state
 `~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`. Stopped by TERM: 2334310 (ao-50, ao-51) and 2937469
 (ao-53) at 13:48:10, 2238373 (ao-49) at 12:25:51, 1346791
@@ -156,12 +158,19 @@ add the missing-`TMUX_TMPDIR` fallback.
    (M-1 the N-3 test oracle; M-2 a name per launch breaks `fleet_watch.sh` and `ao_relaunch.py`; M-3
    legacy association and retire are incomplete), 1 minor (m-1 R4 malformed git output). Landable alone
    now: the R2a core subset (refusals only, with the Herdr close kept unknown) and R4 with m-1. For
-   OD-17 the reviewer prefers (b), a stable name with a launch-token guard. Next: the owner chooses a
-   design r3 and which landable parts start.
-   - Context: R2 (server and launch identity) and R3 (per-ID lease, F-1, F-2, F-3, F-6) are HIGH; R3 is
-     the largest. R4 (fail-open reads F-8 to F-11) is medium and small.
-   - Expected outcome: a review file `development/reviews/same_id_design_review_r1_<model>.md`, then
-     the owner's choices, then R2.
+   OD-17 the reviewer prefers (b), a stable name with a launch-token guard. The owner answered
+   "1a 2a 3a 4a" (2026-10-21, about 14:06 EDT):
+   - 1a: the R2a core subset starts now (ao-55, Opus 5.5, then a Codex review); R4 with m-1 follows
+     after R2a lands (both change `session-manager.ts`).
+   - 2a: ao-52 writes design r3 for R2b, R3a, R3b and the Herdr close; ao-51 re-checks it (round 3).
+   - 3a: OD-17 is (b): a stable tmux name (host tools keep working) plus a launch token that tmux checks
+     before every pane mutation. No name per launch.
+   - 4a: the review's table is the working basis for OD-2 to OD-16; the owner decides the final list
+     after round 3.
+   - Both ao-55 and ao-52 start from `cbfbc182` (`main` with R1 plus ao-52's 50 r2 tests). ao-55 changes
+     only the R2a markings of the core r2 test file; design r3 does not touch that file.
+   - Context: R2b and R3 are HIGH; R3a is the largest. R4 (fail-open reads F-8 to F-11) is medium and
+     small.
 3. **`ao send` to an idle Codex pane says "processing" for an unsubmitted paste** - DISPATCHED to ao-54
    at 14:04 EDT (owner "4a", 2026-10-21; Known Issues, first entry). After its `done`: a review by a new
    Codex gpt-6-astra session, then land, rebuild and restart on the owner's word.
@@ -175,9 +184,9 @@ add the missing-`TMUX_TMPDIR` fallback.
    `origin/main` at the commit that records the handover close. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-51, ao-52, ao-54 and the orchestrator records. `ps -o pid=,args= -p
-   3624110,3626937,2833081,3636904,3760585` - expect the two lifecycle workers and the three watchers.
-3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{1,2,4}/.agent_report.md` - a `running|` line
+   agent-orchestrator` - expect ao-51, ao-52, ao-54, ao-55 and the orchestrator records. `ps -o pid=,args= -p
+   3624110,3626937,2833081,3636904,3760585,3845635` - expect the two lifecycle workers and the four watchers.
+3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{1,2,4,5}/.agent_report.md` - a `running|` line
    means the round still runs; act on `done|` as the Live Sessions table says.
 
 ## Key Files
