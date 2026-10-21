@@ -976,11 +976,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     strategy: "reuse" | "delete" | "ignore";
     /** m-1: the environment of the pane that the spawn starts. */
     env?: Record<string, string>;
+    /**
+     * Round 7 (M-1): the record that the orchestrator start reserved. The
+     * delete checks skip the records of `criteria.sessionId`; with `own`, a
+     * removal runs only while that ID's record is still this start's.
+     */
+    own?: OwnLaunchRecord;
   }): Promise<string | undefined> {
     // Row 24: reuse by the stored ID only, no title discovery (owner Q7).
     // The orchestrator `delete` strategy deletes stored IDs only, too; an
     // older OpenCode session that no metadata stores is not found by title.
-    const { sessionsDir, project, criteria, strategy, env } = options;
+    const { sessionsDir, project, criteria, strategy, env, own } = options;
     if (strategy === "ignore") return undefined;
 
     const candidateIds = findOpenCodeSessionIds(sessionsDir, criteria);
@@ -1003,10 +1009,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
         // Round 5 (1.0.1): the holder check awaited; a record that took the
         // ID meanwhile was not checked, so the session stays. Round 6 (M-1):
-        // the compare runs directly before each removal attempt.
+        // the compare runs directly before each removal attempt. Round 7
+        // (M-1): the compare skips the orchestrator's own ID, so a new
+        // reservation or launch of that ID is seen only through `own`: the
+        // session stays unless the ID's record is still this start's (a
+        // record that is gone keeps it too; the archive still names it, so
+        // the next start with this strategy decides again).
         await deleteOpenCodeSession(
           openCodeSessionId,
-          () => openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) === namers,
+          () =>
+            (!own || own.check().state === "own") &&
+            openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) === namers,
           env,
         );
       }
@@ -2281,6 +2294,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           criteria: { sessionId },
           strategy: "delete",
           env: preparedEnvironment,
+          own,
         });
       }
     } catch (err) {

@@ -1060,6 +1060,70 @@ describe("M-1 (round 6): each OpenCode removal attempt has its own ownership che
 
     expect(removeOpenCodeSession).toHaveBeenCalledTimes(2);
   });
+
+  describe("round 7 (review r5, M-1): the orchestrator delete strategy and its own ID", () => {
+    /** A project-mode orchestrator with the delete strategy, and an archive that names ses_shared. */
+    function orchestratorDeleteRegistry(): PluginRegistry {
+      ctx.config.projects["my-app"]!.orchestratorWorkspaceMode = "project";
+      ctx.config.projects["my-app"]!.orchestratorSessionStrategy = "delete";
+      launchedRecord("app-orchestrator", { agent: "opencode", opencodeSessionId: "ses_shared" });
+      deleteMetadata(sessionsDir, "app-orchestrator", true);
+      vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-orch"));
+      return createMockRegistry({
+        runtime: ctx.mockRuntime,
+        agent: { ...ctx.mockAgent, name: "opencode" },
+        workspace: ctx.mockWorkspace,
+      });
+    }
+
+    it("review case: a new launch of the orchestrator ID takes ses_shared during a failed attempt: no second attempt", async () => {
+      const registry = orchestratorDeleteRegistry();
+      let replacement: Record<string, string> | undefined;
+      failFirstRemoveAfter(() => {
+        replacement = publishNewLaunch("app-orchestrator", makeHandle("rt-new"), {
+          agent: "opencode",
+          opencodeSessionId: "ses_shared",
+        });
+      });
+      const sm = createSessionManager({ config: ctx.config, registry });
+
+      await expect(
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }),
+      ).rejects.toThrow(/changed/);
+      expect(recordOf("app-orchestrator")).toEqual(replacement);
+      expect(recordOf("app-orchestrator")).toMatchObject({ opencodeSessionId: "ses_shared" });
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("a kill of the start's reservation during a failed attempt keeps ses_shared too", async () => {
+      const registry = orchestratorDeleteRegistry();
+      failFirstRemoveAfter(() => {
+        deleteMetadata(sessionsDir, "app-orchestrator", true);
+      });
+      const sm = createSessionManager({ config: ctx.config, registry });
+
+      await expect(
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }),
+      ).rejects.toThrow(/Session app-orchestrator was removed/);
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("control: the start still owns its reservation, the second attempt removes ses_shared", async () => {
+      const registry = orchestratorDeleteRegistry();
+      failFirstRemoveAfter(() => undefined);
+      const sm = createSessionManager({ config: ctx.config, registry });
+
+      const session = await sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" });
+
+      expect(session.id).toBe("app-orchestrator");
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(2);
+      expect(removeOpenCodeSession).toHaveBeenLastCalledWith(
+        "ses_shared",
+        expect.anything(),
+        undefined,
+      );
+    });
+  });
 });
 
 describe("rollback of a project-mode orchestrator start: the shared prompt file", () => {
