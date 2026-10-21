@@ -931,9 +931,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `destroy`: `git rev-parse` await, `git worktree remove`, `rmSync` fallback; OpenCode prepared-session
     `discard`: interrupt await, two removes). Proposed fix: an optional ownership callback on
     `Workspace.destroy` and `PreparedAgentSession.discard` (`types.ts` plus two plugins).
-  - **Review r5**: brief ready (`~/.cache/agent-skills-haiku55-arc/brief-review-killed-r5-sol.md`), not
-    dispatched. Owner decision first: the ao-47 model (the review r4 run switched from gpt-6.1-sol to
-    gpt-6-astra after two `cyber_policy` stops; `~/.codex/config.toml` default is now gpt-6-astra).
+  - **Review r5** (ao-47 on gpt-6-astra, owner "1 yes 2a 3a": the owner switched the model after two
+    `cyber_policy` stops on gpt-6.1-sol in review r4; ao-47 stays on Astra; the global Codex default stays
+    gpt-6-astra). Dispatched 22:44:20 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r5-sol.md`, output
+    `development/reviews/killed_status_review_r5_astra6.md`: re-check of `f06a1107..7294d978`, a rating of
+    the two plugin removal steps, and a whole-fix land-safe statement with the deferred items.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
