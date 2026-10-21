@@ -31,7 +31,7 @@ import {
   statSync,
   symlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
   deleteMetadata,
@@ -621,6 +621,28 @@ describe.skipIf(process.getuid?.() === 0)(
 
       expect(answers).toEqual([true]);
       expect(warnings()).not.toMatch(/kept/);
+    });
+
+    it("kill: the sessions directory cannot be checked when the kill archives the record: the kill fails and the record stays", async () => {
+      const worktree = managedWorktree("app-1");
+      launchedRecord("app-1", { worktree });
+      vi.mocked(ctx.mockWorkspace.destroy).mockImplementation(async (path, stillOwned) => {
+        await Promise.resolve();
+        if (stillOwned && !stillOwned()) return;
+        rmSync(path, { recursive: true, force: true });
+        // After the last check: the parent of the sessions directory cannot
+        // be searched, so existsSync answers false for the directory.
+        makeUnreadable(dirname(sessionsDir));
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.kill("app-1")).rejects.toThrow(
+        "Session app-1 could not be read while it was killed; its record was not archived; run the kill again",
+      );
+
+      restoreModes();
+      expect(recordOf("app-1")).toMatchObject({ worktree });
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
     });
   },
 );

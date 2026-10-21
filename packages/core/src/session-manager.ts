@@ -1576,10 +1576,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   function openCodeNamers(sessionsDir: string, openCodeId: string, exceptId?: string): string {
     const namers: string[] = [];
     // Round 8 (M-1): a record that cannot be checked or read throws; it is
-    // never left out of the compare.
+    // never left out of the compare. Round 9 (M-1): also after the listing
+    // (readMetadataRaw answers null when existsSync cannot check the path).
     for (const id of listRecordIds(sessionsDir)) {
       if (id === exceptId) continue;
-      const raw = readMetadataRaw(sessionsDir, id);
+      const raw = readRecordStrict(sessionsDir, id);
       if (!raw || asValidOpenCodeSessionId(raw["opencodeSessionId"]) !== openCodeId) continue;
       namers.push(`${id}=${JSON.stringify(launchIdentity(raw))}`);
     }
@@ -1699,8 +1700,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
     for (const id of archivedIds) {
       // The ID has an archive file, so a null here is a read error (which
-      // readArchivedMetadataRaw answers as null) or a removal since.
-      const archived = readArchivedMetadataRaw(sessionsDir, id);
+      // readArchivedMetadataRaw answers as null) or a removal since. Round 9
+      // (M-1): its directory read throws on an error; that is a holder too.
+      let archived: Record<string, string> | null;
+      try {
+        archived = readArchivedMetadataRaw(sessionsDir, id);
+      } catch (err) {
+        return `the latest archive of ${id} could not be read (${shortErrorText(err)})`;
+      }
       if (!archived) return `the latest archive of ${id} could not be read`;
       if (names(archived)) return `the latest archive of ${id} names it`;
     }
@@ -2991,7 +2998,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       if (removedId) markArchivedOpenCodeCleanup(sessionsDir, sessionId, removedId);
       await removeLedgerOfRemovedSession(project, sessionsDir, raw["opencodeSessionId"], sessionId);
     }
-    if (!archived && readMetadataRaw(sessionsDir, sessionId) !== null) {
+    // Round 9 (M-1): deleteMetadata answers false also when existsSync cannot
+    // check the sessions directory, and readMetadataRaw then answers null; a
+    // record that cannot be checked may still be there, so the kill fails.
+    let remains: boolean;
+    try {
+      remains = !archived && readRecordStrict(sessionsDir, sessionId) !== null;
+    } catch {
+      remains = true;
+    }
+    if (remains) {
       throw recordChangedError(
         sessionsDir,
         sessionId,
@@ -3026,11 +3042,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // is held, directly before the removal; this first one only saves the
       // wait. A kept ledger keeps its key in the archive (the catch below).
       // Round 8 (M-1): a record that cannot be checked or read throws (the
-      // catch below keeps the ledger); it is never left out.
+      // catch below keeps the ledger); it is never left out. Round 9 (M-1):
+      // also after the listing (readMetadataRaw answers null when existsSync
+      // cannot check the path).
       const namerOf = (): string | undefined =>
         listRecordIds(sessionsDir).find(
           (id) =>
-            asValidOpenCodeSessionId(readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"]) ===
+            asValidOpenCodeSessionId(readRecordStrict(sessionsDir, id)?.["opencodeSessionId"]) ===
             key,
         );
       const early = namerOf();
