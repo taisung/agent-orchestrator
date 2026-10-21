@@ -1042,11 +1042,14 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
       (`recovery/validator.ts:81,87`; with `escalatePartial: false` a live runtime is destroyed), F-9
       `hasOtherOpenCodeRecord` (`session-manager.ts:971-985`), F-10 the session numbers
       (`:1209-1216`, `:1265-1268`), F-11 other-plugin liveness false on an error.
-  - **On `main` 2026-10-21 10:17 EDT** (not built, not live, not pushed): clean `git cherry-pick
-    0e3eabc2..ce49c9fd`, 34 commits, `6361a663..8fe2e1aa`; the source outside `development/` is equal to
-    `ce49c9fd` (`git diff --quiet` exit 0), so the r8 gates (2866 passed) apply. Next, on the owner's word:
-    rebuild the primary checkout, restart lifecycle workers 271579 and 321413, push, then check that
-    `ao-orchestrator` and `as-orchestrator` change to `working`.
+  - **Landed and live 2026-10-21** (owner "1a"): clean `git cherry-pick 0e3eabc2..ce49c9fd`, 34
+    commits, `6361a663..8fe2e1aa` (10:17 EDT); the source outside `development/` equals `ce49c9fd`, so the
+    r8 gates (2866 passed) apply. Primary checkout rebuilt 10:24:53 (`pnpm install --frozen-lockfile`,
+    `pnpm build`, both exit 0). Lifecycle workers restarted by exact PID with `restart_lifecycle.py`:
+    271579 → 1470866 (10:24:58), 321413 → 1471311 (10:25:01). Pushed `654b3d28..7e2a6aef`.
+    `ao-orchestrator` changed `killed` → `working` at 10:24:59 with `generation=1`. `as-orchestrator`
+    stays `killed`, correctly: no tmux session `f6790d5546be-as-orchestrator` and no claude process of it
+    exist. Router rows ao-46 r1 to r9 and ao-47 r1 to r8 marked landed `8fe2e1aa`.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different

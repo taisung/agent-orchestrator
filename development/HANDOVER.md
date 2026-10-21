@@ -1,7 +1,7 @@
 # Handover
 
 **Last Updated**: 2026-10-20
-**Latest Code Commit**: 8fe2e1aa (the killed-status fix, cherry-picked 2026-10-21 10:17 EDT; not built, not live, not pushed)
+**Latest Code Commit**: 8fe2e1aa (the killed-status fix; built 2026-10-21 10:24:53 EDT, live since the worker restarts of 10:24:58 and 10:25:01, pushed as `654b3d28..7e2a6aef`)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
@@ -19,6 +19,14 @@ global OpenCode service (PID 15920) of this handover stopped then. The owner ran
 its new orchestrator record read `status=killed` 171 ms after its `createdAt` (Priority 1, live). The
 owner chose Priority 1: ao-46 (Claude Code, Opus 5.5) investigates it, dispatched 11:26 EDT, brief
 `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-status.md`, meter `5h 6%`, `wk 6%`.
+
+**Update 2026-10-21 10:30 EDT.** The killed-status fix landed (owner "1a"): 9 author rounds by ao-46
+(Opus, 151.59 USD) and 8 reviews by ao-47 (Codex, Sol then Astra); review r8 LAND-SAFE under the owner
+rule 2a. Clean cherry-pick `0e3eabc2..ce49c9fd` onto `main` as `6361a663..8fe2e1aa` (source equal to
+`ce49c9fd`); primary checkout rebuilt 10:24:53; lifecycle workers restarted by exact PID (271579 →
+1470866, 321413 → 1471311); `main` pushed `654b3d28..7e2a6aef`. `ao-orchestrator` changed to `working`
+at 10:24:59 with `generation=1`. `as-orchestrator` stays `killed`, correctly: its tmux session and its
+`claude` process no longer exist. The structural round (design by ao-48) runs; see Next Priorities.
 
 ## Live Sessions and Worktrees
 
@@ -47,8 +55,8 @@ the seven older worker branches with no `+` in `git cherry main` and no merge co
 `i3-r2-pre-rebase` are the only local branches. `git worktree list` shows only the primary checkout, and
 `/home/taisung/.worktrees/agent-orchestrator/` is empty.
 
-**Lifecycle workers** (since the host restart of 2026-10-20 10:42): 271579 (this config, started by
-`ao start` at 11:19:55) and 321413 (agent-skills, 11:25:30). The workers of Nexus, VSF and the Nexus
+**Lifecycle workers** (restarted on the fix build 2026-10-21): 1470866 (this config, 10:24:58) and
+1471311 (agent-skills, 10:25:01); before that 271579 and 321413. The workers of Nexus, VSF and the Nexus
 config of this fork do not run until their orchestrators run `ao start`. Every brief must protect the
 live ones (check with `ps` at dispatch), not the old 105049, 105142, 105154, 106266, 106285. The global OpenCode service does not run (old PID 15920): an
 `opencode api` call starts one with the caller's environment.
@@ -81,9 +89,11 @@ counter for every Node writer, with `pr` in the compare, and the bash helper sta
 
 ## Open and Blocked Items
 
-**Lifecycle `killed` status**: open - live records read `status=killed` (the orchestrator record since
-2026-10-16 14:56:51), so the lifecycle worker does not poll them; a new worker can also go `spawning` to
-`killed` at the first poll (ao-29). Cause not analyzed. Priority 1 below.
+**Lifecycle `killed` status**: fixed and live 2026-10-21 10:25 (`8fe2e1aa`); review r8 m-1 (the
+generation-floor read answers 0 on a read error; the doc overstates "never repeats") is a small open
+follow-up.
+**Launches that share a tmux name, a tmux server and a worktree path**: open - the tmux prefix match,
+the wrong-server damage (critical), F-1 to F-11 of reviews r7 and r8. Design round by ao-48 runs.
 **I-5 follow-ups**: open - m-4 (the double-failure warning omits that the sweep also removes `admitted`
 entries; text in `i5_review_r5_sol61.md`), the duplicated child runner of the lock and ledger tests,
 and a 2.0.32 measurement of the I-4-era M-4 and M-5 (needs a model turn and the owner's word).
@@ -116,13 +126,10 @@ private servers only from the scratch environment, the lifecycle-worker PID clea
 
 Ask the owner which one to start; route it with `~/agent-skills/scripts/routing.py route`.
 
-1. **Lifecycle `killed` status** - one investigation worker (route `debugging`; HIGH by the profile: the
-   lifecycle state of every session).
-   - Context: TODO Known Issues "Live sessions read `status=killed`" and the first-poll race in
-     "Follow-ups after I-3". One write gave every record of this project `status=killed` at
-     2026-10-16 14:56:51 while the panes ran. Workers spawned since then read `working`.
-   - Expected outcome: a measured cause in `lifecycle-manager.ts` or the metadata writers, a reproducer
-     in a scratch state root, and a fix brief. No change to the real records before the cause is known.
+1. **Launches that share a name, a server and a path** - ao-48 (Opus) writes the design
+   (`development/reviews/same_id_design_r1_opus.md`, failing tests, owner decisions, a plan of
+   implementation rounds). Then the owner chooses; then implementation rounds with a cross-family review.
+   - Also queued after the fix: the claude-code `detectActivity` dialog fix, review r8 m-1.
 2. **I-5 follow-ups** - one small author round: m-4 text, optional shared test runner. LOW.
 3. **Project guide and test isolation** - one worker each; LOW and MEDIUM.
 4. **`0005` Phases 0 to 4** - none started; owner decision on scope.
@@ -133,7 +140,7 @@ Ask the owner which one to start; route it with `~/agent-skills/scripts/routing.
    `main` = `origin/main` at the handover commit. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao status` - expect no
-   worker. `ps -o pid=,args= -p 105049,105142,105154,106266,106285` - expect the five lifecycle workers.
+   worker. `ps -o pid=,args= -p 1470866,1471311` - expect the two lifecycle workers.
 3. Ask the owner which of Next Priorities to start.
 
 ## Key Files
