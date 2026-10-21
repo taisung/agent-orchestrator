@@ -436,6 +436,19 @@ rollback keeps a runtime that any record may own and names it. The active genera
 repeats (a per-ID floor); each archived copy has its own series. `Workspace.destroy` keeps `Promise<void>`
 (the core public API is stable); a refusal comes back only through the callback.
 
+
+**D-8 — same-ID design decisions** (owner 2026-10-21, answers after review r1, r2 and r3 of the design by
+ao-51). OD-1a: `=name` for session targets, `=name:` for window and pane targets (R1, landed `5e8fc14b`).
+OD-11: the rounds R2a, R4, RW, R2b-1, R2b-2, R3a, R3b, RH (optional). OD-17 (b): a stable tmux name plus a
+launch token that tmux checks before every pane mutation, no name per launch (host tools keep working).
+R2a is the refusal-only core subset; Herdr `stop` answers `unknown` and closes nothing (OD-19 (a)).
+Decided as author and reviewer agree: OD-2 to OD-13, OD-15, OD-16, OD-20 (a) (append-only inbox for the
+shell writers), OD-21 (a) (OpenCode namespace in the canonical store). OD-14 is narrowed: a process-group
+supervisor with a journal; only hooks that start no daemons are supported, and a child that leaves the
+group is outside the guarantee. OD-18 (a): a legacy send goes to the visible exact name with a notice,
+only after an atomic no-token check inside tmux, which also guards every other legacy mutation. Files:
+`development/reviews/same_id_design_r{1..3}_opus.md`, `same_id_design_review_r{1..3}_astra6.md`.
+
 ## Known Issues
 
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
