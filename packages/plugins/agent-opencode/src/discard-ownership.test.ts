@@ -57,6 +57,7 @@ import {
   type OrchestratorConfig,
   type PluginRegistry,
   type Runtime,
+  type RuntimeHandle,
   type Workspace,
 } from "@aoagents/ao-core";
 import { create } from "./index.js";
@@ -244,13 +245,21 @@ describe("spawn rollback through the session manager with the real OpenCode plug
     };
     const sessionsDir = getSessionsDir(configPath, projectPath);
     mkdirSync(sessionsDir, { recursive: true });
+    // Same-ID R2a: the rollback goes on only after a confirmed stop, so this
+    // runtime's destroy stops the session (isAlive answers false after it).
+    const stopped = new Set<string>();
     const runtime = {
       name: "mock",
-      create: vi.fn(async () => ({ id: "rt-spawned", runtimeName: "mock", data: {} })),
-      destroy: vi.fn(async () => undefined),
+      create: vi.fn(async () => {
+        stopped.delete("rt-spawned");
+        return { id: "rt-spawned", runtimeName: "mock", data: {} };
+      }),
+      destroy: vi.fn(async (handle: RuntimeHandle) => {
+        stopped.add(handle.id);
+      }),
       sendMessage: vi.fn(async () => undefined),
       getOutput: vi.fn(async () => ""),
-      isAlive: vi.fn(async () => true),
+      isAlive: vi.fn(async (handle: RuntimeHandle) => !stopped.has(handle.id)),
     } as unknown as Runtime;
     const workspace = {
       name: "mock-ws",
