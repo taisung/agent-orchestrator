@@ -91,7 +91,7 @@ describe.skipIf(!tmuxOk)("runtime-tmux (integration)", () => {
   it("getAttachInfo returns tmux command", async () => {
     const info = await runtime.getAttachInfo!(handle);
     expect(info.type).toBe("tmux");
-    expect(info.target).toBe(sessionId);
+    expect(info.target).toBe(`=${sessionId}`);
     expect(info.command).toContain("tmux attach");
   });
 
