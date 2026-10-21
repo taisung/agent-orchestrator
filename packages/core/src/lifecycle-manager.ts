@@ -652,6 +652,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       runtimeAuthoritative && !!agent && AUTHORITATIVE_AGENTS.has(agent.name)
         ? "gone"
         : "ambiguous";
+    // Same-ID R2a, the gate (design r2 section 2.7): an agent negative
+    // ("exited", or isProcessRunning() false) counts only after a runtime
+    // positive. While the runtime probe failed (or no runtime plugin could
+    // probe the stored handle), the negative keeps the status and the
+    // outcome stays as it is, so a session whose runtime could not be checked
+    // is never killed by its agent's answer alone. Agent positives still
+    // classify. "no server" skips the agent check below.
+    const agentNegativeCounts = probe.outcome === "alive";
 
     // 2. Check agent activity — prefer JSONL-based detection (runtime-agnostic).
     // With no runtime server there is no pane to read: skip it.
@@ -678,7 +686,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (activityState) {
           if (activityState.state === "waiting_input") return "needs_input";
           if (activityState.state === "exited") {
-            if (inLaunchGrace) return KEEP_STATUS;
+            if (inLaunchGrace || !agentNegativeCounts) return KEEP_STATUS;
             probe.outcome = agentNegative;
             probe.killedReason = "agent-exited";
             return SESSION_STATUS.KILLED;
@@ -703,7 +711,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
             const processAlive = await agent.isProcessRunning(session.runtimeHandle);
             if (!processAlive) {
-              if (inLaunchGrace) return KEEP_STATUS;
+              if (inLaunchGrace || !agentNegativeCounts) return KEEP_STATUS;
               probe.outcome = agentNegative;
               probe.killedReason = "agent-exited";
               return SESSION_STATUS.KILLED;

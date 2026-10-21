@@ -518,7 +518,7 @@ describe("[same-id R2] B-6: the lifecycle keeps a session whose runtime probe co
   }
 
   for (const agentName of ["codex", "claude-code"]) {
-    defect(
+    it(
       `${agentName}: a runtime probe that rejects plus the agent's 'exited' does not reach killed`,
       async () => {
         writeRecord("app-1");
