@@ -196,6 +196,7 @@ export async function cleanupSession(
 
     deleteMetadata(sessionsDir, sessionId, true, {
       [GENERATION_KEY]: terminated[GENERATION_KEY],
+      ...launchIdentity(terminated),
     });
 
     return {

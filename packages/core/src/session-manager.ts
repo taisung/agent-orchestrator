@@ -353,20 +353,20 @@ async function deleteOpenCodeSession(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-async function interruptThenRemoveOpenCodeSession(sessionId: string): Promise<void> {
+async function interruptOpenCodeSessionBestEffort(sessionId: string): Promise<void> {
   const validatedSessionId = asValidOpenCodeSessionId(sessionId);
   if (!validatedSessionId) return;
   // Row 20 (`ao session kill --purge-session`): stop a running loop before
   // the delete. The interrupt is best effort (a 404 is already gone, and the
-  // remove runs even when the interrupt hangs). The remove throws after its
-  // retries; the `kill` caller warns and archives anyway. `cleanup` never
-  // calls this (archived sessions are not running).
+  // remove runs even when the interrupt hangs). The `kill` caller removes
+  // the session after it checks the record again (round 5, 1.0.1); the
+  // remove throws after its retries, and the kill warns and archives anyway.
+  // `cleanup` never interrupts (archived sessions are not running).
   try {
     await interruptOpenCodeSession(validatedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS);
   } catch {
     // Best effort: fall through to the remove even when the interrupt hangs.
   }
-  await deleteOpenCodeSession(validatedSessionId);
 }
 
 /** Escape regex metacharacters in a string. */
@@ -623,11 +623,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
+    // Round 5 (B-2): the launch too, so a record of an earlier build without
+    // a generation that a new launch replaced is not repaired from this read.
     const written = updateMetadataIf(
       sessionsDir,
       sessionName,
       {
         [GENERATION_KEY]: readRaw[GENERATION_KEY],
+        ...launchIdentity(readRaw),
         pr: readRaw["pr"],
         status: readRaw["status"],
       },
@@ -976,6 +979,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // m-4: keep an ID that another live AO session still runs in. The
         // orchestrator path replaces the session with its own ID, so that
         // record does not count as another holder.
+        const namers = openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId);
         if (
           await findLiveOpenCodeSessionHolder(
             sessionsDir,
@@ -984,6 +988,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             criteria.sessionId,
           )
         ) {
+          continue;
+        }
+        // Round 5 (1.0.1): the holder check awaited; a record that took the
+        // ID meanwhile was not checked, so the session stays.
+        if (openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) !== namers) {
           continue;
         }
         await deleteOpenCodeSession(openCodeSessionId, env);
@@ -1384,6 +1393,44 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   /**
+   * Round 5 (B-1, M-1): whether a runtime that this process created, and
+   * whose launch no longer owns the record, may still belong to the record
+   * that is there now. Read the record directly before the destroy (no
+   * await in between). A runtime name is the same for every launch of the
+   * ID, so a record that names the runtime (by handle or tmux name), and a
+   * reservation or a launch that has no runtime handle yet (it can create
+   * the same name at any time, or created it and did not write it yet),
+   * may own it. Only no record, or a launched record that names another
+   * runtime, shows that no record owns it.
+   */
+  function recordMayOwnRuntime(
+    record: Readonly<Record<string, string>> | null,
+    handle: RuntimeHandle,
+  ): boolean {
+    if (!record) return false;
+    if (!record["runtimeHandle"]) return true;
+    return recordNamesRuntime(record, handle) || record["tmuxName"] === handle.id;
+  }
+
+  /**
+   * Round 5 (1.0.1): the active records other than `exceptId` that name
+   * OpenCode session `openCodeId`, with their launch identity. A removal
+   * takes it before its awaited holder check and compares it again directly
+   * before the removal: a record that took the ID (issue reuse, a restore)
+   * or a new launch of a holder during the check keeps the session.
+   */
+  function openCodeNamers(sessionsDir: string, openCodeId: string, exceptId?: string): string {
+    const namers: string[] = [];
+    for (const id of listMetadata(sessionsDir)) {
+      if (id === exceptId) continue;
+      const raw = readMetadataRaw(sessionsDir, id);
+      if (!raw || asValidOpenCodeSessionId(raw["opencodeSessionId"]) !== openCodeId) continue;
+      namers.push(`${id}=${JSON.stringify(launchIdentity(raw))}`);
+    }
+    return namers.sort().join("\n");
+  }
+
+  /**
    * B-1 (round 4): the record of a launch in progress (a spawn or an
    * orchestrator start), from its reservation on. Each write goes only into
    * the version that this launch wrote last, compared by its launch identity
@@ -1419,6 +1466,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       release(): void {
         deleteMetadata(sessionsDir, sessionId, false, launchIdentity(owned));
       },
+      /** The latest archived copy of the ID, or null. */
+      latestArchive(): Record<string, string> | null {
+        return readArchivedMetadataRaw(sessionsDir, sessionId);
+      },
     };
   }
 
@@ -1429,10 +1480,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * are removed only while the record is still this launch (or gone): a new
    * reservation, launch or restore of the same ID uses the same worktree
    * path and runtime name, so they stay for it. The runtime of this launch
-   * is stopped unless the record that replaced it names the same runtime (a
-   * restore after a kill reuses the tmux name; that runtime is the other
-   * launch's). The agent session that this launch prepared is always its own.
-   * Every step is best effort.
+   * is stopped only while no other record may own it (recordMayOwnRuntime:
+   * a restore after a kill reuses the tmux name). The agent session that
+   * this launch prepared is removed unless the record now there or the
+   * latest archive of the ID names it (a restore of this launch's archived
+   * record runs on it). Round 5 (M-1): each step reads the record again
+   * directly before it (the earlier steps await), with no await between
+   * the check and the step. Every step is best effort; a runtime or agent
+   * session that stays is named to the operator.
    */
   async function rollbackLaunch(rollback: {
     own: OwnLaunchRecord;
@@ -1441,35 +1496,56 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     prepared?: PreparedAgentSession;
     destroyWorkspace?: () => Promise<void>;
   }): Promise<void> {
-    let checked: ReturnType<OwnLaunchRecord["check"]>;
-    try {
-      checked = rollback.own.check();
-    } catch {
-      checked = { state: "replaced", current: null };
-    }
+    const check = (): ReturnType<OwnLaunchRecord["check"]> => {
+      try {
+        return rollback.own.check();
+      } catch {
+        return { state: "replaced", current: null };
+      }
+    };
     if (rollback.runtime && rollback.handle) {
-      if (checked.state !== "replaced" || !recordNamesRuntime(checked.current, rollback.handle)) {
+      const checked = check();
+      if (checked.state !== "replaced" || !recordMayOwnRuntime(checked.current, rollback.handle)) {
         try {
           await rollback.runtime.destroy(rollback.handle);
         } catch {
           /* best effort */
         }
+      } else {
+        warnOperator(
+          `ao: kept runtime ${rollback.handle.runtimeName ?? "?"} ${rollback.handle.id} of a failed launch: another launch of the ID may own it; stop it by hand if no session uses it.`,
+        );
       }
     }
-    await discardPreparedSession(rollback.prepared);
-    if (rollback.destroyWorkspace && checked.state !== "replaced") {
+    if (rollback.prepared) {
+      const checked = check();
+      const archived = checked.state === "own" ? null : rollback.own.latestArchive();
+      const namedElsewhere = Object.entries(rollback.prepared.metadata).some(
+        ([key, value]) =>
+          value !== "" &&
+          ((checked.state === "replaced" && checked.current?.[key] === value) ||
+            archived?.[key] === value),
+      );
+      if (!namedElsewhere) {
+        await discardPreparedSession(rollback.prepared);
+      } else if (rollback.prepared.created) {
+        warnOperator(
+          `ao: kept the agent session of a failed launch (${Object.values(rollback.prepared.metadata).join(", ")}): another record of the ID names it.`,
+        );
+      }
+    }
+    if (rollback.destroyWorkspace && check().state !== "replaced") {
       try {
         await rollback.destroyWorkspace();
       } catch {
         /* best effort */
       }
     }
-    if (checked.state === "own") {
-      try {
-        rollback.own.release();
-      } catch {
-        /* best effort */
-      }
+    try {
+      // Conditional: it deletes only a record that is still this launch.
+      rollback.own.release();
+    } catch {
+      /* best effort */
     }
   }
 
@@ -2113,7 +2189,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             ? () => workspacePlugin.destroy(workspacePath)
             : undefined,
       });
-      if (promptFile) {
+      // Round 5: the prompt file name is the same for every start of the
+      // ID; it stays when another start replaced the record.
+      if (promptFile && own.check().state !== "replaced") {
         try {
           unlinkSync(promptFile);
         } catch {
@@ -2443,13 +2521,32 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   /**
+   * Round 5 (M-2): the values that a cleanup decision to kill used: the PR
+   * and the issue that it checked, the status, and the launch. A claim of
+   * another PR, an issue change, a status write (by Node or by a bash
+   * helper) or a new launch since the read makes the decision stale.
+   */
+  function cleanupDecisionOf(metadata: Readonly<Record<string, string>>): Record<string, string> {
+    return {
+      pr: metadata["pr"] ?? "",
+      issue: metadata["issue"] ?? "",
+      status: metadata["status"] ?? "",
+      ...launchIdentity(metadata),
+    };
+  }
+
+  /**
    * The kill. B-1 (round 4): the record is archived only while it still names
    * the launch that this kill read (its launch identity), so a restore, a
    * new launch or a new reservation of the ID during the kill keeps its
    * record, and the kill throws. A status or PR write of another process
-   * does not stop it. `decidedFrom` (cleanup): the launch that a caller
-   * decided to kill before it awaited; a record that names another launch
-   * is not touched at all.
+   * does not stop a direct kill. `decidedFrom` (cleanup): the record that a
+   * caller decided to kill from before it awaited. Round 5 (M-2): the kill
+   * then compares the facts of that decision too (`cleanupDecisionOf`: PR,
+   * issue and status, plus the launch identity); a record where one of them
+   * changed is not touched at all, and a change during the kill stops the
+   * later steps. Round 5 (1.0.1): each step reads the record directly
+   * before it, with no await between the check and the step.
    */
   async function killRecord(
     sessionId: SessionId,
@@ -2457,7 +2554,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     decidedFrom?: Readonly<Record<string, string>>,
   ): Promise<void> {
     const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
-    if (decidedFrom && !holdsExpected(raw, launchIdentity(decidedFrom))) {
+    const expected = decidedFrom ? cleanupDecisionOf(decidedFrom) : launchIdentity(raw);
+    if (decidedFrom && !holdsExpected(raw, expected)) {
       throw recordChangedError(
         sessionsDir,
         sessionId,
@@ -2473,11 +2571,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // B-1 (round 4): the destroy steps await. A restore (or a new launch) of
     // the ID meanwhile uses the same worktree path and the same agent
-    // session, so the later steps stop when the record names another launch.
-    // A record that is gone (another kill archived it) does not stop them.
+    // session, so the later steps stop when the record names another launch
+    // (or, for cleanup, when a fact of its decision changed). A record that
+    // is gone (another kill archived it) does not stop them.
     const stopWhenReplaced = (kept: string): void => {
       const current = readMetadataRaw(sessionsDir, sessionId);
-      if (current && !holdsExpected(current, launchIdentity(raw))) {
+      if (current && !holdsExpected(current, expected)) {
         throw recordChangedError(sessionsDir, sessionId, "it was killed", kept);
       }
     };
@@ -2492,6 +2591,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             (project ? (project.runtime ?? config.defaults.runtime) : config.defaults.runtime),
         );
         if (runtimePlugin) {
+          // Round 5 (1.0.1): the launcher check awaited. What is left is the
+          // window between this read and the tmux command (the runtime name
+          // is the same for every launch of the ID; no record compare can
+          // close it).
+          stopWhenReplaced("nothing was destroyed; run the kill again");
           try {
             await runtimePlugin.destroy(handle);
           } catch {
@@ -2524,6 +2628,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // without `opencodeCleanedAt`, so `ao session cleanup` retries the
       // removal; the operator gets one line that says so (m-5).
       const mappedOpenCodeSessionId = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
+      const namers = mappedOpenCodeSessionId
+        ? openCodeNamers(sessionsDir, mappedOpenCodeSessionId, sessionId)
+        : "";
       const holder = mappedOpenCodeSessionId
         ? await findLiveOpenCodeSessionHolder(
             sessionsDir,
@@ -2541,19 +2648,38 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${sessionId}: ${holder}.`,
         );
       } else if (mappedOpenCodeSessionId) {
-        try {
-          await interruptThenRemoveOpenCodeSession(mappedOpenCodeSessionId);
-          didPurgeOpenCodeSession = true;
-        } catch (err) {
+        // Round 5 (1.0.1): the holder check awaited. Check this record and
+        // the other records that name the ID directly before the interrupt
+        // and again before the removal (the interrupt awaits).
+        const stillUnheld = (): boolean => {
+          stopWhenReplaced("its agent session and record were kept; run the kill again");
+          if (openCodeNamers(sessionsDir, mappedOpenCodeSessionId, sessionId) === namers) {
+            return true;
+          }
           warnOperator(
-            `ao: could not remove OpenCode session ${mappedOpenCodeSessionId} of ${sessionId} (${shortErrorText(err)}); \`ao session cleanup\` retries the removal.`,
+            `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${sessionId}: another session took the ID during the check; \`ao session cleanup\` removes it once no live session holds it.`,
           );
+          return false;
+        };
+        if (stillUnheld()) {
+          await interruptOpenCodeSessionBestEffort(mappedOpenCodeSessionId);
+          if (stillUnheld()) {
+            try {
+              await deleteOpenCodeSession(mappedOpenCodeSessionId);
+              didPurgeOpenCodeSession = true;
+            } catch (err) {
+              warnOperator(
+                `ao: could not remove OpenCode session ${mappedOpenCodeSessionId} of ${sessionId} (${shortErrorText(err)}); \`ao session cleanup\` retries the removal.`,
+              );
+            }
+          }
         }
       }
     }
 
-    // Archive metadata (B-1: only the launch that this kill read).
-    const archived = deleteMetadata(sessionsDir, sessionId, true, launchIdentity(raw));
+    // Archive metadata (B-1: only the launch that this kill read; M-2: for
+    // cleanup, only while the facts of its decision still hold).
+    const archived = deleteMetadata(sessionsDir, sessionId, true, expected);
     if (didPurgeOpenCodeSession) {
       const removedId = asValidOpenCodeSessionId(raw["opencodeSessionId"]);
       if (removedId) markArchivedOpenCodeCleanup(sessionsDir, sessionId, removedId);
@@ -2588,6 +2714,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (!key) return;
     const dir = getDeliveryLedgerDir(config.configPath, project.path);
     try {
+      // Round 5 (1.0.1): directly before the removal, no active record may
+      // name the key (a record that names it sends through this ledger).
+      // The removal then waits for the ledger lock inside the I-5 module.
+      const namer = listMetadata(sessionsDir).find(
+        (id) =>
+          asValidOpenCodeSessionId(readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"]) === key,
+      );
+      if (namer) throw new Error(`session ${namer} names OpenCode session ${key}`);
       await removeDeliveryLedger(dir, key);
     } catch (err) {
       let kept: boolean;
@@ -2764,7 +2898,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
         if (shouldKill) {
           if (!options?.dryRun) {
-            // B-1 (round 4): the checks awaited; kill only the launch they read.
+            // B-1 (round 4): the checks awaited; kill only the launch they
+            // read. M-2 (round 5): and only while its PR, issue and status
+            // are still the ones that the checks used.
             await killRecord(session.id, { purgeOpenCode: shouldPurgeOpenCode }, session.metadata);
           }
           pushKilled(session.projectId, session.id);
@@ -2813,6 +2949,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
           continue;
         }
+        const namers =
+          cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode
+            ? openCodeNamers(sessionsDir, mappedOpenCodeSessionId)
+            : "";
         const holder =
           cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode
             ? await findLiveOpenCodeSessionHolder(
@@ -2831,6 +2971,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
         } else if (cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode) {
           if (!options?.dryRun) {
+            // Round 5 (1.0.1): the holder check awaited. Directly before the
+            // removal the ID still has no active record (a restore copies the
+            // archive back and runs on the same OpenCode session), the latest
+            // archive still names this OpenCode session, and no other record
+            // took it.
+            if (
+              readMetadataRaw(sessionsDir, archivedId) !== null ||
+              asValidOpenCodeSessionId(
+                readArchivedMetadataRaw(sessionsDir, archivedId)?.["opencodeSessionId"],
+              ) !== mappedOpenCodeSessionId ||
+              openCodeNamers(sessionsDir, mappedOpenCodeSessionId) !== namers
+            ) {
+              warnOperator(
+                `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${archivedId}: its records changed during the check; the next \`ao session cleanup\` checks again.`,
+              );
+              pushSkipped(projectKey, archivedId);
+              continue;
+            }
             try {
               await deleteOpenCodeSession(mappedOpenCodeSessionId);
               markArchivedOpenCodeCleanup(sessionsDir, archivedId, mappedOpenCodeSessionId);
@@ -3405,6 +3563,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         previousSessionId,
         {
           [GENERATION_KEY]: previousRaw[GENERATION_KEY],
+          ...launchIdentity(previousRaw),
           pr: previousRaw["pr"],
           status: previousRaw["status"],
         },
@@ -3788,9 +3947,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // 9. Update metadata — merge updates, preserving existing fields. B-1
     // (round 4): only into the version that this restore owns. When it was
     // archived, or another reservation, restore or launch replaced it, the
-    // new runtime has no record that names it: it is stopped (best effort;
-    // it was created a moment ago, so no other launch can hold its runtime
-    // name yet), and the restore throws.
+    // restore throws. Round 5 (B-1): the new runtime is stopped only when the
+    // record read directly before the destroy shows that no record owns it
+    // (recordMayOwnRuntime). Another launch of the ID can stop this runtime
+    // and create its own under the same name before this write, so "created
+    // a moment ago" is no proof; a runtime that stays is named in the error.
     const now = new Date().toISOString();
     const restoredRecord = updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), {
       status: "spawning",
@@ -3799,6 +3960,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       [RESERVATION_KEY]: "",
     });
     if (!restoredRecord) {
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      if (recordMayOwnRuntime(current, handle)) {
+        throw recordChangedError(
+          sessionsDir,
+          sessionId,
+          "it was restored",
+          `its record was not written, and its runtime ${handle.runtimeName ?? "?"} ${handle.id} was kept because the record now there may own that runtime name; stop it by hand if no session uses it`,
+        );
+      }
       const changed = recordChangedError(
         sessionsDir,
         sessionId,

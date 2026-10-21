@@ -259,6 +259,17 @@ function launchKeyOf(metadata: Readonly<Record<string, string>>): string {
   return JSON.stringify(launchIdentity(metadata));
 }
 
+/**
+ * The version of a record that a poll read, for a write that any other Node
+ * write must cancel: its generation plus its launch identity (round 5, B-2).
+ * Generations never repeat for an ID, so the generation alone tells versions
+ * apart among records of this build. The launch identity also rejects a new
+ * launch whose record has no generation (an earlier build wrote it).
+ */
+function readVersionOf(metadata: Readonly<Record<string, string>>): Record<string, string> {
+  return { [GENERATION_KEY]: metadata[GENERATION_KEY] ?? "", ...launchIdentity(metadata) };
+}
+
 /** The status that this worker last saw for one launch of a session. */
 interface TrackedStatus {
   status: SessionStatus;
@@ -732,12 +743,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // Persist PR URL so subsequent polls don't need to re-query.
           // Don't write status here — step 4 below will determine the
           // correct status (merged, ci_failed, etc.) on this same cycle.
-          // 1.2: only into the record version that this poll read.
+          // 1.2: only into the record version that this poll read (its
+          // generation and, round 5 B-2, its launch).
           const sessionsDir = getSessionsDir(config.configPath, project.path);
           const written = updateMetadataIf(
             sessionsDir,
             session.id,
-            { [GENERATION_KEY]: session.metadata[GENERATION_KEY] },
+            readVersionOf(session.metadata),
             { pr: detectedPR.url },
           );
           if (written) session.metadata = written;
@@ -991,8 +1003,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
   /**
    * Merge lifecycle bookkeeping keys into the record. 1.2: only into the
-   * record version that this poll read or last wrote (its generation), so no
-   * archived or reserved record is recreated and no newer launch is changed.
+   * record version that this poll read or last wrote (its generation and,
+   * round 5, its launch: readVersionOf), so no archived or reserved record
+   * is recreated and no newer launch is changed.
    * When the record changed, nothing is written; the next poll reads it again.
    */
   function updateSessionMetadata(session: Session, updates: Partial<Record<string, string>>): void {
@@ -1003,7 +1016,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const written = updateMetadataIf(
       sessionsDir,
       session.id,
-      { [GENERATION_KEY]: session.metadata[GENERATION_KEY] },
+      readVersionOf(session.metadata),
       updates,
     );
     if (written) session.metadata = written;
@@ -1482,10 +1495,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         getSessionsDir(config.configPath, project.path),
         session.id,
         {
-          [GENERATION_KEY]: session.metadata[GENERATION_KEY],
+          ...readVersionOf(session.metadata),
           status: session.metadata["status"],
-          runtimeHandle: session.metadata["runtimeHandle"],
-          tmuxName: session.metadata["tmuxName"],
           pr: session.metadata["pr"],
         },
         updates,

@@ -309,11 +309,13 @@ describe("1.1 item 2: restore writes only into the version that it owns", () => 
     });
     const sm = createSessionManager({ config, registry: ctx.mockRegistry });
 
+    // Round 5 (B-1): the reservation may own the runtime name (it can
+    // create it at any time), so the restore keeps its runtime and names it.
     await expect(sm.restore("app-1")).rejects.toThrow(
-      /Session app-1 changed while it was restored/,
+      /Session app-1 changed while it was restored.*its runtime mock rt-restored was kept/,
     );
     expect(recordOf("app-1")).toEqual(reservation);
-    expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-restored"));
+    expect(ctx.mockRuntime.destroy).not.toHaveBeenCalledWith(makeHandle("rt-restored"));
   });
 
   it("a newer launch published during runtime.create keeps its record", async () => {
@@ -347,11 +349,12 @@ describe("1.1 item 2: restore writes only into the version that it owns", () => 
     });
     const sm = createSessionManager({ config, registry: ctx.mockRegistry });
 
+    // Round 5 (B-1): kept and named, as in review case 3.
     await expect(sm.restore("app-1")).rejects.toThrow(
-      /Session app-1 changed while it was restored/,
+      /Session app-1 changed while it was restored.*its runtime mock rt-restored was kept/,
     );
     expect(recordOf("app-1")).toEqual(reservation);
-    expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-restored"));
+    expect(ctx.mockRuntime.destroy).not.toHaveBeenCalledWith(makeHandle("rt-restored"));
   });
 
   it("from the archive: another restore's copy-back of the same archive is told apart by its reservation ID", async () => {
@@ -550,8 +553,10 @@ describe("1.1 item 3: spawn writes only into its own reservation and launch", ()
       /Session app-1 changed while the spawn started its runtime/,
     );
     expect(recordOf("app-1")).toEqual(reservation);
-    // The new reservation names no runtime: this spawn's runtime is stopped.
-    expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-spawned"));
+    // Round 5 (B-1, M-1): the new reservation can create the same runtime
+    // name at any time (or created it already), so this spawn's runtime
+    // stays, and the operator gets its name.
+    expect(ctx.mockRuntime.destroy).not.toHaveBeenCalledWith(makeHandle("rt-spawned"));
     // The worktree path of the ID is the new reservation's too.
     expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalledWith(workspace);
   });

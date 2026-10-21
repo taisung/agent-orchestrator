@@ -898,3 +898,122 @@ describe("m-1 (round 4): the identity tolerance of C3 at its limits", () => {
     expect(await recoversWithLag(lagMs)).toBe(recovers);
   });
 });
+
+/**
+ * Round 5 (B-2): a compare that means "any Node write cancels" never accepts
+ * a stale version. Generations never repeat for an ID, and the compare also
+ * names the launch (a record of an earlier build has no generation).
+ */
+describe("B-2 (round 5): the version compares of the lifecycle reject a repeated version", () => {
+  const PR1 = "https://github.com/org/my-app/pull/1";
+
+  function oldLaunchPR(): PRInfo {
+    return {
+      number: 1,
+      url: PR1,
+      title: "PR 1",
+      owner: "org",
+      repo: "my-app",
+      branch: "feat/old",
+      baseBranch: "main",
+      isDraft: false,
+    };
+  }
+
+  function summaryOfOldLaunch(): void {
+    vi.mocked(agent.getSessionInfo).mockResolvedValue({
+      summary: "Summary of the old launch",
+      summaryIsFallback: false,
+      agentSessionId: null,
+    } as never);
+  }
+
+  it("the review's reproducer: a delete without archive and a new launch during the PR detection", async () => {
+    const scm = createMockSCM({
+      detectPR: vi.fn(async () => {
+        // A launch rollback (delete without archive), a new reservation and
+        // a new launch of the ID, while the old launch's PR is detected.
+        deleteMetadata(env.sessionsDir, "app-1", false);
+        expect(reserveSessionId(env.sessionsDir, "app-1")).toBe(true);
+        const handle = handleOf("app-1", { createdAt: 2 });
+        expect(
+          updateMetadata(env.sessionsDir, "app-1", {
+            worktree: "/tmp",
+            branch: "feat/new",
+            status: "spawning",
+            tmuxName: handle.id,
+            project: "my-app",
+            createdAt: LONG_AGO(),
+            runtimeHandle: JSON.stringify(handle),
+            reservationId: "",
+          }),
+        ).toBe(true);
+        return oldLaunchPR();
+      }),
+    });
+    usePlugins({ runtime: "tmux", agent: "claude-code" }, scm);
+    summaryOfOldLaunch();
+    writeRecord("app-1", { branch: "feat/old" }, { createdAt: 1 });
+    const lm = newLifecycle();
+
+    await lm.check("app-1");
+
+    expect(scm.detectPR).toHaveBeenCalled();
+    const record = recordOf("app-1");
+    expect(record).toMatchObject({ branch: "feat/new", status: "spawning" });
+    expect(record["pr"]).toBeUndefined();
+    expect(record["pinnedSummary"]).toBeUndefined();
+  });
+
+  it("a new launch of an earlier build (records without a generation) during the PR detection", async () => {
+    const recordFile = join(env.sessionsDir, "app-1");
+    const oldBuildRecord = (handleData: Record<string, unknown>, branch: string): string => {
+      const handle = handleOf("app-1", handleData);
+      return [
+        "worktree=/tmp",
+        `branch=${branch}`,
+        "status=working",
+        `tmuxName=${handle.id}`,
+        "project=my-app",
+        `createdAt=${LONG_AGO()}`,
+        `runtimeHandle=${JSON.stringify(handle)}`,
+        "",
+      ].join("\n");
+    };
+    const scm = createMockSCM({
+      detectPR: vi.fn(async () => {
+        // An earlier build writes a full new launch: no generation, no lock.
+        writeFileSync(recordFile, oldBuildRecord({ createdAt: 2 }, "feat/new"));
+        return oldLaunchPR();
+      }),
+    });
+    usePlugins({ runtime: "tmux", agent: "claude-code" }, scm);
+    summaryOfOldLaunch();
+    mkdirSync(env.sessionsDir, { recursive: true });
+    writeFileSync(recordFile, oldBuildRecord({ createdAt: 1 }, "feat/old"));
+    const lm = newLifecycle();
+
+    await lm.check("app-1");
+
+    expect(scm.detectPR).toHaveBeenCalled();
+    const record = recordOf("app-1");
+    expect(record["branch"]).toBe("feat/new");
+    expect(record["pr"]).toBeUndefined();
+    expect(record["pinnedSummary"]).toBeUndefined();
+  });
+
+  it("control: with no change during the detection, the PR and the summary are written", async () => {
+    const scm = createMockSCM({ detectPR: vi.fn(async () => oldLaunchPR()) });
+    usePlugins({ runtime: "tmux", agent: "claude-code" }, scm);
+    summaryOfOldLaunch();
+    writeRecord("app-1", { branch: "feat/old" }, { createdAt: 1 });
+    const lm = newLifecycle();
+
+    await lm.check("app-1");
+
+    expect(recordOf("app-1")).toMatchObject({
+      pr: PR1,
+      pinnedSummary: "Summary of the old launch",
+    });
+  });
+});

@@ -39,6 +39,22 @@
  * checkout, a runtime create, a probe) and then writes passes the values that
  * it decided from as `expected`: the generation, or the launch identity
  * (`launchIdentity`) when only a new launch or reservation must stop it.
+ *
+ * Generations never repeat for a session ID (round 5, B-2). Within one record
+ * each write adds 1. A record that starts (a reservation, a copy-back, a full
+ * write over a missing record or over one without a generation) starts above
+ * the generation floor of the ID: the larger of its latest archived copy and
+ * the floor file `<dataDir>/.generations/<id>`, which every delete (with or
+ * without an archive) raises to the deleted record's generation before it
+ * removes the file. So a delete without an archive (a launch rollback), an
+ * archive, a copy-back or a new reservation never brings back a generation
+ * that an earlier version of the ID had. No reader lists the floor directory
+ * as a session: `listMetadata` (this build and earlier builds) skips names
+ * that start with a dot, the archive readers need `<id>_<digit>`, and the
+ * bash helper and hook write only `<dataDir>/<id>`. An earlier build does not
+ * raise the floor when it deletes; a record of an earlier build has no
+ * generation, which is why the version compares also compare the launch
+ * identity.
  */
 
 import {
@@ -465,6 +481,49 @@ function generationOf(record: Readonly<Record<string, string>> | null): number {
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
+/**
+ * Round 5 (B-2): the directory of the generation floors, one file per
+ * session ID. Its name starts with a dot, so no reader lists it as a session.
+ */
+export const GENERATION_FLOOR_DIR = ".generations";
+
+function generationFloorPath(dataDir: string, sessionId: SessionId): string {
+  return join(dataDir, GENERATION_FLOOR_DIR, sessionId);
+}
+
+/** The floor that the deletes of the ID kept; 0 when it has none. */
+function readGenerationFloor(dataDir: string, sessionId: SessionId): number {
+  try {
+    const value = Number.parseInt(
+      readFileSync(generationFloorPath(dataDir, sessionId), "utf-8").trim(),
+      10,
+    );
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Raise the floor of the ID to `generation` (call it under the record lock). */
+function raiseGenerationFloor(dataDir: string, sessionId: SessionId, generation: number): void {
+  if (generation <= readGenerationFloor(dataDir, sessionId)) return;
+  const path = generationFloorPath(dataDir, sessionId);
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWriteFileSync(path, `${generation}\n`);
+}
+
+/**
+ * The highest generation that an earlier record of the ID had: its latest
+ * archived copy or the floor that its deletes kept. A new record starts
+ * above it.
+ */
+function generationBaseOf(dataDir: string, sessionId: SessionId): number {
+  return Math.max(
+    generationOf(readArchivedMetadataRaw(dataDir, sessionId)),
+    readGenerationFloor(dataDir, sessionId),
+  );
+}
+
 /** Read a record file; null when it does not exist. */
 function readRecordFile(path: string): Record<string, string> | null {
   try {
@@ -505,9 +564,9 @@ function mergeUpdates(
  * Write `next` as the record with the next generation (call it under the
  * record lock). A record without a generation (a new record of
  * `writeMetadata`, a record from before the key or of an old build)
- * continues from its latest archived copy, so an archive followed by a
- * copy-back or a new record with the same ID never repeats a generation that
- * a reader saw before.
+ * continues from the generation base of the ID (its latest archived copy
+ * and the floor of its deletes), so no record of the ID repeats a
+ * generation that a reader saw before.
  */
 function commitRecord(
   dataDir: string,
@@ -516,7 +575,7 @@ function commitRecord(
   existing: Readonly<Record<string, string>> | null,
   next: Record<string, string>,
 ): Record<string, string> {
-  const base = generationOf(existing) || generationOf(readArchivedMetadataRaw(dataDir, sessionId));
+  const base = generationOf(existing) || generationBaseOf(dataDir, sessionId);
   const written = { ...next, [GENERATION_KEY]: String(base + 1) };
   mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, serializeMetadata(written));
@@ -588,8 +647,10 @@ export function updateMetadataIf(
  * Delete a session's metadata file.
  * Optionally archive it to an `archive/` subdirectory. The copy and the
  * unlink run under the record lock. With `expected` (round 4, B-1), only a
- * record that still holds every expected value is deleted. Returns true when
- * the record was deleted; false when it does not exist or a value differs.
+ * record that still holds every expected value is deleted. Before the unlink
+ * the generation floor of the ID rises to the deleted record's generation
+ * (round 5, B-2). Returns true when the record was deleted; false when it
+ * does not exist or a value differs.
  */
 export function deleteMetadata(
   dataDir: string,
@@ -607,7 +668,11 @@ export function deleteMetadata(
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw err;
     }
-    if (expected && !holdsExpected(parseKeyValueContent(content), expected)) return false;
+    const deleted = parseKeyValueContent(content);
+    if (expected && !holdsExpected(deleted, expected)) return false;
+    // Round 5 (B-2): keep the generation before the file goes, so the next
+    // record of the ID continues above it (also without an archive).
+    raiseGenerationFloor(dataDir, sessionId, generationOf(deleted));
 
     if (archive) {
       const archiveDir = join(dataDir, "archive");
@@ -751,8 +816,9 @@ export function listMetadata(dataDir: string): SessionId[] {
  *
  * The record holds `initial` (M-5: the launch claim of a spawn that prepares
  * its agent session) plus a new reservation ID (RESERVATION_KEY, round 4)
- * and the next generation (it continues above the latest archived copy; a
- * caller's `generation` or reservation ID is ignored, m-3). The content goes
+ * and the next generation (it continues above the latest archived copy and
+ * the generation floor of the ID, round 5; a caller's `generation` or
+ * reservation ID is ignored, m-3). The content goes
  * into a dot-named temp file in the same directory, which `listMetadata`
  * skips and no session ID can name, and `link` then publishes that complete
  * file under the record name. Like O_EXCL, `link` fails with EEXIST when the
@@ -780,7 +846,9 @@ export function reserveSessionRecord(
     const record: Record<string, string> = {
       ...content,
       [RESERVATION_KEY]: randomUUID(),
-      [GENERATION_KEY]: String(generationOf(archived) + 1),
+      [GENERATION_KEY]: String(
+        Math.max(generationOf(archived), readGenerationFloor(dataDir, sessionId)) + 1,
+      ),
     };
     return createRecordFile(dataDir, sessionId, path, record) ? record : null;
   });
