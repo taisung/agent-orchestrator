@@ -425,6 +425,21 @@ repeats (a per-ID floor); each archived copy has its own series. `Workspace.dest
 
 ## Known Issues
 
+- **Feature: `ao session relaunch <id> [--continue]`** (owner 2026-10-21, "2 yes"). Restart the agent
+  process in its existing pane with the launch command that `ao` builds at that time, for example to use
+  a newer Claude Code version; with `--continue`, a Claude Code session keeps its conversation. Today a
+  restart needs `/exit` and a manual relaunch with the same arguments (the orchestrator's 9,300-byte
+  `--append-system-prompt`), or `ao stop` and `ao start`. A worker round in the fork (MEDIUM: one CLI
+  command and the agent launch path). Until then: the helper `scripts/ao_relaunch.py` in `~/agent-skills`
+  (ao-49, below).
+- **Session helpers moved out of `~/.cache`** (owner 2026-10-21, "1a"): `restart_lifecycle.py` and a
+  generic `ao_relaunch.py` (save the live argv of a session's agent, run it again in the pane shell) go to
+  `~/agent-skills/scripts/` with tests. ao-49 (Claude Code Opus 5.5; OpenCode Muse skipped because an
+  OpenCode spawn from the orchestrator pane starts the global service with its `AO_*` environment) works
+  in a scratch clone `/tmp/ao49hs/agent-skills`, dispatched 11:58:30 EDT, brief
+  `~/.cache/agent-skills-haiku55-arc/brief-agentskills-session-helpers.md`. The orchestrator then
+  cherry-picks into `~/agent-skills` (commit by name; another session can edit that repository) and asks
+  the owner before a push there.
 - **Traps found in the killed-status and same-ID rounds (2026-10-20 to 2026-10-21):**
   - A Codex gpt-6.1-sol reviewer of lock and race work ended two turns with `codex_error_info:
     cyber_policy` (review r4, 2026-10-21 00:50Z and 00:58Z); the pane only looks idle. The owner moved the
