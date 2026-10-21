@@ -54,8 +54,11 @@ const hooks = vi.hoisted(() => ({
   duringInterrupt: null as null | (() => void),
   /** Runs inside the removal of an OpenCode session (a stand-in that removes nothing). */
   duringRemove: null as null | (() => void),
-  /** Runs once inside the read of `/proc/<pid>/stat` for this pid (a launcher check). */
-  duringProcRead: null as null | { pid: string; run: () => void },
+  /**
+   * Runs once inside the read of `/proc/<pid>/stat` for this pid (a launcher
+   * check), after `skip` such reads.
+   */
+  duringProcRead: null as null | { pid: string; run: () => void; skip?: number },
 }));
 vi.mock("../opencode-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof OpenCodeApi>();
@@ -81,8 +84,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     readFile: vi.fn(async (...args: Parameters<typeof actual.readFile>) => {
       const hook = hooks.duringProcRead;
       if (hook && String(args[0]) === `/proc/${hook.pid}/stat`) {
-        hooks.duringProcRead = null;
-        hook.run();
+        if (hook.skip) {
+          hook.skip -= 1;
+        } else {
+          hooks.duringProcRead = null;
+          hook.run();
+        }
       }
       return actual.readFile(...args);
     }),
@@ -545,6 +552,33 @@ describe("1.0.1: kill reads the record directly before each step", () => {
     expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch" });
   });
 
+  it("a new launch during the holder check: no interrupt, no removal, and the record stays", async () => {
+    openCodeRecord();
+    // A dead launch of another session names the same ID; its launcher
+    // check is the await of the holder check.
+    writeMetadata(sessionsDir, "app-2", {
+      worktree: join(ctx.tmpDir, "ws-app-2"),
+      branch: "feat/two",
+      status: "spawning",
+      project: "my-app",
+      agent: "opencode",
+      opencodeSessionId: "ses_old",
+    });
+    updateMetadata(sessionsDir, "app-2", { launchPid: DEAD_PID, launchPidStart: "stat:1" });
+    hooks.duringProcRead = {
+      pid: DEAD_PID,
+      run: () => publishNewLaunch("app-1", makeHandle("rt-new"), { opencodeSessionId: "ses_old" }),
+    };
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.kill("app-1", { purgeOpenCode: true })).rejects.toThrow(
+      /Session app-1 changed while it was killed .*its agent session and record were kept/,
+    );
+    expect(interruptOpenCodeSession).not.toHaveBeenCalled();
+    expect(removeOpenCodeSession).not.toHaveBeenCalled();
+    expect(recordOf("app-1")).toMatchObject({ branch: "feat/new-launch" });
+  });
+
   it("a new launch during the OpenCode interrupt: the agent session is not removed, and the record stays", async () => {
     openCodeRecord();
     hooks.duringInterrupt = () =>
@@ -633,8 +667,10 @@ describe("1.0.1: the cleanup purge of an archived OpenCode session reads the rec
     updateMetadata(sessionsDir, "app-2", { launchPid: DEAD_PID, launchPidStart: "stat:1" });
   }
 
-  it("a restore of the archived ID during the holder check keeps the OpenCode session", async () => {
+  it("a restore of the archived ID after the active list of the cleanup keeps the OpenCode session", async () => {
     archivedOpenCodeRecord();
+    // The first launcher check of app-2 is in the active loop: the restore
+    // lands before the purge decides, and the holder check skips app-1.
     hooks.duringProcRead = {
       pid: DEAD_PID,
       run: () => {
@@ -658,13 +694,19 @@ describe("1.0.1: the cleanup purge of an archived OpenCode session reads the rec
     );
   });
 
-  it("another record that takes the ID during the holder check keeps the OpenCode session", async () => {
+  it("a new launch of a holder during its check keeps the OpenCode session", async () => {
     archivedOpenCodeRecord();
-    launchedRecord("app-3");
+    // The second launcher check of app-2 is the holder check of the purge.
+    // Meanwhile app-2 is launched again on the same OpenCode session; the
+    // check answers from the dead launch that it read.
     hooks.duringProcRead = {
       pid: DEAD_PID,
+      skip: 1,
       run: () => {
-        updateMetadata(sessionsDir, "app-3", { agent: "opencode", opencodeSessionId: "ses_arch" });
+        publishNewLaunch("app-2", makeHandle("rt-app-2-new"), {
+          agent: "opencode",
+          opencodeSessionId: "ses_arch",
+        });
       },
     };
     const warnings = captureWarnings();
@@ -675,7 +717,11 @@ describe("1.0.1: the cleanup purge of an archived OpenCode session reads the rec
     } finally {
       warnings.restore();
     }
+    expect(hooks.duringProcRead).toBeNull();
     expect(removeOpenCodeSession).not.toHaveBeenCalled();
+    expect(warnings.lines.join("")).toMatch(
+      /kept OpenCode session ses_arch of app-1: its records changed/,
+    );
   });
 
   it("control: with no change during the check, the archived OpenCode session is removed", async () => {
@@ -806,11 +852,17 @@ describe("1.0.1: the delete strategy of a spawn reads the records directly befor
     });
   }
 
-  it("a record that takes the ID during the holder check keeps the OpenCode session", async () => {
+  it("a new launch of a holder during its check keeps the OpenCode session", async () => {
     const registry = deleteStrategySetup();
+    // Meanwhile app-8 is launched again on the same OpenCode session; the
+    // check answers from the dead launch that it read.
     hooks.duringProcRead = {
       pid: DEAD_PID,
-      run: () => launchedRecord("other-1", { agent: "opencode", opencodeSessionId: "ses_issue" }),
+      run: () =>
+        publishNewLaunch("app-8", makeHandle("rt-app-8-new"), {
+          agent: "opencode",
+          opencodeSessionId: "ses_issue",
+        }),
     };
     const sm = createSessionManager({ config: ctx.config, registry });
 
@@ -867,5 +919,80 @@ describe("rollback of a project-mode orchestrator start: the shared prompt file"
     ).rejects.toThrow("post-launch setup failed");
     expect(recordOf("app-orchestrator")).toBeNull();
     expect(existsSync(promptFile())).toBe(false);
+  });
+});
+
+describe("B-2: the claim takeover compares the launch of the old owner too", () => {
+  /** A record of an earlier build (no generation) that owns PR #2. */
+  function oldBuildOwner(handleId: string): string {
+    return [
+      `worktree=${join(ctx.tmpDir, "ws-app-old")}`,
+      "branch=feat/two",
+      "status=pr_open",
+      `pr=${PR2}`,
+      "project=my-app",
+      "tmuxName=hash-app-old",
+      "createdAt=2026-10-20T10:00:00.000Z",
+      `runtimeHandle=${JSON.stringify(makeHandle(handleId))}`,
+      "",
+    ].join("\n");
+  }
+
+  function claimRegistry(checkoutPR: () => Promise<boolean>): PluginRegistry {
+    const scm = createMockSCM({
+      resolvePR: vi.fn().mockResolvedValue({
+        number: 2,
+        url: PR2,
+        title: "Two",
+        owner: "org",
+        repo: "my-app",
+        branch: "feat/two",
+        baseBranch: "main",
+        isDraft: false,
+      }),
+      checkoutPR: vi.fn(checkoutPR),
+    });
+    return createMockRegistry({
+      runtime: ctx.mockRuntime,
+      agent: ctx.mockAgent,
+      workspace: ctx.mockWorkspace,
+      scm,
+    });
+  }
+
+  it("an earlier build's new launch of the old owner during the checkout keeps its PR", async () => {
+    launchedRecord("app-1");
+    const ownerFile = join(sessionsDir, "app-old");
+    writeFileSync(ownerFile, oldBuildOwner("rt-old"));
+    const sm = createSessionManager({
+      config: ctx.config,
+      registry: claimRegistry(async () => {
+        // An earlier build replaces the old owner with a new launch: the
+        // same PR and status, no generation.
+        writeFileSync(ownerFile, oldBuildOwner("rt-old-relaunched"));
+        return true;
+      }),
+    });
+
+    await sm.claimPR("app-1", "2");
+
+    expect(recordOf("app-1")).toMatchObject({ pr: PR2, status: "pr_open" });
+    expect(recordOf("app-old")).toMatchObject({
+      pr: PR2,
+      runtimeHandle: JSON.stringify(makeHandle("rt-old-relaunched")),
+    });
+  });
+
+  it("control: an unchanged old owner of an earlier build is taken over", async () => {
+    launchedRecord("app-1");
+    writeFileSync(join(sessionsDir, "app-old"), oldBuildOwner("rt-old"));
+    const sm = createSessionManager({
+      config: ctx.config,
+      registry: claimRegistry(async () => true),
+    });
+
+    await sm.claimPR("app-1", "2");
+
+    expect(recordOf("app-old")?.["pr"]).toBeUndefined();
   });
 });

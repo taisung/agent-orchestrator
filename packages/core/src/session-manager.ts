@@ -2971,16 +2971,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(projectKey, archivedId);
         } else if (cleanupAgent === "opencode" && mappedOpenCodeSessionId && shouldPurgeOpenCode) {
           if (!options?.dryRun) {
-            // Round 5 (1.0.1): the holder check awaited. Directly before the
-            // removal the ID still has no active record (a restore copies the
-            // archive back and runs on the same OpenCode session), the latest
-            // archive still names this OpenCode session, and no other record
-            // took it.
+            // Round 5 (1.0.1): the holder check awaited, and it skips this
+            // ID. Directly before the removal the ID still has no active
+            // record (a restore copies the archive back and runs on the same
+            // OpenCode session; the active list of this cleanup is older),
+            // and the active records that name this OpenCode session are
+            // still the ones from before the check.
             if (
               readMetadataRaw(sessionsDir, archivedId) !== null ||
-              asValidOpenCodeSessionId(
-                readArchivedMetadataRaw(sessionsDir, archivedId)?.["opencodeSessionId"],
-              ) !== mappedOpenCodeSessionId ||
               openCodeNamers(sessionsDir, mappedOpenCodeSessionId) !== namers
             ) {
               warnOperator(
