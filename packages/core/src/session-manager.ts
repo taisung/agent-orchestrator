@@ -1554,6 +1554,31 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     );
   }
 
+  /**
+   * Review r1 (M-1): remove the archive copy-back of a refused restore again,
+   * and say what happened, for the refusal message. Only while the record is
+   * still that copy-back (its launch identity with the reservation ID), and
+   * without an archive copy: the archive that it came from stays the latest
+   * one. A record that another operation put in its place stays.
+   */
+  function releaseCopyBack(
+    sessionsDir: string,
+    sessionId: SessionId,
+    copyBack: Readonly<Record<string, string>>,
+  ): string {
+    const rest = "the workspace is as it was, and no new runtime was created";
+    try {
+      if (deleteMetadata(sessionsDir, sessionId, false, launchIdentity(copyBack))) {
+        return `nothing was restored: the archive copy-back of this restore was removed again, ${rest}`;
+      }
+      return readMetadataRaw(sessionsDir, sessionId) === null
+        ? `nothing was restored: the archive copy-back of this restore is already gone (another operation on the ID removed it), ${rest}`
+        : `the active record of ${sessionId} is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed; ${rest}`;
+    } catch (err) {
+      return `the archive copy-back of this restore could not be removed (${shortErrorText(err)}), so an active record of ${sessionId} stays; ${rest}`;
+    }
+  }
+
   /** True when the record's stored runtime handle names the runtime of `handle`. */
   function recordNamesRuntime(
     record: Readonly<Record<string, string>> | null,
@@ -4275,6 +4300,28 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
+    // 6. Check the workspace. Review r1 (M-1): only checks here, no change.
+    //    A refused restore changes nothing: the missing workspace is
+    //    recreated in step 8, after the old runtime stop is confirmed.
+    const workspaceExists = plugins.workspace?.exists
+      ? await plugins.workspace.exists(workspacePath)
+      : existsSync(workspacePath);
+    let branchToRestore: string | null = null;
+    if (!workspaceExists) {
+      // Try to restore workspace if plugin supports it
+      if (!plugins.workspace?.restore) {
+        throw new WorkspaceMissingError(workspacePath, "workspace plugin does not support restore");
+      }
+      if (!session.branch) {
+        throw new WorkspaceMissingError(workspacePath, "branch metadata is missing");
+      }
+      // m-13: refuse a stored branch before any git runs. This covers the
+      // archive restore (fromArchive copies the same stored branch back) and
+      // the restore-before-send path (restoreForDelivery calls restore()).
+      assertSafeBranchForSession(sessionId, session.branch);
+      branchToRestore = session.branch;
+    }
+
     // B-1 (round 4): the version that this restore owns. Every later write
     // compares its launch identity: an archive, a new reservation, or another
     // restore or launch of the ID stops the restore, and nothing is written.
@@ -4283,7 +4330,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // Keep the stored spawn identity when copying the archive back. The
       // copy-back is a reservation: it never writes over an active record
       // (another restore or a new reservation), and only while the latest
-      // archive is still the one that this restore read.
+      // archive is still the one that this restore read. It holds the ID
+      // during the stop in step 7, so no other restore or reservation of the
+      // ID can start a launch under the runtime name that step 7 stops.
       const copyBack: Record<string, string | undefined> = {
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
@@ -4324,30 +4373,48 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       return !!current && holdsExpected(current, launchIdentity(owned));
     };
 
-    // 6. Check workspace
-    const workspaceExists = plugins.workspace?.exists
-      ? await plugins.workspace.exists(workspacePath)
-      : existsSync(workspacePath);
+    // B-1 (round 4): the checks above awaited. Stop before the old runtime
+    // is stopped when another process changed the launch meanwhile (the
+    // runtime name is the same for every launch of the ID).
+    if (!stillOwned()) {
+      throw recordChangedError(
+        sessionsDir,
+        sessionId,
+        "it was restored",
+        "no runtime was destroyed or created",
+      );
+    }
 
-    if (!workspaceExists) {
-      // Try to restore workspace if plugin supports it
-      if (!plugins.workspace?.restore) {
-        throw new WorkspaceMissingError(workspacePath, "workspace plugin does not support restore");
+    // 7. Stop the old runtime if still alive (e.g. tmux session survives agent
+    // crash). Same-ID R2a (N-2): only a confirmed stop (destroyed or absent)
+    // lets the restore go on. Review r1 (M-1): the stop runs before the
+    // workspace is recreated, and a refusal removes the archive copy-back of
+    // this restore again, so the refused restore leaves the record, the
+    // archive and the workspace as they were.
+    if (session.runtimeHandle) {
+      const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
+      if (!isRuntimeStopConfirmed(stopped)) {
+        throw new RuntimeStopUnconfirmedError({
+          sessionId,
+          handle: session.runtimeHandle,
+          stop: stopped,
+          kept: fromArchive
+            ? releaseCopyBack(sessionsDir, sessionId, owned)
+            : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
+          retry: `ao session restore ${sessionId}`,
+        });
       }
-      if (!session.branch) {
-        throw new WorkspaceMissingError(workspacePath, "branch metadata is missing");
-      }
-      // m-13: refuse a stored branch before any git runs. This covers the
-      // archive restore (fromArchive copies the same stored branch back) and
-      // the restore-before-send path (restoreForDelivery calls restore()).
-      assertSafeBranchForSession(sessionId, session.branch);
+    }
+
+    // 8. Recreate a missing workspace, now that the old runtime is stopped.
+    if (branchToRestore !== null && plugins.workspace?.restore) {
       try {
         const wsInfo = await plugins.workspace.restore(
           {
             projectId,
             project,
             sessionId,
-            branch: session.branch,
+            branch: branchToRestore,
           },
           workspacePath,
         );
@@ -4362,38 +4429,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           `restore failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    }
 
-    // B-1 (round 4): the workspace step awaited. Stop before the old runtime
-    // is destroyed when another process changed the launch meanwhile (the
-    // runtime name is the same for every launch of the ID).
-    if (!stillOwned()) {
-      throw recordChangedError(
-        sessionsDir,
-        sessionId,
-        "it was restored",
-        "no runtime was destroyed or created",
-      );
-    }
-
-    // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash).
-    // Same-ID R2a (N-2): only a confirmed stop (destroyed or absent) lets the
-    // restore create a runtime. Anything else throws before step 8, so no
-    // second launch of the ID starts while the old one may still run.
-    if (session.runtimeHandle) {
-      const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
-      if (!isRuntimeStopConfirmed(stopped)) {
-        throw new RuntimeStopUnconfirmedError({
+      // B-1 (round 4): the workspace step awaited. Stop before a runtime is
+      // created when another process changed the launch meanwhile.
+      if (!stillOwned()) {
+        throw recordChangedError(
+          sessionsDir,
           sessionId,
-          handle: session.runtimeHandle,
-          stop: stopped,
-          kept: "record and worktree kept; no new runtime was created",
-          retry: `ao session restore ${sessionId}`,
-        });
+          "it was restored",
+          "its old runtime was stopped, and no new runtime was created",
+        );
       }
     }
 
-    // 8. Create runtime (reuse tmuxName from metadata)
+    // 9. Create runtime (reuse tmuxName from metadata)
     const tmuxName = raw["tmuxName"];
     const handle = await plugins.runtime.create({
       sessionId: tmuxName ?? sessionId,
@@ -4412,7 +4461,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       },
     });
 
-    // 9. Update metadata — merge updates, preserving existing fields. B-1
+    // 10. Update metadata — merge updates, preserving existing fields. B-1
     // (round 4): only into the version that this restore owns. When it was
     // archived, or another reservation, restore or launch replaced it, the
     // restore throws. Round 5 (B-1): the new runtime is stopped only when the
@@ -4457,7 +4506,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
     owned = restoredRecord;
 
-    // 10. Run postLaunchSetup (non-fatal)
+    // 11. Run postLaunchSetup (non-fatal)
     const restoredSession: Session = {
       ...session,
       status: "spawning",

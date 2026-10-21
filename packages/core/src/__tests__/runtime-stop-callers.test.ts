@@ -8,7 +8,7 @@
  * `destroyed` and `absent` are the healthy controls.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -22,7 +22,13 @@ import { getWorktreesDir } from "../paths.js";
 import { cleanupSession } from "../recovery/actions.js";
 import { DEFAULT_RECOVERY_CONFIG, type RecoveryAssessment } from "../recovery/types.js";
 import { isRuntimeStopUnconfirmedError } from "../runtime-stop.js";
-import type { PluginRegistry, RuntimeStopOutcome, SCM, Tracker } from "../types.js";
+import {
+  WorkspaceMissingError,
+  type PluginRegistry,
+  type RuntimeStopOutcome,
+  type SCM,
+  type Tracker,
+} from "../types.js";
 import {
   createMockRegistry,
   createMockSCM,
@@ -391,6 +397,217 @@ describe("restore (N-2)", () => {
       expect((result as { hint: string }).hint).toContain("`ao session restore app-1`");
       expectKept(worktree, before);
       expectNoRuntimeChange(mode);
+    });
+  }
+});
+
+/** The worktree path of `id`, not created. */
+function missingWorktree(id: string): string {
+  const project = ctx.config.projects["my-app"]!;
+  return join(getWorktreesDir(ctx.config.configPath, project.path), id);
+}
+
+/** Every archive file of `id`, name and content, in name order. */
+function archiveFiles(id: string): Array<[string, string]> {
+  const dir = join(sessionsDir, "archive");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.startsWith(`${id}_`))
+    .sort()
+    .map((name) => [name, readFileSync(join(dir, name), "utf-8")]);
+}
+
+/** A workspace plugin that can recreate `worktree` (git worktree add, in effect). */
+function restorableWorkspace(worktree: string): void {
+  ctx.mockWorkspace.exists = vi.fn(async (path: string) => existsSync(path));
+  ctx.mockWorkspace.restore = vi.fn(async (cfg) => {
+    mkdirSync(worktree, { recursive: true });
+    return {
+      path: worktree,
+      branch: cfg.branch,
+      sessionId: cfg.sessionId,
+      projectId: cfg.projectId,
+    };
+  });
+}
+
+/** A killed record of app-1 whose worktree is missing; archived when asked. */
+function killedRecordWithoutWorktree(archived: boolean): string {
+  const worktree = missingWorktree("app-1");
+  launchedRecord("app-1", worktree, { status: "killed" });
+  if (archived) deleteMetadata(sessionsDir, "app-1", true);
+  restorableWorkspace(worktree);
+  vi.mocked(ctx.mockAgent.getActivityState).mockResolvedValue({ state: "exited" });
+  vi.mocked(ctx.mockAgent.isProcessRunning).mockResolvedValue(false);
+  vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-app-1-restored"));
+  return worktree;
+}
+
+describe("restore that recreates a workspace or copies an archive back (review r1, M-1)", () => {
+  for (const archived of [true, false]) {
+    const variant = archived
+      ? "an archived record, its worktree missing"
+      : "an active record, its worktree missing";
+    for (const mode of MODES) {
+      it(`${variant}, ${mode}: ${goesOn(mode) ? "recreates the worktree and relaunches" : "refuses; no active record, no worktree and no runtime appear"}`, async () => {
+        const worktree = killedRecordWithoutWorktree(archived);
+        stopAnswers(mode);
+        const activeBefore = readMetadataRaw(sessionsDir, "app-1");
+        const archiveBefore = archiveFiles("app-1");
+        const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+        const result = await sm.restore("app-1").then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+        if (goesOn(mode)) {
+          expect(result).toBeNull();
+          expect(ctx.mockWorkspace.restore).toHaveBeenCalledTimes(1);
+          expect(existsSync(worktree)).toBe(true);
+          expect(ctx.mockRuntime.create).toHaveBeenCalledTimes(1);
+          const after = readMetadataRaw(sessionsDir, "app-1");
+          expect(after?.["runtimeHandle"]).toContain("rt-app-1-restored");
+          expect(after?.["reservationId"] ?? "").toBe("");
+          return;
+        }
+        expect(isRuntimeStopUnconfirmedError(result)).toBe(true);
+        const message = (result as Error).message;
+        expect(message).toContain(`runtime stop unconfirmed (${OUTCOME[mode]})`);
+        expect(message).toContain(
+          archived
+            ? "nothing was restored: the archive copy-back of this restore was removed again, the workspace is as it was, and no new runtime was created"
+            : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
+        );
+        expect(message, "the message claims a worktree").not.toContain("worktree kept");
+        expect(readMetadataRaw(sessionsDir, "app-1"), "the active record changed").toEqual(
+          activeBefore,
+        );
+        expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
+        expect(existsSync(worktree), "a worktree appeared").toBe(false);
+        expect(ctx.mockWorkspace.restore, "the workspace was recreated").not.toHaveBeenCalled();
+        expectNoRuntimeChange(mode);
+      });
+    }
+  }
+
+  it("a workspace that cannot be recreated refuses before the archive is copied back and before any stop", async () => {
+    const worktree = killedRecordWithoutWorktree(true);
+    delete ctx.mockWorkspace.restore;
+    stopAnswers("destroyed");
+    const archiveBefore = archiveFiles("app-1");
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.restore("app-1")).rejects.toBeInstanceOf(WorkspaceMissingError);
+
+    expect(readMetadataRaw(sessionsDir, "app-1"), "the archive was copied back").toBeNull();
+    expect(archiveFiles("app-1")).toEqual(archiveBefore);
+    expect(existsSync(worktree)).toBe(false);
+    expect(ctx.mockRuntime.stop).not.toHaveBeenCalled();
+    expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("a refusal never removes a record or a workspace that replaced the copy-back during the stop", async () => {
+    const worktree = killedRecordWithoutWorktree(true);
+    const replacement = {
+      worktree,
+      branch: "feat/app-1-next",
+      status: "working",
+      project: "my-app",
+      tmuxName: "hash-app-1",
+      createdAt: "2026-10-21T12:00:00.000Z",
+      runtimeHandle: JSON.stringify(makeHandle("rt-app-1-next")),
+    };
+    // During the stop, a kill archives the copy-back, and a new launch of
+    // the ID writes its own record and creates its own worktree.
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      deleteMetadata(sessionsDir, "app-1", true);
+      writeMetadata(sessionsDir, "app-1", replacement);
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(worktree, "work.txt"), "work of the new launch");
+      return { outcome: "unknown" as const, detail: "the runtime server did not answer" };
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const result = await sm.restore("app-1").then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(isRuntimeStopUnconfirmedError(result)).toBe(true);
+    expect((result as Error).message).toContain(
+      "the active record of app-1 is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed",
+    );
+    expect(readMetadataRaw(sessionsDir, "app-1")).toMatchObject(replacement);
+    expect(readFileSync(join(worktree, "work.txt"), "utf-8")).toBe("work of the new launch");
+    expect(ctx.mockWorkspace.restore).not.toHaveBeenCalled();
+    expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
+    expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("a copy-back that another operation removed during the stop is named as gone", async () => {
+    killedRecordWithoutWorktree(true);
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      deleteMetadata(sessionsDir, "app-1", true);
+      return { outcome: "unknown" as const, detail: "the runtime server did not answer" };
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const result = await sm.restore("app-1").then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect((result as Error).message).toContain(
+      "nothing was restored: the archive copy-back of this restore is already gone (another operation on the ID removed it)",
+    );
+    expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
+  });
+});
+
+/**
+ * The source-level reproducer of review r1 (M-1, the form of live case G),
+ * with the assertions turned to the wanted behavior. Measured on ac1cbf4b:
+ * archived=false left a recreated workspace, archived=true also left a new
+ * active record (afterActive=true, afterWorkspace=true).
+ */
+describe("review r1 reproducer, M-1: a refused restore changes nothing", () => {
+  for (const archived of [false, true]) {
+    it(`refused restore changes disk: archived=${archived}`, async () => {
+      const path = join(
+        getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
+        "app-1",
+      );
+      const raw = {
+        worktree: path,
+        branch: "feat/review",
+        status: "killed",
+        project: "my-app",
+        agent: "mock-agent",
+        runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      writeMetadata(sessionsDir, "app-1", raw);
+      if (archived) deleteMetadata(sessionsDir, "app-1", true);
+      const before = readMetadataRaw(sessionsDir, "app-1");
+      ctx.mockWorkspace.exists = vi.fn(async () => false);
+      ctx.mockWorkspace.restore = vi.fn(async () => {
+        mkdirSync(path, { recursive: true });
+        return { path, branch: raw.branch, sessionId: "app-1", projectId: "my-app" };
+      });
+      ctx.mockRuntime.stop = vi.fn(async () => ({
+        outcome: "unknown" as const,
+        detail: "old pane still running",
+      }));
+      vi.mocked(ctx.mockAgent.getActivityState).mockResolvedValue({ state: "exited" });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      const err = await sm.restore("app-1").catch((e: unknown) => e);
+
+      expect((err as { code?: unknown }).code).toBe("ERR_RUNTIME_STOP_UNCONFIRMED");
+      expect(readMetadataRaw(sessionsDir, "app-1"), "an active record appeared").toEqual(before);
+      expect(existsSync(path), "a workspace appeared").toBe(false);
+      expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
     });
   }
 });
