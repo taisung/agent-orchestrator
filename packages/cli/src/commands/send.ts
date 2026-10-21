@@ -128,7 +128,12 @@ async function sendViaTmux(pane: string, message: string): Promise<void> {
     writeFileSync(tmpFile, message);
     try {
       await exec("tmux", ["load-buffer", tmpFile]);
-      await exec("tmux", ["paste-buffer", "-t", pane]);
+      // -p: a pane whose program asked for bracketed paste (Claude Code,
+      // Codex and Gemini all do) gets the text inside the paste markers, as
+      // from a terminal paste, so no line break in it acts as an Enter and
+      // the Enter below follows a finished paste. Other panes get the same
+      // bytes as without -p.
+      await exec("tmux", ["paste-buffer", "-p", "-t", pane]);
     } finally {
       try {
         unlinkSync(tmpFile);

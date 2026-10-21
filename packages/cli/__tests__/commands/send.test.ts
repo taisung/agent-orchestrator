@@ -253,7 +253,8 @@ describe("send command", () => {
 
       // Should have used load-buffer for long message
       expect(mockExec).toHaveBeenCalledWith("tmux", expect.arrayContaining(["load-buffer"]));
-      expect(mockExec).toHaveBeenCalledWith("tmux", expect.arrayContaining(["paste-buffer"]));
+      // -p: bracketed paste, so a line break in the text is not an Enter
+      expect(mockExec).toHaveBeenCalledWith("tmux", ["paste-buffer", "-p", "-t", "=my-session:"]);
     });
 
     it("uses send-keys for short messages", async () => {
