@@ -734,10 +734,10 @@ export interface Workspace {
    * own steps await. The plugin runs the check directly before each step
    * that removes files (also a fallback or a retry), with no await between
    * the check and the step. When it answers false or throws, the plugin
-   * removes nothing more and resolves `"kept"`. Without it, the plugin works
-   * as before and resolves `undefined`.
+   * removes nothing more and resolves; the caller knows from its own check
+   * that the workspace stayed. Without it, the plugin works as before.
    */
-  destroy(workspacePath: string, stillOwned?: () => boolean): Promise<"kept" | undefined>;
+  destroy(workspacePath: string, stillOwned?: () => boolean): Promise<void>;
 
   /** List existing workspaces for a project */
   list(projectId: string): Promise<WorkspaceInfo[]>;

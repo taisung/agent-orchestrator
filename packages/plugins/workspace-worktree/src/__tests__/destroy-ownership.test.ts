@@ -104,18 +104,42 @@ function failingRemove(during: () => void = () => undefined): () => void {
 
 const REMOVE = ["worktree", "remove", "--force"];
 
+/**
+ * Round 8 (M-3): `destroy` resolves nothing, so the caller knows of a kept
+ * worktree only from its own check. This wraps a check and records each
+ * answer: "yes", "no" or "throw".
+ */
+function recorded(check: () => boolean): { check: () => boolean; answers: string[] } {
+  const answers: string[] = [];
+  return {
+    answers,
+    check: () => {
+      let answer: boolean;
+      try {
+        answer = check();
+      } catch (err) {
+        answers.push("throw");
+        throw err;
+      }
+      answers.push(answer ? "yes" : "no");
+      return answer;
+    },
+  };
+}
+
 describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
-  it("a new launch during git rev-parse: no git remove, no fallback, the result is kept", async () => {
+  it("a new launch during git rev-parse: no git remove, no fallback, the check answered no", async () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
     let owner = "old";
     gitAnswers(failingRemove(), () => {
       owner = "new";
       newLaunchFileIn(path);
     });
+    const { check, answers } = recorded(() => owner === "old");
 
-    const result = await create().destroy(path, () => owner === "old");
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
 
-    expect(result).toBe("kept");
+    expect(answers).toEqual(["no"]);
     expect(git.calls.map((args) => args[0])).toEqual(["rev-parse"]);
     expect(existsSync(join(path, "new-launch.txt"))).toBe(true);
   });
@@ -129,10 +153,11 @@ describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
         newLaunchFileIn(path);
       }),
     );
+    const { check, answers } = recorded(() => owner === "old");
 
-    const result = await create().destroy(path, () => owner === "old");
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
 
-    expect(result).toBe("kept");
+    expect(answers).toEqual(["yes", "no"]);
     expect(git.calls).toEqual([
       ["rev-parse", "--path-format=absolute", "--git-common-dir"],
       [...REMOVE, path],
@@ -144,12 +169,13 @@ describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
   it("a check that throws before the git remove keeps the worktree", async () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
     gitAnswers(failingRemove());
-
-    const result = await create().destroy(path, () => {
+    const { check, answers } = recorded(() => {
       throw new Error("the record could not be read");
     });
 
-    expect(result).toBe("kept");
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
+
+    expect(answers).toEqual(["throw"]);
     expect(git.calls.map((args) => args[0])).toEqual(["rev-parse"]);
     expect(existsSync(join(path, "launch.txt"))).toBe(true);
   });
@@ -158,15 +184,15 @@ describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
     let checks = 0;
     gitAnswers(failingRemove());
-
-    const result = await create().destroy(path, () => {
+    const { check, answers } = recorded(() => {
       checks += 1;
       if (checks > 1) throw new Error("the record could not be read");
       return true;
     });
 
-    expect(result).toBe("kept");
-    expect(checks).toBe(2);
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
+
+    expect(answers).toEqual(["yes", "throw"]);
     expect(existsSync(join(path, "launch.txt"))).toBe(true);
   });
 
@@ -178,40 +204,33 @@ describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
       newLaunchFileIn(path);
       throw new Error("fatal: not a git repository");
     };
+    const { check, answers } = recorded(() => owner === "old");
 
-    const result = await create().destroy(path, () => owner === "old");
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
 
-    expect(result).toBe("kept");
+    expect(answers).toEqual(["no"]);
     expect(existsSync(join(path, "new-launch.txt"))).toBe(true);
   });
 
   it("control: nothing changes, the failed git remove falls back and removes the directory", async () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
-    let checks = 0;
     gitAnswers(failingRemove());
+    const { check, answers } = recorded(() => true);
 
-    const result = await create().destroy(path, () => {
-      checks += 1;
-      return true;
-    });
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
 
-    expect(result).toBeUndefined();
-    expect(checks).toBe(2);
+    expect(answers).toEqual(["yes", "yes"]);
     expect(existsSync(path)).toBe(false);
   });
 
   it("control: nothing changes, a git remove that works needs one check and no fallback", async () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
-    let checks = 0;
     gitAnswers(() => rmSync(path, { recursive: true, force: true }));
+    const { check, answers } = recorded(() => true);
 
-    const result = await create().destroy(path, () => {
-      checks += 1;
-      return true;
-    });
+    await expect(create().destroy(path, check)).resolves.toBeUndefined();
 
-    expect(result).toBeUndefined();
-    expect(checks).toBe(1);
+    expect(answers).toEqual(["yes"]);
     expect(existsSync(path)).toBe(false);
   });
 
@@ -219,9 +238,8 @@ describe("workspace.destroy() with an ownership check (round 7, M-2)", () => {
     const path = worktreeAt(join(root, "worktrees", "app-1"));
     gitAnswers(failingRemove(() => newLaunchFileIn(path)));
 
-    const result = await create().destroy(path);
+    await expect(create().destroy(path)).resolves.toBeUndefined();
 
-    expect(result).toBeUndefined();
     expect(existsSync(path)).toBe(false);
   });
 });

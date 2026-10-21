@@ -10,7 +10,7 @@
  * the session manager.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -101,9 +101,8 @@ function contractDestroy(during: () => void = () => undefined): void {
   vi.mocked(ctx.mockWorkspace.destroy).mockImplementation(async (path, stillOwned) => {
     await Promise.resolve();
     during();
-    if (stillOwned && !stillOwned()) return "kept";
+    if (stillOwned && !stillOwned()) return;
     rmSync(path, { recursive: true, force: true });
-    return undefined;
   });
 }
 
@@ -290,6 +289,47 @@ describe("M-2 (round 7): core passes its ownership check to the workspace destro
     expect(existsSync(worktree)).toBe(false);
     expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({ status: "terminated" });
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "round 8 (review r6, M-3): recovery cleanup, the check throws on an unreadable record (readable again after the step): the worktree and the record stay",
+    async () => {
+      const worktree = managedWorktree("app-1");
+      launchedRecord("app-1", { worktree });
+      const assessed = assessment();
+      const before = recordOf("app-1");
+      const recordFile = join(sessionsDir, "app-1");
+      // `destroy` resolves nothing: the plugin's check throws (a real
+      // `chmod 000` makes the record unreadable during its own wait), the
+      // plugin keeps the worktree, and the mode is back before it returns.
+      vi.mocked(ctx.mockWorkspace.destroy).mockImplementation(async (path, stillOwned) => {
+        await Promise.resolve();
+        chmodSync(recordFile, 0o000);
+        let owned: boolean;
+        try {
+          owned = stillOwned ? stillOwned() : true;
+        } catch {
+          owned = false;
+        } finally {
+          chmodSync(recordFile, 0o644);
+        }
+        if (owned) rmSync(path, { recursive: true, force: true });
+      });
+
+      const result = await cleanupSession(
+        assessed,
+        ctx.config,
+        ctx.mockRegistry,
+        recoveryContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/changed after the assessment; nothing was written/);
+      expect(existsSync(worktree)).toBe(true);
+      // Not terminated and not archived: the record is the one assessed.
+      expect(recordOf("app-1")).toEqual(before);
+      expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
+    },
+  );
 });
 
 describe("M-3 (round 7): core passes its ownership decision to the prepared-session discard", () => {

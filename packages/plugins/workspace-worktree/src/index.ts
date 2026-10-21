@@ -163,12 +163,13 @@ export function create(config?: Record<string, unknown>): Workspace {
       };
     },
 
-    async destroy(workspacePath: string, stillOwned?: () => boolean): Promise<"kept" | undefined> {
+    async destroy(workspacePath: string, stillOwned?: () => boolean): Promise<void> {
       // Round 7 (M-2): every launch of a session ID uses the same path, and
       // the git commands await, so a new launch can take the path meanwhile.
       // The caller's check runs directly before each removal step (the git
       // remove and the fallback), with no await between the check and the
-      // step. A check that answers false or throws keeps the directory.
+      // step. A check that answers false or throws keeps the directory; the
+      // caller knows it from its own check (no return value, round 8).
       const owned = (): boolean => {
         if (!stillOwned) return true;
         try {
@@ -186,7 +187,7 @@ export function create(config?: Record<string, unknown>): Workspace {
         );
         // git-common-dir returns something like /path/to/repo/.git
         const repoPath = resolve(gitCommonDir, "..");
-        if (!owned()) return "kept";
+        if (!owned()) return;
         await git(repoPath, "worktree", "remove", "--force", workspacePath);
 
         // NOTE: We intentionally do NOT delete the branch here. The worktree
@@ -197,11 +198,10 @@ export function create(config?: Record<string, unknown>): Workspace {
       } catch {
         // If git commands fail, try to clean up the directory
         if (existsSync(workspacePath)) {
-          if (!owned()) return "kept";
+          if (!owned()) return;
           rmSync(workspacePath, { recursive: true, force: true });
         }
       }
-      return undefined;
     },
 
     async list(projectId: string): Promise<WorkspaceInfo[]> {

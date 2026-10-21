@@ -183,10 +183,21 @@ export async function cleanupSession(
     if (workspacePath && workspaceExists && workspace) {
       // Round 7 (M-2): the plugin's git steps await; it runs the same check
       // again directly before each removal step. A kept worktree ends the
-      // action as the check above does.
+      // action as the check above does. Round 8 (M-3): `destroy` returns
+      // nothing, so `kept` records the last answer of this check: a no or a
+      // throw (the plugin removes nothing after either) keeps the worktree.
       let kept = false;
+      const stillUnchanged = (): boolean => {
+        let answer = false;
+        try {
+          answer = unchanged();
+        } finally {
+          kept = !answer;
+        }
+        return answer;
+      };
       try {
-        kept = (await workspace.destroy(workspacePath, unchanged)) === "kept";
+        await workspace.destroy(workspacePath, stillUnchanged);
       } catch {
         // ignore cleanup errors
       }
