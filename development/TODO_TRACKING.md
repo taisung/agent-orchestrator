@@ -1066,6 +1066,17 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     the round-9 audit. Deliverables: failing tests (marked so the suite stays green), reproducers, a
     design file `development/reviews/same_id_design_r1_opus.md` with options, owner decisions and a plan
     of implementation rounds. The implementation starts after the killed-status fix lands.
+    Done 11:13 EDT (18.09 USD): commit `c516cead` on top of `ce49c9fd`, 42 failing defect tests (`it.fails`;
+    `SAME_ID_DEFECTS=red` shows the failures): R1 17, R2 8, R3 6, R4 11; full run green. Design on `main`:
+    `development/reviews/same_id_design_r1_opus.md`. Measured live: D-A `ao send` typed into and
+    `ao session kill` ended the live `kr-10` for a dead `kr-1`; D-B `ao session cleanup` archived two live
+    sessions and removed their worktrees, `ao send` started a second pane, `ao start` replaced the live
+    orchestrator, all with the tmux calls on another running server. Plan: R1 exact targets (`=name`,
+    `=name:`; low, S), R2 server and launch identity (`-S` socket, server PID and start time read back at
+    create, guarded destroy; HIGH, M-L), R4 the fail-open reads (medium, S), R3 one operation per ID (a
+    per-ID lease, one `git worktree add`, `stillOwned` in `postCreate`, a claim before the reuse read,
+    an `ao status` list of unowned runtimes; HIGH, L). Owner decisions OD-1 to OD-12 (design section 9).
+    New trap: tmux silently uses the default socket when `TMUX_TMPDIR` names a missing directory.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
