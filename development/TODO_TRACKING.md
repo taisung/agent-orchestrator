@@ -1000,6 +1000,18 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r7-astra.md`, output
     `development/reviews/killed_status_review_r7_astra6.md`): re-check of `0d3c05fe..69d6f467`, the strict
     reads in older paths, and a whole-fix land-safe statement with a separate follow-up list.
+    Done 08:50 EDT: **NOT-LAND-SAFE**, 0 blockers, 1 major, 0 minors. r6 M-2 and M-3 fixed, m-1 fixed as
+    asked, r6 M-1 partly fixed. All eight requested mutants fail tests; full run 2852 passed.
+    - M-1 (left in code of this fix, `7c8a18ec`): `preparedSessionHolder` (`session-manager.ts:1665`)
+      calls `listArchivedSessionIds` (`:639`, older `4e2144d9`), whose `if (!existsSync(archiveDir)) return
+      []` also answers "no archive" for EACCES or ELOOP. The decision then finds no holder and removes the
+      prepared session that an archive names (unsearchable-parent and symlink-loop reproducers). A strict
+      directory read (ENOENT is empty, any other error is a holder) passed 16 of 16 in the reviewer's
+      scratch copy. The audit and `docs/DEVELOPMENT.md` overstate the guarantee until it is fixed.
+    - Follow-up list (does not block, for the later round): F-1 r6 M-4; F-2 r6 M-5; F-3 the reuse
+      read-to-write window (`session-manager.ts:1139`, `:2026`, older code); F-4 the tmux prefix match;
+      F-5 the check-to-command gaps; F-6 the kept-runtime visibility; F-7 the hidden socket over 5 minutes.
+    - R7: the Opus author failed a seventh review round. The next step is the owner's.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
