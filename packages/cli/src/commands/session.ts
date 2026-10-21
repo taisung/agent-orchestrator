@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import {
   exactSessionTarget,
   isOrchestratorSession,
+  isRuntimeStopUnconfirmedError,
   loadConfig,
   SessionNotRestorableError,
   WorkspaceMissingError,
@@ -233,6 +234,13 @@ export function registerSession(program: Command): void {
         await sm.kill(sessionName, { purgeOpenCode: opts.purgeSession === true });
         console.log(chalk.green(`\nSession ${sessionName} killed.`));
       } catch (err) {
+        // Same-ID R2a: a runtime stop that was not confirmed keeps the record
+        // and the worktree; print the outcome and the next action.
+        if (isRuntimeStopUnconfirmedError(err)) {
+          console.error(chalk.red(`Failed to kill session ${sessionName}: ${err.message}`));
+          console.error(chalk.yellow(`Next: ${err.hint}`));
+          process.exit(1);
+        }
         console.error(chalk.red(`Failed to kill session ${sessionName}: ${err}`));
         process.exit(1);
       }
@@ -406,6 +414,10 @@ export function registerSession(program: Command): void {
           console.error(chalk.red(`Cannot restore: ${err.reason}`));
         } else if (err instanceof WorkspaceMissingError) {
           console.error(chalk.red(`Workspace missing: ${err.message}`));
+        } else if (isRuntimeStopUnconfirmedError(err)) {
+          // Same-ID R2a (N-2): no second runtime while the old one may run.
+          console.error(chalk.red(`Failed to restore session ${sessionName}: ${err.message}`));
+          console.error(chalk.yellow(`Next: ${err.hint}`));
         } else {
           console.error(chalk.red(`Failed to restore session ${sessionName}: ${err}`));
         }

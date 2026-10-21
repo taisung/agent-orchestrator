@@ -16,6 +16,8 @@ import {
   type Session,
   type CleanupResult,
   type SessionManager,
+  type UnconfirmedRuntimeStop,
+  RuntimeStopUnconfirmedError,
   SessionLaunchInProgressError,
   SessionNotFoundError,
   getSessionsDir,
@@ -487,6 +489,78 @@ describe("session kill", () => {
       expect(output).not.toContain("killed");
     },
   );
+
+  // Same-ID R2a: a runtime stop that was not confirmed keeps the record and
+  // the worktree; the kill exits 1 with the outcome and the next action.
+  const refusals: UnconfirmedRuntimeStop[] = [
+    { outcome: "unknown", detail: "the destroy of tmux session hash-app-1 failed (timed out)" },
+    { outcome: "other-launch", detail: "the address now names another launch" },
+  ];
+  it.each(refusals)("exits 1 with the outcome and the hint on a $outcome stop", async (stop) => {
+    mockSessionManager.kill.mockRejectedValue(
+      new RuntimeStopUnconfirmedError({
+        sessionId: "app-1",
+        handle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+        stop,
+        kept: "record and worktree kept",
+        retry: "ao session kill app-1",
+      }),
+    );
+
+    await expect(program.parseAsync(["node", "test", "session", "kill", "app-1"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => String(c[0]))
+      .join("\n");
+    expect(errors).toContain(
+      `Failed to kill session app-1: runtime stop unconfirmed (${stop.outcome}): ${stop.detail}; record and worktree kept`,
+    );
+    expect(errors).toContain(
+      "Next: Check tmux session hash-app-1 by hand and stop it if it still runs, then run `ao session kill app-1` again.",
+    );
+    const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(output).not.toContain("killed");
+  });
+
+  it("exits 0 (no process.exit) when the kill is confirmed", async () => {
+    mockSessionManager.kill.mockResolvedValue(undefined);
+
+    await program.parseAsync(["node", "test", "session", "kill", "app-1"]);
+
+    expect(process.exit).not.toHaveBeenCalled();
+    const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(output).toContain("Session app-1 killed.");
+  });
+});
+
+describe("session restore", () => {
+  it("exits 1 with the outcome and the hint when the old runtime stop is not confirmed (N-2)", async () => {
+    mockSessionManager.restore.mockRejectedValue(
+      new RuntimeStopUnconfirmedError({
+        sessionId: "app-1",
+        handle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+        stop: { outcome: "unknown", detail: "the destroy of tmux session hash-app-1 failed" },
+        kept: "record and worktree kept; no new runtime was created",
+        retry: "ao session restore app-1",
+      }),
+    );
+
+    await expect(
+      program.parseAsync(["node", "test", "session", "restore", "app-1"]),
+    ).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => String(c[0]))
+      .join("\n");
+    expect(errors).toContain(
+      "Failed to restore session app-1: runtime stop unconfirmed (unknown): the destroy of tmux session hash-app-1 failed; record and worktree kept; no new runtime was created",
+    );
+    expect(errors).toContain("`ao session restore app-1` again");
+  });
 });
 
 describe("session attach", () => {

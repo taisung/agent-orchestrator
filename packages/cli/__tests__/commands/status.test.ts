@@ -581,6 +581,48 @@ describe("status command", () => {
     expect(parsed[0].pendingThreads).toBe(0);
   });
 
+  // Same-ID R2a: a failed launch whose runtime stop was not confirmed keeps
+  // its record with launchFailed; status names it.
+  it("shows launchFailed of a kept failed launch, in the table and in JSON", async () => {
+    writeFileSync(
+      join(sessionsDir, "app-1"),
+      "worktree=/tmp/wt/app-1\nbranch=feat/kept\nstatus=spawning\n" +
+        "launchFailed=post-launch setup failed; then runtime stop unconfirmed (unknown): the destroy of tmux session hash-app-1 failed; record kept\n",
+    );
+    mockTmux.mockImplementation(async (...args: string[]) => {
+      if (args[0] === "list-sessions") return "app-1";
+      if (args[0] === "display-message") return String(Math.floor(Date.now() / 1000));
+      return null;
+    });
+    mockGit.mockResolvedValue("feat/kept");
+
+    await program.parseAsync(["node", "test", "status"]);
+
+    const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain(
+      "launch failed: post-launch setup failed; then runtime stop unconfirmed (unknown)",
+    );
+
+    consoleSpy.mockClear();
+    await program.parseAsync(["node", "test", "status", "--json"]);
+    const parsed = JSON.parse(consoleSpy.mock.calls.map((c) => c[0]).join(""));
+    expect(parsed[0].launchFailed).toContain("runtime stop unconfirmed (unknown)");
+  });
+
+  it("shows no launchFailed line for a session without it", async () => {
+    writeFileSync(
+      join(sessionsDir, "app-1"),
+      "worktree=/tmp/wt/app-1\nbranch=feat/ok\nstatus=working\n",
+    );
+    mockTmux.mockResolvedValue(null);
+    mockGit.mockResolvedValue("feat/ok");
+
+    await program.parseAsync(["node", "test", "status"]);
+
+    const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).not.toContain("launch failed");
+  });
+
   it("rejects --watch with --json", async () => {
     await expect(program.parseAsync(["node", "test", "status", "--watch", "--json"])).rejects.toThrow(
       "process.exit(1)",

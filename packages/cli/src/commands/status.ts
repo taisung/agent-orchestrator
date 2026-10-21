@@ -42,6 +42,8 @@ interface SessionInfo {
   reviewDecision: ReviewDecision | null;
   pendingThreads: number | null;
   activity: ActivityState | null;
+  /** Same-ID R2a: a launch that failed and whose runtime stop was not confirmed. */
+  launchFailed: string | null;
 }
 
 interface StatusOptions {
@@ -82,6 +84,7 @@ async function gatherSessionInfo(
   let branch = session.branch;
   const status = session.status;
   const summary = session.metadata["summary"] ?? null;
+  const launchFailed = session.metadata["launchFailed"] || null;
   const prUrl = suppressPROwnership ? null : (session.metadata["pr"] ?? null);
   const issue = session.issueId;
 
@@ -162,6 +165,7 @@ async function gatherSessionInfo(
     reviewDecision,
     pendingThreads,
     activity,
+    launchFailed,
   };
 }
 
@@ -218,6 +222,14 @@ function printSessionRow(info: SessionInfo): void {
   if (displaySummary) {
     console.log(`  ${" ".repeat(COL.session)}${chalk.dim(displaySummary.slice(0, 60))}`);
   }
+  printLaunchFailed(info, `  ${" ".repeat(COL.session)}`);
+}
+
+/** Same-ID R2a: the kept record of a failed launch says why it stays. */
+function printLaunchFailed(info: SessionInfo, indent: string): void {
+  if (info.launchFailed) {
+    console.log(`${indent}${chalk.red(`launch failed: ${info.launchFailed}`)}`);
+  }
 }
 
 function printOrchestratorRow(info: SessionInfo): void {
@@ -230,6 +242,7 @@ function printOrchestratorRow(info: SessionInfo): void {
   if (displaySummary) {
     console.log(`                ${chalk.dim(displaySummary.slice(0, 60))}`);
   }
+  printLaunchFailed(info, "                ");
 }
 
 export function registerStatus(program: Command): void {
