@@ -170,11 +170,19 @@ export function create(): Runtime {
       };
     },
 
+    /**
+     * Resolves when tmux killed the session or answered that it does not
+     * exist. Every other failure (no server, a timeout, an unknown error)
+     * rejects with the failure as `cause` (same-ID R2a): core `stopRuntime`
+     * then asks `isAlive`, and a caller goes on only after a confirmed stop.
+     */
     async destroy(handle: RuntimeHandle): Promise<void> {
+      const target = exactSessionTarget(handle.id);
       try {
-        await tmux("kill-session", "-t", exactSessionTarget(handle.id));
-      } catch {
-        // Session may already be dead — that's fine
+        await tmux("kill-session", "-t", target);
+      } catch (err: unknown) {
+        if (isTmuxTargetNotFound(err)) return;
+        throw tmuxProbeError(`kill-session -t ${target}`, err);
       }
     },
 

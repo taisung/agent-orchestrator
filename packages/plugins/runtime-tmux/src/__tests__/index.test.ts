@@ -424,18 +424,63 @@ describe("runtime.destroy()", () => {
     );
   });
 
-  it("does not throw if session is already gone", async () => {
-    const runtime = create();
-    const handle = makeHandle("already-dead");
+  // Same-ID R2a: destroy resolves only for a kill and for tmux's own "gone"
+  // answer; every other failure rejects with the failure as cause, so core
+  // stopRuntime asks isAlive and a caller goes on only after a confirmed stop.
+  it("resolves when tmux answers that the session does not exist", async () => {
+    mockTmuxFailure("kill-session -t =already-dead", "can't find session: already-dead\n");
 
-    mockTmuxError("session not found: already-dead");
-
-    // Should not throw
-    await expect(runtime.destroy(handle)).resolves.toBeUndefined();
+    await expect(create().destroy(makeHandle("already-dead"))).resolves.toBeUndefined();
   });
 
-  it("ends no session for a handle ID that is not a safe tmux name", async () => {
-    await expect(create().destroy(makeHandle("bad.session"))).resolves.toBeUndefined();
+  it("resolves when a server with no session answers 'no current target'", async () => {
+    mockTmuxFailure("kill-session -t =already-dead", "no current target\n");
+
+    await expect(create().destroy(makeHandle("already-dead"))).resolves.toBeUndefined();
+  });
+
+  it("rejects with the cause when tmux fails with another error", async () => {
+    const failure = tmuxFailure("kill-session -t =busy", "server exited unexpectedly\n");
+    mockExecFileCustom.mockRejectedValueOnce(failure);
+
+    const rejection = await create()
+      .destroy(makeHandle("busy"))
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+
+    expect(rejection).toBeInstanceOf(TmuxProbeError);
+    expect((rejection as TmuxProbeError).code).toBe("ERR_RUNTIME_PROBE");
+    expect((rejection as TmuxProbeError).message).toContain("server exited unexpectedly");
+    expect((rejection as TmuxProbeError).cause).toBe(failure);
+  });
+
+  it("rejects with the no-server code when no tmux server runs", async () => {
+    mockTmuxFailure("kill-session -t =gone", "no server running on /tmp/tmux-1000/default\n");
+
+    await expect(create().destroy(makeHandle("gone"))).rejects.toMatchObject({
+      name: "TmuxProbeError",
+      code: "ERR_RUNTIME_NO_SERVER",
+    });
+  });
+
+  it("rejects when the tmux command times out", async () => {
+    mockExecFileCustom.mockRejectedValueOnce(
+      Object.assign(new Error("Command failed: tmux kill-session -t =slow"), {
+        killed: true,
+        signal: "SIGTERM",
+        stderr: "",
+      }),
+    );
+
+    await expect(create().destroy(makeHandle("slow"))).rejects.toThrow(/timed out/);
+  });
+
+  it("rejects, and ends no session, for a handle ID that is not a safe tmux name", async () => {
+    await expect(create().destroy(makeHandle("bad.session"))).rejects.toThrow(
+      'Invalid tmux session name "bad.session"',
+    );
     expect(mockExecFileCustom).not.toHaveBeenCalled();
   });
 });
