@@ -892,6 +892,16 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     and `generation` never repeats for a session ID. The tmux-name destroy windows in `killRecord` and
     restore step 7 go to the prefix-match round. Dispatched 19:35:11 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r5.md`, on top of `f35b665f`, no rebase.
+    Done 20:41 EDT at `f06a1107` (4 commits, `f35b665f..f06a1107`; 19.72 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r5.md`). Full run 2756 passed. New state in the
+    real sessions directories after rollout: `sessions/.generations/<id>` (one small file per deleted ID;
+    the installed build's `listMetadata` skips dot names). New behavior: a stale restore or rollback keeps
+    a runtime that any record may own and names it in the error or a warning; a cleanup kill skips a
+    session whose PR, issue or status changed during its checks.
+  - **Review r4** (ao-47, dispatched 20:45:02 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r4-sol.md`, output
+    `development/reviews/killed_status_review_r4_sol61.md`): re-check of `f35b665f..f06a1107`, plus a
+    whole-fix and rollout judgment.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
