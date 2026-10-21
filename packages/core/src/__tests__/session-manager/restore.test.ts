@@ -125,10 +125,12 @@ describe("restore", () => {
     const wsPath = join(tmpDir, "ws-app-1");
     mkdirSync(wsPath, { recursive: true });
 
-    // Make destroy throw — should not block restore
+    // Make destroy throw — should not block restore while the runtime
+    // answers that the old session is gone (same-ID R2a: "absent").
     const failingRuntime = {
       ...mockRuntime,
       destroy: vi.fn().mockRejectedValue(new Error("session not found")),
+      isAlive: vi.fn().mockResolvedValue(false),
       create: vi.fn().mockResolvedValue(makeHandle("rt-new")),
     };
 

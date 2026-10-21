@@ -703,6 +703,12 @@ describe("1.1 item 3: an orchestrator start that reuses a live orchestrator", ()
 
   it("a record archived during the liveness check: its orphan runtime is stopped, and a new start follows", async () => {
     vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async (handle) => {
+      // Same-ID R2a: the orphan runs until its destroy, then answers gone,
+      // so its stop is confirmed.
+      const destroyed = vi
+        .mocked(ctx.mockRuntime.destroy)
+        .mock.calls.some(([destroyedHandle]) => destroyedHandle.id === handle.id);
+      if (destroyed) return false;
       if (handle.id === "rt-orch-old") deleteMetadata(sessionsDir, "app-orchestrator", true);
       return true;
     });

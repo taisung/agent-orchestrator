@@ -191,7 +191,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     vi.mocked(ctx.mockRuntime.isAlive).mockRejectedValue(probeError());
   }
 
-  defect("kill: a destroy that rejects keeps the worktree and the record", async () => {
+  it("kill: a destroy that rejects keeps the worktree and the record", async () => {
     const worktree = managedWorktree("app-1");
     launchedRecord("app-1", worktree);
     stopUnknown();
@@ -207,7 +207,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     expect(readMetadataRaw(sessionsDir, "app-1"), "the record was archived").not.toBeNull();
   });
 
-  defect(
+  it(
     "kill: a destroy that resolves while the session still runs keeps the worktree and the record",
     async () => {
       // A guarded destroy that kept the session (another launch, an
@@ -242,7 +242,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     expect(readArchivedMetadataRaw(sessionsDir, "app-1")).not.toBeNull();
   });
 
-  defect(
+  it(
     "cleanup of a merged PR: a destroy that rejects keeps the worktree and the record",
     async () => {
       // The PR and issue routes do not probe the runtime first (review B-6,
@@ -271,7 +271,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     },
   );
 
-  defect("launch rollback: a destroy that rejects keeps the workspace and the record", async () => {
+  it("launch rollback: a destroy that rejects keeps the workspace and the record", async () => {
     const worktree = managedWorktree("app-1");
     vi.mocked(ctx.mockWorkspace.create).mockResolvedValue({
       path: worktree,
@@ -301,7 +301,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     ).not.toBeNull();
   });
 
-  defect(
+  it(
     "orchestrator start: a destroy of the live orchestrator that rejects keeps its record and starts no second one",
     async () => {
       // The delete strategy replaces a live orchestrator: today the destroy
@@ -359,7 +359,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     return worktree;
   }
 
-  defect("restore: a destroy of the old pane that rejects creates no second runtime", async () => {
+  it("restore: a destroy of the old pane that rejects creates no second runtime", async () => {
     // Today step 7 drops the rejection (session-manager.ts:4256-4262) and
     // step 8 creates a runtime. With a tmux name per launch (design r2,
     // R2b), tmux no longer refuses the second session by its name, so two
@@ -393,7 +393,7 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     expect(readMetadataRaw(sessionsDir, "app-1")?.["runtimeHandle"]).toContain("rt-app-1-restored");
   });
 
-  defect("recovery cleanup: a destroy that rejects keeps the worktree and the record", async () => {
+  it("recovery cleanup: a destroy that rejects keeps the worktree and the record", async () => {
     const worktree = managedWorktree("app-1");
     launchedRecord("app-1", worktree);
     const rawMetadata = readMetadataRaw(sessionsDir, "app-1")!;

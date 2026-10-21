@@ -115,6 +115,13 @@ import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
 import { exactPaneTarget, exactSessionTarget } from "./tmux.js";
+import {
+  isRuntimeStopConfirmed,
+  isRuntimeStopUnconfirmedError,
+  RuntimeStopUnconfirmedError,
+  stopRuntime,
+  type UnconfirmedRuntimeStop,
+} from "./runtime-stop.js";
 
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
@@ -1745,7 +1752,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * agent session, the workspace and the record stay. Every step is best
    * effort; a runtime, agent session, workspace or record that stays is
    * named to the operator, except a workspace that stays for a new launch
-   * of the ID.
+   * of the ID. Same-ID R2a: a runtime stop that is not confirmed
+   * (`stopRuntime` answers `other-launch` or `unknown`) ends the rollback
+   * there (keepUnconfirmedLaunch): the agent session, the workspace and the
+   * record stay, and the record gets `launchFailed`. The answer says
+   * whether that happened.
    */
   async function rollbackLaunch(rollback: {
     own: OwnLaunchRecord;
@@ -1753,7 +1764,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     handle?: RuntimeHandle;
     prepared?: PreparedAgentSession;
     workspace?: RollbackWorkspace;
-  }): Promise<void> {
+    /** The error that failed the launch, for `launchFailed`. */
+    failure?: unknown;
+  }): Promise<{ stopUnconfirmed: boolean }> {
     const { own } = rollback;
     const unreadable = (error: unknown): string =>
       `the record of ${own.sessionId} could not be read (${shortErrorText(error)})`;
@@ -1767,10 +1780,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             ? "another launch of the ID may own it"
             : undefined;
       if (keptBecause === undefined) {
-        try {
-          await rollback.runtime.destroy(handle);
-        } catch {
-          /* best effort */
+        const stopped = await stopRuntime(rollback.runtime, handle);
+        if (!isRuntimeStopConfirmed(stopped)) {
+          keepUnconfirmedLaunch(rollback, handle, stopped);
+          return { stopUnconfirmed: true };
         }
       } else {
         warnOperator(
@@ -1830,6 +1843,58 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         /* best effort */
       }
     }
+    return { stopUnconfirmed: false };
+  }
+
+  /**
+   * Same-ID R2a: the rollback of a launch whose runtime stop is not
+   * confirmed. The runtime may still run, so nothing that it may use goes:
+   * the agent session, the workspace and the record stay (review r2: a
+   * stopped own runtime alone never allows the removal of a workspace that
+   * another record may own, and an unknown stop keeps both). The record,
+   * while it is still this launch, gets `launchFailed` (`ao status` shows
+   * it); the operator gets the outcome and the next action.
+   */
+  function keepUnconfirmedLaunch(
+    rollback: {
+      own: OwnLaunchRecord;
+      prepared?: PreparedAgentSession;
+      workspace?: RollbackWorkspace;
+      failure?: unknown;
+    },
+    handle: RuntimeHandle,
+    stopped: UnconfirmedRuntimeStop,
+  ): void {
+    const { own } = rollback;
+    const checked = own.checkOrUnknown();
+    const kept = [
+      ...(checked.state === "own" ? ["record"] : []),
+      ...(rollback.workspace ? [`workspace ${rollback.workspace.path}`] : []),
+      ...(rollback.prepared?.created
+        ? [`agent session ${Object.values(rollback.prepared.metadata).join(", ")}`]
+        : []),
+    ];
+    const refusal = new RuntimeStopUnconfirmedError({
+      sessionId: own.sessionId,
+      handle,
+      stop: stopped,
+      kept: kept.length > 0 ? `${kept.join(", ")} kept` : "nothing removed",
+      retry: `ao session kill ${own.sessionId}`,
+    });
+    const failure =
+      rollback.failure === undefined ? "" : `${shortErrorText(rollback.failure)}; then `;
+    const launchFailed = `${failure}${refusal.message}`.replace(/\s+/g, " ").trim().slice(0, 600);
+    let unrecorded = "";
+    if (checked.state === "own") {
+      try {
+        own.write({ launchFailed }, "the rollback recorded the failed launch");
+      } catch (err) {
+        unrecorded = ` The record does not name the failure: ${shortErrorText(err)}.`;
+      }
+    }
+    warnOperator(
+      `ao: the failed launch of ${own.sessionId} was not rolled back: ${refusal.message}. ${refusal.hint}${unrecorded}`,
+    );
   }
 
   // Define methods as local functions so `this` is not needed
@@ -2196,6 +2261,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         handle,
         prepared,
         workspace: spawnWorkspace(),
+        failure: err,
       });
       throw err;
     }
@@ -2297,6 +2363,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let own: OwnLaunchRecord;
     const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
 
+    /**
+     * Same-ID R2a: stop a live orchestrator before this start replaces it.
+     * Only `destroyed` or `absent` goes on; anything else throws, so the
+     * start removes no record and creates no runtime.
+     */
+    const orchestratorRuntime = plugins.runtime;
+    const stopOrchestratorOrRefuse = async (handle: RuntimeHandle, kept: string): Promise<void> => {
+      const stopped = await stopRuntime(orchestratorRuntime, handle);
+      if (!isRuntimeStopConfirmed(stopped)) {
+        throw new RuntimeStopUnconfirmedError({
+          sessionId: `${project.sessionPrefix}-orchestrator`,
+          handle,
+          stop: stopped,
+          kept,
+          retry: "ao start",
+        });
+      }
+    };
+
     if (orchestratorWorkspaceMode === "project") {
       sessionId = `${project.sessionPrefix}-orchestrator`;
       tmuxName = config.configPath
@@ -2353,16 +2438,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           // it is stopped before this start uses the ID and its runtime name.
           // A record without a handle is another start's reservation, and
           // it is kept (the reservation below then fails).
+          // Same-ID R2a: only a confirmed stop lets the start use the ID.
           if (!persistedRaw) {
-            await plugins.runtime
-              .destroy(existingOrchestrator.runtimeHandle)
-              .catch(() => undefined);
+            await stopOrchestratorOrRefuse(
+              existingOrchestrator.runtimeHandle,
+              "no record names it; no new orchestrator was started",
+            );
           }
         } else if (existingAlive) {
           if (stillNames(existingRaw)) {
-            await plugins.runtime
-              .destroy(existingOrchestrator.runtimeHandle)
-              .catch(() => undefined);
+            // Same-ID R2a: the record is deleted, and a new orchestrator
+            // started, only after a confirmed stop of the live one.
+            await stopOrchestratorOrRefuse(
+              existingOrchestrator.runtimeHandle,
+              "its record kept; no second orchestrator was started",
+            );
             deleteMetadata(sessionsDir, sessionId, false, launchIdentity(existingRaw));
           }
         } else {
@@ -2466,13 +2556,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Undo a failed start (see rollbackLaunch) and remove its prompt file.
     const rollbackOrchestratorLaunch = async (
       promptFile: string | undefined,
-      failed: { handle?: RuntimeHandle; prepared?: PreparedAgentSession } = {},
+      failed: { handle?: RuntimeHandle; prepared?: PreparedAgentSession; failure?: unknown } = {},
     ): Promise<void> => {
-      await rollbackLaunch({
+      const { stopUnconfirmed } = await rollbackLaunch({
         own,
         runtime: plugins.runtime ?? undefined,
         handle: failed.handle,
         prepared: failed.prepared,
+        failure: failed.failure,
         workspace:
           orchestratorWorkspaceMode === "isolated" && workspacePlugin
             ? {
@@ -2483,8 +2574,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       });
       // Round 5: the prompt file name is the same for every start of the
       // ID; it stays when another start replaced the record. Round 8 (M-1):
-      // it stays too when the record cannot be read.
-      if (!promptFile) return;
+      // it stays too when the record cannot be read. Same-ID R2a: and when
+      // the runtime that may read it could not be confirmed stopped.
+      if (!promptFile || stopUnconfirmed) return;
       const checked = own.checkOrUnknown();
       if (checked.state === "unknown") {
         warnOperator(
@@ -2717,7 +2809,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     } catch (err) {
       // Clean up runtime on post-launch failure. The runtime goes first, so no
       // pane still uses the agent session that is removed.
-      await rollbackOrchestratorLaunch(systemPromptFile, { handle, prepared });
+      await rollbackOrchestratorLaunch(systemPromptFile, { handle, prepared, failure: err });
       throw err;
     }
 
@@ -2846,7 +2938,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * issue and status, plus the launch identity); a record where one of them
    * changed is not touched at all, and a change during the kill stops the
    * later steps. Round 5 (1.0.1): each step reads the record directly
-   * before it, with no await between the check and the step.
+   * before it, with no await between the check and the step. Same-ID R2a:
+   * a runtime stop that is not confirmed (`stopRuntime` answers
+   * `other-launch` or `unknown`) throws RuntimeStopUnconfirmedError before
+   * any removal, so the worktree, the agent session and the record stay.
    */
   async function killRecord(
     sessionId: SessionId,
@@ -2898,10 +2993,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           // is the same for every launch of the ID; no record compare can
           // close it).
           stopWhenReplaced("nothing was destroyed; run the kill again");
-          try {
-            await runtimePlugin.destroy(handle);
-          } catch {
-            // Runtime might already be gone
+          // Same-ID R2a: only a confirmed stop (destroyed or absent) lets the
+          // kill remove the worktree and archive the record. Anything else
+          // keeps both: the session may still run in them.
+          const stopped = await stopRuntime(runtimePlugin, handle);
+          if (!isRuntimeStopConfirmed(stopped)) {
+            throw new RuntimeStopUnconfirmedError({
+              sessionId,
+              handle,
+              stop: stopped,
+              kept: "record and worktree kept",
+              retry: decidedFrom ? "ao session cleanup" : `ao session kill ${sessionId}`,
+            });
           }
         }
       }
@@ -3256,9 +3359,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           pushSkipped(session.projectId, session.id);
         }
       } catch (err) {
+        // Same-ID R2a: on every route (runtime, merged PR, closed issue) the
+        // kill's own stop decides. An unconfirmed stop keeps the session; it
+        // is reported with the outcome and the next action.
         result.errors.push({
           sessionId: session.id,
-          error: err instanceof Error ? err.message : String(err),
+          error: isRuntimeStopUnconfirmedError(err)
+            ? `kept: ${err.message}. ${err.hint}`
+            : err instanceof Error
+              ? err.message
+              : String(err),
         });
       }
     }
@@ -4266,12 +4376,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
     }
 
-    // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash)
+    // 7. Destroy old runtime if still alive (e.g. tmux session survives agent crash).
+    // Same-ID R2a (N-2): only a confirmed stop (destroyed or absent) lets the
+    // restore create a runtime. Anything else throws before step 8, so no
+    // second launch of the ID starts while the old one may still run.
     if (session.runtimeHandle) {
-      try {
-        await plugins.runtime.destroy(session.runtimeHandle);
-      } catch {
-        // Best effort — may already be gone
+      const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
+      if (!isRuntimeStopConfirmed(stopped)) {
+        throw new RuntimeStopUnconfirmedError({
+          sessionId,
+          handle: session.runtimeHandle,
+          stop: stopped,
+          kept: "record and worktree kept; no new runtime was created",
+          retry: `ao session restore ${sessionId}`,
+        });
       }
     }
 
@@ -4325,18 +4443,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           `its record was not written, and its runtime ${handle.runtimeName ?? "?"} ${handle.id} was kept because the record now there may own that runtime name; stop it by hand if no session uses it`,
         );
       }
-      const changed = recordChangedError(
+      // Same-ID R2a: the error says whether the stop of the new runtime was
+      // confirmed; an unconfirmed one names the runtime to stop by hand.
+      const stopped = await stopRuntime(plugins.runtime, handle);
+      throw recordChangedError(
         sessionsDir,
         sessionId,
         "it was restored",
-        "its new runtime was stopped and its record was not written",
+        isRuntimeStopConfirmed(stopped)
+          ? "its new runtime was stopped and its record was not written"
+          : `its record was not written, and the stop of its new runtime ${handle.runtimeName ?? "?"} ${handle.id} was not confirmed (${stopped.outcome}: ${stopped.detail}); stop it by hand if no session uses it`,
       );
-      try {
-        await plugins.runtime.destroy(handle);
-      } catch {
-        /* best effort */
-      }
-      throw changed;
     }
     owned = restoredRecord;
 

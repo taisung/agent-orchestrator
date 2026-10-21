@@ -176,9 +176,12 @@ describe("kill", () => {
   });
 
   it("tolerates runtime destroy failure", async () => {
+    // Same-ID R2a: a failed destroy is tolerated while the runtime answers
+    // that the session is gone ("absent").
     const failRuntime: Runtime = {
       ...mockRuntime,
       destroy: vi.fn().mockRejectedValue(new Error("already gone")),
+      isAlive: vi.fn().mockResolvedValue(false),
     };
     const registryWithFail: PluginRegistry = {
       ...mockRegistry,
@@ -407,8 +410,14 @@ describe("kill", () => {
       ]);
       process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
       writeSharedPair("merged");
+      // Same-ID R2a: the kill of app-1 goes on only after a confirmed stop of
+      // its own runtime (rt-1 answers gone), so only the holder's probe (rt-2)
+      // fails or hangs.
       if (mode === "runtime error")
-        vi.mocked(mockRuntime.isAlive).mockRejectedValue(new Error("unavailable"));
+        vi.mocked(mockRuntime.isAlive).mockImplementation(async (handle) => {
+          if (handle.id === "rt-1") return false;
+          throw new Error("unavailable");
+        });
       if (mode === "agent error" || mode === "agent alive") {
         vi.mocked(mockRuntime.isAlive).mockResolvedValue(false);
         if (mode === "agent error")
@@ -423,7 +432,9 @@ describe("kill", () => {
         );
       }
       if (mode === "hang")
-        vi.mocked(mockRuntime.isAlive).mockImplementation(() => new Promise(() => {}));
+        vi.mocked(mockRuntime.isAlive).mockImplementation((handle) =>
+          handle.id === "rt-1" ? Promise.resolve(false) : new Promise(() => {}),
+        );
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       try {
         const sm = createSessionManager({ config, registry: mockRegistry });

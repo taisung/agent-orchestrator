@@ -10,6 +10,11 @@ import {
 import { getSessionsDir } from "../paths.js";
 import { validateStatus } from "../utils/validation.js";
 import { sessionFromMetadata } from "../utils/session-from-metadata.js";
+import {
+  isRuntimeStopConfirmed,
+  RuntimeStopUnconfirmedError,
+  stopRuntime,
+} from "../runtime-stop.js";
 import type { RecoveryAssessment, RecoveryResult, RecoveryContext } from "./types.js";
 
 /**
@@ -161,11 +166,25 @@ export async function cleanupSession(
     const runtime = registry.get<Runtime>("runtime", runtimeName);
     const workspace = registry.get<Workspace>("workspace", workspaceName);
 
+    // Same-ID R2a: only a confirmed stop (destroyed or absent) lets the
+    // cleanup remove the worktree and archive the record; anything else
+    // fails the action and keeps both.
     if (runtimeAlive && assessment.runtimeHandle && runtime) {
-      try {
-        await runtime.destroy(assessment.runtimeHandle);
-      } catch {
-        // ignore cleanup errors
+      const stopped = await stopRuntime(runtime, assessment.runtimeHandle);
+      if (!isRuntimeStopConfirmed(stopped)) {
+        const refusal = new RuntimeStopUnconfirmedError({
+          sessionId,
+          handle: assessment.runtimeHandle,
+          stop: stopped,
+          kept: "record and worktree kept",
+          retry: `ao session kill ${sessionId}`,
+        });
+        return {
+          success: false,
+          sessionId,
+          action: "cleanup",
+          error: `${refusal.message}. ${refusal.hint}`,
+        };
       }
     }
 

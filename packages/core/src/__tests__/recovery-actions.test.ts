@@ -347,7 +347,9 @@ describe("cleanupSession", () => {
       destroy: vi.fn().mockRejectedValue(new Error("Runtime destroy failed")),
       sendMessage: vi.fn(),
       getOutput: vi.fn(),
-      isAlive: vi.fn(),
+      // Same-ID R2a: the cleanup goes on after a failed destroy only while
+      // the runtime answers that the session is gone ("absent").
+      isAlive: vi.fn().mockResolvedValue(false),
     };
     const mockWorkspace: Workspace = {
       name: "worktree",

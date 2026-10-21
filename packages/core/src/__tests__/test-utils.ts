@@ -71,13 +71,34 @@ export interface MockPlugins {
 }
 
 export function createMockPlugins(): MockPlugins {
+  // Same-ID R2a: a runtime whose destroy works. Core stops a runtime with
+  // destroy and then isAlive (stopRuntime), and goes on only when isAlive
+  // answers false. So this isAlive answers false for a handle ID whose last
+  // destroy call (also one that a test made reject or replaced) came after
+  // the last create call (a restore or a new launch can reuse the ID). It
+  // reads the recorded calls, so it holds whatever destroy a test sets. A
+  // test that sets isAlive gets what it sets.
+  const lastCallOrder = (fn: unknown, matches: (args: unknown[]) => boolean): number => {
+    if (!vi.isMockFunction(fn)) return 0;
+    let last = 0;
+    fn.mock.calls.forEach((args, index) => {
+      if (matches(args)) last = Math.max(last, fn.mock.invocationCallOrder[index] ?? 0);
+    });
+    return last;
+  };
   const runtime: Runtime = {
     name: "mock",
     create: vi.fn().mockResolvedValue({ id: "rt-1", runtimeName: "mock", data: {} }),
     destroy: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined),
     getOutput: vi.fn().mockResolvedValue("$ some terminal output\n"),
-    isAlive: vi.fn().mockResolvedValue(true),
+    isAlive: vi.fn(async (handle: RuntimeHandle) => {
+      const destroyedAt = lastCallOrder(
+        runtime.destroy,
+        (args) => (args[0] as RuntimeHandle | undefined)?.id === handle.id,
+      );
+      return destroyedAt === 0 || lastCallOrder(runtime.create, () => true) > destroyedAt;
+    }),
   };
 
   const agent: Agent = {
