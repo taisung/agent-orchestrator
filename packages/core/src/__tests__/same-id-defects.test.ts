@@ -148,30 +148,30 @@ describe("[same-id R1] D-A: the exported core tmux helpers match a longer sessio
     proc.tmux = null;
   });
 
-  defect("hasTmuxSession answers false for a dead name while one live name starts with it", async () => {
+  it("hasTmuxSession answers false for a dead name while one live name starts with it", async () => {
     tmuxWith(["kr-10"]);
     await expect(hasSession("kr-1")).resolves.toBe(false);
   });
 
-  defect("killTmuxSession of a dead name does not end the live session", async () => {
+  it("killTmuxSession of a dead name does not end the live session", async () => {
     const sessions = tmuxWith(["kr-10"]);
     await killSession("kr-1").catch(() => undefined);
     expect([...sessions.keys()]).toEqual(["kr-10"]);
   });
 
-  defect("tmuxSendKeys to a dead name types nothing into another session", async () => {
+  it("tmuxSendKeys to a dead name types nothing into another session", async () => {
     const sessions = tmuxWith(["kr-10"]);
     await sendKeys("kr-1", "hello").catch(() => undefined);
     expect(sessions.get("kr-10")!.keys).toEqual([]);
   });
 
-  defect("tmuxCapturePane of a dead name does not read another session's screen", async () => {
+  it("tmuxCapturePane of a dead name does not read another session's screen", async () => {
     tmuxWith(["kr-10"]);
     const screen = await capturePane("kr-1").catch(() => "");
     expect(screen).not.toContain("/dev/pts/50");
   });
 
-  defect("getTmuxPaneTTY of a dead name does not answer another session's pane", async () => {
+  it("getTmuxPaneTTY of a dead name does not answer another session's pane", async () => {
     tmuxWith(["kr-10"]);
     await expect(getPaneTTY("kr-1")).resolves.toBeNull();
   });

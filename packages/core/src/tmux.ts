@@ -6,6 +6,42 @@
 
 import { execFile } from "node:child_process";
 
+/**
+ * The names that AO gives its tmux sessions: runtime-tmux refuses any other
+ * session ID, and `generateTmuxName` builds `<hash>-<prefix>-<num>` from
+ * these characters. tmux reads a dot or a colon in a target as a window or
+ * pane separator, so an exact target of such a name could select another pane.
+ */
+const SAFE_TMUX_NAME = /^[a-zA-Z0-9_-]+$/;
+
+function assertSafeTmuxName(name: string): void {
+  if (!SAFE_TMUX_NAME.test(name)) {
+    throw new Error(`Invalid tmux session name "${name}": must match ${SAFE_TMUX_NAME}`);
+  }
+}
+
+/**
+ * The exact `-t` target of a session, for `has-session`, `kill-session` and
+ * `attach`. tmux 3.4 tries a plain target as an exact name and then as the
+ * start of one session name, so `kr-1` reaches a live `kr-10` while `kr-1` is
+ * dead. `=name` matches only the session of that name.
+ */
+export function exactSessionTarget(name: string): string {
+  assertSafeTmuxName(name);
+  return `=${name}`;
+}
+
+/**
+ * The exact `-t` target of a window or pane, for `list-panes`, `send-keys`,
+ * `paste-buffer`, `capture-pane` and `display-message`: the current window
+ * and pane of the session of that name. Without the colon, tmux first tries
+ * `=name` as a window name in the current session.
+ */
+export function exactPaneTarget(name: string): string {
+  assertSafeTmuxName(name);
+  return `=${name}:`;
+}
+
 /** Run a tmux command and return stdout. */
 function tmux(...args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -68,7 +104,7 @@ export async function listSessions(): Promise<TmuxSessionInfo[]> {
 /** Check if a specific tmux session exists. */
 export async function hasSession(sessionName: string): Promise<boolean> {
   try {
-    await tmux("has-session", "-t", sessionName);
+    await tmux("has-session", "-t", exactSessionTarget(sessionName));
     return true;
   } catch {
     return false;
@@ -128,7 +164,7 @@ export async function sendKeys(
   pressEnter = true,
 ): Promise<void> {
   // Clear any partial input first (matches bash reference scripts)
-  await tmux("send-keys", "-t", sessionName, "Escape");
+  await tmux("send-keys", "-t", exactPaneTarget(sessionName), "Escape");
   // Small delay to ensure Escape is processed before pasting
   await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -145,7 +181,7 @@ export async function sendKeys(
 
     try {
       await tmux("load-buffer", "-b", bufferName, tmpFile);
-      await tmux("paste-buffer", "-b", bufferName, "-d", "-t", sessionName);
+      await tmux("paste-buffer", "-b", bufferName, "-d", "-t", exactPaneTarget(sessionName));
     } finally {
       try {
         unlinkSync(tmpFile);
@@ -156,7 +192,7 @@ export async function sendKeys(
   } else {
     // Use -l (literal) to prevent tmux from interpreting text as key names
     // (e.g. "Enter", "Escape", "C-c" would be treated as keypresses without -l)
-    await tmux("send-keys", "-t", sessionName, "-l", text);
+    await tmux("send-keys", "-t", exactPaneTarget(sessionName), "-l", text);
   }
 
   if (pressEnter) {
@@ -166,7 +202,7 @@ export async function sendKeys(
     if (text.includes("\n") || text.length > 200) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    await tmux("send-keys", "-t", sessionName, "Enter");
+    await tmux("send-keys", "-t", exactPaneTarget(sessionName), "Enter");
   }
 }
 
@@ -177,12 +213,12 @@ export async function sendKeys(
  * @param lines - Number of scrollback lines to capture (default 30)
  */
 export async function capturePane(sessionName: string, lines = 30): Promise<string> {
-  return tmux("capture-pane", "-t", sessionName, "-p", "-S", `-${lines}`);
+  return tmux("capture-pane", "-t", exactPaneTarget(sessionName), "-p", "-S", `-${lines}`);
 }
 
 /** Kill a tmux session. */
 export async function killSession(sessionName: string): Promise<void> {
-  await tmux("kill-session", "-t", sessionName);
+  await tmux("kill-session", "-t", exactSessionTarget(sessionName));
 }
 
 /**
@@ -191,7 +227,13 @@ export async function killSession(sessionName: string): Promise<void> {
  */
 export async function getPaneTTY(sessionName: string): Promise<string | null> {
   try {
-    const output = await tmux("list-panes", "-t", sessionName, "-F", "#{pane_tty}");
+    const output = await tmux(
+      "list-panes",
+      "-t",
+      exactPaneTarget(sessionName),
+      "-F",
+      "#{pane_tty}",
+    );
     const tty = output.trim().split("\n")[0];
     return tty || null;
   } catch {

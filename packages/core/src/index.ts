@@ -47,6 +47,8 @@ export {
   capturePane as tmuxCapturePane,
   killSession as killTmuxSession,
   getPaneTTY as getTmuxPaneTTY,
+  exactSessionTarget,
+  exactPaneTarget,
 } from "./tmux.js";
 
 // herdr — command wrappers
