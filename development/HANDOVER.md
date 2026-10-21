@@ -29,7 +29,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; record `working`/`stuck` since 2026-10-21 10:24:59 (`generation=1`) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-50 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-50`, branch `feat/same-id-r1-read-agent-task-md-in-your-worktree-and-execute-i`, moved to `c516cead` before the brief. Same-ID R1 author (exact tmux targets); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-r1.md`, scratch `/tmp/aosr1`; dispatched 12:09 EDT; router row open | on its `done`: spawn the R1 code review (Codex, `--model gpt-6-astra` pinned) on `c516cead..<tip>` |
+| ao-50 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-50`, branch `feat/same-id-r1-read-agent-task-md-in-your-worktree-and-execute-i`, moved to `c516cead` before the brief. Same-ID R1 author (exact tmux targets); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-r1.md`, scratch `/tmp/aosr1`; dispatched 12:09 EDT. DONE 12:44 EDT at `5b363474` (`c516cead..5b363474`, 4 commits; full run 2926 passed, 4 expected fail, 29 skipped; report saved as `reports/ao-50_same_id_r1.report.md`); router row closed `in-review`; 11.38 USD | keep: it is the author of any R1 fix round. Before a fix brief: set line 1 of its report to `running|...` |
+| ao-53 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-53`, branch `feat/same-id-r1-review-read-agent-task-md-in-your-worktree-and-e`, moved to `5b363474`. Review r1 of R1 (`c516cead..5b363474`); review file `development/reviews/same_id_r1_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-r1-astra.md`, scratch `/tmp/aosrv`; dispatched 12:47 EDT; `weekly 81% left`; router row open | on `LAND-SAFE`: copy the review to `main`, cherry-pick `ce49c9fd..5b363474` (`c516cead` and the four R1 commits) onto `main` when it applies cleanly, then ask the owner about the rebuild and the restart of 1470866 and 1471311. On `NOT-LAND-SAFE`: a fix brief to ao-50 |
 | ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT. DONE 12:27 EDT: R2 NOT-SOUND, R3 NOT-SOUND, R4 SOUND-WITH-CHANGES (B-1 to B-7, M-1 to M-4), no R1 notes; review on `main` (`bee93ab3`); router row closed `in-review`. Idle; `weekly 81% left`, context 68% used | keep (owner "2a"): it re-checks ao-52's design r2. Before that brief: set line 1 of its report to `running|...` |
 | ao-52 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-52`, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex`, moved to `c516cead`. Design revision r2 for R2 to R4 (owner "1a"): answers B-1 to B-7, M-1 to M-4, OD-13 to OD-16, a revised round plan, failing tests for the new counterexamples in new files only; design file `development/reviews/same_id_design_r2_opus.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-design-r2.md`, scratch `/tmp/aosd2`; dispatched 12:38 EDT; router row open | on its `done`: copy the design to `main`, then a short re-check brief to ao-51; after the re-check, ask the owner OD-2 to OD-10, OD-12 and OD-13 to OD-16 |
 
@@ -59,7 +60,8 @@ caller's environment.
 
 **Watchers**: PID 2334310 watches ao-50 and ao-51 since 12:09:08, state
 `~/.cache/fleet_watch/ao-sameid-r1-2026-10-21`. PID 2833081 watches ao-52 since 12:38:07, state
-`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`. Stopped by TERM: 2238373 (ao-49) at 12:25:51, 1346791
+`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`. PID 2937469 watches ao-53 since 12:47:31, state
+`~/.cache/fleet_watch/ao-sameid-r1rev-2026-10-21`. Stopped by TERM: 2238373 (ao-49) at 12:25:51, 1346791
 (ao-48) at 12:02:39, and 3020940 (ao-46, ao-47) at 11:40:01; each log ends with `EXIT signal SIGTERM`.
 
 Killed on the owner's word (2026-10-21 12:26 EDT): ao-49. Its helpers landed in `~/agent-skills` as
@@ -151,9 +153,9 @@ add the missing-`TMUX_TMPDIR` fallback.
    `origin/main` at the commit that records the handover close. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-50, ao-51, ao-52 and the orchestrator records. `ps -o pid=,args= -p
-   1470866,1471311,2334310,2833081` - expect the two lifecycle workers and the two watchers.
-3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{0,1,2}/.agent_report.md` - a `running|` line
+   agent-orchestrator` - expect ao-50 to ao-53 and the orchestrator records. `ps -o pid=,args= -p
+   1470866,1471311,2334310,2833081,2937469` - expect the two lifecycle workers and the three watchers.
+3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{0,1,2,3}/.agent_report.md` - a `running|` line
    means the round still runs; act on `done|` as the Live Sessions table says.
 
 ## Key Files
