@@ -477,6 +477,12 @@ async function assertOpenCodeModelAvailable(
  * The prepared session. `discard` removes the session only when this spawn
  * created it: it interrupts a turn that the pane may have started, then
  * removes the session. It never throws; a failure gets one operator line.
+ * Round 7 (M-3): the interrupt and the removal attempts await, and another
+ * AO session can take the ID meanwhile (a new launch or a restore of the
+ * same AO ID). The caller's `stillUnheld` runs directly before the
+ * interrupt and before each removal attempt; when it answers false or
+ * throws, no further call is made and the operator gets one line that names
+ * the kept session.
  */
 function preparedOpenCodeSession(
   sessionId: string,
@@ -489,9 +495,28 @@ function preparedOpenCodeSession(
     metadata: { opencodeSessionId: sessionId },
     agentConfig: { opencodeSessionId: sessionId },
     created,
-    async discard() {
+    async discard(stillUnheld?: () => boolean) {
       if (!created || discarded) return;
       discarded = true;
+      // `discarded` means that the removal ran (it removed the session, or
+      // it failed and told the operator). A kept session is not removed, so
+      // the flag goes back to false: a later `discard` decides again with
+      // its own check. A throw counts as no; it never permits a removal.
+      const kept = (): boolean => {
+        let reason: string;
+        try {
+          if (!stillUnheld || stillUnheld()) return false;
+          reason = "the ownership check answered no";
+        } catch (err) {
+          reason = `the ownership check failed (${oneLine(err)})`;
+        }
+        discarded = false;
+        process.stderr.write(
+          `ao: kept the OpenCode session ${sessionId} that this spawn created: ${reason}, so another AO session may use it now.\n`,
+        );
+        return true;
+      };
+      if (kept()) return;
       try {
         await interruptOpenCodeSession(sessionId, OPENCODE_API_TIMEOUT_MS, env);
       } catch {
@@ -499,6 +524,7 @@ function preparedOpenCodeSession(
       }
       let lastError: unknown;
       for (let attempt = 1; attempt <= 2; attempt++) {
+        if (kept()) return;
         try {
           await removeOpenCodeSession(sessionId, OPENCODE_API_TIMEOUT_MS, env);
           return;

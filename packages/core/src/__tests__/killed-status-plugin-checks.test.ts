@@ -1,12 +1,13 @@
 /**
  * Round 7 of the killed-status fix (development/reviews/killed_status_review_r5_astra6.md).
  *
- * M-2: the workspace plugin's `destroy` awaits inside its step. Core passes
- * its ownership check to it, and the plugin runs it again directly before
- * each of its own removal calls. These tests use stand-in plugins that keep
- * that contract (their own step awaits, another process acts meanwhile, then
- * they run the check); the real plugins are tested in their own packages,
- * also through the session manager.
+ * M-2 and M-3: the workspace plugin's `destroy` and the agent's prepared
+ * session `discard` await inside their step. Core passes its ownership check
+ * to each, and the plugin runs it again directly before each of its own
+ * removal calls. These tests use stand-in plugins that keep that contract
+ * (their own step awaits, another process acts meanwhile, then they run the
+ * check); the real plugins are tested in their own packages, also through
+ * the session manager.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -23,7 +24,7 @@ import {
 import { getWorktreesDir } from "../paths.js";
 import { cleanupSession } from "../recovery/actions.js";
 import { DEFAULT_RECOVERY_CONFIG, type RecoveryAssessment } from "../recovery/types.js";
-import type { RuntimeHandle } from "../types.js";
+import type { PreparedAgentSession, RuntimeHandle } from "../types.js";
 import {
   makeHandle,
   setupTestContext,
@@ -291,3 +292,70 @@ describe("M-2 (round 7): core passes its ownership check to the workspace destro
   });
 });
 
+describe("M-3 (round 7): core passes its ownership decision to the prepared-session discard", () => {
+  /**
+   * An agent whose prepared session (created by this spawn) keeps the
+   * round-7 contract: its own step awaits (`during` runs there), then it
+   * asks the caller's check; the answers are collected.
+   */
+  function preparedAgent(during: () => void = () => undefined): (boolean | undefined)[] {
+    const answers: (boolean | undefined)[] = [];
+    const prepared: PreparedAgentSession = {
+      metadata: { opencodeSessionId: "ses_prep" },
+      agentConfig: { opencodeSessionId: "ses_prep" },
+      created: true,
+      discard: vi.fn(async (stillUnheld?: () => boolean) => {
+        await Promise.resolve();
+        during();
+        answers.push(stillUnheld?.());
+      }),
+    };
+    ctx.mockAgent.prepareAgentSession = vi.fn(async () => prepared);
+    vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-spawned"));
+    ctx.mockAgent.postLaunchSetup = vi.fn(async () => {
+      throw new Error("post-launch setup failed");
+    });
+    return answers;
+  }
+
+  it("a new launch that names the prepared session during the hook's own wait: the check answers no", async () => {
+    const answers = preparedAgent(() => {
+      publishNewLaunch("app-1", { opencodeSessionId: "ses_prep" });
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+    expect(answers).toEqual([false]);
+    expect(recordOf("app-1")).toMatchObject({ opencodeSessionId: "ses_prep" });
+  });
+
+  it("an archive of the record during the hook's own wait: the archive names the prepared session, the check answers no", async () => {
+    const answers = preparedAgent(() => {
+      deleteMetadata(sessionsDir, "app-1", true);
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+    expect(answers).toEqual([false]);
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeSessionId"]).toBe("ses_prep");
+  });
+
+  it("control: a delete without an archive during the hook's own wait: no record names the session, the check answers yes", async () => {
+    const answers = preparedAgent(() => {
+      deleteMetadata(sessionsDir, "app-1", false);
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+    expect(answers).toEqual([true]);
+  });
+
+  it("control: nothing changes, the check answers yes", async () => {
+    const answers = preparedAgent();
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+    expect(answers).toEqual([true]);
+    expect(recordOf("app-1")).toBeNull();
+  });
+});

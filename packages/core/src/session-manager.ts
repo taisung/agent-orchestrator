@@ -145,12 +145,16 @@ function shortErrorText(err: unknown): string {
 /**
  * Remove the agent session that this spawn created, on a failed spawn. The
  * hook never throws by contract; a throw anyway must not replace the error
- * that caused the cleanup.
+ * that caused the cleanup. Round 7 (M-3): `stillUnheld` goes to the hook,
+ * which runs it before each of its calls.
  */
-async function discardPreparedSession(prepared: PreparedAgentSession | undefined): Promise<void> {
+async function discardPreparedSession(
+  prepared: PreparedAgentSession | undefined,
+  stillUnheld?: () => boolean,
+): Promise<void> {
   if (!prepared) return;
   try {
-    await prepared.discard();
+    await prepared.discard(stillUnheld);
   } catch (err) {
     warnOperator(
       `ao: could not remove the agent session of a failed spawn: ${shortErrorText(err)}`,
@@ -1512,12 +1516,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * latest archive of the ID names it (a restore of this launch's archived
    * record runs on it). Round 5 (M-1): each step reads the record again
    * directly before it (the earlier steps await), with no await between
-   * the check and the step. Round 7 (M-2): the workspace plugin awaits
-   * inside its step, so it gets the same check and runs it again directly
-   * before each of its own removal calls. Every step is best effort; a
-   * runtime or agent session that stays is named to the operator. A
-   * workspace that stays belongs to the new launch, as when the first check
-   * finds it.
+   * the check and the step. Round 7 (M-2, M-3): the agent hook and the
+   * workspace plugin await inside their step, so each gets the same check
+   * and runs it again directly before each of its own calls. Every step is
+   * best effort; a runtime or agent session that stays is named to the
+   * operator. A workspace that stays belongs to the new launch, as when the
+   * first check finds it.
    */
   async function rollbackLaunch(rollback: {
     own: OwnLaunchRecord;
@@ -1548,16 +1552,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
     if (rollback.prepared) {
-      const checked = check();
-      const archived = checked.state === "own" ? null : rollback.own.latestArchive();
-      const namedElsewhere = Object.entries(rollback.prepared.metadata).some(
-        ([key, value]) =>
-          value !== "" &&
-          ((checked.state === "replaced" && checked.current?.[key] === value) ||
-            archived?.[key] === value),
-      );
-      if (!namedElsewhere) {
-        await discardPreparedSession(rollback.prepared);
+      const prepared = rollback.prepared;
+      const namedElsewhere = (): boolean => {
+        const checked = check();
+        const archived = checked.state === "own" ? null : rollback.own.latestArchive();
+        return Object.entries(prepared.metadata).some(
+          ([key, value]) =>
+            value !== "" &&
+            ((checked.state === "replaced" && checked.current?.[key] === value) ||
+              archived?.[key] === value),
+        );
+      };
+      if (!namedElsewhere()) {
+        await discardPreparedSession(prepared, () => !namedElsewhere());
       } else if (rollback.prepared.created) {
         warnOperator(
           `ao: kept the agent session of a failed launch (${Object.values(rollback.prepared.metadata).join(", ")}): another record of the ID names it.`,

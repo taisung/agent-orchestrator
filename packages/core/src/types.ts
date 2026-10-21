@@ -609,8 +609,15 @@ export interface PreparedAgentSession {
    * Remove the agent session when this call created it; a reused session is
    * never removed. Best effort: it never throws, and it tells the operator
    * when the removal fails.
+   *
+   * `stillUnheld` (optional, round 7): the caller's ownership check. The
+   * hook runs it directly before each call that stops or removes the
+   * session (the interrupt and each removal attempt), with no await between
+   * the check and the call. When it answers false or throws, the hook makes
+   * no further call, keeps the session, and tells the operator which
+   * session it kept. Without it, the hook works as before.
    */
-  discard(): Promise<void>;
+  discard(stillUnheld?: () => boolean): Promise<void>;
 }
 
 export interface AgentLaunchConfirmOptions {
