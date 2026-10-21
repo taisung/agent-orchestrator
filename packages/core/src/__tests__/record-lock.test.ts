@@ -144,10 +144,18 @@ interface Child {
   stderr: () => string;
 }
 
+/**
+ * 1.6 (round 5): the environment of every child: PATH and the parent's
+ * HOME, so a child never falls back to a real home directory.
+ */
+function childEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", ...extra };
+}
+
 function runChild(cmd: Record<string, unknown>): Child {
   const child = spawn(process.execPath, [join(childDir, "child.js"), JSON.stringify(cmd)], {
     stdio: ["ignore", "ignore", "pipe"],
-    env: { PATH: process.env["PATH"] ?? "" },
+    env: childEnv(),
   });
   children.push(child);
   let stderr = "";
@@ -549,11 +557,14 @@ withRecordLock(dir, "kr-2", () => {
 `;
   }
 
-  async function runApiChild(args: (script: string) => string[]): Promise<void> {
+  async function runApiChild(
+    args: (script: string) => string[],
+    env: Record<string, string> = {},
+  ): Promise<void> {
     const script = apiScript();
     const child = spawn(process.execPath, args(script), {
       stdio: ["ignore", "ignore", "pipe"],
-      env: { PATH: process.env["PATH"] ?? "" },
+      env: childEnv(env),
     });
     children.push(child);
     let stderr = "";
@@ -597,4 +608,54 @@ withRecordLock(dir, "kr-2", () => {
       return [file];
     });
   }, 20_000);
+
+  describe("m-1 (round 5): the lock helper does not depend on NODE_OPTIONS", () => {
+    /** A script file in the child directory (a `{"type":"module"}` package). */
+    function scriptFile(name: string, script: string): string {
+      const file = join(childDir, `${name}-${Date.now()}.mjs`);
+      writeFileSync(file, script);
+      return file;
+    }
+
+    /** The API script of m-2, written to a file that the child runs. */
+    function asFile(name: string): (script: string) => string[] {
+      return (script) => [scriptFile(name, script)];
+    }
+
+    /** A preload that logs each thread that runs it. */
+    function preload(kind: "cjs" | "mjs"): { file: string; log: string } {
+      const log = join(dir, `.preload-${kind}`);
+      const file = join(childDir, `preload-${Date.now()}.${kind}`);
+      writeFileSync(
+        file,
+        kind === "cjs"
+          ? `require("node:fs").appendFileSync(${JSON.stringify(log)}, (require("node:worker_threads").isMainThread ? "main" : "worker") + "\\n");\n`
+          : `import { appendFileSync } from "node:fs";\nimport { isMainThread } from "node:worker_threads";\nappendFileSync(${JSON.stringify(log)}, (isMainThread ? "main" : "worker") + "\\n");\n`,
+      );
+      return { file, log };
+    }
+
+    it("the review's case: a child with NODE_OPTIONS=--input-type=module (`-e`)", async () => {
+      // Before round 5 the helper source was CommonJS eval code; a worker
+      // parses NODE_OPTIONS from its environment, so it ran as a module, did
+      // not start, and the first write threw after the 10 s wait. (Node
+      // refuses --input-type for a file entry point, so this mode reaches a
+      // caller only through `-e`, `--print` or stdin.)
+      await runApiChild((script) => ["-e", script], { NODE_OPTIONS: "--input-type=module" });
+    }, 20_000);
+
+    it("a harmless NODE_OPTIONS=--require preload runs in the caller only", async () => {
+      const { file, log } = preload("cjs");
+      await runApiChild(asFile("api-require"), { NODE_OPTIONS: `--require ${file}` });
+      expect(readFileSync(log, "utf-8")).toBe("main\n");
+    }, 20_000);
+
+    it("a harmless NODE_OPTIONS=--import preload runs in the caller only", async () => {
+      const { file, log } = preload("mjs");
+      await runApiChild(asFile("api-import"), {
+        NODE_OPTIONS: `--import ${pathToFileURL(file).href}`,
+      });
+      expect(readFileSync(log, "utf-8")).toBe("main\n");
+    }, 20_000);
+  });
 });
