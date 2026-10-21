@@ -919,6 +919,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
       competing spawn of the same ID gets `duplicate session` and rolls back; the orphan is invisible to
       `ao status`, `ao send` and cleanup. Candidate for the prefix-match round.
     - R7: the Opus author failed a fourth review round. The next step is the owner's.
+  - **Fix round 6** (owner 2026-10-20, answers "1a 2a 3a 4a"): ao-46 on Opus; r4 M-1 (fresh check before
+    each OpenCode removal attempt), M-2 (check under the ledger lock; `delivery-ledger.ts` may change only
+    in `removeDeliveryLedger`), m-1 as a documentation fix (the active series never repeats; each archived
+    copy has its own series), m-2 (removal table in three classes). The visibility of a kept runtime that
+    no record names goes to the tmux prefix-match round. Dispatched 21:26:09 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r6.md`, on top of `f06a1107`, no rebase.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
