@@ -1066,7 +1066,7 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     the round-9 audit. Deliverables: failing tests (marked so the suite stays green), reproducers, a
     design file `development/reviews/same_id_design_r1_opus.md` with options, owner decisions and a plan
     of implementation rounds. The implementation starts after the killed-status fix lands.
-    Done 11:13 EDT (18.09 USD): commit `c516cead` on top of `ce49c9fd`, 42 failing defect tests (`it.fails`;
+    Done 11:05 EDT (18.09 USD): commit `c516cead` on top of `ce49c9fd`, 42 failing defect tests (`it.fails`;
     `SAME_ID_DEFECTS=red` shows the failures): R1 17, R2 8, R3 6, R4 11; full run green. Design on `main`:
     `development/reviews/same_id_design_r1_opus.md`. Measured live: D-A `ao send` typed into and
     `ao session kill` ended the live `kr-10` for a dead `kr-1`; D-B `ao session cleanup` archived two live
