@@ -87,6 +87,13 @@ import {
   resolveCodexBinary,
   _resetSessionFileCache,
 } from "./index.js";
+import {
+  DERIVED_MID_TURN_PASTE_0163,
+  DERIVED_SUBMITTED_RUNNING_0163,
+  REAL_IDLE_EMPTY_0163,
+  REAL_UNSUBMITTED_PASTE_0163,
+  RUNNING_ROW_0163,
+} from "./__fixtures__/panes-0.163.0.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -646,6 +653,106 @@ describe("detectActivity", () => {
 
   it("returns active for multi-line output with activity in the middle", () => {
     expect(agent.detectActivity("Starting\n(esc to interrupt)\nstill going\n")).toBe("active");
+  });
+});
+
+// =========================================================================
+// detectActivity — Codex 0.163.0 screens (src/__fixtures__/panes-0.163.0.ts)
+// =========================================================================
+describe("detectActivity on Codex 0.163.0 screens", () => {
+  const agent = create();
+
+  /** The composer, status line and footer of the real idle capture (its last 4 lines). */
+  const IDLE_BOTTOM = REAL_IDLE_EMPTY_0163.trimEnd().split("\n").slice(-4);
+
+  /** Indented transcript lines with `row` at `distance` lines above the composer, then IDLE_BOTTOM. */
+  function screenWithRowAbove(row: string, distance: number): string {
+    const transcript = Array.from({ length: 12 }, (_, i) => `  transcript line ${i + 1}`);
+    transcript[transcript.length - distance] = row;
+    return [...transcript, ...IDLE_BOTTOM].join("\n");
+  }
+
+  it("returns idle for the real idle screen (placeholder and '? for shortcuts' footer)", () => {
+    expect(agent.detectActivity(REAL_IDLE_EMPTY_0163)).toBe("idle");
+  });
+
+  it("returns idle for the real screen whose composer holds an unsubmitted paste", () => {
+    // Text in the composer with no running-turn row is not a running turn:
+    // the paste waits for an Enter.
+    expect(agent.detectActivity(REAL_UNSUBMITTED_PASTE_0163)).toBe("idle");
+  });
+
+  it("returns active when the running-turn row is above a composer that holds text", () => {
+    expect(agent.detectActivity(DERIVED_MID_TURN_PASTE_0163)).toBe("active");
+  });
+
+  it("returns active when the running-turn row is above the empty composer", () => {
+    expect(agent.detectActivity(DERIVED_SUBMITTED_RUNNING_0163)).toBe("active");
+  });
+
+  it("returns waiting_input for an approval prompt in the tail, before it reads the composer", () => {
+    const lines = REAL_IDLE_EMPTY_0163.trimEnd().split("\n");
+    const prompt = lines.length - IDLE_BOTTOM.length;
+    const withApproval = (text: string): string =>
+      [...lines.slice(0, prompt), text, ...lines.slice(prompt)].join("\n");
+
+    expect(agent.detectActivity(withApproval("  approval required"))).toBe("waiting_input");
+    expect(agent.detectActivity(withApproval("  Run pnpm test? (y)es / (n)o"))).toBe(
+      "waiting_input",
+    );
+  });
+
+  it("returns idle when an old running-turn row is in the scrollback far above the composer", () => {
+    expect(agent.detectActivity(`${RUNNING_ROW_0163}\n${REAL_IDLE_EMPTY_0163}`)).toBe("idle");
+  });
+
+  it("reads the running-turn row only in the 8 lines above the composer", () => {
+    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 1))).toBe("active");
+    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 8))).toBe("active");
+    expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 9))).toBe("idle");
+  });
+
+  it("stops at the 'Worked for' line: the text of a finished turn is not a running turn", () => {
+    const working = REAL_IDLE_EMPTY_0163.replace(
+      "  were cleaned up. No commit or PR created, as required by the brief.",
+      "  Working tree clean. Running the suite again changed nothing.",
+    );
+    expect(working).not.toBe(REAL_IDLE_EMPTY_0163);
+    expect(agent.detectActivity(working)).toBe("idle");
+
+    // Without the "Worked for" line the same words are in the 8-line window.
+    const noTurnEnd = working.replace(/\n {2}Worked for 18m 30s • 1:56 PM\n/, "\n");
+    expect(noTurnEnd).not.toBe(working);
+    expect(agent.detectActivity(noTurnEnd)).toBe("active");
+  });
+
+  it("never reads the composer text or the footer as activity", () => {
+    const busyWords = REAL_UNSUBMITTED_PASTE_0163.replace(
+      "› Your .agent_task.md is replaced",
+      "› Working (5m 47s • esc to interrupt) Running Thinking",
+    );
+    expect(busyWords).not.toBe(REAL_UNSUBMITTED_PASTE_0163);
+    expect(agent.detectActivity(busyWords)).toBe("idle");
+  });
+
+  it("does not read the numbered cursor row of a selection list as the composer", () => {
+    // Derived from strings in the 0.163.0 binary, not captured: an approval
+    // view draws numbered rows, and keys typed into it choose an option.
+    const approvalView = [
+      ...REAL_IDLE_EMPTY_0163.trimEnd().split("\n").slice(0, -4),
+      "  Would you like to run the following command?",
+      "",
+      "  $ pnpm test",
+      "",
+      "› 1. Yes, proceed (y)",
+      "  2. No, and tell Codex what to do differently (esc)",
+    ].join("\n");
+    expect(agent.detectActivity(approvalView)).not.toBe("idle");
+  });
+
+  it("keeps the older forms: a bare prompt and the 'tab to queue message' footer", () => {
+    expect(agent.detectActivity("some output\n› ")).toBe("idle");
+    expect(agent.detectActivity("output\n› draft\ntab to queue message")).toBe("idle");
   });
 });
 
