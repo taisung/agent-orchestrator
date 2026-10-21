@@ -68,19 +68,49 @@ function hasQueuedMessage(terminalOutput: string): boolean {
   return terminalOutput.includes("Press up to edit queued messages");
 }
 
-function hasUnsubmittedCodexInput(terminalOutput: string): boolean {
-  const lines = terminalOutput.trimEnd().split("\n");
-  const tail = lines.slice(-8).join("\n");
+/** What the Codex composer holds: nothing, or text that starts with `firstLine`. */
+type CodexComposer = { kind: "empty" } | { kind: "text"; firstLine: string };
 
-  // Codex's UI can accept a paste but miss the trailing Enter while the screen is
-  // redrawing. In that case the input box shows either the literal message or a
-  // "[Pasted Content ...]" placeholder next to the Codex prompt, and the footer
-  // says "tab to queue message". This is not "delivered" yet; one extra Enter is
-  // the safe recovery.
-  return (
-    /tab to queue message/i.test(tail) &&
-    /(?:^|\n)\s*[›❯]\s+(?:\[Pasted Content\b|\S)/.test(tail)
-  );
+/**
+ * Read the composer of a Codex screen (0.163.0). The composer is the last line
+ * that starts with the prompt glyph, with only indented or blank lines below it
+ * (its wrapped text, the status line and the footer). The placeholder "Ask
+ * Codex to do anything" and the footer hint "? for shortcuts" show only while
+ * the composer is empty. Null when no composer is in view: a row at column 0
+ * below the last prompt is transcript, and a numbered prompt row ("› 1. Yes,
+ * proceed") is the cursor of a selection list. A bare prompt with neither
+ * empty sign is not read either. The agent-codex `detectActivity` finds the
+ * composer with the same rules.
+ */
+function readCodexComposer(terminalOutput: string): CodexComposer | null {
+  const lines = terminalOutput.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] ?? "";
+    if (/^\s*[›❯](?:\s|$)/.test(line)) {
+      const text = line.replace(/^\s*[›❯]\s*/, "").trim();
+      if (/^\d+\.\s/.test(text)) return null;
+      const below = lines.slice(i + 1).join("\n");
+      if (text === "Ask Codex to do anything" || /\?\s+for shortcuts/i.test(below)) {
+        return { kind: "empty" };
+      }
+      return text === "" ? null : { kind: "text", firstLine: text };
+    }
+    if (/^\S/.test(line)) return null;
+  }
+  return null;
+}
+
+/**
+ * True when the composer text is this message: Codex shows a long paste as
+ * "[Pasted Content ...]", and otherwise the first composer line starts the
+ * message (whitespace collapsed, because the composer wraps it). Enter goes
+ * only to the message that this command sent, never to text that someone
+ * else typed.
+ */
+function composerHoldsMessage(firstLine: string, message: string): boolean {
+  if (/^\[Pasted Content\b/.test(firstLine)) return true;
+  const shown = firstLine.replace(/\s+/g, " ");
+  return message.replace(/\s+/g, " ").trim().startsWith(shown);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -351,7 +381,12 @@ export function registerSend(program: Command): void {
         const pane = exactPaneTarget(tmuxTarget);
         await sendViaTmux(pane, message);
 
-        // Verify delivery with retries
+        // Verify delivery with retries. A Codex screen with no running turn
+        // shows where the message is: still in the composer (the paste landed,
+        // the Enter did not submit it), or gone from it.
+        const readsCodexComposer = agent.name === "codex";
+        let composerHeldMessage = false;
+        let composerEmpty = false;
         for (let attempt = 1; attempt <= 3; attempt++) {
           await sleep(2000);
           const output = await captureOutput(10);
@@ -363,9 +398,29 @@ export function registerSend(program: Command): void {
             console.log(chalk.green("Message queued (session finishing previous task)"));
             return;
           }
-          if (hasUnsubmittedCodexInput(output)) {
-            await tmux("send-keys", "-t", pane, "Enter");
-            await sleep(1000);
+          const composer = readsCodexComposer ? readCodexComposer(output) : null;
+          composerEmpty = composer?.kind === "empty";
+          if (composer?.kind === "empty") {
+            // The message left the composer after an Enter of this loop:
+            // Codex took it. An empty composer that never showed the message
+            // proves nothing (the paste can be lost), and an Enter into it
+            // does nothing, so the loop only looks again for a turn.
+            if (composerHeldMessage) {
+              console.log(chalk.green("Message sent and processing"));
+              return;
+            }
+            continue;
+          }
+          if (composer?.kind === "text") {
+            // Not submitted yet. One more Enter submits this message; text
+            // that is not this message stays as it is.
+            if (composerHoldsMessage(composer.firstLine, message)) {
+              composerHeldMessage = true;
+              if (attempt < 3) {
+                await tmux("send-keys", "-t", pane, "Enter");
+                await sleep(1000);
+              }
+            }
             continue;
           }
           if (attempt < 3) {
@@ -374,6 +429,14 @@ export function registerSend(program: Command): void {
           }
         }
 
+        if (composerEmpty) {
+          console.log(
+            chalk.yellow(
+              "Message sent — the input box is empty but no turn is running: could not confirm it was received",
+            ),
+          );
+          return;
+        }
         console.log(chalk.yellow("Message sent — could not confirm it was received"));
       },
     );
