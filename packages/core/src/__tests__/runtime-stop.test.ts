@@ -400,6 +400,58 @@ describe("stopRuntime never rejects, also for a plugin answer that AO cannot rea
   });
 });
 
+describe("the next action of a runtime that a retry cannot help", () => {
+  it("a stop answer keeps a non-empty next, and drops one that is not a string", async () => {
+    const withNext = runtimeWith({
+      stop: vi.fn().mockResolvedValue({
+        outcome: "unknown",
+        detail: "cannot stop yet",
+        next: "Close it by hand.",
+      }),
+    });
+    const badNext = runtimeWith({
+      stop: vi.fn().mockResolvedValue({ outcome: "other-launch", detail: "moved", next: 7 }),
+    });
+
+    await expect(stopRuntime(withNext, HANDLE)).resolves.toEqual({
+      outcome: "unknown",
+      detail: "cannot stop yet",
+      next: "Close it by hand.",
+    });
+    await expect(stopRuntime(badNext, HANDLE)).resolves.toEqual({
+      outcome: "other-launch",
+      detail: "moved",
+    });
+  });
+
+  it("the error uses next as its hint, also through hintFor, and names no retry", () => {
+    const err = new RuntimeStopUnconfirmedError({
+      sessionId: "app-1",
+      handle: HANDLE,
+      stop: { outcome: "unknown", detail: "cannot stop yet", next: "Close it by hand." },
+      kept: "record and worktree kept",
+      retry: "ao session kill app-1",
+    });
+
+    expect(err.hint).toBe("Close it by hand.");
+    expect(err.hintFor("ao stop my-app")).toBe("Close it by hand.");
+  });
+
+  it("hintFor names another command to try again", () => {
+    const err = new RuntimeStopUnconfirmedError({
+      sessionId: "app-orchestrator",
+      handle: HANDLE,
+      stop: { outcome: "unknown", detail: "the server did not answer" },
+      kept: "record and worktree kept",
+      retry: "ao session kill app-orchestrator",
+    });
+
+    expect(err.hint).toContain("`ao session kill app-orchestrator`");
+    expect(err.hintFor("ao stop my-app")).toContain("then run `ao stop my-app` again");
+    expect(err.hintFor("ao stop my-app")).not.toContain("ao session kill");
+  });
+});
+
 describe("RuntimeStopUnconfirmedError", () => {
   it("names the outcome, the detail, what was kept, and the next action", () => {
     const cause = new Error("timeout");

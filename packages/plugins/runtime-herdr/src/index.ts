@@ -339,17 +339,23 @@ export function create(config?: Record<string, unknown>): Runtime {
      * the close cannot cover a replacement that takes the IDs between the
      * check and the close (same-ID review r2, B-2). Until herdr offers a close
      * that names the terminal itself, AO keeps the record and the worktree of
-     * a Herdr session; the operator closes the workspace by hand.
+     * a Herdr session; the operator closes the workspace by hand. A retry
+     * gives the same answer, so `next` says that instead of a retry.
      */
     async stop(handle: RuntimeHandle): Promise<RuntimeStopOutcome> {
       const workspaceId =
         typeof handle.data.workspaceId === "string" ? handle.data.workspaceId : "";
+      const terminal = workspaceId ? `workspace ${workspaceId}` : `pane ${handle.id}`;
       return {
         outcome: "unknown",
         detail:
           `the Herdr close cannot yet check the terminal at close time (same-ID review r2, B-2): ` +
-          `herdr reuses pane and workspace IDs, so a close of ${workspaceId ? `workspace ${workspaceId}` : `pane ${handle.id}`} ` +
+          `herdr reuses pane and workspace IDs, so a close of ${terminal} ` +
           `could reach another terminal; nothing was closed. Close it by hand in herdr after you check that it is this session`,
+        next:
+          `Close herdr ${terminal} by hand after you check that it belongs to this session. ` +
+          `AO cannot stop a Herdr session yet: a retry of this command gives the same refusal, ` +
+          `and AO keeps the record and the worktree of this session until it can check the terminal at close time.`,
       };
     },
 

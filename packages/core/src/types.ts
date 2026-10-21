@@ -358,12 +358,17 @@ export interface Runtime {
  *   nothing was stopped.
  * - `unknown`: the stop could not be confirmed (an error, no answer, or the
  *   launch still runs after the stop).
+ *
+ * `next` (optional, `other-launch` and `unknown`) is the next action for the
+ * operator when a retry of the command cannot help, for example a runtime
+ * that cannot stop a session at all yet. Without it the operator checks the
+ * session by hand and tries the command again.
  */
 export type RuntimeStopOutcome =
   | { outcome: "destroyed" }
   | { outcome: "absent"; evidence: string }
-  | { outcome: "other-launch"; detail: string }
-  | { outcome: "unknown"; detail: string; cause?: unknown };
+  | { outcome: "other-launch"; detail: string; next?: string }
+  | { outcome: "unknown"; detail: string; next?: string; cause?: unknown };
 
 export interface RuntimeCreateConfig {
   sessionId: SessionId;

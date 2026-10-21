@@ -109,9 +109,11 @@ function asStopOutcome(value: unknown): RuntimeStopOutcome | null {
     case "unknown": {
       const detail = answer["detail"];
       if (!nonEmptyString(detail)) return null;
-      if (outcome === "other-launch") return { outcome, detail };
+      const next = answer["next"];
+      const nextAction = nonEmptyString(next) ? { next } : {};
+      if (outcome === "other-launch") return { outcome, detail, ...nextAction };
       const cause = answer["cause"];
-      return { outcome, detail, ...(cause !== undefined && { cause }) };
+      return { outcome, detail, ...nextAction, ...(cause !== undefined && { cause }) };
     }
     default:
       return null;
@@ -254,6 +256,20 @@ async function stopOrThrow(runtime: Runtime, handle: RuntimeHandle): Promise<Run
 export const RUNTIME_STOP_UNCONFIRMED_ERROR_CODE = "ERR_RUNTIME_STOP_UNCONFIRMED";
 
 /**
+ * The next action after an unconfirmed stop: the runtime's own `next` when it
+ * gave one (a retry cannot help, for example a Herdr stop in R2a), otherwise
+ * a check by hand and `retry`.
+ */
+function stopHint(handle: RuntimeHandle, stop: UnconfirmedRuntimeStop, retry: string): string {
+  if (stop.next) return stop.next;
+  return (
+    `Check ${handle.runtimeName} session ${handle.id} by hand and stop it if it still runs, ` +
+    `then run \`${retry}\` again. AO goes on only when the runtime answers that the session ` +
+    `stopped or does not exist.`
+  );
+}
+
+/**
  * A caller refused to go on because the runtime stop was not confirmed
  * (`other-launch` or `unknown`). The message names the outcome, its detail
  * and what the caller kept; `hint` is the next action for the operator.
@@ -264,6 +280,8 @@ export class RuntimeStopUnconfirmedError extends Error {
   readonly outcome: UnconfirmedRuntimeStop["outcome"];
   readonly detail: string;
   readonly hint: string;
+  private readonly stopHandle: RuntimeHandle;
+  private readonly unconfirmedStop: UnconfirmedRuntimeStop;
 
   constructor(params: {
     sessionId: SessionId;
@@ -283,10 +301,17 @@ export class RuntimeStopUnconfirmedError extends Error {
     this.sessionId = sessionId;
     this.outcome = stop.outcome;
     this.detail = stop.detail;
-    this.hint =
-      `Check ${handle.runtimeName} session ${handle.id} by hand and stop it if it still runs, ` +
-      `then run \`${retry}\` again. AO goes on only when the runtime answers that the session ` +
-      `stopped or does not exist.`;
+    this.stopHandle = handle;
+    this.unconfirmedStop = stop;
+    this.hint = stopHint(handle, stop, retry);
+  }
+
+  /**
+   * The hint with another command to try again, for a command that called the
+   * refusing operation (`ao stop` calls the kill of `ao session kill`).
+   */
+  hintFor(retry: string): string {
+    return stopHint(this.stopHandle, this.unconfirmedStop, retry);
   }
 }
 

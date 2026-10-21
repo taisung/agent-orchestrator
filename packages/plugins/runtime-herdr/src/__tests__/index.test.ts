@@ -214,6 +214,36 @@ describe("stop()", () => {
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
+  it("names the next action: close by hand, and a retry gives the same refusal (review r1)", async () => {
+    const stopped = await create().stop!(HANDLE);
+
+    expect(stopped).toMatchObject({
+      next:
+        "Close herdr workspace w7 by hand after you check that it belongs to this session. " +
+        "AO cannot stop a Herdr session yet: a retry of this command gives the same refusal, " +
+        "and AO keeps the record and the worktree of this session until it can check the terminal at close time.",
+    });
+  });
+
+  it("the core refusal shows that next action as its hint, with no retry", async () => {
+    const { RuntimeStopUnconfirmedError, stopRuntime } = await import("@aoagents/ao-core");
+    const stopped = await stopRuntime(create(), HANDLE);
+    if (stopped.outcome !== "unknown") throw new Error(`expected unknown, got ${stopped.outcome}`);
+
+    const refusal = new RuntimeStopUnconfirmedError({
+      sessionId: "app-1",
+      handle: HANDLE,
+      stop: stopped,
+      kept: "record and worktree kept",
+      retry: "ao session kill app-1",
+    });
+
+    expect(refusal.hint).toContain("Close herdr workspace w7 by hand");
+    expect(refusal.hint).toContain("a retry of this command gives the same refusal");
+    expect(refusal.hint).not.toContain("ao session kill");
+    expect(refusal.hintFor("ao stop my-app")).toBe(refusal.hint);
+  });
+
   it("core stopRuntime uses it instead of destroy: unknown, and no close", async () => {
     const { stopRuntime } = await import("@aoagents/ao-core");
     const runtime = create();
