@@ -1019,6 +1019,19 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     number allocation (`session-manager.ts:1196-1198`, `:1251-1253`) is older code for the follow-up list.
     Review r8 will be a short re-check of the round-9 range under rule 2a. Dispatched 09:29:40 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r9.md`, on top of `69d6f467`.
+    Done 09:56 EDT at `ce49c9fd` (3 commits; 10.07 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r9.md`). Full run 2866 passed. Audit items left
+    for the follow-up list: the session numbers (`session-manager.ts:1209-1216`, `:1265-1268`) and
+    `hasOtherOpenCodeRecord` (`:971-985`) read the old archive listing; the recovery validator
+    (`recovery/validator.ts:78-92`) reads a workspace that `existsSync` cannot check as missing, and with
+    `escalatePartial: false` (not the default) a live session gets the cleanup action; other-plugin
+    liveness answers false on an error. In the code of this fix, the generation-floor read
+    (`metadata.ts:506-516`) answers 0 on a read error, so a generation can repeat; no removal follows,
+    says the author, because every generation compare also compares the launch identity.
+  - **Review r8** (ao-47 on gpt-6-astra, short re-check under rule 2a, dispatched 2026-10-21 09:59:16 EDT,
+    brief `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r8-astra.md`, output
+    `development/reviews/killed_status_review_r8_astra6.md`): `69d6f467..ce49c9fd`, the audit, and a
+    whole-fix statement for `0e3eabc2..ce49c9fd`.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
