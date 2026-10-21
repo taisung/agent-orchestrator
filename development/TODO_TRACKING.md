@@ -1041,6 +1041,13 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `workspace-worktree/src/index.ts:140-146`) and r6 M-5 (`postCreate` after an unchecked await in spawn
     and restore, `session-manager.ts:1699-1710`, `:3954-3966`, symlink removal at plugin `:372`). Starts
     after the killed-status fix lands.
+    **Design round started 2026-10-21** (owner: "continue with the two needed steps"): ao-48 (Opus) on
+    top of `ce49c9fd`, dispatched 10:11:33 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-design.md`. Scope: D-A the tmux prefix match,
+    D-B the wrong tmux server (critical), D-C F-1 to F-7 of review r7, D-D the older fail-open reads of
+    the round-9 audit. Deliverables: failing tests (marked so the suite stays green), reproducers, a
+    design file `development/reviews/same_id_design_r1_opus.md` with options, owner decisions and a plan
+    of implementation rounds. The implementation starts after the killed-status fix lands.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
