@@ -3347,8 +3347,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
         // Check if runtime is dead
         if (!shouldKill && session.runtimeHandle && plugins.runtime) {
+          const handle = session.runtimeHandle;
           try {
-            const alive = await plugins.runtime.isAlive(session.runtimeHandle);
+            const alive = await plugins.runtime.isAlive(handle);
             if (!alive) {
               // Do not archive an OpenCode holder on an uncertain negative and
               // thereby remove it from the archived-purge guard below.
@@ -3367,8 +3368,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               if (reason) warnOperator(`ao: kept ${session.id}: ${reason}.`);
               else shouldKill = true;
             }
-          } catch {
-            // Can't check — skip
+          } catch (err) {
+            // Review r1 (F-3): a probe that cannot answer keeps the session,
+            // as before, and the result now says so, as on the other routes.
+            result.errors.push({
+              sessionId: session.id,
+              error:
+                `kept: the runtime check of ${handle.runtimeName} session ${handle.id} could not answer ` +
+                `(${shortErrorText(err)}), so nothing shows that the session stopped. ` +
+                `Check the session by hand (when no ${handle.runtimeName} server runs, start one so that ` +
+                `it can answer), then run \`ao session cleanup\` again.`,
+            });
+            continue;
           }
         }
 

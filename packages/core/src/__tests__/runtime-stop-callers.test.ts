@@ -246,6 +246,38 @@ describe("cleanup, every route", () => {
   }
 });
 
+describe("cleanup, runtime route: a runtime probe that cannot answer (review r1, F-3)", () => {
+  for (const dryRun of [false, true]) {
+    it(`${dryRun ? "dry run" : "cleanup"}: the session is kept as before and reported with the reason`, async () => {
+      const worktree = managedWorktree("app-1");
+      launchedRecord("app-1", worktree);
+      stopAnswers("destroyed");
+      vi.mocked(ctx.mockRuntime.isAlive).mockRejectedValue(
+        Object.assign(new Error("tmux could not answer: timed out"), { code: "ERR_RUNTIME_PROBE" }),
+      );
+      const before = readMetadataRaw(sessionsDir, "app-1");
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      const result = await sm.cleanup("my-app", dryRun ? { dryRun: true } : undefined);
+
+      expect(result.killed).not.toContain("app-1");
+      expect(result.skipped).not.toContain("app-1");
+      expect(result.errors).toEqual([
+        {
+          sessionId: "app-1",
+          error:
+            "kept: the runtime check of mock session rt-app-1 could not answer (tmux could not answer: timed out), " +
+            "so nothing shows that the session stopped. Check the session by hand (when no mock server runs, " +
+            "start one so that it can answer), then run `ao session cleanup` again.",
+        },
+      ]);
+      expectKept(worktree, before);
+      expect(ctx.mockRuntime.stop).not.toHaveBeenCalled();
+      expect(ctx.mockRuntime.destroy).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe("launch rollback", () => {
   for (const mode of MODES) {
     it(`${mode}: ${goesOn(mode) ? "removes the workspace and the record" : "keeps the workspace and the record, with launchFailed"}`, async () => {
