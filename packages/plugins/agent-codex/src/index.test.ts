@@ -92,6 +92,8 @@ import {
   DERIVED_SUBMITTED_RUNNING_0163,
   REAL_IDLE_EMPTY_0163,
   REAL_UNSUBMITTED_PASTE_0163,
+  REVIEW_B2_NESTED_PROMPT,
+  REVIEW_M2_NUMBERED_MESSAGE,
   RUNNING_ROW_0163,
 } from "./__fixtures__/panes-0.163.0.js";
 
@@ -748,6 +750,56 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
       "  2. No, and tell Codex what to do differently (esc)",
     ].join("\n");
     expect(agent.detectActivity(approvalView)).not.toBe("idle");
+
+    // The cursor on the second option: the numbered row above it is an option row.
+    const secondOption = approvalView
+      .replace("› 1. Yes, proceed (y)", "  1. Yes, proceed (y)")
+      .replace("  2. No, and tell", "› 2. No, and tell");
+    expect(secondOption).not.toBe(approvalView);
+    expect(agent.detectActivity(secondOption)).not.toBe("idle");
+  });
+
+  it("M-2: reads a composer whose text starts with '1. ' as a composer when no option row is next to it", () => {
+    expect(agent.detectActivity(REVIEW_M2_NUMBERED_MESSAGE)).toBe("idle");
+  });
+
+  it("B-2: returns active for a running turn whose composer quotes a transcript", () => {
+    // The indented "›" row and the "Worked for" row are message text below
+    // the composer's prompt row; the running-turn row is directly above it.
+    expect(agent.detectActivity(REVIEW_B2_NESTED_PROMPT)).toBe("active");
+  });
+
+  it("never reads a running-turn row in the composer text, also below an indented prompt row", () => {
+    // The composer of the unsubmitted capture holds a message that quotes a
+    // running-turn row and a prompt row; no turn runs.
+    const lines = REAL_UNSUBMITTED_PASTE_0163.trimEnd().split("\n");
+    const quoted = [
+      ...lines.slice(0, 3),
+      "› why does this pane say:",
+      `  ${RUNNING_ROW_0163}`,
+      "  › draft",
+      ...lines.slice(-3),
+    ].join("\n");
+    expect(agent.detectActivity(quoted)).toBe("idle");
+  });
+
+  it("a running turn wins when the composer text copies screen rows and a 'Worked for' row is above the composer", () => {
+    // Derived to show the rule, not seen on a screen: with an indented prompt
+    // row in the composer text the layout leaves a doubt, so the running-turn
+    // row counts also above the "Worked for" row.
+    const doubt = [
+      RUNNING_ROW_0163,
+      "  Worked for 1s",
+      "› examine this transcript",
+      "  › examine this transcript",
+      "  tab to queue message",
+    ].join("\n");
+    expect(agent.detectActivity(doubt)).toBe("active");
+
+    // Control: the same rows with no copied screen row in the composer text.
+    const plain = doubt.replace("  › examine this transcript", "  and say what it shows");
+    expect(plain).not.toBe(doubt);
+    expect(agent.detectActivity(plain)).toBe("idle");
   });
 
   it("keeps the older forms: a bare prompt and the 'tab to queue message' footer", () => {

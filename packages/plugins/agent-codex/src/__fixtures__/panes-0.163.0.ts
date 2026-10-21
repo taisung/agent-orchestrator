@@ -63,3 +63,40 @@ export const DERIVED_SUBMITTED_RUNNING_0163 = [
   ...IDLE_LINES.slice(-4),
   "",
 ].join("\n");
+
+/*
+ * REVIEW screens: quoted verbatim from review r1 of the round-1 change
+ * (development/reviews/codex_send_idle_review_r1_astra6.md, ao-56). The
+ * reviewer constructed them; they are not captures.
+ */
+
+/**
+ * REVIEW B-2: a running turn whose composer quotes a transcript. The prompt
+ * row in column 0 is the composer; the two indented rows below it are message
+ * text, one of them an indented prompt row.
+ */
+export const REVIEW_B2_NESTED_PROMPT =
+  "◦ Working (5m 47s • esc to interrupt)\n› examine this transcript\n  Worked for 1s\n  › examine this transcript\n  tab to queue message\n";
+
+/** REVIEW M-1 B, check 1: the first row of the message in the composer. */
+export const REVIEW_M1B_FIRST_ROW = "› Describe";
+
+/**
+ * REVIEW M-1 B, check 2: the message `Describe this UI\n? for shortcuts means
+ * help` in the composer. Its second row holds the footer text of an empty
+ * composer, but that row is message text, not the footer.
+ */
+export const REVIEW_M1B_COMPOSER =
+  "› Describe this UI\n  ? for shortcuts means help\n  Context 68% used\n  ⚠ 2 warnings · f2 to view";
+
+/** REVIEW M-2: an idle composer whose text starts with "1. "; no selection list is on the screen. */
+export const REVIEW_M2_NUMBERED_MESSAGE =
+  "  Worked for 1s\n› 1. Summarize the test failures\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";
+
+/** REVIEW B-1: a draft of another sender, "Your", in an idle composer. */
+export const REVIEW_B1_FOREIGN_DRAFT =
+  "  Worked for 15m 54s • 12:24 PM\n\n› Your\n\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";
+
+/** REVIEW B-1: a paste of another sender, shown as a placeholder, in an idle composer. */
+export const REVIEW_B1_FOREIGN_PASTE =
+  "  Worked for 15m 54s • 12:24 PM\n\n› [Pasted Content 900 chars]\n\n  Context 68% used\n  ⚠ 2 warnings · f2 to view\n";

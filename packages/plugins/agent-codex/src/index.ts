@@ -33,6 +33,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
+import { readCodexScreen } from "./codex-screen.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -340,61 +341,6 @@ async function findCodexSessionFileCached(workspacePath: string): Promise<string
   return result;
 }
 
-// =============================================================================
-// Terminal Screen Parsing (for detectActivity)
-// =============================================================================
-
-/** A composer line of the Codex TUI: the prompt glyph ("›" in 0.163.0) starts the line. */
-const CODEX_PROMPT_LINE = /^\s*[›❯](?:\s|$)/;
-
-/** The line that closes a finished turn ("Worked for 15m 54s • 12:24 PM"). */
-const CODEX_TURN_END_LINE = /^[\s─]*Worked for \d+[hms]\b/;
-
-/** The running-turn row ("◦ Working (5m 47s • esc to interrupt)") and older active words. */
-const CODEX_ACTIVE_PATTERNS = [/\b(Working|Thinking|Running|Osmosing)\b/i, /esc to interrupt/i];
-
-/**
- * How many lines above the composer can hold the running-turn row. Codex
- * draws that row directly above the composer; "Working" text further up is
- * scrollback and must not make an idle screen active.
- */
-const CODEX_TURN_ROW_WINDOW = 8;
-
-/**
- * The line index of the composer prompt in a current Codex screen (0.163.0),
- * or null. The composer is the last line that starts with the prompt glyph,
- * with only indented or blank lines below it (its wrapped text, the status
- * line and the footer such as "? for shortcuts" or "⚠ 2 warnings · f2 to
- * view"). A row at column 0 below the last prompt is transcript, so no
- * composer is in view; a numbered prompt row ("› 1. Yes, proceed") is the
- * cursor of a selection list, not the composer.
- */
-function findCodexComposer(lines: string[]): number | null {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i] ?? "";
-    if (CODEX_PROMPT_LINE.test(line)) {
-      return /^\s*[›❯]\s+\d+\.\s/.test(line) ? null : i;
-    }
-    if (/^\S/.test(line)) return null;
-  }
-  return null;
-}
-
-/**
- * True when the rows directly above the composer show a running turn. The
- * scan stops at the "Worked for" line of a finished turn: the text above it
- * is the transcript of that turn.
- */
-function hasRunningTurnAbove(lines: string[], composerIndex: number): boolean {
-  const stop = Math.max(0, composerIndex - CODEX_TURN_ROW_WINDOW);
-  for (let i = composerIndex - 1; i >= stop; i--) {
-    const line = lines[i] ?? "";
-    if (CODEX_TURN_END_LINE.test(line)) return false;
-    if (CODEX_ACTIVE_PATTERNS.some((pattern) => pattern.test(line))) return true;
-  }
-  return false;
-}
-
 function createCodexAgent(): Agent {
   /** Cached resolved binary path (populated by init or first getLaunchCommand) */
   let resolvedBinary: string | null = null;
@@ -472,17 +418,19 @@ function createCodexAgent(): Agent {
       // holds text that nobody submitted (an unsubmitted paste is not a
       // running turn). The composer text and the footer never count as
       // activity, so a message that says "Working" cannot look busy.
-      const composer = findCodexComposer(lines);
-      if (composer !== null) {
-        return hasRunningTurnAbove(lines, composer) ? "active" : "idle";
+      // `ao send` reads the screen with the same parser (codex-screen.ts).
+      const screen = readCodexScreen(terminalOutput);
+      if (screen.composer !== null) {
+        return screen.runningTurn ? "active" : "idle";
       }
 
       // Codex can also show a prompt while it is still working so the user can
       // queue the next message.  Prefer explicit active indicators over the
       // modern footer-style prompt detection below; otherwise ao send can race
       // a live response and leave the pasted report in the input box.
-      if (/\b(Working|Thinking|Running|Osmosing)\b/i.test(tail)) return "active";
-      if (/esc to interrupt/i.test(tail)) return "active";
+      // With no composer in view, the parser reads the running words and
+      // "esc to interrupt" in the last 8 lines.
+      if (screen.runningTurn) return "active";
 
       // Modern Codex uses a Unicode prompt ("›"/"❯") plus a
       // "tab to queue message" footer rather than a bare ">" line.
@@ -787,6 +735,8 @@ export type {
   ApprovalHandler,
   ApprovalDecision,
 } from "./app-server-client.js";
+export { readCodexScreen } from "./codex-screen.js";
+export type { CodexComposer, CodexScreen } from "./codex-screen.js";
 
 export function detect(): boolean {
   try {
