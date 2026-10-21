@@ -171,17 +171,27 @@ export async function cleanupSession(
 
     // B-1 (round 4): the destroy awaited; a new launch of the ID meanwhile
     // uses the same worktree path, so stop before it is removed.
-    const afterDestroy = readMetadataRaw(sessionsDir, sessionId);
-    if (!afterDestroy || !holdsExpected(afterDestroy, assessedVersion(rawMetadata))) {
+    const unchanged = (): boolean => {
+      const now = readMetadataRaw(sessionsDir, sessionId);
+      return !!now && holdsExpected(now, assessedVersion(rawMetadata));
+    };
+    if (!unchanged()) {
       return { success: false, sessionId, action: "cleanup", error: RECORD_CHANGED };
     }
 
     const workspacePath = rawMetadata["worktree"];
     if (workspacePath && workspaceExists && workspace) {
+      // Round 7 (M-2): the plugin's git steps await; it runs the same check
+      // again directly before each removal step. A kept worktree ends the
+      // action as the check above does.
+      let kept = false;
       try {
-        await workspace.destroy(workspacePath);
+        kept = (await workspace.destroy(workspacePath, unchanged)) === "kept";
       } catch {
         // ignore cleanup errors
+      }
+      if (kept) {
+        return { success: false, sessionId, action: "cleanup", error: RECORD_CHANGED };
       }
     }
 

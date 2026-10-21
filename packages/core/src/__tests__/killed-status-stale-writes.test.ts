@@ -537,7 +537,7 @@ describe("1.1 item 3: spawn writes only into its own reservation and launch", ()
     );
     expect(recordOf("app-1")).toBeNull();
     expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-1"));
-    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(workspace, expect.any(Function));
   });
 
   it("an archive plus a new reservation during runtime.create: the new reservation stays, and so does the shared workspace", async () => {
@@ -767,6 +767,7 @@ describe("1.1 item 3: kill and cleanup archive only the launch they read", () =>
     vi.mocked(ctx.mockWorkspace.destroy).mockImplementation(async () => {
       publishNewLaunch("app-1");
       updateMetadata(sessionsDir, "app-1", { agent: "opencode", opencodeSessionId: "ses_old" });
+      return undefined;
     });
     const sm = createSessionManager({ config, registry: ctx.mockRegistry });
 
@@ -1062,7 +1063,10 @@ describe("1.1 item 3: the recovery actions write only the assessed version", () 
     const result = await cleanupSession(assessed, config, ctx.mockRegistry, context());
 
     expect(result.success).toBe(true);
-    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(join(ctx.tmpDir, "ws-app-1"));
+    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(
+      join(ctx.tmpDir, "ws-app-1"),
+      expect.any(Function),
+    );
     expect(recordOf("app-1")).toBeNull();
     expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toMatchObject({ status: "terminated" });
   });

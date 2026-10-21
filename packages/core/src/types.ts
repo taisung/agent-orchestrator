@@ -719,8 +719,18 @@ export interface Workspace {
   /** Create an isolated workspace for a session */
   create(config: WorkspaceCreateConfig): Promise<WorkspaceInfo>;
 
-  /** Destroy a workspace */
-  destroy(workspacePath: string): Promise<void>;
+  /**
+   * Destroy a workspace.
+   *
+   * `stillOwned` (optional, round 7): the caller's ownership check. Every
+   * launch of a session ID can use the same workspace path, and the plugin's
+   * own steps await. The plugin runs the check directly before each step
+   * that removes files (also a fallback or a retry), with no await between
+   * the check and the step. When it answers false or throws, the plugin
+   * removes nothing more and resolves `"kept"`. Without it, the plugin works
+   * as before and resolves `undefined`.
+   */
+  destroy(workspacePath: string, stillOwned?: () => boolean): Promise<"kept" | undefined>;
 
   /** List existing workspaces for a project */
   list(projectId: string): Promise<WorkspaceInfo[]>;

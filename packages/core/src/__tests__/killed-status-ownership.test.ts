@@ -383,7 +383,7 @@ describe("M-1: the launch rollback reads the record again before each step", () 
     await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
     expect(ctx.mockRuntime.destroy).toHaveBeenCalledWith(makeHandle("rt-spawned"));
     expect(prepared.discard).toHaveBeenCalled();
-    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(worktree);
+    expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(worktree, expect.any(Function));
     expect(recordOf("app-1")).toBeNull();
   });
 });

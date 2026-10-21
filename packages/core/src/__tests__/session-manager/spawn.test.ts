@@ -946,7 +946,7 @@ describe("spawn", () => {
       expect(mockRuntime.create).not.toHaveBeenCalled();
       expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
       expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
-      expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace, expect.any(Function));
     });
 
     it("fails the spawn on a dead pane and removes only the session that it created", async () => {
@@ -978,7 +978,7 @@ describe("spawn", () => {
       ]);
       expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_other"]);
       expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
-      expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace, expect.any(Function));
     });
 
     it.each(["runtime.create", "postLaunchSetup"] as const)(
@@ -1892,7 +1892,7 @@ describe("spawn", () => {
         "runtime creation failed",
       );
 
-      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
       expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
     });
 
@@ -1933,7 +1933,7 @@ describe("spawn", () => {
       // The prompt file existed when the agent refused, and the cleanup removed it.
       expect(promptFileExistedAtLaunch).toBe(true);
       expect(existsSync(promptFileAtLaunch!)).toBe(false);
-      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
       expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
       expect(mockRuntime.create).not.toHaveBeenCalled();
     });
@@ -1967,7 +1967,7 @@ describe("spawn", () => {
       );
 
       expect(mockRuntime.destroy).toHaveBeenCalled();
-      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+      expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
       expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
     });
 
@@ -2210,7 +2210,7 @@ describe("spawn", () => {
         ).rejects.toThrow(/session.create failed/);
 
         expect(mockRuntime.create).not.toHaveBeenCalled();
-        expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+        expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
         expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
         expect(existsSync(promptFile)).toBe(false);
       });
@@ -2250,7 +2250,7 @@ describe("spawn", () => {
         expect(readFileSync(deleteLogPath, "utf-8")).toContain("sessionID=ses_created_1");
         expect(readFileSync(deleteLogPath, "utf-8")).not.toContain("ses_old_orch");
         expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_old_orch"]);
-        expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+        expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
         expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
         expect(
           existsSync(join(getProjectBaseDirForTest(), "orchestrator-prompt-app-orchestrator-1.md")),
@@ -3812,7 +3812,7 @@ describe("a throw before the launch rolls the spawn back (m-5)", () => {
     const sm = createSessionManager({ config, registry });
     await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("environment failed");
 
-    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace, expect.any(Function));
     expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
     expect(readArchivedMetadataRaw(sessionsDir, "app-1")).toBeNull();
     expect(agent.prepareAgentSession).not.toHaveBeenCalled();
@@ -3855,7 +3855,7 @@ describe("a throw before the launch rolls the spawn back (m-5)", () => {
       "session.remove",
     );
 
-    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace);
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(workspace, expect.any(Function));
     expect(readMetadataRaw(sessionsDir, "app-9")).toBeNull();
     expect(readArchivedMetadataRaw(sessionsDir, "app-9")).toBeNull();
     expect(mockRuntime.create).not.toHaveBeenCalled();
@@ -3885,7 +3885,7 @@ describe("a throw before the launch rolls the spawn back (m-5)", () => {
       sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "You are the orchestrator." }),
     ).rejects.toThrow("environment failed");
 
-    expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+    expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath, expect.any(Function));
     expect(readMetadataRaw(sessionsDir, "app-orchestrator-1")).toBeNull();
     expect(existsSync(promptFile)).toBe(false);
     expect(agent.prepareAgentSession).not.toHaveBeenCalled();

@@ -1512,15 +1512,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * latest archive of the ID names it (a restore of this launch's archived
    * record runs on it). Round 5 (M-1): each step reads the record again
    * directly before it (the earlier steps await), with no await between
-   * the check and the step. Every step is best effort; a runtime or agent
-   * session that stays is named to the operator.
+   * the check and the step. Round 7 (M-2): the workspace plugin awaits
+   * inside its step, so it gets the same check and runs it again directly
+   * before each of its own removal calls. Every step is best effort; a
+   * runtime or agent session that stays is named to the operator. A
+   * workspace that stays belongs to the new launch, as when the first check
+   * finds it.
    */
   async function rollbackLaunch(rollback: {
     own: OwnLaunchRecord;
     runtime?: Runtime;
     handle?: RuntimeHandle;
     prepared?: PreparedAgentSession;
-    destroyWorkspace?: () => Promise<void>;
+    destroyWorkspace?: (stillOwned: () => boolean) => Promise<unknown>;
   }): Promise<void> {
     const check = (): ReturnType<OwnLaunchRecord["check"]> => {
       try {
@@ -1562,7 +1566,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
     if (rollback.destroyWorkspace && check().state !== "replaced") {
       try {
-        await rollback.destroyWorkspace();
+        await rollback.destroyWorkspace(() => check().state !== "replaced");
       } catch {
         /* best effort */
       }
@@ -1670,12 +1674,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // Create workspace (if workspace plugin is available)
     let workspacePath = project.path;
-    const destroySpawnWorkspace = async (): Promise<void> => {
+    const destroySpawnWorkspace = async (stillOwned: () => boolean): Promise<void> => {
       if (
         plugins.workspace &&
         shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
       ) {
-        await plugins.workspace.destroy(workspacePath);
+        await plugins.workspace.destroy(workspacePath, stillOwned);
       }
     };
     if (plugins.workspace) {
@@ -2193,7 +2197,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const isolatedWorkspace = plugins.workspace;
         await rollbackLaunch({
           own,
-          destroyWorkspace: () => isolatedWorkspace.destroy(workspacePath),
+          destroyWorkspace: (stillOwned) => isolatedWorkspace.destroy(workspacePath, stillOwned),
         });
         throw err;
       }
@@ -2212,7 +2216,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         prepared: failed.prepared,
         destroyWorkspace:
           orchestratorWorkspaceMode === "isolated" && workspacePlugin
-            ? () => workspacePlugin.destroy(workspacePath)
+            ? (stillOwned) => workspacePlugin.destroy(workspacePath, stillOwned)
             : undefined,
       });
       // Round 5: the prompt file name is the same for every start of the
@@ -2632,18 +2636,32 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    stopWhenReplaced("its worktree, agent session and record were kept; run the kill again");
+    const keptWorktree = "its worktree, agent session and record were kept; run the kill again";
+    stopWhenReplaced(keptWorktree);
     const worktree = raw["worktree"];
     if (worktree && shouldDestroyWorkspacePath(project, projectId, worktree)) {
       const workspacePlugin = project
         ? resolvePlugins(project).workspace
         : registry.get<Workspace>("workspace", config.defaults.workspace);
       if (workspacePlugin) {
+        // Round 7 (M-2): the plugin's git steps await; it runs this check
+        // again directly before each removal step. A replaced record keeps
+        // the worktree and ends the kill as the check above does.
+        let replaced: Error | undefined;
         try {
-          await workspacePlugin.destroy(worktree);
+          await workspacePlugin.destroy(worktree, () => {
+            try {
+              stopWhenReplaced(keptWorktree);
+              return true;
+            } catch (err) {
+              replaced = err instanceof Error ? err : new Error(String(err));
+              return false;
+            }
+          });
         } catch {
           // Workspace might already be gone
         }
+        if (replaced) throw replaced;
       }
     }
 
