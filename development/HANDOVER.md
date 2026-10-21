@@ -31,7 +31,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; record `working`/`stuck` since 2026-10-21 10:24:59 (`generation=1`) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT. DONE 12:27 EDT: R2 NOT-SOUND, R3 NOT-SOUND, R4 SOUND-WITH-CHANGES (B-1 to B-7, M-1 to M-4), no R1 notes; review on `main` (`bee93ab3`); router row closed `in-review`. Idle; `weekly 81% left`, context 68% used RE-CHECK r2 of design r2 dispatched 13:37 EDT (branch fast-forwarded to `628e0fbf`; brief `brief-review-same-id-design-r2-astra.md`; review file `same_id_design_review_r2_astra6.md`; it also checks the effect of a name per launch on `fleet_watch.sh`, `ao_relaunch.py` and pane captures); router row open | on its `done`: copy the review to `main`, then ask the owner OD-2 to OD-10, OD-12 and OD-13 to OD-17 (or a design r3 first) |
+| ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT. DONE 12:27 EDT: R2 NOT-SOUND, R3 NOT-SOUND, R4 SOUND-WITH-CHANGES (B-1 to B-7, M-1 to M-4), no R1 notes; review on `main` (`bee93ab3`); router row closed `in-review`. Idle; `weekly 81% left`, context 68% used RE-CHECK r2 of design r2 dispatched 13:37 EDT (branch fast-forwarded to `628e0fbf`; brief `brief-review-same-id-design-r2-astra.md`; review file `same_id_design_review_r2_astra6.md`; it also checks the effect of a name per launch on `fleet_watch.sh`, `ao_relaunch.py` and pane captures); DONE 13:55 EDT: R2a, R2b, R3a, R3b NOT-SOUND, R4 SOUND-WITH-CHANGES; 5 B, 3 M, 1 m (`same_id_design_review_r2_astra6.md`, on `main` at `3843a025`); router row closed `in-review` | keep for a round-3 re-check; the owner chooses the next step |
 | ao-52 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-52`, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex`, moved to `c516cead`. Design revision r2 for R2 to R4 (owner "1a"): answers B-1 to B-7, M-1 to M-4, OD-13 to OD-16, a revised round plan, failing tests for the new counterexamples in new files only; design file `development/reviews/same_id_design_r2_opus.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-design-r2.md`, scratch `/tmp/aosd2`; dispatched 12:38 EDT. DONE 13:33 EDT at `628e0fbf` (`c516cead..628e0fbf`, 50 new tests in 4 new files; full run 2933 passed, 25 expected fail, 29 skipped): all 11 findings accepted, new N-1 to N-3, a tmux name per launch `<base>-r<8 hex>` (OD-17), plan R2a, R2b, R4, R3a, R3b; design on `main` (`8e15bbbc`); router row closed `in-review`; 20.11 USD | keep: author of a design r3 if the re-check needs one |
 
 Closed by this handover (2026-10-21 11:40 EDT): ao-46 (the killed-status author) and ao-47 (its
@@ -146,8 +146,17 @@ add the missing-`TMUX_TMPDIR` fallback.
      old tests that pin plain argument vectors updated, full run green.
 2. **Design of R2 to R4, then the remaining owner decisions** - review r1 by ao-51 is DONE (R2 and R3
    NOT-SOUND, R4 SOUND-WITH-CHANGES; `development/reviews/same_id_design_review_r1_astra6.md`). The
-   design revision r2 is DISPATCHED to ao-52 (owner "1a", 2026-10-21), and ao-51 re-checks it (owner
-   "2a"). After the re-check, ask the owner OD-2 to OD-10, OD-12 and OD-13 to OD-16.
+   design revision r2 by ao-52 is DONE (`development/reviews/same_id_design_r2_opus.md`, 50 new tests
+   at `628e0fbf`, not on `main`). Its re-check by ao-51 is DONE (2026-10-21 13:55 EDT,
+   `development/reviews/same_id_design_review_r2_astra6.md`): R2a, R2b, R3a, R3b NOT-SOUND, R4
+   SOUND-WITH-CHANGES, 5 blockers (B-1 stop and send act on a reusable name; B-2 the Herdr pre-check can
+   close a replacement; B-3 the lock descriptor does not reach grandchildren; B-4 the OpenCode quarantine
+   is per project, the lock per store; B-5 the rollout leaves the unlocked shell writers active), 3 majors
+   (M-1 the N-3 test oracle; M-2 a name per launch breaks `fleet_watch.sh` and `ao_relaunch.py`; M-3
+   legacy association and retire are incomplete), 1 minor (m-1 R4 malformed git output). Landable alone
+   now: the R2a core subset (refusals only, with the Herdr close kept unknown) and R4 with m-1. For
+   OD-17 the reviewer prefers (b), a stable name with a launch-token guard. Next: the owner chooses a
+   design r3 and which landable parts start.
    - Context: R2 (server and launch identity) and R3 (per-ID lease, F-1, F-2, F-3, F-6) are HIGH; R3 is
      the largest. R4 (fail-open reads F-8 to F-11) is medium and small.
    - Expected outcome: a review file `development/reviews/same_id_design_review_r1_<model>.md`, then
