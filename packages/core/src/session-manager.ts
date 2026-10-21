@@ -1557,9 +1557,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   /**
    * Review r1 (M-1): remove the archive copy-back of a refused restore again,
    * and say what happened, for the refusal message. Only while the record is
-   * still that copy-back (its launch identity with the reservation ID), and
-   * without an archive copy: the archive that it came from stays the latest
-   * one. A record that another operation put in its place stays.
+   * still that copy-back as it was written (its launch identity with the
+   * reservation ID, and its generation), and without an archive copy: the
+   * archive that it came from stays the latest one. Review r2 (M-1): the
+   * copy-back is an active record during the stop, so another operation can
+   * write to it (a PR claim, a status or summary update) without a change of
+   * the launch identity. Such a write raises the generation, and the record
+   * stays with it. A record that another operation put in its place stays too.
    */
   function releaseCopyBack(
     sessionsDir: string,
@@ -1568,12 +1572,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   ): string {
     const rest = "the workspace is as it was, and no new runtime was created";
     try {
-      if (deleteMetadata(sessionsDir, sessionId, false, launchIdentity(copyBack))) {
+      const unchanged = {
+        ...launchIdentity(copyBack),
+        [GENERATION_KEY]: copyBack[GENERATION_KEY] ?? "",
+      };
+      if (deleteMetadata(sessionsDir, sessionId, false, unchanged)) {
         return `nothing was restored: the archive copy-back of this restore was removed again, ${rest}`;
       }
-      return readMetadataRaw(sessionsDir, sessionId) === null
-        ? `nothing was restored: the archive copy-back of this restore is already gone (another operation on the ID removed it), ${rest}`
-        : `the active record of ${sessionId} is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed; ${rest}`;
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      if (current === null) {
+        return `nothing was restored: the archive copy-back of this restore is already gone (another operation on the ID removed it), ${rest}`;
+      }
+      if (holdsExpected(current, launchIdentity(copyBack))) {
+        return `the archive copy-back of this restore changed during the stop (another operation on the ID wrote to it), so it was kept as the active record of ${sessionId} with that write and was not removed; ${rest}; check that record with \`ao session ls\` before you restore again, because a restore now reads the active record and not the archive`;
+      }
+      return `the active record of ${sessionId} is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed; ${rest}`;
     } catch (err) {
       return `the archive copy-back of this restore could not be removed (${shortErrorText(err)}), so an active record of ${sessionId} stays; ${rest}`;
     }
@@ -4400,8 +4413,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // crash). Same-ID R2a (N-2): only a confirmed stop (destroyed or absent)
     // lets the restore go on. Review r1 (M-1): the stop runs before the
     // workspace is recreated, and a refusal removes the archive copy-back of
-    // this restore again, so the refused restore leaves the record, the
-    // archive and the workspace as they were.
+    // this restore again while no other operation changed it (review r2,
+    // M-1), so the refused restore leaves the record, the archive and the
+    // workspace as they were. A copy-back that another operation wrote to or
+    // replaced during the stop stays, and the refusal says so.
     if (session.runtimeHandle) {
       const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
       if (!isRuntimeStopConfirmed(stopped)) {

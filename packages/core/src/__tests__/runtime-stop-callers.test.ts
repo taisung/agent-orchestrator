@@ -33,6 +33,7 @@ import {
   createMockRegistry,
   createMockSCM,
   makeHandle,
+  makePR,
   setupTestContext,
   teardownTestContext,
   type TestContext,
@@ -645,6 +646,169 @@ describe("review r1 reproducer, M-1: a refused restore changes nothing", () => {
       expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
     });
   }
+});
+
+/**
+ * Review r2 (M-1): the archive copy-back is an active record during the
+ * stop, and another operation can write to it without a change of its
+ * launch identity. The first three tests are the reviewer's tests (their
+ * logs left out, their assertions kept, then the message checked). Measured
+ * on 3612c2fd: the update and the PR claim were deleted with the copy-back
+ * (the active record became null), and the second restore entered (as on
+ * ac1cbf4b, so it is a control of F-4, not of this fix).
+ */
+describe("review r2 reproducer, M-1: a refused restore keeps a write made during the stop", () => {
+  const changedDuringStop =
+    "the archive copy-back of this restore changed during the stop (another operation on the ID wrote to it), so it was kept as the active record of app-1 with that write and was not removed; the workspace is as it was, and no new runtime was created; check that record with `ao session ls` before you restore again, because a restore now reads the active record and not the archive";
+
+  it("review: refused copy-back must preserve another operation metadata update", async () => {
+    const wt = join(
+      getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
+      "app-1",
+    );
+    writeMetadata(sessionsDir, "app-1", {
+      project: "my-app",
+      worktree: wt,
+      branch: "feat/app-1",
+      status: "killed",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    deleteMetadata(sessionsDir, "app-1", true);
+    ctx.mockWorkspace.exists = vi.fn(async () => false);
+    ctx.mockWorkspace.restore = vi.fn(async (cfg) => {
+      mkdirSync(wt, { recursive: true });
+      return { path: wt, branch: cfg.branch, sessionId: cfg.sessionId, projectId: cfg.projectId };
+    });
+    let written: Record<string, string> | null = null;
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      updateMetadata(sessionsDir, "app-1", {
+        pinnedSummary: "Important user summary",
+        pr: "https://github.com/org/repo/pull/99",
+      });
+      written = readMetadataRaw(sessionsDir, "app-1");
+      return { outcome: "unknown" as const, detail: "server unavailable" };
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const err = await sm.restore("app-1").catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("runtime stop unconfirmed");
+    expect(readMetadataRaw(sessionsDir, "app-1"), "another successful writer was erased").toEqual(
+      written,
+    );
+    expect(existsSync(wt), "a workspace appeared").toBe(false);
+    expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+    expect((err as Error).message).toContain(changedDuringStop);
+  });
+
+  it("review: a copy-back does not exclude a second active-record restore", async () => {
+    const wt = join(
+      getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
+      "app-1",
+    );
+    mkdirSync(wt, { recursive: true });
+    writeMetadata(sessionsDir, "app-1", {
+      project: "my-app",
+      worktree: wt,
+      branch: "feat/app-1",
+      status: "killed",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    deleteMetadata(sessionsDir, "app-1", true);
+    let entered = 0;
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      entered++;
+      if (entered === 1)
+        await expect(sm.restore("app-1")).rejects.toThrow("runtime stop unconfirmed");
+      return { outcome: "unknown" as const, detail: "server unavailable" };
+    });
+
+    await expect(sm.restore("app-1")).rejects.toThrow("runtime stop unconfirmed");
+    expect(entered).toBe(2);
+  });
+
+  it("review: a successful public PR claim survives another restore refusal", async () => {
+    const wt = join(
+      getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
+      "app-1",
+    );
+    mkdirSync(wt, { recursive: true });
+    writeMetadata(sessionsDir, "app-1", {
+      project: "my-app",
+      worktree: wt,
+      branch: "feat/app-1",
+      status: "killed",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    deleteMetadata(sessionsDir, "app-1", true);
+    const archiveBefore = archiveFiles("app-1");
+    const pr = makePR({
+      number: 99,
+      url: "https://github.com/org/repo/pull/99",
+      branch: "feat/claimed",
+    });
+    const scm = createMockSCM({
+      resolvePR: vi.fn(async () => pr),
+      getPRState: vi.fn(async () => "open" as const),
+      checkoutPR: vi.fn(async () => true),
+    });
+    const registry = createMockRegistry({
+      runtime: ctx.mockRuntime,
+      workspace: ctx.mockWorkspace,
+      agent: ctx.mockAgent,
+      scm,
+    });
+    const sm = createSessionManager({ config: ctx.config, registry });
+    let claimed: Record<string, string> | null = null;
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      await sm.claimPR("app-1", pr.url);
+      claimed = readMetadataRaw(sessionsDir, "app-1");
+      return { outcome: "unknown" as const, detail: "server unavailable" };
+    });
+
+    const err = await sm.restore("app-1").catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("runtime stop unconfirmed");
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["pr"], "successful PR claim lost").toBe(pr.url);
+    expect(readMetadataRaw(sessionsDir, "app-1"), "the claimed record changed").toEqual(claimed);
+    expect(claimed).toMatchObject({ branch: "feat/claimed", status: "pr_open", pr: pr.url });
+    expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
+    expect(existsSync(wt), "the worktree was removed").toBe(true);
+    expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+    expect((err as Error).message).toContain(changedDuringStop);
+  });
+
+  it("a status write during the stop (the lifecycle poll's write) keeps the copy-back, and the refusal names the change, the kept record and the next action", async () => {
+    const worktree = killedRecordWithoutWorktree(true);
+    const archiveBefore = archiveFiles("app-1");
+    let written: Record<string, string> | null = null;
+    let copyBack: Record<string, string> | null = null;
+    ctx.mockRuntime.stop = vi.fn(async () => {
+      copyBack = readMetadataRaw(sessionsDir, "app-1");
+      updateMetadata(sessionsDir, "app-1", { status: "stuck" });
+      written = readMetadataRaw(sessionsDir, "app-1");
+      return { outcome: "unknown" as const, detail: "the runtime server did not answer" };
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const err = await sm.restore("app-1").catch((e: unknown) => e);
+
+    expect(isRuntimeStopUnconfirmedError(err)).toBe(true);
+    // The disk first: the write stays, the archive and the workspace as they were.
+    expect(readMetadataRaw(sessionsDir, "app-1"), "the status write was erased").toEqual(written);
+    expect(written).toMatchObject({ status: "stuck" });
+    expect(Number(written!["generation"])).toBe(Number(copyBack!["generation"]) + 1);
+    expect(written!["reservationId"]).toBe(copyBack!["reservationId"]);
+    expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
+    expect(existsSync(worktree), "a worktree appeared").toBe(false);
+    expect(ctx.mockWorkspace.restore, "the workspace was recreated").not.toHaveBeenCalled();
+    expect(ctx.mockRuntime.create, "a runtime was created").not.toHaveBeenCalled();
+    const refusal = err as Error & { hint: string };
+    expect(refusal.message).toContain(changedDuringStop);
+    expect(refusal.message).not.toContain("was removed again");
+    expect(refusal.hint).toContain("then run `ao session restore app-1` again");
+  });
 });
 
 describe("recovery cleanupSession", () => {
