@@ -957,6 +957,15 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `PreparedAgentSession.discard`, run before the interrupt and each removal); `types.ts` and the two
     plugins allowed for these only. Dispatched 23:17:40 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r7.md`, on top of `7294d978`.
+    Done 23:57 EDT at `0d3c05fe` (4 commits; 12.55 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r7.md`). Full run 2804 passed. Public type
+    change: `Workspace.destroy` now returns `Promise<"kept" | undefined>`. Unchanged plugin removals that
+    the author lists: worktree `create` checkout-failure cleanup, `restore` prune, `postCreate` symlink
+    target removal, the `discard()` of a failed prepare.
+  - **Review r6** (ao-47 on gpt-6-astra, dispatched 2026-10-21 00:00:31 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r6-astra.md`, output
+    `development/reviews/killed_status_review_r6_astra6.md`): re-check of `7294d978..0d3c05fe` and a
+    whole-fix land-safe statement.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
