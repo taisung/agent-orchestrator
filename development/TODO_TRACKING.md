@@ -937,6 +937,20 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r5-sol.md`, output
     `development/reviews/killed_status_review_r5_astra6.md`: re-check of `f06a1107..7294d978`, a rating of
     the two plugin removal steps, and a whole-fix land-safe statement with the deferred items.
+    Done 23:03 EDT: **NOT-LAND-SAFE**, 0 blockers, 3 majors (all must be fixed before landing, says the
+    reviewer). r4 M-2 fixed (real ledger lock), m-1 and m-2 fixed as docs, r4 M-1 partly fixed. The deferred
+    tmux items are not blockers.
+    - M-1: the orchestrator delete-strategy caller (`session-manager.ts:993-1009`, `:2284-2292`) passes
+      its own `sessionId` as the excluded ID, so the per-attempt check does not see a replacement launch of
+      that ID; its second removal deletes the replacement's OpenCode session (expected 1 call, got 2). Core.
+    - M-2: `workspace-worktree` `destroy` (`index.ts:166-188`) removes a replacement worktree after its
+      `git rev-parse` await or a failed `git worktree remove` (`rmSync` fallback). Needs `types.ts` and the
+      plugin.
+    - M-3: the OpenCode prepared-session `discard` (`agent-opencode/src/index.ts:492-511`) removes after its
+      interrupt await and on its retry with no check. Needs `types.ts` and the plugin.
+    - Each interface has one implementation (`Workspace.destroy`: workspace-worktree;
+      `PreparedAgentSession.discard`: agent-opencode).
+    - R7: the Opus author failed a fifth review round. The next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
