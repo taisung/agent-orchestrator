@@ -1,7 +1,7 @@
 # Handover
 
 **Last Updated**: 2026-10-20
-**Latest Code Commit**: 5069e114 (docs(opencode): name every release of an attempt lock in the spec)
+**Latest Code Commit**: 8fe2e1aa (the killed-status fix, cherry-picked 2026-10-21 10:17 EDT; not built, not live, not pushed)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
