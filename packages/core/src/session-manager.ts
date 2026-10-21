@@ -645,6 +645,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return [...ids];
   }
 
+  /**
+   * Round 9 (M-1): `listArchivedSessionIds` for a holder decision. Only a
+   * missing archive directory (`ENOENT`) has no archives: `existsSync`
+   * answers false also for a directory that it cannot check (`EACCES` on a
+   * parent, `ELOOP`), so any other error of the directory read throws.
+   */
+  function listArchivedSessionIdsStrict(sessionsDir: string): string[] {
+    const ids = new Set<string>();
+    for (const file of readdirOrEmpty(join(sessionsDir, "archive"))) {
+      const match = file.match(/^([a-zA-Z0-9_-]+)_\d/);
+      if (match?.[1]) ids.add(match[1]);
+    }
+    return [...ids];
+  }
+
   function isOrchestratorSessionRecord(
     sessionId: string,
     raw: Record<string, string> | null | undefined,
@@ -1649,7 +1664,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * also when it is a copy of this launch, because a restore runs on it.
    * Round 8 (M-1): a record or an archive that exists but cannot be read is
    * a holder, and so is a read error of the directories; no read error
-   * counts as "names nothing".
+   * counts as "names nothing". Round 9 (M-1): the archive directory too:
+   * only a missing one (`ENOENT`) has no archives, and a directory that
+   * cannot be checked or read is a holder.
    */
   function preparedSessionHolder(
     own: OwnLaunchRecord,
@@ -1662,9 +1679,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let archivedIds: string[];
     try {
       ids = listRecordIds(sessionsDir);
-      archivedIds = listArchivedSessionIds(sessionsDir);
     } catch (err) {
       return `the records could not be listed (${shortErrorText(err)})`;
+    }
+    try {
+      archivedIds = listArchivedSessionIdsStrict(sessionsDir);
+    } catch (err) {
+      return `the archives could not be listed (${shortErrorText(err)})`;
     }
     for (const id of ids) {
       let record: Record<string, string> | null;

@@ -11,6 +11,10 @@
  * keeps it, also during a failed first removal, and so does a holder in the
  * latest archive of another AO ID.
  *
+ * Round 9 (review r7, M-1): an archive directory that cannot be checked (its
+ * parent has mode 000, or `sessions/archive` is a symlink loop) is unknown,
+ * not "no archives": the prepared session stays and core names it.
+ *
  * The plugin and the session manager (the built core) are real, and so are
  * the files: an unreadable record is a real `chmod 000` of a file in the
  * test's temporary directory, restored before an assertion reads it. The
@@ -18,7 +22,19 @@
  * `opencode` process runs), and so is the version probe.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,7 +92,7 @@ import { create } from "./index.js";
 
 let root: string;
 let stderr: string[];
-let modes: string[];
+let modes: Array<{ path: string; mode: number }>;
 const originalStateRoot = process.env["AO_STATE_ROOT"];
 
 beforeEach(() => {
@@ -114,13 +130,13 @@ afterEach(() => {
 });
 
 function makeUnreadable(path: string): void {
-  modes.push(path);
+  modes.push({ path, mode: statSync(path).mode & 0o7777 });
   chmodSync(path, 0o000);
 }
 
 function restoreModes(): void {
-  for (const path of modes.splice(0)) {
-    if (existsSync(path)) chmodSync(path, 0o644);
+  for (const { path, mode } of modes.splice(0).reverse()) {
+    if (existsSync(path)) chmodSync(path, mode);
   }
 }
 
@@ -384,3 +400,90 @@ describe("M-2 (round 8): issue reuse by another AO session during the rollback k
     expect(stderr.join("")).not.toMatch(/kept/);
   });
 });
+
+describe.skipIf(process.getuid?.() === 0)(
+  "M-1 (round 9): an archive directory that cannot be checked keeps the prepared session",
+  () => {
+    /**
+     * Another process archives app-2 (it names ses_prepared), then the
+     * archive directory moves below a scratch parent and `sessions/archive`
+     * links to it: the archive is still there, behind that parent.
+     */
+    function archiveBehindParent(sessionsDir: string): string {
+      writeMetadata(sessionsDir, "app-2", {
+        worktree: join(root, "ws-app-2"),
+        branch: "feat/INT-2",
+        status: "killed",
+        project: "my-app",
+        agent: "opencode",
+        opencodeSessionId: "ses_prepared",
+      });
+      expect(deleteMetadata(sessionsDir, "app-2", true)).toBe(true);
+      const parent = join(root, "archive-parent");
+      mkdirSync(parent);
+      renameSync(join(sessionsDir, "archive"), join(parent, "archive"));
+      symlinkSync(join(parent, "archive"), join(sessionsDir, "archive"));
+      return parent;
+    }
+
+    function latestArchiveOf(sessionsDir: string, id: string): string {
+      const dir = join(sessionsDir, "archive");
+      const files = readdirSync(dir)
+        .filter((name) => name.startsWith(`${id}_`))
+        .sort();
+      return readFileSync(join(dir, files[files.length - 1]!), "utf-8");
+    }
+
+    it("review reproducer: the archive of app-2 names ses_prepared, and its parent becomes mode 000 during the interrupt of app-1: no removal, the session is named", async () => {
+      const { sessionsDir, sm } = setup();
+      let existsAnswer: boolean | undefined;
+      api.duringInterrupt = () => {
+        makeUnreadable(archiveBehindParent(sessionsDir));
+        existsAnswer = existsSync(join(sessionsDir, "archive"));
+      };
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(existsAnswer).toBe(false);
+      expect(api.interrupt).toHaveBeenCalledTimes(1);
+      expect(api.remove).not.toHaveBeenCalled();
+      expect(stderr.join("")).toMatch(KEPT_LINE);
+      expect(stderr.join("")).toMatch(
+        /kept the agent session of a failed launch \(ses_prepared\): the archives could not be listed \(EACCES/,
+      );
+      restoreModes();
+      expect(latestArchiveOf(sessionsDir, "app-2")).toContain("opencodeSessionId=ses_prepared");
+    });
+
+    it("a symlink loop at sessions/archive during the interrupt: no removal, the session is named", async () => {
+      const { sessionsDir, sm } = setup();
+      api.duringInterrupt = () => {
+        symlinkSync("archive", join(sessionsDir, "archive"));
+      };
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(api.remove).not.toHaveBeenCalled();
+      expect(stderr.join("")).toMatch(KEPT_LINE);
+      expect(stderr.join("")).toMatch(/\(ses_prepared\): the archives could not be listed \(ELOOP/);
+    });
+
+    it("control: the archive directory is missing (ENOENT) during the interrupt: ses_prepared is removed", async () => {
+      const { sessionsDir, sm } = setup();
+      let archiveError: string | undefined;
+      api.duringInterrupt = () => {
+        try {
+          statSync(join(sessionsDir, "archive"));
+        } catch (err) {
+          archiveError = (err as NodeJS.ErrnoException).code;
+        }
+      };
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(archiveError).toBe("ENOENT");
+      expect(api.remove).toHaveBeenCalledTimes(1);
+      expect(stderr.join("")).not.toMatch(/kept/);
+    });
+  },
+);

@@ -14,9 +14,23 @@
  * that keep the contract (their own step awaits, another process acts
  * meanwhile, then they run the caller's check; a check that throws counts as
  * no).
+ *
+ * Round 9 (development/reviews/killed_status_review_r7_astra6.md, M-1): the
+ * archive directory too. Only a missing one (ENOENT) has no archives; a
+ * directory that cannot be checked (a parent with mode 000, a symlink loop)
+ * keeps the prepared session.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -61,7 +75,7 @@ afterEach(() => {
 
 /** Make `path` unreadable (a real mode change); `restoreModes` undoes it. */
 function makeUnreadable(path: string, mode = 0o000): void {
-  modes.push({ path, mode: path === sessionsDir ? 0o755 : 0o644 });
+  modes.push({ path, mode: statSync(path).mode & 0o7777 });
   chmodSync(path, mode);
 }
 
@@ -502,6 +516,111 @@ describe.skipIf(process.getuid?.() === 0)(
       expect(ctx.mockRuntime.destroy).not.toHaveBeenCalled();
       restoreModes();
       expect(recordOf("app-orchestrator")).toMatchObject({ role: "orchestrator" });
+    });
+  },
+);
+
+describe.skipIf(process.getuid?.() === 0)(
+  "M-1 (round 9): an archive directory that cannot be checked is unknown, not absent",
+  () => {
+    /**
+     * Archive app-2 (it names `openCodeId`), then move the archive directory
+     * below a scratch parent and link `sessions/archive` to it: the archive
+     * is still there, behind that parent.
+     */
+    function archiveBehindParent(openCodeId: string): string {
+      launchedRecord("app-2", { agent: "opencode", opencodeSessionId: openCodeId });
+      expect(deleteMetadata(sessionsDir, "app-2", true)).toBe(true);
+      const parent = join(ctx.tmpDir, "archive-parent");
+      mkdirSync(parent);
+      renameSync(join(sessionsDir, "archive"), join(parent, "archive"));
+      symlinkSync(join(parent, "archive"), join(sessionsDir, "archive"));
+      return parent;
+    }
+
+    it("an existing archive behind an unsearchable directory is unknown, not absent", async () => {
+      let existsAnswer: boolean | undefined;
+      const { answers } = preparedSpawn({
+        during: () => {
+          makeUnreadable(archiveBehindParent("ses_prep"));
+          existsAnswer = existsSync(join(sessionsDir, "archive"));
+        },
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      // existsSync cannot check the path, so it answers false.
+      expect(existsAnswer).toBe(false);
+      expect(answers).toEqual([false]);
+      expect(warnings()).toMatch(
+        /kept the agent session of a failed launch \(ses_prep\): the archives could not be listed \(EACCES/,
+      );
+      restoreModes();
+      expect(readArchivedMetadataRaw(sessionsDir, "app-2")).toMatchObject({
+        opencodeSessionId: "ses_prep",
+      });
+    });
+
+    it("the same before the hook runs: core keeps the session without a call to discard", async () => {
+      const { answers, prepared } = preparedSpawn({
+        beforeRollback: () => makeUnreadable(archiveBehindParent("ses_prep")),
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(prepared.discard).not.toHaveBeenCalled();
+      expect(answers).toEqual([]);
+      expect(warnings()).toMatch(/\(ses_prep\): the archives could not be listed \(EACCES/);
+    });
+
+    it("a symlink loop at sessions/archive is unknown, not absent", async () => {
+      const { answers } = preparedSpawn({
+        during: () => symlinkSync("archive", join(sessionsDir, "archive")),
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(answers).toEqual([false]);
+      expect(warnings()).toMatch(/\(ses_prep\): the archives could not be listed \(ELOOP/);
+    });
+
+    it("control: the archive directory is missing (ENOENT) and nothing names the session: the session is removed", async () => {
+      let archiveError: string | undefined;
+      const { answers, prepared } = preparedSpawn({
+        during: () => {
+          try {
+            statSync(join(sessionsDir, "archive"));
+          } catch (err) {
+            archiveError = (err as NodeJS.ErrnoException).code;
+          }
+        },
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(archiveError).toBe("ENOENT");
+      expect(prepared.discard).toHaveBeenCalledTimes(1);
+      expect(answers).toEqual([true]);
+      expect(recordOf("app-1")).toBeNull();
+      expect(warnings()).not.toMatch(/kept/);
+    });
+
+    it("control: the same linked archive directory with a searchable parent, and its archive names another session: the session is removed", async () => {
+      const { answers } = preparedSpawn({
+        during: () => {
+          archiveBehindParent("ses_other");
+        },
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(answers).toEqual([true]);
+      expect(warnings()).not.toMatch(/kept/);
     });
   },
 );
