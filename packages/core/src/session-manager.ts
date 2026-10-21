@@ -142,6 +142,79 @@ function shortErrorText(err: unknown): string {
   return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
+/** The `code` of a Node file-system error, or undefined. */
+function errorCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
+}
+
+/** The entries of a directory; none when it does not exist. Another error throws. */
+function readdirOrEmpty(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/**
+ * Round 8 (M-1): throw unless the record file of `sessionId` is missing. A
+ * path that cannot be checked (`existsSync` answers false for it too) or a
+ * file that is there now is not "gone".
+ */
+function assertNoRecordFile(sessionsDir: string, sessionId: string): void {
+  try {
+    statSync(join(sessionsDir, sessionId));
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return;
+    throw err;
+  }
+  throw new Error(`the record of ${sessionId} exists but was not read`);
+}
+
+/**
+ * Round 8 (M-1): `readMetadataRaw`, but null only when the record file is
+ * missing. A record that cannot be read or checked throws.
+ */
+function readRecordStrict(sessionsDir: string, sessionId: string): Record<string, string> | null {
+  const record = readMetadataRaw(sessionsDir, sessionId);
+  if (!record) assertNoRecordFile(sessionsDir, sessionId);
+  return record;
+}
+
+/**
+ * Round 8 (M-1): the session IDs that have a record file, as `listMetadata`
+ * lists them, but an entry that cannot be checked throws: `listMetadata`
+ * leaves it out, and a holder check must not miss a record that it cannot
+ * read.
+ */
+function listRecordIds(sessionsDir: string): string[] {
+  return readdirOrEmpty(sessionsDir).filter((id) => {
+    if (id === "archive" || id.startsWith(".") || !/^[a-zA-Z0-9_-]+$/.test(id)) return false;
+    try {
+      return statSync(join(sessionsDir, id)).isFile();
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return false;
+      throw err;
+    }
+  });
+}
+
+/**
+ * The result of a check of a launch's own record (see `ownLaunchRecord`).
+ * Round 8 (M-1): "unknown" when the check could not read the record.
+ */
+type LaunchCheck =
+  | { state: "own" | "gone" | "replaced"; current: Record<string, string> | null }
+  | { state: "unknown"; current: null; error: unknown };
+
+/** A workspace that a failed launch removes (see `rollbackLaunch`). */
+interface RollbackWorkspace {
+  path: string;
+  /** The plugin destroy, with the rollback's check as `stillOwned`. */
+  destroy(stillOwned: () => boolean): Promise<void>;
+}
+
 /**
  * Remove the agent session that this spawn created, on a failed spawn. The
  * hook never throws by contract; a throw anyway must not replace the error
@@ -1403,11 +1476,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     during: string,
     outcome: string,
   ): Error {
-    const gone = readMetadataRaw(sessionsDir, sessionId) === null;
+    // Round 8 (M-1): the message only; a record that cannot be read is
+    // named as such, and the read error does not replace this error.
+    let state: "gone" | "changed" | "unreadable";
+    try {
+      state = readRecordStrict(sessionsDir, sessionId) === null ? "gone" : "changed";
+    } catch {
+      state = "unreadable";
+    }
     return new Error(
-      gone
+      state === "gone"
         ? `Session ${sessionId} was removed (archived or deleted) while ${during}; ${outcome}`
-        : `Session ${sessionId} changed while ${during} (a new reservation, launch or restore of the ID, or another write); ${outcome}`,
+        : state === "unreadable"
+          ? `Session ${sessionId} could not be read while ${during}; ${outcome}`
+          : `Session ${sessionId} changed while ${during} (a new reservation, launch or restore of the ID, or another write); ${outcome}`,
     );
   }
 
@@ -1451,7 +1533,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    */
   function openCodeNamers(sessionsDir: string, openCodeId: string, exceptId?: string): string {
     const namers: string[] = [];
-    for (const id of listMetadata(sessionsDir)) {
+    // Round 8 (M-1): a record that cannot be checked or read throws; it is
+    // never left out of the compare.
+    for (const id of listRecordIds(sessionsDir)) {
       if (id === exceptId) continue;
       const raw = readMetadataRaw(sessionsDir, id);
       if (!raw || asValidOpenCodeSessionId(raw["opencodeSessionId"]) !== openCodeId) continue;
@@ -1475,7 +1559,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     reserved: Record<string, string>,
   ) {
     let owned = reserved;
+    const check = (): {
+      state: "own" | "gone" | "replaced";
+      current: Record<string, string> | null;
+    } => {
+      // Round 8 (M-1): readMetadataRaw answers null also when the path
+      // cannot be checked (existsSync); only a missing file is gone.
+      const current = readRecordStrict(sessionsDir, sessionId);
+      if (!current) return { state: "gone", current };
+      return {
+        state: holdsExpected(current, launchIdentity(owned)) ? "own" : "replaced",
+        current,
+      };
+    };
     return {
+      sessionsDir,
+      sessionId,
       write(updates: Partial<Record<string, string>>, during: string): void {
         const written = updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), updates);
         if (!written) {
@@ -1483,27 +1582,82 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
         owned = written;
       },
-      /** The record now, and whether it is still this launch, gone, or replaced. */
-      check(): { state: "own" | "gone" | "replaced"; current: Record<string, string> | null } {
-        const current = readMetadataRaw(sessionsDir, sessionId);
-        if (!current) return { state: "gone", current };
-        return {
-          state: holdsExpected(current, launchIdentity(owned)) ? "own" : "replaced",
-          current,
-        };
+      /**
+       * The record now, and whether it is still this launch, gone, or
+       * replaced. It throws when it cannot read the record.
+       */
+      check,
+      /**
+       * Round 8 (M-1): `check`, with a read error as "unknown" (the error
+       * is in `error`). It never throws. Unknown is never "gone": a step
+       * that removes a resource keeps it on "unknown".
+       */
+      checkOrUnknown(): LaunchCheck {
+        try {
+          return check();
+        } catch (error) {
+          return { state: "unknown", current: null, error };
+        }
+      },
+      /** True when `record` is a version of this launch (its launch identity). */
+      holds(record: Readonly<Record<string, string>>): boolean {
+        return holdsExpected(record, launchIdentity(owned));
       },
       /** Delete the record without an archive, only while it is still this launch. */
       release(): void {
         deleteMetadata(sessionsDir, sessionId, false, launchIdentity(owned));
       },
-      /** The latest archived copy of the ID, or null. */
-      latestArchive(): Record<string, string> | null {
-        return readArchivedMetadataRaw(sessionsDir, sessionId);
-      },
     };
   }
 
   type OwnLaunchRecord = ReturnType<typeof ownLaunchRecord>;
+
+  /**
+   * Round 8 (M-2): a record other than this launch's own record that names
+   * one of the values of `values` (the agent session that this launch
+   * prepared), or undefined. It reads what issue reuse and the kill holder
+   * checks read: every active record and the latest archive of each session
+   * ID. Only the active record that still holds this launch's identity is
+   * left out (compared by launch identity, not by the ID); an archive counts
+   * also when it is a copy of this launch, because a restore runs on it.
+   * Round 8 (M-1): a record or an archive that exists but cannot be read is
+   * a holder, and so is a read error of the directories; no read error
+   * counts as "names nothing".
+   */
+  function preparedSessionHolder(
+    own: OwnLaunchRecord,
+    values: Readonly<Record<string, string>>,
+  ): string | undefined {
+    const { sessionsDir } = own;
+    const names = (record: Readonly<Record<string, string>>): boolean =>
+      Object.entries(values).some(([key, value]) => value !== "" && record[key] === value);
+    let ids: string[];
+    let archivedIds: string[];
+    try {
+      ids = listRecordIds(sessionsDir);
+      archivedIds = listArchivedSessionIds(sessionsDir);
+    } catch (err) {
+      return `the records could not be listed (${shortErrorText(err)})`;
+    }
+    for (const id of ids) {
+      let record: Record<string, string> | null;
+      try {
+        record = readRecordStrict(sessionsDir, id);
+      } catch (err) {
+        return `the record of ${id} could not be read (${shortErrorText(err)})`;
+      }
+      if (!record || (id === own.sessionId && own.holds(record))) continue;
+      if (names(record)) return `the record of ${id} names it`;
+    }
+    for (const id of archivedIds) {
+      // The ID has an archive file, so a null here is a read error (which
+      // readArchivedMetadataRaw answers as null) or a removal since.
+      const archived = readArchivedMetadataRaw(sessionsDir, id);
+      if (!archived) return `the latest archive of ${id} could not be read`;
+      if (names(archived)) return `the latest archive of ${id} names it`;
+    }
+    return undefined;
+  }
 
   /**
    * B-1 (round 4): undo a launch that failed. The record and the workspace
@@ -1512,77 +1666,102 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * path and runtime name, so they stay for it. The runtime of this launch
    * is stopped only while no other record may own it (recordMayOwnRuntime:
    * a restore after a kill reuses the tmux name). The agent session that
-   * this launch prepared is removed unless the record now there or the
-   * latest archive of the ID names it (a restore of this launch's archived
-   * record runs on it). Round 5 (M-1): each step reads the record again
-   * directly before it (the earlier steps await), with no await between
-   * the check and the step. Round 7 (M-2, M-3): the agent hook and the
-   * workspace plugin await inside their step, so each gets the same check
-   * and runs it again directly before each of its own calls. Every step is
-   * best effort; a runtime or agent session that stays is named to the
-   * operator. A workspace that stays belongs to the new launch, as when the
-   * first check finds it.
+   * this launch prepared is removed only while no other record and no
+   * archive of any ID names it (preparedSessionHolder, round 8 M-2: issue
+   * reuse gives it to another session, and a restore of an archived record
+   * runs on it). Round 5 (M-1): each step reads the record again directly
+   * before it (the earlier steps await), with no await between the check
+   * and the step. Round 7 (M-2, M-3): the agent hook and the workspace
+   * plugin await inside their step, so each gets the same check and runs it
+   * again directly before each of its own calls. Round 8 (M-1): a check that
+   * cannot read the record is "unknown", never "gone": the runtime, the
+   * agent session, the workspace and the record stay. Every step is best
+   * effort; a runtime, agent session, workspace or record that stays is
+   * named to the operator, except a workspace that stays for a new launch
+   * of the ID.
    */
   async function rollbackLaunch(rollback: {
     own: OwnLaunchRecord;
     runtime?: Runtime;
     handle?: RuntimeHandle;
     prepared?: PreparedAgentSession;
-    destroyWorkspace?: (stillOwned: () => boolean) => Promise<unknown>;
+    workspace?: RollbackWorkspace;
   }): Promise<void> {
-    const check = (): ReturnType<OwnLaunchRecord["check"]> => {
-      try {
-        return rollback.own.check();
-      } catch {
-        return { state: "replaced", current: null };
-      }
-    };
+    const { own } = rollback;
+    const unreadable = (error: unknown): string =>
+      `the record of ${own.sessionId} could not be read (${shortErrorText(error)})`;
     if (rollback.runtime && rollback.handle) {
-      const checked = check();
-      if (checked.state !== "replaced" || !recordMayOwnRuntime(checked.current, rollback.handle)) {
+      const handle = rollback.handle;
+      const checked = own.checkOrUnknown();
+      const keptBecause =
+        checked.state === "unknown"
+          ? unreadable(checked.error)
+          : checked.state === "replaced" && recordMayOwnRuntime(checked.current, handle)
+            ? "another launch of the ID may own it"
+            : undefined;
+      if (keptBecause === undefined) {
         try {
-          await rollback.runtime.destroy(rollback.handle);
+          await rollback.runtime.destroy(handle);
         } catch {
           /* best effort */
         }
       } else {
         warnOperator(
-          `ao: kept runtime ${rollback.handle.runtimeName ?? "?"} ${rollback.handle.id} of a failed launch: another launch of the ID may own it; stop it by hand if no session uses it.`,
+          `ao: kept runtime ${handle.runtimeName ?? "?"} ${handle.id} of a failed launch: ${keptBecause}; stop it by hand if no session uses it.`,
         );
       }
     }
     if (rollback.prepared) {
       const prepared = rollback.prepared;
-      const namedElsewhere = (): boolean => {
-        const checked = check();
-        const archived = checked.state === "own" ? null : rollback.own.latestArchive();
-        return Object.entries(prepared.metadata).some(
-          ([key, value]) =>
-            value !== "" &&
-            ((checked.state === "replaced" && checked.current?.[key] === value) ||
-              archived?.[key] === value),
-        );
-      };
-      if (!namedElsewhere()) {
-        await discardPreparedSession(prepared, () => !namedElsewhere());
-      } else if (rollback.prepared.created) {
+      // The last answer of the decision: why the session stays, or undefined.
+      let heldBy = preparedSessionHolder(own, prepared.metadata);
+      if (heldBy === undefined) {
+        await discardPreparedSession(prepared, () => {
+          heldBy = preparedSessionHolder(own, prepared.metadata);
+          return heldBy === undefined;
+        });
+      }
+      if (heldBy !== undefined && prepared.created) {
         warnOperator(
-          `ao: kept the agent session of a failed launch (${Object.values(rollback.prepared.metadata).join(", ")}): another record of the ID names it.`,
+          `ao: kept the agent session of a failed launch (${Object.values(prepared.metadata).join(", ")}): ${heldBy}.`,
         );
       }
     }
-    if (rollback.destroyWorkspace && check().state !== "replaced") {
+    if (rollback.workspace) {
+      const workspace = rollback.workspace;
+      let unread: { error: unknown } | undefined;
+      // A replaced record keeps the workspace for its launch; unknown keeps it too.
+      const ownOrGone = (): boolean => {
+        const checked = own.checkOrUnknown();
+        if (checked.state === "unknown") unread = { error: checked.error };
+        return checked.state === "own" || checked.state === "gone";
+      };
+      if (ownOrGone()) {
+        try {
+          await workspace.destroy(ownOrGone);
+        } catch {
+          /* best effort */
+        }
+      }
+      if (unread) {
+        warnOperator(
+          `ao: kept the workspace ${workspace.path} of a failed launch: ${unreadable(unread.error)}; remove it by hand if no session uses it.`,
+        );
+      }
+    }
+    // Conditional: it deletes only a record that is still this launch, and
+    // never a record that it cannot read.
+    const last = own.checkOrUnknown();
+    if (last.state === "unknown") {
+      warnOperator(
+        `ao: kept the record of a failed launch: ${unreadable(last.error)}; remove it by hand if no session uses it.`,
+      );
+    } else {
       try {
-        await rollback.destroyWorkspace(() => check().state !== "replaced");
+        own.release();
       } catch {
         /* best effort */
       }
-    }
-    try {
-      // Conditional: it deletes only a record that is still this launch.
-      rollback.own.release();
-    } catch {
-      /* best effort */
     }
   }
 
@@ -1681,13 +1860,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // Create workspace (if workspace plugin is available)
     let workspacePath = project.path;
-    const destroySpawnWorkspace = async (stillOwned: () => boolean): Promise<void> => {
-      if (
-        plugins.workspace &&
-        shouldDestroyWorkspacePath(project, spawnConfig.projectId, workspacePath)
-      ) {
-        await plugins.workspace.destroy(workspacePath, stillOwned);
+    // The workspace that a rollback removes; none outside the managed roots.
+    const spawnWorkspace = (): RollbackWorkspace | undefined => {
+      const workspace = plugins.workspace;
+      const path = workspacePath;
+      if (!workspace || !shouldDestroyWorkspacePath(project, spawnConfig.projectId, path)) {
+        return undefined;
       }
+      return { path, destroy: (stillOwned) => workspace.destroy(path, stillOwned) };
     };
     if (plugins.workspace) {
       let workspaceCreated = false;
@@ -1713,7 +1893,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // Clean up the workspace and the reserved session ID on failure.
         await rollbackLaunch({
           own,
-          destroyWorkspace: workspaceCreated ? destroySpawnWorkspace : undefined,
+          workspace: workspaceCreated ? spawnWorkspace() : undefined,
         });
         throw err;
       }
@@ -1789,7 +1969,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             })
           : undefined;
     } catch (err) {
-      await rollbackLaunch({ own, destroyWorkspace: destroySpawnWorkspace });
+      await rollbackLaunch({ own, workspace: spawnWorkspace() });
       throw err;
     }
     const agentLaunchConfig: AgentLaunchConfig = {
@@ -1865,7 +2045,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     } catch (err) {
       // Remove only an agent session that this spawn created (never a reused
       // one), the workspace and the reserved ID.
-      await rollbackLaunch({ own, prepared, destroyWorkspace: destroySpawnWorkspace });
+      await rollbackLaunch({ own, prepared, workspace: spawnWorkspace() });
       throw err;
     }
 
@@ -1948,7 +2128,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         runtime: plugins.runtime,
         handle,
         prepared,
-        destroyWorkspace: destroySpawnWorkspace,
+        workspace: spawnWorkspace(),
       });
       throw err;
     }
@@ -2089,7 +2269,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           existingAlive &&
           (orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore")
         ) {
-          const persistedRaw = readMetadataRaw(sessionsDir, sessionId);
+          // Round 8 (M-1): null only for a missing record; a record that
+          // cannot be read throws and keeps the runtime.
+          const persistedRaw = readRecordStrict(sessionsDir, sessionId);
           if (persistedRaw?.["runtimeHandle"]) {
             const persisted = metadataToSession(
               sessionId,
@@ -2204,7 +2386,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const isolatedWorkspace = plugins.workspace;
         await rollbackLaunch({
           own,
-          destroyWorkspace: (stillOwned) => isolatedWorkspace.destroy(workspacePath, stillOwned),
+          workspace: {
+            path: workspacePath,
+            destroy: (stillOwned) => isolatedWorkspace.destroy(workspacePath, stillOwned),
+          },
         });
         throw err;
       }
@@ -2221,14 +2406,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         runtime: plugins.runtime ?? undefined,
         handle: failed.handle,
         prepared: failed.prepared,
-        destroyWorkspace:
+        workspace:
           orchestratorWorkspaceMode === "isolated" && workspacePlugin
-            ? (stillOwned) => workspacePlugin.destroy(workspacePath, stillOwned)
+            ? {
+                path: workspacePath,
+                destroy: (stillOwned) => workspacePlugin.destroy(workspacePath, stillOwned),
+              }
             : undefined,
       });
       // Round 5: the prompt file name is the same for every start of the
-      // ID; it stays when another start replaced the record.
-      if (promptFile && own.check().state !== "replaced") {
+      // ID; it stays when another start replaced the record. Round 8 (M-1):
+      // it stays too when the record cannot be read.
+      if (!promptFile) return;
+      const checked = own.checkOrUnknown();
+      if (checked.state === "unknown") {
+        warnOperator(
+          `ao: kept the prompt file ${promptFile} of a failed start: the record of ${sessionId} could not be read (${shortErrorText(checked.error)}).`,
+        );
+      } else if (checked.state !== "replaced") {
         try {
           unlinkSync(promptFile);
         } catch {
@@ -2612,8 +2807,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // session, so the later steps stop when the record names another launch
     // (or, for cleanup, when a fact of its decision changed). A record that
     // is gone (another kill archived it) does not stop them.
+    // Round 8 (M-1): a record that cannot be read or checked throws, so it
+    // stops the kill too.
     const stopWhenReplaced = (kept: string): void => {
-      const current = readMetadataRaw(sessionsDir, sessionId);
+      const current = readRecordStrict(sessionsDir, sessionId);
       if (current && !holdsExpected(current, expected)) {
         throw recordChangedError(sessionsDir, sessionId, "it was killed", kept);
       }
@@ -2780,8 +2977,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // waits for the ledger lock, so the decisive check runs after the lock
       // is held, directly before the removal; this first one only saves the
       // wait. A kept ledger keeps its key in the archive (the catch below).
+      // Round 8 (M-1): a record that cannot be checked or read throws (the
+      // catch below keeps the ledger); it is never left out.
       const namerOf = (): string | undefined =>
-        listMetadata(sessionsDir).find(
+        listRecordIds(sessionsDir).find(
           (id) =>
             asValidOpenCodeSessionId(readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"]) ===
             key,
@@ -3049,8 +3248,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             // and the active records that name this OpenCode session are
             // still the ones from before the check. Round 6 (M-1): this
             // check runs directly before each removal attempt.
+            // Round 8 (M-1): an active record that cannot be read or
+            // checked throws (an error entry below), never "no record".
             const unchanged = (): boolean =>
-              readMetadataRaw(sessionsDir, archivedId) === null &&
+              readRecordStrict(sessionsDir, archivedId) === null &&
               openCodeNamers(sessionsDir, mappedOpenCodeSessionId) === namers;
             try {
               if (!(await deleteOpenCodeSession(mappedOpenCodeSessionId, unchanged))) {
@@ -4029,8 +4230,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       [RESERVATION_KEY]: "",
     });
     if (!restoredRecord) {
-      const current = readMetadataRaw(sessionsDir, sessionId);
-      if (recordMayOwnRuntime(current, handle)) {
+      let mayOwn: boolean;
+      try {
+        mayOwn = recordMayOwnRuntime(readRecordStrict(sessionsDir, sessionId), handle);
+      } catch {
+        // Round 8 (M-1): a record that cannot be read may own the runtime too.
+        mayOwn = true;
+      }
+      if (mayOwn) {
         throw recordChangedError(
           sessionsDir,
           sessionId,

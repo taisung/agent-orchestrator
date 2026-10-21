@@ -1033,7 +1033,9 @@ describe("spawn", () => {
 
       const prepared = await vi.mocked(agent.prepareAgentSession!).mock.results[0]!.value;
       expect(prepared.created).toBe(false);
-      expect(prepared.discard).toHaveBeenCalledTimes(1);
+      // Round 8 (review r6, M-2): the record app-9 names ses_reused, so the
+      // rollback keeps it without a call to discard.
+      expect(prepared.discard).not.toHaveBeenCalled();
       expect(existsSync(deleteLogPath)).toBe(false);
       expect(readMockApiSessions(mockBin).map((entry) => entry.id)).toEqual(["ses_reused"]);
       // The older record that stores the reused ID stays.
