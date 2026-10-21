@@ -1012,6 +1012,13 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
       read-to-write window (`session-manager.ts:1139`, `:2026`, older code); F-4 the tmux prefix match;
       F-5 the check-to-command gaps; F-6 the kept-runtime visibility; F-7 the hidden socket over 5 minutes.
     - R7: the Opus author failed a seventh review round. The next step is the owner's.
+  - **Fix round 9** (owner 2026-10-21, answers "1a 2a"): ao-46 on Opus; r7 M-1 only: a strict archive
+    listing in `preparedSessionHolder` (ENOENT is empty, any other error keeps and names the session), and
+    an audit of every `existsSync`, listing or read shortcut that feeds a removal decision in the code of
+    this fix, fixed there. `listArchivedSessionIds` stays unchanged for its other callers; the session
+    number allocation (`session-manager.ts:1196-1198`, `:1251-1253`) is older code for the follow-up list.
+    Review r8 will be a short re-check of the round-9 range under rule 2a. Dispatched 09:29:40 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r9.md`, on top of `69d6f467`.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
