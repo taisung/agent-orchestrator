@@ -504,6 +504,14 @@ describe("restore that recreates a workspace or copies an archive back (review r
           return;
         }
         expect(isRuntimeStopUnconfirmedError(result)).toBe(true);
+        // The disk first: a message that is right cannot hide a change.
+        expect(readMetadataRaw(sessionsDir, "app-1"), "the active record changed").toEqual(
+          activeBefore,
+        );
+        expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
+        expect(existsSync(worktree), "a worktree appeared").toBe(false);
+        expect(ctx.mockWorkspace.restore, "the workspace was recreated").not.toHaveBeenCalled();
+        expectNoRuntimeChange(mode);
         const message = (result as Error).message;
         expect(message).toContain(`runtime stop unconfirmed (${OUTCOME[mode]})`);
         expect(message).toContain(
@@ -512,13 +520,6 @@ describe("restore that recreates a workspace or copies an archive back (review r
             : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
         );
         expect(message, "the message claims a worktree").not.toContain("worktree kept");
-        expect(readMetadataRaw(sessionsDir, "app-1"), "the active record changed").toEqual(
-          activeBefore,
-        );
-        expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
-        expect(existsSync(worktree), "a worktree appeared").toBe(false);
-        expect(ctx.mockWorkspace.restore, "the workspace was recreated").not.toHaveBeenCalled();
-        expectNoRuntimeChange(mode);
       });
     }
   }
@@ -567,14 +568,16 @@ describe("restore that recreates a workspace or copies an archive back (review r
     );
 
     expect(isRuntimeStopUnconfirmedError(result)).toBe(true);
-    expect((result as Error).message).toContain(
-      "the active record of app-1 is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed",
+    expect(readMetadataRaw(sessionsDir, "app-1"), "the replacement was removed").toMatchObject(
+      replacement,
     );
-    expect(readMetadataRaw(sessionsDir, "app-1")).toMatchObject(replacement);
     expect(readFileSync(join(worktree, "work.txt"), "utf-8")).toBe("work of the new launch");
     expect(ctx.mockWorkspace.restore).not.toHaveBeenCalled();
     expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
     expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+    expect((result as Error).message).toContain(
+      "the active record of app-1 is no longer the archive copy-back of this restore (another operation on the ID replaced it) and was not removed",
+    );
   });
 
   it("a copy-back that another operation removed during the stop is named as gone", async () => {
@@ -590,10 +593,10 @@ describe("restore that recreates a workspace or copies an archive back (review r
       (err: unknown) => err,
     );
 
+    expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
     expect((result as Error).message).toContain(
       "nothing was restored: the archive copy-back of this restore is already gone (another operation on the ID removed it)",
     );
-    expect(readMetadataRaw(sessionsDir, "app-1")).toBeNull();
   });
 });
 
