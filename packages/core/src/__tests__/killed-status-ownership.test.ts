@@ -11,7 +11,15 @@
  * step changes the record as another process would.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -1196,6 +1204,24 @@ describe("M-1 (round 6): each OpenCode removal attempt has its own ownership che
         }
       },
     );
+
+    it("round 8 (M-1): an entry that the record listing cannot check (a symlink loop) appears during a failed attempt: no second attempt, the session is named", async () => {
+      const registry = orchestratorDeleteRegistry();
+      failFirstRemoveAfter(() => symlinkSync("app-3", join(sessionsDir, "app-3")));
+      const sm = createSessionManager({ config: ctx.config, registry });
+
+      const first = await withWarnings(() =>
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }).then(
+          () => "started",
+          (err: unknown) => String(err),
+        ),
+      );
+
+      expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+      expect(first.text).toMatch(
+        /kept OpenCode session ses_shared of app-orchestrator: the records that may name it could not be read \(ELOOP/,
+      );
+    });
 
     it("control: the start still owns its reservation, the second attempt removes ses_shared", async () => {
       const registry = orchestratorDeleteRegistry();

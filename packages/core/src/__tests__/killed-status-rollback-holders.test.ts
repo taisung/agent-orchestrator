@@ -16,7 +16,7 @@
  * no).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import {
@@ -448,6 +448,60 @@ describe.skipIf(process.getuid?.() === 0)(
       expect(answers).toEqual([true]);
       expect(recordOf("app-1")).toBeNull();
       expect(warnings()).not.toMatch(/kept/);
+    });
+  },
+);
+
+describe.skipIf(process.getuid?.() === 0)(
+  "1.1 item 2 (round 8): the other checks of this fix read strictly",
+  () => {
+    it("rollback: an entry that the record listing cannot check (a symlink loop) appears during the hook's own wait: a holder", async () => {
+      const { answers } = preparedSpawn({
+        during: () => symlinkSync("app-3", recordPath("app-3")),
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("post-launch setup failed");
+
+      expect(answers).toEqual([false]);
+      expect(warnings()).toMatch(/\(ses_prep\): the records could not be listed \(ELOOP/);
+    });
+
+    it("kill: the sessions directory cannot be searched after the runtime destroy: the kill stops and the worktree stays", async () => {
+      const worktree = managedWorktree("app-1");
+      launchedRecord("app-1", { worktree });
+      contractDestroy();
+      vi.mocked(ctx.mockRuntime.destroy).mockImplementation(async () => {
+        makeUnreadable(sessionsDir, 0o600);
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(sm.kill("app-1")).rejects.toThrow(/EACCES/);
+
+      expect(ctx.mockRuntime.destroy).toHaveBeenCalledTimes(1);
+      expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
+      restoreModes();
+      expect(existsSync(worktree)).toBe(true);
+      expect(recordOf("app-1")).toMatchObject({ worktree });
+    });
+
+    it("orchestrator start (reuse): the sessions directory cannot be searched after the liveness check: the running runtime stays", async () => {
+      ctx.config.projects["my-app"]!.orchestratorWorkspaceMode = "project";
+      ctx.config.projects["my-app"]!.orchestratorSessionStrategy = "reuse";
+      launchedRecord("app-orchestrator", { role: "orchestrator" });
+      vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async () => {
+        makeUnreadable(sessionsDir, 0o600);
+        return true;
+      });
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      await expect(
+        sm.spawnOrchestrator({ projectId: "my-app", systemPrompt: "review" }),
+      ).rejects.toThrow(/EACCES/);
+
+      expect(ctx.mockRuntime.destroy).not.toHaveBeenCalled();
+      restoreModes();
+      expect(recordOf("app-orchestrator")).toMatchObject({ role: "orchestrator" });
     });
   },
 );
