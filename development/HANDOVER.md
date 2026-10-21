@@ -30,10 +30,13 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 | ao-48 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-48`, branch `feat/same-id-design-read-agent-task-md-in-your-worktree-and-execu` at `c516cead` on top of `ce49c9fd` (same source as `main`). Design round done 11:05 EDT, report line 1 `done|c516cead|...`; 18.09 USD; context 26% | keep: it holds `c516cead` and the design context; it is the proposed R1 author (Next Priorities 1) |
 
-Closed by this handover after its commit: ao-46 (the killed-status author) and ao-47 (its reviewer).
-Their work is on `main` by patch; the results of the kills and the branch deletions are in the commit
-that follows this one. Reports, briefs and review originals: `~/.cache/agent-skills-haiku55-arc/reports/`
-and `~/.cache/agent-skills-haiku55-arc/brief-*.md`.
+Closed by this handover (2026-10-21 11:40 EDT): ao-46 (the killed-status author) and ao-47 (its
+reviewer). Before the kills: their final reports are saved, and every review copy in ao-47 equals its
+copy on `main`. `ao session cleanup -p agent-orchestrator` found nothing to clean. `ao session kill`
+archived both records (`ao-46_2026-10-21T15-40-19-910Z`, `ao-47_2026-10-21T15-40-20-419Z`) and removed
+their tmux sessions and worktrees. Both branches had no merge commit and no `+` line in `git cherry main`
+(34 `-` each), so both are deleted (each was at `ce49c9fd`). Reports, briefs and review originals:
+`~/.cache/agent-skills-haiku55-arc/reports/` and `~/.cache/agent-skills-haiku55-arc/brief-*.md`.
 
 **Local branches**: `main`, `i3-r2-pre-rebase` (keep: two commits that `main` has only in rewritten
 form), the ao-48 branch.
@@ -45,7 +48,8 @@ workers of Nexus, VSF and the Nexus config of this fork do not run until their o
 caller's environment.
 
 **Watchers**: PID 1346791 (parent 1346775) watches ao-48 since 10:11:33, state
-`~/.cache/fleet_watch/ao-sameid-2026-10-21`. PID 3020940 (ao-46, ao-47) is retired at this handover.
+`~/.cache/fleet_watch/ao-sameid-2026-10-21`. PID 3020940 (ao-46, ao-47) was stopped by TERM at
+11:40:01 before the kills; its log ends with `EXIT signal SIGTERM`.
 Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
 /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
 /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed <id> ...
@@ -122,7 +126,7 @@ add the missing-`TMUX_TMPDIR` fallback.
 ## First Actions
 
 1. `cd /home/taisung/local/agent-orchestrator && git status -sb && git log --oneline -3` - expect `main` =
-   `origin/main` at the handover follow-up commit. ` D test-ao-config2.yaml` is an old working-tree
+   `origin/main` at the commit that records the handover close. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
    agent-orchestrator` - expect ao-48 and the orchestrator records only. `ps -o pid=,args= -p
