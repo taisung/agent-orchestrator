@@ -925,6 +925,15 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     copy has its own series), m-2 (removal table in three classes). The visibility of a kept runtime that
     no record names goes to the tmux prefix-match round. Dispatched 21:26:09 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r6.md`, on top of `f06a1107`, no rebase.
+    Done 21:51 EDT at `7294d978` (3 commits; 11.05 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r6.md`). Full run 2768 passed. New author
+    finding: two plugin removal steps wait or retry with no ownership check (`workspace-worktree`
+    `destroy`: `git rev-parse` await, `git worktree remove`, `rmSync` fallback; OpenCode prepared-session
+    `discard`: interrupt await, two removes). Proposed fix: an optional ownership callback on
+    `Workspace.destroy` and `PreparedAgentSession.discard` (`types.ts` plus two plugins).
+  - **Review r5**: brief ready (`~/.cache/agent-skills-haiku55-arc/brief-review-killed-r5-sol.md`), not
+    dispatched. Owner decision first: the ao-47 model (the review r4 run switched from gpt-6.1-sol to
+    gpt-6-astra after two `cyber_policy` stops; `~/.codex/config.toml` default is now gpt-6-astra).
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
