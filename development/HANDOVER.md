@@ -30,8 +30,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | ao-orchestrator | this session, primary checkout, `main`; record `working`/`stuck` since 2026-10-21 10:24:59 (`generation=1`) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 | ao-50 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-50`, branch `feat/same-id-r1-read-agent-task-md-in-your-worktree-and-execute-i`, moved to `c516cead` before the brief. Same-ID R1 author (exact tmux targets); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-r1.md`, scratch `/tmp/aosr1`; dispatched 12:09 EDT; router row open | on its `done`: spawn the R1 code review (Codex, `--model gpt-6-astra` pinned) on `c516cead..<tip>` |
-| ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT; Codex `weekly 83% left` at dispatch; router row open. It may send one `note|none|R1 note in the review file` | on its `done`: copy the review to `main`, then ask the owner OD-2 to OD-10 and OD-12 with the review's options |
-| ao-49 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-49` (not used: the work is in the scratch clone `/tmp/ao49hs/agent-skills`, branch `feat/ao-session-helpers`). Writes `scripts/restart_lifecycle.py` and `scripts/ao_relaunch.py` with tests for `~/agent-skills` (owner "1a 2 yes"); dispatched 11:58:30 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-agentskills-session-helpers.md`; router row open; watcher PID 2238373 (state `~/.cache/fleet_watch/ao-helpers-2026-10-21`) | on its `done`: review the diff, cherry-pick into `~/agent-skills`, run `bash tests/run_all.sh` there, ask the owner before a push of `~/agent-skills`; then kill ao-49 |
+| ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT. DONE 12:27 EDT: R2 NOT-SOUND, R3 NOT-SOUND, R4 SOUND-WITH-CHANGES (B-1 to B-7, M-1 to M-4), no R1 notes; review on `main` (`bee93ab3`); router row closed `in-review`. Idle; `weekly 81% left`, context 68% used | keep (owner "2a"): it re-checks ao-52's design r2. Before that brief: set line 1 of its report to `running|...` |
+| ao-52 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-52`, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex`, moved to `c516cead`. Design revision r2 for R2 to R4 (owner "1a"): answers B-1 to B-7, M-1 to M-4, OD-13 to OD-16, a revised round plan, failing tests for the new counterexamples in new files only; design file `development/reviews/same_id_design_r2_opus.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-design-r2.md`, scratch `/tmp/aosd2`; dispatched 12:38 EDT; router row open | on its `done`: copy the design to `main`, then a short re-check brief to ao-51; after the re-check, ask the owner OD-2 to OD-10, OD-12 and OD-13 to OD-16 |
 
 Closed by this handover (2026-10-21 11:40 EDT): ao-46 (the killed-status author) and ao-47 (its
 reviewer). Before the kills: their final reports are saved, and every review copy in ao-47 equals its
@@ -58,9 +58,17 @@ workers of Nexus, VSF and the Nexus config of this fork do not run until their o
 caller's environment.
 
 **Watchers**: PID 2334310 watches ao-50 and ao-51 since 12:09:08, state
-`~/.cache/fleet_watch/ao-sameid-r1-2026-10-21`. PID 2238373 watches ao-49, state
-`~/.cache/fleet_watch/ao-helpers-2026-10-21`. Stopped by TERM: 1346791 (ao-48) at 12:02:39, and 3020940
-(ao-46, ao-47) at 11:40:01; both logs end with `EXIT signal SIGTERM`.
+`~/.cache/fleet_watch/ao-sameid-r1-2026-10-21`. PID 2833081 watches ao-52 since 12:38:07, state
+`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`. Stopped by TERM: 2238373 (ao-49) at 12:25:51, 1346791
+(ao-48) at 12:02:39, and 3020940 (ao-46, ao-47) at 11:40:01; each log ends with `EXIT signal SIGTERM`.
+
+Killed on the owner's word (2026-10-21 12:26 EDT): ao-49. Its helpers landed in `~/agent-skills` as
+`f121d03` (fast-forward from `2baef80`; orchestrator review: no blocker, four minors in the router row;
+`tests/run_all.sh` passed all 15 suites, log `~/.cache/agent-skills-haiku55-arc/run_all-main-f121d03.log`)
+and were pushed on the owner's word. Report, brief and the worker's `run_all.out` are in
+`~/.cache/agent-skills-haiku55-arc/reports/ao-49_*`. The record is archived
+(`ao-49_2026-10-21T16-26-01-276Z`), its branch is deleted (an ancestor of `main`), and `/tmp/ao49hs` with
+its orchestrator-prompt snapshot is removed.
 Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
 /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
 /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed <id> ...
@@ -75,8 +83,9 @@ Sol stopped on `cyber_policy` (Known Issues traps).
 
 ## Open and Blocked Items
 
-**Same-ID arc**: in progress - R1 (ao-50) and the design review of R2 to R4 (ao-51) run; OD-2 to OD-10
-and OD-12 wait for that review.
+**Same-ID arc**: in progress - R1 (ao-50) runs; review r1 of the R2 to R4 design found R2 and R3 not
+sound, so the design revision r2 (ao-52) runs, and ao-51 re-checks it. OD-2 to OD-10, OD-12 and OD-13
+to OD-16 wait for that re-check.
 **Killed-status r8 m-1**: open - `readGenerationFloor` (`packages/core/src/metadata.ts:506-516`)
 answers 0 on a read error, so a generation can repeat; `docs/DEVELOPMENT.md:446` says "never repeats".
 No removal bypass (every compare also checks the launch identity). A small worker change: harden the read
@@ -124,9 +133,10 @@ add the missing-`TMUX_TMPDIR` fallback.
      `main` cleanly when the source is still equal), rebuild and restart on the owner's word.
    - Expected outcome: the 17 `[same-id R1]` tests pass as normal `it` tests (flip them from `defect()`),
      old tests that pin plain argument vectors updated, full run green.
-2. **Design review of R2 to R4, then the remaining owner decisions** - the review is DISPATCHED to ao-51
-   (owner "2a", 2026-10-21; gpt-6-astra). After it, ask the owner OD-2 to OD-10 and OD-12 (design
-   section 9) with the review's options.
+2. **Design of R2 to R4, then the remaining owner decisions** - review r1 by ao-51 is DONE (R2 and R3
+   NOT-SOUND, R4 SOUND-WITH-CHANGES; `development/reviews/same_id_design_review_r1_astra6.md`). The
+   design revision r2 is DISPATCHED to ao-52 (owner "1a", 2026-10-21), and ao-51 re-checks it (owner
+   "2a"). After the re-check, ask the owner OD-2 to OD-10, OD-12 and OD-13 to OD-16.
    - Context: R2 (server and launch identity) and R3 (per-ID lease, F-1, F-2, F-3, F-6) are HIGH; R3 is
      the largest. R4 (fail-open reads F-8 to F-11) is medium and small.
    - Expected outcome: a review file `development/reviews/same_id_design_review_r1_<model>.md`, then
@@ -141,9 +151,9 @@ add the missing-`TMUX_TMPDIR` fallback.
    `origin/main` at the commit that records the handover close. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-49, ao-50, ao-51 and the orchestrator records. `ps -o pid=,args= -p
-   1470866,1471311,2238373,2334310` - expect the two lifecycle workers and the two watchers.
-3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{0,1}/.agent_report.md` - a `running|` line
+   agent-orchestrator` - expect ao-50, ao-51, ao-52 and the orchestrator records. `ps -o pid=,args= -p
+   1470866,1471311,2334310,2833081` - expect the two lifecycle workers and the two watchers.
+3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{0,1,2}/.agent_report.md` - a `running|` line
    means the round still runs; act on `done|` as the Live Sessions table says.
 
 ## Key Files
