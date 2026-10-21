@@ -15,8 +15,9 @@ exist; a new `ao start` in agent-skills gives it a new record.
 
 The next arc is "launches that share a tmux name, a tmux server and a worktree path". Its design is done
 (ao-48, `development/reviews/same_id_design_r1_opus.md`) with 42 failing defect tests on ao-48's branch
-(`c516cead`, not on `main`). No implementation has started. Three owner questions were asked at the end
-of this session and are NOT answered (Next Priorities 1 and 2). Until R1 and R2 land, two destructive
+(`c516cead`, not on `main`). The owner answered "1a 2a" (2026-10-21 12:05 EDT): R1 starts now with OD-1a
+and OD-11a (author ao-50), and a cross-family review of the design for R2 to R4 comes first (ao-51,
+gpt-6-astra). Both were dispatched at 12:09 EDT on top of `c516cead`. Until R1 and R2 land, two destructive
 defects stay live: the tmux prefix match (D-A) and `ao` with its tmux calls on another server (D-B,
 critical). Operating rules until then are in the Next Session Start Prompt.
 
@@ -28,7 +29,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`.
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`; record `working`/`stuck` since 2026-10-21 10:24:59 (`generation=1`) | transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/aeb5b549-6146-4d51-af32-1a0ae26c77e4.jsonl` |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-48 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-48`, branch `feat/same-id-design-read-agent-task-md-in-your-worktree-and-execu` at `c516cead` on top of `ce49c9fd` (same source as `main`). Design round done 11:05 EDT, report line 1 `done|c516cead|...`; 18.09 USD; context 26% | keep: it holds `c516cead` and the design context; it is the proposed R1 author (Next Priorities 1) |
+| ao-50 | Claude Code Opus 5.5 (`--model claude-opus-5-5`), worktree `/home/taisung/.worktrees/agent-orchestrator/ao-50`, branch `feat/same-id-r1-read-agent-task-md-in-your-worktree-and-execute-i`, moved to `c516cead` before the brief. Same-ID R1 author (exact tmux targets); brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-same-id-r1.md`, scratch `/tmp/aosr1`; dispatched 12:09 EDT; router row open | on its `done`: spawn the R1 code review (Codex, `--model gpt-6-astra` pinned) on `c516cead..<tip>` |
+| ao-51 | Codex `--model gpt-6-astra`, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-51`, branch `feat/same-id-design-review-read-agent-task-md-in-your-worktree-an`, moved to `c516cead`. Cross-family review of the design for R2 to R4; review file `development/reviews/same_id_design_review_r1_astra6.md` in its worktree (not committed); brief `~/.cache/agent-skills-haiku55-arc/brief-review-same-id-design-astra.md`, scratch `/tmp/aosdr`; dispatched 12:09 EDT; Codex `weekly 83% left` at dispatch; router row open. It may send one `note|none|R1 note in the review file` | on its `done`: copy the review to `main`, then ask the owner OD-2 to OD-10 and OD-12 with the review's options |
 | ao-49 | Claude Code Opus 5.5, worktree `/home/taisung/.worktrees/agent-orchestrator/ao-49` (not used: the work is in the scratch clone `/tmp/ao49hs/agent-skills`, branch `feat/ao-session-helpers`). Writes `scripts/restart_lifecycle.py` and `scripts/ao_relaunch.py` with tests for `~/agent-skills` (owner "1a 2 yes"); dispatched 11:58:30 EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-agentskills-session-helpers.md`; router row open; watcher PID 2238373 (state `~/.cache/fleet_watch/ao-helpers-2026-10-21`) | on its `done`: review the diff, cherry-pick into `~/agent-skills`, run `bash tests/run_all.sh` there, ask the owner before a push of `~/agent-skills`; then kill ao-49 |
 
 Closed by this handover (2026-10-21 11:40 EDT): ao-46 (the killed-status author) and ao-47 (its
@@ -39,8 +41,15 @@ their tmux sessions and worktrees. Both branches had no merge commit and no `+` 
 (34 `-` each), so both are deleted (each was at `ce49c9fd`). Reports, briefs and review originals:
 `~/.cache/agent-skills-haiku55-arc/reports/` and `~/.cache/agent-skills-haiku55-arc/brief-*.md`.
 
+Killed on the owner's word (2026-10-21 12:02 EDT): ao-48 (the design author). Before the kill: its report
+and brief are saved as `~/.cache/agent-skills-haiku55-arc/reports/ao-48_same_id_design_r1.{report,task}.md`,
+its design copy equals `main`, and its watcher 1346791 was stopped by TERM (log `EXIT signal SIGTERM`).
+`ao session kill` archived the record (`ao-48_2026-10-21T16-02-48-504Z`) and removed its tmux session and
+worktree.
+
 **Local branches**: `main`, `i3-r2-pre-rebase` (keep: two commits that `main` has only in rewritten
-form), the ao-48 branch.
+form), the ao-48 branch `feat/same-id-design-read-agent-task-md-in-your-worktree-and-execu` at `c516cead`
+(the only `+` line of `git cherry main`; keep until R1 lands, the ao-50 and ao-51 branches also hold it).
 
 **Lifecycle workers**: 1470866 (this config, started 2026-10-21 10:24:58) and 1471311 (agent-skills,
 10:25:01), both on the fix build. Every brief protects these PIDs (check with `ps` at dispatch). The
@@ -48,9 +57,10 @@ workers of Nexus, VSF and the Nexus config of this fork do not run until their o
 `ao start`. The global OpenCode service does not run: an `opencode api` call starts one with the
 caller's environment.
 
-**Watchers**: PID 1346791 (parent 1346775) watches ao-48 since 10:11:33, state
-`~/.cache/fleet_watch/ao-sameid-2026-10-21`. PID 3020940 (ao-46, ao-47) was stopped by TERM at
-11:40:01 before the kills; its log ends with `EXIT signal SIGTERM`.
+**Watchers**: PID 2334310 watches ao-50 and ao-51 since 12:09:08, state
+`~/.cache/fleet_watch/ao-sameid-r1-2026-10-21`. PID 2238373 watches ao-49, state
+`~/.cache/fleet_watch/ao-helpers-2026-10-21`. Stopped by TERM: 1346791 (ao-48) at 12:02:39, and 3020940
+(ao-46, ao-47) at 11:40:01; both logs end with `EXIT signal SIGTERM`.
 Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
 /home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w
 /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20 --preseed <id> ...
@@ -65,7 +75,8 @@ Sol stopped on `cyber_policy` (Known Issues traps).
 
 ## Open and Blocked Items
 
-**Same-ID arc**: blocked on the owner - the three questions of Next Priorities 1 and 2.
+**Same-ID arc**: in progress - R1 (ao-50) and the design review of R2 to R4 (ao-51) run; OD-2 to OD-10
+and OD-12 wait for that review.
 **Killed-status r8 m-1**: open - `readGenerationFloor` (`packages/core/src/metadata.ts:506-516`)
 answers 0 on a read error, so a generation can repeat; `docs/DEVELOPMENT.md:446` says "never repeats".
 No removal bypass (every compare also checks the launch identity). A small worker change: harden the read
@@ -101,21 +112,21 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 ## Next Priorities
 
-1. **Same-ID round R1, exact tmux targets** - ask the owner first: "Start R1 now with OD-1a (`=name` for
-   session targets, `=name:` for window and pane targets) and OD-11a (order R1, R2, R4, R3)?"
+1. **Same-ID round R1, exact tmux targets** - DISPATCHED to ao-50 (owner "1a", 2026-10-21: OD-1a `=name`
+   for session targets, `=name:` for window and pane targets; OD-11a order R1, R2, R4, R3).
    - Context: design sections 2 and 7. 47 production call sites in runtime-tmux, core (`tmux.ts`,
      `session-manager.ts:522`), the four agent plugins (`list-panes`), the CLI (`lib/shell.ts:57`,
      `commands/send.ts`, `commands/session.ts`) and `integration-tests/src/helpers/tmux.ts`; empty
      `display-message` output means "gone"; new helpers refuse names outside `[a-zA-Z0-9_-]`; core
-     exports grow (no break). Risk LOW, size S. Author: ao-48 on top of `c516cead` (no rebase). Review:
+     exports grow (no break). Risk LOW, size S. Author: ao-50 on top of `c516cead` (no rebase). Review:
      a new Codex session with `--model gpt-6-astra` pinned (cross-family, routing rule for HIGH
      architecture; R1 itself is LOW). After LAND-SAFE: cherry-pick `ce49c9fd..<tip>` (it applies to
      `main` cleanly when the source is still equal), rebuild and restart on the owner's word.
    - Expected outcome: the 17 `[same-id R1]` tests pass as normal `it` tests (flip them from `defect()`),
      old tests that pin plain argument vectors updated, full run green.
-2. **Design review of R2 to R4, then the remaining owner decisions** - ask: "A cross-family review of the
-   design for R2 to R4 first (recommended), accept every recommended option now, or decide each option
-   yourself?" OD-2 to OD-10 and OD-12 are in design section 9.
+2. **Design review of R2 to R4, then the remaining owner decisions** - the review is DISPATCHED to ao-51
+   (owner "2a", 2026-10-21; gpt-6-astra). After it, ask the owner OD-2 to OD-10 and OD-12 (design
+   section 9) with the review's options.
    - Context: R2 (server and launch identity) and R3 (per-ID lease, F-1, F-2, F-3, F-6) are HIGH; R3 is
      the largest. R4 (fail-open reads F-8 to F-11) is medium and small.
    - Expected outcome: a review file `development/reviews/same_id_design_review_r1_<model>.md`, then
@@ -130,10 +141,10 @@ add the missing-`TMUX_TMPDIR` fallback.
    `origin/main` at the commit that records the handover close. ` D test-ao-config2.yaml` is an old working-tree
    deletion; leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-48 and the orchestrator records only. `ps -o pid=,args= -p
-   1470866,1471311,1346791` - expect the two lifecycle workers and the ao-48 watcher.
-3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-48/.agent_report.md` - expect
-   `done|c516cead|...`. Then ask the owner the questions of Next Priorities 1 and 2.
+   agent-orchestrator` - expect ao-49, ao-50, ao-51 and the orchestrator records. `ps -o pid=,args= -p
+   1470866,1471311,2238373,2334310` - expect the two lifecycle workers and the two watchers.
+3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-5{0,1}/.agent_report.md` - a `running|` line
+   means the round still runs; act on `done|` as the Live Sessions table says.
 
 ## Key Files
 
@@ -169,12 +180,10 @@ runs from this checkout's `dist`, so every fleet runs what you land after a rebu
 on the owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker` only after a restart by
 exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py`.
 
-The killed-status fix is live and pushed. The same-ID arc has a finished design and failing tests on
-ao-48's branch, and waits for the owner. Do First Actions 1 to 3, then ask the two questions of Next
-Priorities 1 and 2 in plain text with numbered options (a watcher can paste into this pane, so never open
-an AskUserQuestion dialog). On "start R1", write the R1 brief from the design (sections 2 and 7) and the
-template `brief-aofork-killed-fix-r9.md`, set line 1 of ao-48's report to `running|c516cead|...`, open a
-router row, and `ao send --no-wait ao-48`.
+The killed-status fix is live and pushed. The same-ID arc has a finished design and failing tests
+(`c516cead`). R1 runs in ao-50, and the design review of R2 to R4 runs in ao-51. Do First Actions 1 to 3.
+Ask the owner in plain text with numbered options (a watcher can paste into this pane, so never open an
+AskUserQuestion dialog).
 
 Until R1 and R2 land: run `ao` only from a shell on the default tmux server (never inside a private
 server pane, never with another `TMUX` or `TMUX_TMPDIR`); do not kill or clean up a dead session whose
