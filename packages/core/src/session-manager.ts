@@ -4354,9 +4354,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // Keep the stored spawn identity when copying the archive back. The
       // copy-back is a reservation: it never writes over an active record
       // (another restore or a new reservation), and only while the latest
-      // archive is still the one that this restore read. It holds the ID
-      // during the stop in step 7, so no other restore or reservation of the
-      // ID can start a launch under the runtime name that step 7 stops.
+      // archive is still the one that this restore read. While it exists, no
+      // other reservation of the ID can be made (a spawn, or the copy-back of
+      // a restore that read the archive before it). It is not an operation
+      // lock (review r2, F-4): an operation that reads it as an active record
+      // (another restore, an orchestrator start, a PR claim, a kill, a
+      // lifecycle write) can still act on it during the stop in step 7. One
+      // operation per ID is same-ID R3.
       const copyBack: Record<string, string | undefined> = {
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
