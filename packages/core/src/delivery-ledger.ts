@@ -551,16 +551,27 @@ export async function settleDelivery(options: {
  * Remove the ledger of `key` (its agent session was removed). Runs under the
  * ledger lock, and removes also a corrupt file, which no send can use any
  * more. No file is no error.
+ *
+ * The wait for the lock can make a check of the caller stale. When the
+ * caller gives `stillRemovable`, it runs after the lock is held, directly
+ * before the removal; when it answers false, the file stays and the result
+ * is `"kept"`. Without it, the removal is as before.
  */
-export async function removeDeliveryLedger(dir: string, key: string): Promise<void> {
+export async function removeDeliveryLedger(
+  dir: string,
+  key: string,
+  stillRemovable?: () => boolean,
+): Promise<"kept" | undefined> {
   const path = deliveryLedgerPath(dir, key);
-  if (!existsSync(path)) return;
+  if (!existsSync(path)) return undefined;
   requireLockSupport(path);
   const lockName = deliveryLedgerLockName(dir, key);
   const lock = await holdDeliveryLock(lockName, DELIVERY_LOCK_WAIT_MS);
   if (!lock) throw new DeliveryLedgerBusyError(path, lockName);
   try {
+    if (stillRemovable && !stillRemovable()) return "kept";
     rmSync(path, { force: true });
+    return undefined;
   } finally {
     lock.release();
   }

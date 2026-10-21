@@ -2736,15 +2736,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (!key) return;
     const dir = getDeliveryLedgerDir(config.configPath, project.path);
     try {
-      // Round 5 (1.0.1): directly before the removal, no active record may
-      // name the key (a record that names it sends through this ledger).
-      // The removal then waits for the ledger lock inside the I-5 module.
-      const namer = listMetadata(sessionsDir).find(
-        (id) =>
-          asValidOpenCodeSessionId(readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"]) === key,
-      );
-      if (namer) throw new Error(`session ${namer} names OpenCode session ${key}`);
-      await removeDeliveryLedger(dir, key);
+      // Round 5 (1.0.1): no active record may name the key (a record that
+      // names it sends through this ledger). Round 6 (M-2): the removal
+      // waits for the ledger lock, so the decisive check runs after the lock
+      // is held, directly before the removal; this first one only saves the
+      // wait. A kept ledger keeps its key in the archive (the catch below).
+      const namerOf = (): string | undefined =>
+        listMetadata(sessionsDir).find(
+          (id) =>
+            asValidOpenCodeSessionId(readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"]) ===
+            key,
+        );
+      const early = namerOf();
+      if (early) throw new Error(`session ${early} names OpenCode session ${key}`);
+      let late: string | undefined;
+      const outcome = await removeDeliveryLedger(dir, key, () => {
+        late = namerOf();
+        return late === undefined;
+      });
+      if (outcome === "kept") throw new Error(`session ${late} names OpenCode session ${key}`);
     } catch (err) {
       let kept: boolean;
       try {
