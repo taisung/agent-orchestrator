@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
-import type { SessionManager } from "@aoagents/ao-core";
+import { RuntimeStopUnconfirmedError, type SessionManager } from "@aoagents/ao-core";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
@@ -870,6 +870,57 @@ describe("stop command", () => {
       .mock.calls.map((c) => c.join(" "))
       .join("\n");
     expect(output).toContain("is not running");
+  });
+
+  it("a stop refusal prints the outcome, the detail and the next action, and exits 1 (review r1, F-3)", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
+    mockSessionManager.kill.mockRejectedValue(
+      new RuntimeStopUnconfirmedError({
+        sessionId: "app-orchestrator",
+        handle: { id: "hash-app-orchestrator", runtimeName: "tmux", data: {} },
+        stop: {
+          outcome: "unknown",
+          detail: "the destroy of tmux session hash-app-orchestrator failed",
+        },
+        kept: "record and worktree kept",
+        retry: "ao session kill app-orchestrator",
+      }),
+    );
+
+    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(errors).toContain(
+      "Failed to stop orchestrator session app-orchestrator: runtime stop unconfirmed (unknown): the destroy of tmux session hash-app-orchestrator failed; record and worktree kept",
+    );
+    expect(errors).toContain(
+      "Next: Check tmux session hash-app-orchestrator by hand and stop it if it still runs, then run `ao stop my-app` again.",
+    );
+    expect(errors).toContain("The lifecycle worker was not stopped.");
+    expect(errors).not.toContain("ao session kill");
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+    expect(process.exit).toHaveBeenCalledTimes(1);
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("another kill error keeps the generic message and exit 1", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
+    mockSessionManager.kill.mockRejectedValue(new Error("disk full"));
+
+    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(errors).toContain("disk full");
+    expect(errors).not.toContain("Next:");
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
   });
 
   it("passes purge flag when stopping orchestrator with --purge-session", async () => {

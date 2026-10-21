@@ -30,6 +30,7 @@ import {
   normalizeOrchestratorSessionStrategy,
   isOrchestratorSession,
   isTerminalSession,
+  isRuntimeStopUnconfirmedError,
   ConfigNotFoundError,
   type OrchestratorConfig,
   type ProjectConfig,
@@ -1122,10 +1123,12 @@ export function registerStop(program: Command): void {
     .description("Stop the orchestrator agent and lifecycle worker")
     .option("--purge-session", "Delete mapped OpenCode session when stopping")
     .action(async (projectArg?: string, opts: { purgeSession?: boolean } = {}) => {
+      let retry = "ao stop";
       try {
         const config = loadConfig();
         const { projectId: _projectId, project } = await resolveProject(config, projectArg, "stop");
         const sessionId = `${project.sessionPrefix}-orchestrator`;
+        retry = `ao stop ${_projectId}`;
 
         console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
 
@@ -1136,7 +1139,12 @@ export function registerStop(program: Command): void {
         if (existing) {
           const spinner = ora("Stopping orchestrator session").start();
           const purgeOpenCode = opts?.purgeSession === true;
-          await sm.kill(sessionId, { purgeOpenCode });
+          try {
+            await sm.kill(sessionId, { purgeOpenCode });
+          } catch (err) {
+            spinner.fail("Orchestrator session not stopped");
+            throw err;
+          }
           spinner.succeed("Orchestrator session stopped");
         } else {
           console.log(chalk.yellow(`Orchestrator session "${sessionId}" is not running`));
@@ -1152,6 +1160,18 @@ export function registerStop(program: Command): void {
         console.log(chalk.bold.green("\n✓ Orchestrator stopped\n"));
         console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
       } catch (err) {
+        if (isRuntimeStopUnconfirmedError(err)) {
+          // Same-ID R2a (review r1, F-3): the refusal names the outcome, its
+          // detail and the next action, as `ao session kill` does. The
+          // lifecycle worker stays as it is while the orchestrator may run.
+          console.error(
+            chalk.red(`\nFailed to stop orchestrator session ${err.sessionId}: ${err.message}`),
+          );
+          const hint = typeof err.hintFor === "function" ? err.hintFor(retry) : err.hint;
+          console.error(chalk.yellow(`Next: ${hint}`));
+          console.error(chalk.dim("The lifecycle worker was not stopped."));
+          process.exit(1);
+        }
         if (err instanceof Error) {
           console.error(chalk.red("\nError:"), err.message);
         } else {
