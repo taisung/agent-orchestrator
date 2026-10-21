@@ -991,6 +991,15 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     Review rule for r7 (2a): a finding blocks landing only if this fix made it, made it worse, or left it
     in code that it changed; older races of the same kind go to the follow-up list. Dispatched 07:41:07
     EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r8.md`, on top of `0d3c05fe`.
+    Done 08:30 EDT at `69d6f467` (5 commits; 17.01 USD; report
+    `~/.cache/agent-skills-haiku55-arc/reports/ao-46-killed-r8.md`). Full run 2852 passed. The author's
+    audit also moved the kill, the orchestrator start, the restore, the ledger removal and the archived
+    cleanup to strict reads (`readRecordStrict`, `listRecordIds`). Open, for the later round: the window
+    between another start's read of the mapping and its own record write (issue reuse).
+  - **Review r7** (ao-47 on gpt-6-astra, dispatched 2026-10-21 08:33:55 EDT under rule 2a, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r7-astra.md`, output
+    `development/reviews/killed_status_review_r7_astra6.md`): re-check of `0d3c05fe..69d6f467`, the strict
+    reads in older paths, and a whole-fix land-safe statement with a separate follow-up list.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
