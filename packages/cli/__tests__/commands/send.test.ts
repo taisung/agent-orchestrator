@@ -365,6 +365,78 @@ describe("send command", () => {
       );
     });
 
+    describe("a recorded session whose tmux session is gone while a longer name lives", () => {
+      /**
+       * has-session as tmux 3.4 answers it: `=name` matches exactly; a plain
+       * target matches an exact name, then the start of exactly one name.
+       */
+      function tmuxWithSessions(names: string[]): void {
+        mockTmux.mockImplementation(async (...args: string[]) => {
+          if (args[0] === "has-session") {
+            const target = args[args.indexOf("-t") + 1] ?? "";
+            if (target.startsWith("=")) return names.includes(target.slice(1)) ? "" : null;
+            if (names.includes(target)) return "";
+            return names.filter((name) => name.startsWith(target)).length === 1 ? "" : null;
+          }
+          if (args[0] === "capture-pane") return "❯ ";
+          return "";
+        });
+      }
+
+      function recordedSession(tmuxName: string): Record<string, unknown> {
+        return {
+          id: "app-1",
+          projectId: "my-app",
+          status: "working",
+          activity: "idle",
+          branch: null,
+          issueId: null,
+          pr: null,
+          workspacePath: null,
+          runtimeHandle: { id: tmuxName, runtimeName: "tmux", data: {} },
+          agentInfo: null,
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+          metadata: {},
+        };
+      }
+
+      it("checks the exact name and sends through the session manager (restore), not directly", async () => {
+        mockConfigRef.current = makeConfig();
+        mockSessionManager.get.mockResolvedValue(recordedSession("abc-app-1"));
+        mockSessionManager.send.mockResolvedValue(undefined);
+        // abc-app-1 is dead; abc-app-10 is the only name that starts with it.
+        tmuxWithSessions(["abc-app-10"]);
+
+        await program.parseAsync(["node", "test", "send", "--no-wait", "app-1", "hello"]);
+
+        expect(mockTmux).toHaveBeenCalledWith("has-session", "-t", "=abc-app-1");
+        expect(mockTmux).not.toHaveBeenCalledWith("has-session", "-t", "abc-app-1");
+        expect(mockSessionManager.send).toHaveBeenCalledWith("app-1", "hello");
+        expect(mockExec).not.toHaveBeenCalled();
+      });
+
+      it("delivers directly when the session of the exact name lives (control)", async () => {
+        mockConfigRef.current = makeConfig();
+        mockSessionManager.get.mockResolvedValue(recordedSession("abc-app-1"));
+        mockSessionManager.send.mockResolvedValue(undefined);
+        tmuxWithSessions(["abc-app-1", "abc-app-10"]);
+        mockDetectActivity.mockReturnValue("active");
+
+        await program.parseAsync(["node", "test", "send", "--no-wait", "app-1", "hello"]);
+
+        expect(mockTmux).toHaveBeenCalledWith("has-session", "-t", "=abc-app-1");
+        expect(mockSessionManager.send).not.toHaveBeenCalled();
+        expect(mockExec).toHaveBeenCalledWith("tmux", [
+          "send-keys",
+          "-t",
+          "=abc-app-1:",
+          "-l",
+          "hello",
+        ]);
+      });
+    });
+
     it("waits for tmux AO sessions before direct delivery", async () => {
       mockConfigRef.current = makeConfig();
       mockSessionManager.get.mockResolvedValue({
