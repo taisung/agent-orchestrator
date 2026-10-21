@@ -353,6 +353,22 @@ Durable progress record for this fork. Dated events only; the current state live
     `AO_*`; `~/.ao/bin` unchanged. Follow-ups: m-4 (one warning text), the shared child
   runner of the lock and ledger tests. Costs: author 78.01 USD by trial_cost (19.81, 18.26, 14.86,
   20.05, 5.03); reviewers 8.15 USD (1.56, 1.45, 0.12, 1.83, 0.48, 2.07, 0.64; two content-filter stops).
+- `6361a663..8fe2e1aa` (2026-10-21, ao-46, Claude Opus 5.5; reviews by ao-47, Codex gpt-6.1-sol then
+  gpt-6-astra) - **the killed-status fix**: a live session no longer reads `status=killed`. A launch
+  grace and two negative polls before `killed`; a stored-handle liveness probe; a per-record
+  kernel-released lock and a `generation` key with a per-ID floor (`sessions/.generations/<id>`) for every
+  Node writer; a launch identity (`reservationId`, `runtimeHandle`, `tmuxName`, `createdAt`,
+  `restoredAt`) in every compare; an ownership check directly before each removal step (also in the
+  plugins, with optional `stillOwned` on `Workspace.destroy` and `stillUnheld` on
+  `PreparedAgentSession.discard`); an explicit "unknown" result that keeps and names a resource when a
+  record or a directory cannot be read (`readRecordStrict`, `listRecordIds`,
+  `listArchivedSessionIdsStrict`). Rules in `docs/DEVELOPMENT.md` "Record writes". 9 author rounds
+  (151.59 USD by trial_cost) and 8 reviews (`development/reviews/killed_status_review_r{1..8}_*.md`; r8
+  LAND-SAFE under D-6). Clean cherry-pick of `0e3eabc2..ce49c9fd` (34 commits; source equal to
+  `ce49c9fd`, r8 gates 2866 passed, 29 skipped). Built 10:24:53 EDT; lifecycle workers restarted by exact
+  PID (271579 → 1470866, 321413 → 1471311); pushed `654b3d28..7e2a6aef`. `ao-orchestrator` changed
+  `killed` → `working` at the first poll (10:24:59, `generation=1`). Open follow-up: r8 m-1 (Known
+  Issues). Older races of the same kind: F-1 to F-11 (Known Issues, "Launches that share a name").
 
 ## Decisions
 
@@ -389,8 +405,37 @@ record an admission, because a throw makes the next lifecycle poll admit a secon
 2 s, nothing sent); after 3 failed ledger writes and the end of the sender, a new equal lifecycle
 dispatch inside 10 min is recorded with no new input. Do not retry the rejected designs.
 
+**D-6 — what blocks landing in a review of a race fix** (owner 2026-10-21, answer "2a" after the sixth
+failed review of the killed-status fix). A finding blocks landing only if the fix made it, made it worse,
+or left it in code that the fix wrote or changed. A race of the same kind in older code that the fix did
+not change goes to a follow-up list (F-n) with its file:line and reproducer, and does not change the
+verdict. Why: each review round found the same shared-name or shared-path race in one more older code
+path, so the fix could not end. In code that the fix changed, every removal still needs its own check
+directly before it, and a check that answers no, throws or cannot read keeps the resource.
+
+**D-7 — killed-status fix design choices** (owner 2026-10-20 and 2026-10-21). Fix A+B+C+D in one round by
+one author; the real records stayed `killed` until fix C was live (its first poll corrected
+`ao-orchestrator`). A tmux "not found" is a death that the outage rule never blocks; the outage rule (only
+for plugins that answer false on an error) and "no tmux server" each turn into `killed` after 5 minutes.
+A per-record kernel-released lock and a generation counter for every Node writer, with `pr` in the compare;
+the bash helper stays outside the lock (no `WRAPPER_VERSION` change). B-1 "keep and name": a restore or a
+rollback keeps a runtime that any record may own and names it. The active generation series never
+repeats (a per-ID floor); each archived copy has its own series. `Workspace.destroy` keeps `Promise<void>`
+(the core public API is stable); a refusal comes back only through the callback.
+
 ## Known Issues
 
+- **Traps found in the killed-status and same-ID rounds (2026-10-20 to 2026-10-21):**
+  - A Codex gpt-6.1-sol reviewer of lock and race work ended two turns with `codex_error_info:
+    cyber_policy` (review r4, 2026-10-21 00:50Z and 00:58Z); the pane only looks idle. The owner moved the
+    reviewer to gpt-6-astra with `/model`, which also set the global `~/.codex/config.toml` default to
+    gpt-6-astra. Pin `--model` on every Codex spawn; grep the rollout for `cyber_policy` when a Codex
+    worker looks idle without its report line.
+  - tmux skips a `TMUX_TMPDIR` that names a missing directory and uses `/tmp/tmux-<uid>/default` (ao-48,
+    2026-10-21: one read-only `tmux ls` listed the real fleet). Briefs require `env -u TMUX tmux -L
+    <unique>`; `TMUX_TMPDIR` only for a directory that the script made first.
+  - The CLI `ao send` pastes into a live tmux pane even when the record reads `killed`; only core `send`
+    (lifecycle reactions) restores, that is relaunches, a `killed` session (as-orchestrator, 2026-10-20).
 - **Traps found in the I-5 rounds (2026-10-20):**
   - The Codex reviewer (gpt-6.1-sol) was stopped by a content filter ("This content can't be shown ...
     cybersecurity requests") three times: ao-42 on review r3 (twice), ao-43 on review r4. Each stop came
@@ -743,7 +788,7 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   kept. 91 socket files with no server, older than 2026-10-19, removed from `/tmp/tmux-44402`. Not
   touched: ao-41, ao-orchestrator, the stale `ao-orchestrator-1` record (no worktree, no branch), the
   service and the lifecycle workers.
-- **Live sessions read `status=killed` (found 2026-10-19).** Every record of this project except ao-41
+- **FIXED 2026-10-21 by `6361a663..8fe2e1aa` (What Landed). Live sessions read `status=killed` (found 2026-10-19).** Every record of this project except ao-41
   had `status=killed` with an mtime of 2026-10-16 14:56:51, ao-orchestrator too, while their panes ran.
   So `ao session ls` shows `[killed]` for live sessions, and the lifecycle worker does not poll them (no
   reactions for those sessions). Cause not analyzed (one write for all records at one second; related to
@@ -1101,7 +1146,11 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   lifecycle worker on B. `ao status`, `ao session ls` and a fresh worker wrote nothing. Cause: every
   probe reads "no tmux session" as "dead" (M4 root). The cleanup case is CRITICAL by the profile (it
   removes work). Fix D of the killed-status proposal removes the false "dead" for a server error, but
-  not for a reachable wrong server. Open; a worker change.
+  not for a reachable wrong server. Open; a worker change. Measured again on the fix build 2026-10-21
+  (ao-48): with another tmux server running, `ao session cleanup` archived two live sessions and removed
+  their worktrees, `ao send` started a second pane, `ao start` replaced the live orchestrator; with no
+  other server, `status`, `cleanup` and `send` are safe. Design round R2 (socket, server PID and start
+  time stored at create, `-S` on every call, a guarded destroy).
 - **tmux `-t` targets match by prefix** (found 2026-10-20 by ao-46 in round 3 of the killed-status fix,
   private server, tmux 3.4; not changed by any round). With only `kr-10` live, `has-session -t kr-1` exits
   0; with `kr-10` and `kr-11` live it prints `can't find session: kr-1`; `-t =kr-1` matches exactly (pane
@@ -1114,7 +1163,9 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   attach, the claude-code `list-panes` (`:589`), and CLI `lib/shell.ts:57`, `commands/session.ts:191`,
   `commands/send.ts:108-349`. Rated major and destructive, present before the killed-status fix; it
   needs its own round that changes every target (session targets `=name`, pane targets `=name:`).
-  Open; a worker change.
+  Open; a worker change. Design 2026-10-21 (`development/reviews/same_id_design_r1_opus.md`, round R1):
+  47 call sites; window and pane targets need `=name:`; `display-message` answers empty with exit 0 for
+  an unknown target. Failing tests on ao-48's branch (`c516cead`, `[same-id R1]`).
 - **I-3 and I-4 landed** (I-4 2026-10-17, I-3 2026-10-19; What Landed). The history follows (owner,
   2026-10-16: "go ahead with priority 2"). Dispatched at 13:08 EDT, meter `5h 0%`, `wk 33%`, both on
   `15757aae`, router rows open, watcher PID 107999.
@@ -1471,7 +1522,7 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   "global service read-only, no model turn". The sessions stay in the global store (owner,
   2026-10-15: leave them). Rule for every brief from now: run the integration package with a fake `HOME`, so the
   live block skips. Earlier arcs (I-1, I-6) asked for the same run and are not checked.
-- **The first lifecycle poll can mark a just-spawned session `killed`** (found 2026-10-15 by ao-1, rated
+- **FIXED 2026-10-21 by the killed-status fix (launch grace, two negative polls). The first lifecycle poll can mark a just-spawned session `killed`** (found 2026-10-15 by ao-1, rated
   major and pre-existing by sol-6-1 in the I-2 round-2 review). The first poll can move a session from
   `spawning` to `killed` before its pane starts the agent; some return to `working` on the next poll,
   some stay `killed` with a live pane. Seen on the I-2 build and on `3b2bb918`. A running agent with a
