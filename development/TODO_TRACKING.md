@@ -901,7 +901,24 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
   - **Review r4** (ao-47, dispatched 20:45:02 EDT, brief
     `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r4-sol.md`, output
     `development/reviews/killed_status_review_r4_sol61.md`): re-check of `f35b665f..f06a1107`, plus a
-    whole-fix and rollout judgment.
+    whole-fix and rollout judgment. Done 21:17 EDT: **NOT-LAND-SAFE**, 0 blockers, 2 majors, 2 minors. All
+    five r3 findings fixed (live and built-API reproducers). Floor `.generations` invisible to every
+    reader, also the installed build (`dist/metadata.js:265-279`); a stop between floor write and unlink
+    keeps the rule.
+    - M-1: `deleteOpenCodeSession` (`session-manager.ts:342-348`) retries after 200 and 600 ms without a
+      fresh ownership check; callers `:998`, `:2668`, `:2991`. A new owner of the OpenCode ID loses its
+      agent session (reviewer test: expected 1 remove call, got 2).
+    - M-2: `removeDeliveryLedger` (`delivery-ledger.ts:555-566`) checks nothing after its lock wait and
+      removes a ledger that a new active record names (real ledger lock, built API). The fix needs a
+      check under the ledger lock, in a file that rounds 3 to 5 did not allow.
+    - m-1: archive writes increment only the archive and do not raise the floor, so a number can repeat
+      across active and archive records of one ID. The active series never repeats. No harm shown.
+    - m-2: the author's removal table omits low-level removals (`tmux.ts:184-185` `killTmuxSession`, no
+      production caller; temp files; OpenCode helper; empty-ledger compaction).
+    - Kept-runtime cost (accepted, not a finding): a stale restore keeps a runtime with an agent; a
+      competing spawn of the same ID gets `duplicate session` and rolls back; the orphan is invisible to
+      `ao status`, `ao send` and cleanup. Candidate for the prefix-match round.
+    - R7: the Opus author failed a fourth review round. The next step is the owner's.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
