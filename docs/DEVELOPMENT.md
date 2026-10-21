@@ -212,6 +212,18 @@ await execFileAsync("sh", ["-c", `git commit -m "${message}"`]);
 await execFileAsync("git", ["commit", "-m", message]);
 ```
 
+### tmux Targets
+
+Every tmux `-t` target goes through the core helpers `exactSessionTarget(name)` (`=name`, for
+`has-session`, `kill-session` and `attach`) and `exactPaneTarget(name)` (`=name:`, for `list-panes`,
+`send-keys`, `paste-buffer`, `capture-pane` and `display-message`). tmux 3.4 tries a plain target as an
+exact name and then as the start of one session name, so while `kr-1` is dead, the target `kr-1` reaches a
+live `kr-10`: a send types into it and a kill ends it. `=` matches the name exactly. A window or pane
+target also needs the colon: without it, tmux first tries `=name` as a window name in the current
+session. Both helpers throw for a name outside `[a-zA-Z0-9_-]` (also the empty name), because tmux reads
+a dot or a colon in a target as a separator. For a target that does not exist, `display-message` prints
+empty values and exits 0, so its callers read empty output as "gone", not as "unknown".
+
 ---
 
 ## Plugin Pattern
