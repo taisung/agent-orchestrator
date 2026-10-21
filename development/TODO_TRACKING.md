@@ -369,6 +369,19 @@ Durable progress record for this fork. Dated events only; the current state live
   PID (271579 → 1470866, 321413 → 1471311); pushed `654b3d28..7e2a6aef`. `ao-orchestrator` changed
   `killed` → `working` at the first poll (10:24:59, `generation=1`). Open follow-up: r8 m-1 (Known
   Issues). Older races of the same kind: F-1 to F-11 (Known Issues, "Launches that share a name").
+- `64ee65b4..5e8fc14b` (2026-10-21, ao-48 tests, ao-50 Claude Opus 5.5; reviews by ao-53, Codex
+  gpt-6-astra) - **same-ID R1, exact tmux targets** (owner OD-1a): the core helpers
+  `exactSessionTarget` (`=name`) and `exactPaneTarget` (`=name:`), which refuse a name outside
+  `[a-zA-Z0-9_-]`, at every tmux call site with a target (runtime-tmux, core `tmux.ts` and
+  `session-manager.ts`, the four agents' `list-panes`, CLI `send`, `session attach`, `lib/shell.ts`, the
+  integration helpers); an empty `display-message` output means "gone"; `newSession` refuses before
+  `new-session`; codex, gemini and opencode reject a refused name before their catch-all. Rule in
+  `docs/DEVELOPMENT.md` "tmux Targets". `64ee65b4` holds ao-48's 42 defect tests (`defect()`, red mode
+  `SAME_ID_DEFECTS=red`); after R1: R1 0, R2 8, R3 6, R4 11 still red. 2 author rounds (11.38 + 3.95 USD)
+  and 2 reviews (`development/reviews/same_id_r1_review_r{1,2}_astra6.md`; r1 NOT-LAND-SAFE 1 M, r2
+  LAND-SAFE). Clean cherry-pick of `ce49c9fd..4034ece7` (8 commits; source equal to `4034ece7`, gates
+  2938 passed, 4 expected fail, 29 skipped). NOT built and NOT live yet (owner decision). Follow-up F-1:
+  `core/src/orchestrator-prompt.ts:61` does not teach `=name:`.
 
 ## Decisions
 
