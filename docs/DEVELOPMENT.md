@@ -233,30 +233,38 @@ Gemini do), so a line break in the text is not an Enter. `Enter` follows 300 ms 
 reads the pane up to three times, 2 s apart.
 
 A Codex pane gets no further key: an `Enter` can submit text that another sender typed, or answer a
-prompt. The command reads each screen with `readCodexScreen` of the Codex plugin, the parser that the
-Codex `detectActivity` uses too, and prints one of three lines:
+prompt. At each check the command first asks the Codex `detectActivity`, then reads the screen with
+`readCodexScreen` of the Codex plugin, the parser that `detectActivity` uses too. It prints one of four
+lines:
 
-- A running turn shows: "Message sent and processing".
+- `detectActivity` answers `waiting_input` (an approval prompt): "Message sent — the pane waits for an
+  approval: check `<session>` (tmux pane `<pane>`)". This check comes before every other reading.
+- The status row of a running turn is directly above the composer: "Message sent and processing".
 - After the third check the composer still holds text that starts like the message, or a
   `[Pasted Content ...]` block: "Message not submitted: the text is still in the input box of
   `<session>` (tmux pane `<pane>`); check the pane and press Enter". The text match only chooses this
   line, and text of another sender can match. Capture the pane before you press `Enter`.
-- Every other case (an empty composer with no running turn, other text, no composer in view): "Message
-  sent — could not confirm it was received". An emptied composer is no proof of delivery.
+- Every other case (an empty composer with no running turn, other text, no composer in view, an unclear
+  layout): "Message sent — could not confirm it was received". An emptied composer is no proof of
+  delivery, and words on the screen are never "processing".
 
-The exit code is 0 for all three lines (this change keeps the exit codes). Every other agent keeps the
+The exit code is 0 for all four lines (this change keeps the exit codes). Every other agent keeps the
 loop of `09546110`: "processing" when its `detectActivity` answers `active`, else up to two retry
 `Enter`s, or one at each check for a prompt with text above `tab to queue message`.
 
 The Codex parser reads the composer at its own position: the prompt row with `›` in column 0, with only
 indented or blank rows below it. Codex indents the further rows of the composer text by 2 columns, so an
 indented `›` row is message text. A numbered prompt row is the cursor of a selection list only when a
-numbered option row is next to it. The footer hint `? for shortcuts` (empty composer) counts only in the
-last row, below a blank row under a one-row composer. A running turn is a running word or
-`esc to interrupt` in the 8 rows above the prompt row. The scan stops at the `Worked for` row of a
-finished turn, except when the composer text holds an indented prompt row or a `Worked for` row: that
-layout leaves a doubt, and a running turn wins. The composer text and the footer never count as
-activity.
+numbered option row is next to it and the list shows a sign of a menu: a key hint such as `(y)` at the
+end of a list row, or a hint row below the list (`Press enter to confirm or esc to go back`,
+`Press a number to choose · esc to dismiss`). Otherwise a numbered list is composer text. The footer hint
+`? for shortcuts` (empty composer) counts only in the last row, below a blank row under a one-row
+composer. A running turn is only the status row in its 0.163.0 form, a bullet in column 0 and
+`esc to interrupt` in parentheses (`◦ Working (5m 47s • esc to interrupt)`), directly above the prompt
+row with at most one blank row between. The words of the composer text, of the footer and of the
+transcript ("Working tree clean.") never count. With no composer in view the parser reads no running
+turn, and `detectActivity` keeps its older rules for that screen (a running word or `esc to interrupt`
+in the last 8 rows is `active`).
 
 ---
 
