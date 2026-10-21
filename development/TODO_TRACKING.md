@@ -983,6 +983,23 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     - m-1: a kept orchestrator OpenCode session is hidden when the newest archive is an empty reservation;
       the next start does not find it, and no message names it.
     - R7: the Opus author failed a sixth review round. The next step is the owner's.
+  - **Fix round 8** (owner 2026-10-21, answers "1a 2a"): ao-46 on Opus; r6 M-1 (an explicit "unknown"
+    rollback outcome keeps the runtime, the prepared session and the workspace), M-2 (the prepared decision
+    reads every other record that names the session; an unreadable record is a holder), M-3
+    (`Workspace.destroy` back to `Promise<void>`, refusal only through the callback, a type test that
+    `pnpm typecheck` compiles), m-1 (name the kept orchestrator OpenCode session and the manual route).
+    Review rule for r7 (2a): a finding blocks landing only if this fix made it, made it worse, or left it
+    in code that it changed; older races of the same kind go to the follow-up list. Dispatched 07:41:07
+    EDT, brief `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r8.md`, on top of `0d3c05fe`.
+  - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
+    session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
+    new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
+    name and path per launch) closes the group. It takes: the tmux prefix match of plain `-t` targets, the
+    tmux-name check-to-command windows, the visibility of a kept runtime that no record names, the
+    check-to-single-command gaps of git and `rmSync`, r6 M-4 (worktree `create` checkout-failure cleanup,
+    `workspace-worktree/src/index.ts:140-146`) and r6 M-5 (`postCreate` after an unchecked await in spawn
+    and restore, `session-manager.ts:1699-1710`, `:3954-3966`, symlink removal at plugin `:372`). Starts
+    after the killed-status fix lands.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
