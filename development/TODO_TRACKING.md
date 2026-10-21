@@ -438,6 +438,23 @@ repeats (a per-ID floor); each archived copy has its own series. `Workspace.dest
 
 ## Known Issues
 
+- **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
+  (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
+  `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then
+  `Enter` after 300 ms, `cli/src/commands/send.ts:107-130`) stayed in the Codex 0.163.0 composer; Codex
+  recorded it at 13:38:13, when the orchestrator sent one bare `Enter` after a capture. The rescue of the
+  verify loop (`send.ts:321-352`, one more `Enter` up to three times) did not run: `agent-codex`
+  `detectActivity` (`src/index.ts:397-431`) falls through to `return "active"` for an idle pane of this
+  Codex version (its last line is the `⚠ N warnings · f2 to view` footer, and `tab to queue message` shows
+  only mid-turn). The built plugin answered `active` both for the unsubmitted composer and for an empty
+  idle composer; `hasUnsubmittedCodexInput` also needs `tab to queue message`. Effects: "processing" is no
+  proof for Codex, and a plain `ao send` (with the idle wait) to an idle Codex pane waits its full
+  timeout. The first `Enter` failing is intermittent (the same path worked for ao-53 at 13:30) and not
+  measured; ao-communicate records the same pattern (nex-2087, as-15, as-18, as-19, as-21). Fix (worker,
+  MEDIUM: the send path of every Codex pane): read the idle footer (`› Ask Codex to do anything`,
+  `? for shortcuts`) as idle; read composer text with no `Working` line as unsubmitted; consider
+  `paste-buffer -p`; tests from captured 0.163.0 panes. Until then: capture every Codex send, and send one
+  bare `Enter` only on your own text.
 - **Feature: `ao session relaunch <id> [--continue]`** (owner 2026-10-21, "2 yes"). Restart the agent
   process in its existing pane with the launch command that `ao` builds at that time, for example to use
   a newer Claude Code version; with `--continue`, a Claude Code session keeps its conversation. Today a
