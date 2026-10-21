@@ -230,19 +230,33 @@ empty values and exits 0, so its callers read empty output as "gone", not as "un
 with `send-keys -l`, and pastes a longer one with `load-buffer` and `paste-buffer -p`. `-p` puts the
 bracketed-paste markers around the text when the pane's program asked for them (Claude Code, Codex and
 Gemini do), so a line break in the text is not an Enter. `Enter` follows 300 ms later. Then the command
-reads the pane up to three times. It prints "Message sent and processing" only when the agent's
-`detectActivity` answers `active`, or when a Codex composer that held the message is empty after an
-`Enter` of this check. For a Codex pane with no running turn, it reads the composer (the last line that
-starts with `›`, with only indented or blank lines below it):
+reads the pane up to three times, 2 s apart.
 
-- Text that starts the sent message (or `[Pasted Content ...]`) is not submitted: one more `Enter`, at
-  most two.
-- Other text gets no key: an `Enter` would submit text that another sender typed.
-- An empty composer (the placeholder `Ask Codex to do anything` or the footer `? for shortcuts`) gets no
-  key. When it never showed the message, the command says that it could not confirm the delivery.
+A Codex pane gets no further key: an `Enter` can submit text that another sender typed, or answer a
+prompt. The command reads each screen with `readCodexScreen` of the Codex plugin, the parser that the
+Codex `detectActivity` uses too, and prints one of three lines:
 
-The Codex `detectActivity` reads a running turn only in the 8 lines above the composer, and stops at the
-`Worked for` line of a finished turn. The composer text and the footer never count as activity.
+- A running turn shows: "Message sent and processing".
+- After the third check the composer still holds text that starts like the message, or a
+  `[Pasted Content ...]` block: "Message not submitted: the text is still in the input box of
+  `<session>` (tmux pane `<pane>`); check the pane and press Enter". The text match only chooses this
+  line, and text of another sender can match. Capture the pane before you press `Enter`.
+- Every other case (an empty composer with no running turn, other text, no composer in view): "Message
+  sent — could not confirm it was received". An emptied composer is no proof of delivery.
+
+The exit code is 0 for all three lines (this change keeps the exit codes). Every other agent keeps the
+loop of `09546110`: "processing" when its `detectActivity` answers `active`, else up to two retry
+`Enter`s, or one at each check for a prompt with text above `tab to queue message`.
+
+The Codex parser reads the composer at its own position: the prompt row with `›` in column 0, with only
+indented or blank rows below it. Codex indents the further rows of the composer text by 2 columns, so an
+indented `›` row is message text. A numbered prompt row is the cursor of a selection list only when a
+numbered option row is next to it. The footer hint `? for shortcuts` (empty composer) counts only in the
+last row, below a blank row under a one-row composer. A running turn is a running word or
+`esc to interrupt` in the 8 rows above the prompt row. The scan stops at the `Worked for` row of a
+finished turn, except when the composer text holds an indented prompt row or a `Worked for` row: that
+layout leaves a doubt, and a running turn wins. The composer text and the footer never count as
+activity.
 
 ---
 
