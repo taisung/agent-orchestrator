@@ -368,14 +368,27 @@ export function registerSend(program: Command): void {
 
         // A Codex pane gets no key after the message: an Enter can submit
         // text that another sender typed, or answer a prompt. The command
-        // reads the screen up to three times with the parser of the Codex
-        // plugin and reports what it shows; exit code 0 in every case. The
-        // loop below is the loop of every other agent, unchanged.
+        // reads the screen up to three times and reports what it shows; exit
+        // code 0 in every case. At each check the agent's detectActivity goes
+        // first: an approval prompt (waiting_input) gets a line of its own.
+        // Then "processing" needs the status row of a running turn directly
+        // above the composer (the parser of the Codex plugin); words on the
+        // screen and an unclear layout never give "processing". The loop
+        // below is the loop of every other agent, unchanged.
         if (agent.name === "codex") {
           let composer: CodexComposer | null = null;
           for (let attempt = 1; attempt <= 3; attempt++) {
             await sleep(2000);
-            const screen = readCodexScreen(await captureOutput(10));
+            const output = await captureOutput(10);
+            if (agent.detectActivity(output) === "waiting_input") {
+              console.log(
+                chalk.yellow(
+                  `Message sent — the pane waits for an approval: check ${session} (tmux pane ${pane})`,
+                ),
+              );
+              return;
+            }
+            const screen = readCodexScreen(output);
             if (screen.runningTurn) {
               console.log(chalk.green("Message sent and processing"));
               return;

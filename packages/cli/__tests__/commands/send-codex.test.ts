@@ -18,6 +18,12 @@ import {
   REVIEW_M1B_COMPOSER,
   REVIEW_M1B_FIRST_ROW,
   REVIEW_M2_NUMBERED_MESSAGE,
+  REVIEW_R2_M1_MESSAGE,
+  REVIEW_R2_M1_QUOTED_PROMPT,
+  REVIEW_R2_M2_MESSAGE,
+  REVIEW_R2_M2_NUMBERED_LIST,
+  REVIEW_R2_M3_APPROVAL,
+  RUNNING_ROW_0163,
   UNSUBMITTED_NOTICE_0163,
 } from "../../../plugins/agent-codex/src/__fixtures__/panes-0.163.0.js";
 
@@ -72,6 +78,8 @@ const PROCESSING = "Message sent and processing";
 const NOT_CONFIRMED = "Message sent — could not confirm it was received";
 const NOT_SUBMITTED =
   "Message not submitted: the text is still in the input box of codex-1 (tmux pane =codex-1:); check the pane and press Enter";
+const APPROVAL =
+  "Message sent — the pane waits for an approval: check codex-1 (tmux pane =codex-1:)";
 
 let program: Command;
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -291,6 +299,60 @@ describe("ao send to a Codex 0.163.0 pane", () => {
       "  2. No, and tell Codex what to do differently (esc)",
     ].join("\n");
     screens = [approvalView];
+
+    await send("--no-wait", "codex-1", "hello");
+
+    expect(keys).toEqual(sendOnly("hello"));
+    expect(printed()).toEqual([NOT_CONFIRMED]);
+  });
+
+  it("review r2 M-1: a quoted prompt row does not make a finished turn processing", async () => {
+    screens = [REVIEW_R2_M1_QUOTED_PROMPT];
+
+    await send("--no-wait", "codex-1", REVIEW_R2_M1_MESSAGE);
+
+    expect(keys).toEqual(sendOnly(REVIEW_R2_M1_MESSAGE));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("review r2 M-2: a two-item numbered message with the word 'Running' is not submitted, not processing", async () => {
+    screens = [REVIEW_R2_M2_NUMBERED_LIST];
+
+    await send("--no-wait", "codex-1", REVIEW_R2_M2_MESSAGE);
+
+    expect(keys).toEqual(sendOnly(REVIEW_R2_M2_MESSAGE));
+    expect(printed()).toEqual([NOT_SUBMITTED]);
+  });
+
+  it("review r2 M-3: an approval prompt prints the approval line, not processing, and sends no key", async () => {
+    screens = [REVIEW_R2_M3_APPROVAL];
+
+    await send("--no-wait", "codex-1", "hello");
+
+    expect(keys).toEqual(sendOnly("hello"));
+    expect(printed()).toEqual([APPROVAL]);
+  });
+
+  it("asks detectActivity first: an approval prompt wins over a status row above the composer", async () => {
+    // Derived to show the order: "approval required" in the last 8 rows and
+    // the status row of a running turn directly above the empty composer.
+    const lines = DERIVED_SUBMITTED_RUNNING_0163.trimEnd().split("\n");
+    const status = lines.indexOf(RUNNING_ROW_0163);
+    const both = [...lines.slice(0, status), "  approval required", ...lines.slice(status)].join(
+      "\n",
+    );
+    screens = [REAL_UNSUBMITTED_PASTE_0163, both];
+
+    await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
+
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+    expect(printed()).toEqual([APPROVAL]);
+  });
+
+  it("prints the could-not-confirm line, not processing, for running words with no composer in view", async () => {
+    // An unclear layout: the transcript is below the last prompt row.
+    // detectActivity reads it as active, but no status row is above a composer.
+    screens = [`› old message\n${RUNNING_ROW_0163}\n  Running pnpm test`];
 
     await send("--no-wait", "codex-1", "hello");
 
