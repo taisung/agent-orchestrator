@@ -186,6 +186,47 @@ describe("destroy()", () => {
   });
 });
 
+// Same-ID R2a (owner decision): the Herdr close cannot yet check the terminal
+// at close time (review r2, B-2), so stop answers unknown and closes nothing.
+describe("stop()", () => {
+  it("answers unknown with the B-2 reason and makes no herdr call", async () => {
+    const stopped = await create().stop!(HANDLE);
+
+    expect(stopped.outcome).toBe("unknown");
+    expect(stopped).toMatchObject({
+      detail: expect.stringContaining(
+        "the Herdr close cannot yet check the terminal at close time (same-ID review r2, B-2)",
+      ),
+    });
+    expect(stopped).toMatchObject({ detail: expect.stringContaining("workspace w7") });
+    expect(stopped).toMatchObject({ detail: expect.stringContaining("nothing was closed") });
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it("names the pane when no workspace id was recorded, and still closes nothing", async () => {
+    const stopped = await create().stop!({ ...HANDLE, data: { ...HANDLE.data, workspaceId: "" } });
+
+    expect(stopped).toMatchObject({
+      outcome: "unknown",
+      detail: expect.stringContaining("pane w7:p1"),
+    });
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it("core stopRuntime uses it instead of destroy: unknown, and no close", async () => {
+    const { stopRuntime } = await import("@aoagents/ao-core");
+    const runtime = create();
+    const destroy = vi.spyOn(runtime, "destroy");
+
+    const stopped = await stopRuntime(runtime, HANDLE);
+
+    expect(stopped.outcome).toBe("unknown");
+    expect(destroy).not.toHaveBeenCalled();
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendMessage()", () => {
   /** A `pane get` answer with the agent in a given state. */
   const at = (agent_status: string, agent: string | null = "claude") =>

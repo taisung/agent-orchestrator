@@ -35,6 +35,7 @@ import {
   type RuntimeCreateConfig,
   type RuntimeHandle,
   type RuntimeMetrics,
+  type RuntimeStopOutcome,
   type AttachInfo,
 } from "@aoagents/ao-core";
 
@@ -330,6 +331,26 @@ export function create(config?: Record<string, unknown>): Runtime {
       } catch {
         // Already gone — that's fine.
       }
+    },
+
+    /**
+     * Same-ID R2a: the stop answers `unknown` and closes nothing. Pane and
+     * workspace IDs are positional and herdr reuses them, and a check before
+     * the close cannot cover a replacement that takes the IDs between the
+     * check and the close (same-ID review r2, B-2). Until herdr offers a close
+     * that names the terminal itself, AO keeps the record and the worktree of
+     * a Herdr session; the operator closes the workspace by hand.
+     */
+    async stop(handle: RuntimeHandle): Promise<RuntimeStopOutcome> {
+      const workspaceId =
+        typeof handle.data.workspaceId === "string" ? handle.data.workspaceId : "";
+      return {
+        outcome: "unknown",
+        detail:
+          `the Herdr close cannot yet check the terminal at close time (same-ID review r2, B-2): ` +
+          `herdr reuses pane and workspace IDs, so a close of ${workspaceId ? `workspace ${workspaceId}` : `pane ${handle.id}`} ` +
+          `could reach another terminal; nothing was closed. Close it by hand in herdr after you check that it is this session`,
+      };
     },
 
     /**
