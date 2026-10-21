@@ -325,26 +325,37 @@ function describeOpenCodeCandidate(session: OpenCodeApiSession): string {
   return `${session.id}  directory ${session.location?.directory ?? "unknown"}  created ${createdText}`;
 }
 
+/**
+ * Remove an OpenCode session. True when it is gone (removed, a 404, or no
+ * valid ID); false when `stillUnheld` answered false and the session stays.
+ */
 async function deleteOpenCodeSession(
   sessionId: string,
+  stillUnheld: () => boolean,
   env?: Record<string, string>,
-): Promise<void> {
+): Promise<boolean> {
   const validatedSessionId = asValidOpenCodeSessionId(sessionId);
-  if (!validatedSessionId) return;
+  if (!validatedSessionId) return true;
   // Rows 9 and 21: `session.remove` by ID. A 404 (already removed) is success.
   // On another error, retry, then throw with `cause` from the helper; `kill`
   // purge warns (and archives anyway), `cleanup` records an error entry. A
   // timeout ends the retries: three tries of a hanging service cost three
   // full bounds (about 30 s) and the third answers no sooner than the first.
+  // Round 6 (M-1): the retries wait, and another session can take the ID
+  // meanwhile. `stillUnheld` is the caller's ownership check; it runs
+  // directly before each attempt, with no await between the check and the
+  // attempt. When it answers false, no further attempt is made. An error
+  // that it throws ends the attempts and goes to the caller unchanged.
   const retryDelaysMs = [0, 200, 600];
   let lastError: unknown;
   for (const delayMs of retryDelaysMs) {
     if (delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+    if (!stillUnheld()) return false;
     try {
       await removeOpenCodeSession(validatedSessionId, OPENCODE_DISCOVERY_TIMEOUT_MS, env);
-      return;
+      return true;
     } catch (err) {
       lastError = err;
       if (err instanceof OpenCodeApiTimeoutError) break;
@@ -991,11 +1002,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           continue;
         }
         // Round 5 (1.0.1): the holder check awaited; a record that took the
-        // ID meanwhile was not checked, so the session stays.
-        if (openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) !== namers) {
-          continue;
-        }
-        await deleteOpenCodeSession(openCodeSessionId, env);
+        // ID meanwhile was not checked, so the session stays. Round 6 (M-1):
+        // the compare runs directly before each removal attempt.
+        await deleteOpenCodeSession(
+          openCodeSessionId,
+          () => openCodeNamers(sessionsDir, openCodeSessionId, criteria.sessionId) === namers,
+          env,
+        );
       }
       return undefined;
     }
@@ -2663,16 +2676,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         };
         if (stillUnheld()) {
           await interruptOpenCodeSessionBestEffort(mappedOpenCodeSessionId);
-          if (stillUnheld()) {
-            try {
-              await deleteOpenCodeSession(mappedOpenCodeSessionId);
-              didPurgeOpenCodeSession = true;
-            } catch (err) {
-              warnOperator(
-                `ao: could not remove OpenCode session ${mappedOpenCodeSessionId} of ${sessionId} (${shortErrorText(err)}); \`ao session cleanup\` retries the removal.`,
-              );
-            }
+          // Round 6 (M-1): the check runs directly before each removal
+          // attempt (the retries wait). A replaced record ends the kill as
+          // the first check does, not as a failed removal.
+          let replaced: Error | undefined;
+          try {
+            didPurgeOpenCodeSession = await deleteOpenCodeSession(mappedOpenCodeSessionId, () => {
+              try {
+                return stillUnheld();
+              } catch (err) {
+                replaced = err instanceof Error ? err : new Error(String(err));
+                return false;
+              }
+            });
+          } catch (err) {
+            warnOperator(
+              `ao: could not remove OpenCode session ${mappedOpenCodeSessionId} of ${sessionId} (${shortErrorText(err)}); \`ao session cleanup\` retries the removal.`,
+            );
           }
+          if (replaced) throw replaced;
         }
       }
     }
@@ -2976,19 +2998,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             // record (a restore copies the archive back and runs on the same
             // OpenCode session; the active list of this cleanup is older),
             // and the active records that name this OpenCode session are
-            // still the ones from before the check.
-            if (
-              readMetadataRaw(sessionsDir, archivedId) !== null ||
-              openCodeNamers(sessionsDir, mappedOpenCodeSessionId) !== namers
-            ) {
-              warnOperator(
-                `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${archivedId}: its records changed during the check; the next \`ao session cleanup\` checks again.`,
-              );
-              pushSkipped(projectKey, archivedId);
-              continue;
-            }
+            // still the ones from before the check. Round 6 (M-1): this
+            // check runs directly before each removal attempt.
+            const unchanged = (): boolean =>
+              readMetadataRaw(sessionsDir, archivedId) === null &&
+              openCodeNamers(sessionsDir, mappedOpenCodeSessionId) === namers;
             try {
-              await deleteOpenCodeSession(mappedOpenCodeSessionId);
+              if (!(await deleteOpenCodeSession(mappedOpenCodeSessionId, unchanged))) {
+                warnOperator(
+                  `ao: kept OpenCode session ${mappedOpenCodeSessionId} of ${archivedId}: its records changed during the check; the next \`ao session cleanup\` checks again.`,
+                );
+                pushSkipped(projectKey, archivedId);
+                continue;
+              }
               markArchivedOpenCodeCleanup(sessionsDir, archivedId, mappedOpenCodeSessionId);
               await removeLedgerOfRemovedSession(
                 project,

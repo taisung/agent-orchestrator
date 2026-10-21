@@ -4,7 +4,8 @@
  * Rule 1.0.1: each runtime destroy, worktree destroy, record delete or
  * archive, and agent-session removal reads the current record again directly
  * before the step, with no await between the check and the step. Rule 1.0.2:
- * a generation never repeats for a session ID.
+ * a generation never repeats for a session ID. Round 6 (review r4, M-1): a
+ * retry inside a removal step gets its own check directly before it.
  *
  * Each test runs the real session manager; a stand-in callback of a slow
  * step changes the record as another process would.
@@ -878,6 +879,186 @@ describe("1.0.1: the delete strategy of a spawn reads the records directly befor
     await sm.spawn({ projectId: "my-app", issueId: "INT-1" });
 
     expect(removeOpenCodeSession).toHaveBeenCalledWith("ses_issue", expect.anything(), undefined);
+  });
+});
+
+describe("M-1 (round 6): each OpenCode removal attempt has its own ownership check", () => {
+  /**
+   * The first removal attempt runs `change` (another process acts during the
+   * call), then fails with a transient error; a later attempt removes.
+   */
+  function failFirstRemoveAfter(change: () => void): void {
+    let calls = 0;
+    hooks.duringRemove = () => {
+      calls += 1;
+      if (calls > 1) return;
+      change();
+      throw new Error("transient: the service restarted");
+    };
+  }
+
+  /** A new launch of another session, on the same OpenCode session. */
+  function newLaunchOn(id: string, openCodeSessionId: string): Record<string, string> {
+    launchedRecord(
+      id,
+      { agent: "opencode", opencodeSessionId: openCodeSessionId },
+      makeHandle("rt-new"),
+    );
+    return recordOf(id)!;
+  }
+
+  function openCodeRecord(): void {
+    launchedRecord("app-1", {
+      worktree: managedWorktree(),
+      agent: "opencode",
+      opencodeSessionId: "ses_old",
+    });
+  }
+
+  function archivedOpenCodeRecord(): void {
+    launchedRecord("app-1", { agent: "opencode", opencodeSessionId: "ses_arch" });
+    deleteMetadata(sessionsDir, "app-1", true);
+  }
+
+  function deleteStrategyRegistry(): PluginRegistry {
+    ctx.config.projects["my-app"]!.opencodeIssueSessionStrategy = "delete";
+    launchedRecord("app-7", { agent: "opencode", issue: "INT-1", opencodeSessionId: "ses_issue" });
+    deleteMetadata(sessionsDir, "app-7", true);
+    return createMockRegistry({
+      runtime: ctx.mockRuntime,
+      agent: { ...ctx.mockAgent, name: "opencode" },
+      workspace: ctx.mockWorkspace,
+    });
+  }
+
+  async function withWarnings<T>(run: () => Promise<T>): Promise<{ value: T; text: string }> {
+    const warnings = captureWarnings();
+    try {
+      const value = await run();
+      return { value, text: warnings.lines.join("") };
+    } finally {
+      warnings.restore();
+    }
+  }
+
+  it("review case: kill with purge, a new launch app-2 takes the OpenCode session during a failed attempt: no second attempt", async () => {
+    openCodeRecord();
+    let app2: Record<string, string> | undefined;
+    failFirstRemoveAfter(() => {
+      app2 = newLaunchOn("app-2", "ses_old");
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const { text } = await withWarnings(() => sm.kill("app-1", { purgeOpenCode: true }));
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(recordOf("app-2")).toEqual(app2);
+    expect(text).toMatch(/kept OpenCode session ses_old of app-1: another session took the ID/);
+    // As after the first check: the kill archives, not marked cleaned, and
+    // the ledger is not removed.
+    expect(recordOf("app-1")).toBeNull();
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+    expect(removeDeliveryLedger).not.toHaveBeenCalled();
+  });
+
+  it("kill: a new launch of the killed ID during a failed attempt ends the kill as the first check does", async () => {
+    openCodeRecord();
+    failFirstRemoveAfter(() => {
+      publishNewLaunch("app-1", makeHandle("rt-new"), { opencodeSessionId: "ses_old" });
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await expect(sm.kill("app-1", { purgeOpenCode: true })).rejects.toThrow(
+      /Session app-1 changed while it was killed .*its agent session and record were kept/,
+    );
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(recordOf("app-1")).toMatchObject({
+      branch: "feat/new-launch",
+      opencodeSessionId: "ses_old",
+    });
+  });
+
+  it("control: kill, nothing changes, the second attempt removes the session", async () => {
+    openCodeRecord();
+    failFirstRemoveAfter(() => undefined);
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await sm.kill("app-1", { purgeOpenCode: true });
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(2);
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeDefined();
+    expect(removeDeliveryLedger).toHaveBeenCalled();
+  });
+
+  it("cleanup purge: a new launch takes the archived OpenCode session during a failed attempt: no second attempt", async () => {
+    archivedOpenCodeRecord();
+    let app2: Record<string, string> | undefined;
+    failFirstRemoveAfter(() => {
+      app2 = newLaunchOn("app-2", "ses_arch");
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const { value: result, text } = await withWarnings(() => sm.cleanup("my-app"));
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(recordOf("app-2")).toEqual(app2);
+    expect(result.killed).not.toContain("app-1");
+    expect(result.skipped).toContain("app-1");
+    expect(result.errors).toEqual([]);
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeUndefined();
+    expect(text).toMatch(/kept OpenCode session ses_arch of app-1: its records changed/);
+  });
+
+  it("cleanup purge: a restore of the archived ID during a failed attempt: no second attempt", async () => {
+    archivedOpenCodeRecord();
+    failFirstRemoveAfter(() => {
+      const archived = readArchivedMetadataRaw(sessionsDir, "app-1")!;
+      expect(reserveSessionRecord(sessionsDir, "app-1", archived)).not.toBeNull();
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const { value: result, text } = await withWarnings(() => sm.cleanup("my-app"));
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(recordOf("app-1")).toMatchObject({ opencodeSessionId: "ses_arch" });
+    expect(result.killed).not.toContain("app-1");
+    expect(text).toMatch(/kept OpenCode session ses_arch of app-1: its records changed/);
+  });
+
+  it("control: cleanup purge, nothing changes, the second attempt removes the session", async () => {
+    archivedOpenCodeRecord();
+    failFirstRemoveAfter(() => undefined);
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    const result = await sm.cleanup("my-app");
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(2);
+    expect(result.killed).toContain("app-1");
+    expect(readArchivedMetadataRaw(sessionsDir, "app-1")?.["opencodeCleanedAt"]).toBeDefined();
+  });
+
+  it("delete strategy: a new launch takes the OpenCode session of the issue during a failed attempt: no second attempt", async () => {
+    const registry = deleteStrategyRegistry();
+    let app30: Record<string, string> | undefined;
+    failFirstRemoveAfter(() => {
+      app30 = newLaunchOn("app-30", "ses_issue");
+    });
+    const sm = createSessionManager({ config: ctx.config, registry });
+
+    await sm.spawn({ projectId: "my-app", issueId: "INT-1" });
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(1);
+    expect(recordOf("app-30")).toEqual(app30);
+  });
+
+  it("control: delete strategy, nothing changes, the second attempt removes the session", async () => {
+    const registry = deleteStrategyRegistry();
+    failFirstRemoveAfter(() => undefined);
+    const sm = createSessionManager({ config: ctx.config, registry });
+
+    await sm.spawn({ projectId: "my-app", issueId: "INT-1" });
+
+    expect(removeOpenCodeSession).toHaveBeenCalledTimes(2);
   });
 });
 
