@@ -300,8 +300,20 @@ export interface Runtime {
   /** Create a new session environment and return a handle */
   create(config: RuntimeCreateConfig): Promise<RuntimeHandle>;
 
-  /** Destroy a session environment */
+  /**
+   * Destroy a session environment. Core does not call it directly: every
+   * caller goes through core `stopRuntime`, which uses `stop` when the
+   * runtime has it, and otherwise this method followed by `isAlive`.
+   */
   destroy(handle: RuntimeHandle): Promise<void>;
+
+  /**
+   * Stop this launch and say what happened (same-ID R2a). It never rejects
+   * for a runtime answer: an error that it cannot classify is `unknown`
+   * with the error as `cause`. Optional: core `stopRuntime` stops a runtime
+   * without it through `destroy` and `isAlive`.
+   */
+  stop?(handle: RuntimeHandle): Promise<RuntimeStopOutcome>;
 
   /** Send a text message/prompt to the running agent */
   sendMessage(handle: RuntimeHandle, message: string): Promise<void>;
@@ -332,6 +344,26 @@ export interface Runtime {
   /** Get info needed to attach a human to this session (for Terminal plugin) */
   getAttachInfo?(handle: RuntimeHandle): Promise<AttachInfo>;
 }
+
+/**
+ * What a runtime stop did (`Runtime.stop`, core `stopRuntime`). Only
+ * `destroyed` and `absent` let a caller go on: remove the workspace, archive
+ * or delete the record, or create another runtime for the session ID. On
+ * `other-launch` or `unknown` the caller keeps all of them and reports the
+ * detail.
+ * - `destroyed`: the runtime stopped this launch.
+ * - `absent`: the runtime answered that the launch does not exist (or that
+ *   it ended); `evidence` says what it answered.
+ * - `other-launch`: the address of the launch now names another launch;
+ *   nothing was stopped.
+ * - `unknown`: the stop could not be confirmed (an error, no answer, or the
+ *   launch still runs after the stop).
+ */
+export type RuntimeStopOutcome =
+  | { outcome: "destroyed" }
+  | { outcome: "absent"; evidence: string }
+  | { outcome: "other-launch"; detail: string }
+  | { outcome: "unknown"; detail: string; cause?: unknown };
 
 export interface RuntimeCreateConfig {
   sessionId: SessionId;

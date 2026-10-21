@@ -55,6 +55,16 @@ export {
 export { HERDR_RUNTIME_NAME, getHerdrPaneProcesses, isHerdrProcessRunning } from "./herdr.js";
 export type { HerdrPaneProcess } from "./herdr.js";
 
+// Runtime stop — the outcome that every destructive caller acts on (same-ID R2a)
+export {
+  stopRuntime,
+  isRuntimeStopConfirmed,
+  RuntimeStopUnconfirmedError,
+  isRuntimeStopUnconfirmedError,
+  RUNTIME_STOP_UNCONFIRMED_ERROR_CODE,
+} from "./runtime-stop.js";
+export type { ConfirmedRuntimeStop, UnconfirmedRuntimeStop } from "./runtime-stop.js";
+
 // Session manager — session CRUD
 export { createSessionManager } from "./session-manager.js";
 export type { SessionManagerDeps } from "./session-manager.js";
