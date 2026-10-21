@@ -636,9 +636,10 @@ withRecordLock(dir, "kr-2", () => {
     }
 
     it("the review's case: a child with NODE_OPTIONS=--input-type=module (`-e`)", async () => {
-      // Before round 5 the helper source was CommonJS eval code; a worker
-      // parses NODE_OPTIONS from its environment, so it ran as a module, did
-      // not start, and the first write threw after the 10 s wait. (Node
+      // Before round 5 the worker inherited NODE_OPTIONS (a worker parses it
+      // from its own environment), so it ran the CommonJS helper source as a
+      // module, did not start, and the first write threw after the 10 s
+      // wait. (Node
       // refuses --input-type for a file entry point, so this mode reaches a
       // caller only through `-e`, `--print` or stdin.)
       await runApiChild((script) => ["-e", script], { NODE_OPTIONS: "--input-type=module" });

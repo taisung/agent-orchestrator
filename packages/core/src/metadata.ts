@@ -125,11 +125,11 @@ const LOCK_ERROR_TEXT_BYTES = 512;
  * every 2 to 5 ms while another socket holds it, until the wait ends), and
  * closes the socket on a "release" request. An answer counts only while the
  * slot still waits for this request; a late success of an abandoned request
- * closes its socket at once. It is an ES module (see getLockHelper).
+ * closes its socket at once.
  */
 const LOCK_HELPER_SOURCE = `
-import { parentPort, workerData } from "node:worker_threads";
-import { createServer } from "node:net";
+const { parentPort, workerData } = require("node:worker_threads");
+const { createServer } = require("node:net");
 const state = new Int32Array(workerData.state);
 const errorText = new Uint8Array(workerData.errorText);
 const held = new Map();
@@ -190,18 +190,19 @@ function getLockHelper(): LockHelper {
   if (lockHelper) return lockHelper;
   const state = new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT);
   const errorText = new SharedArrayBuffer(LOCK_ERROR_TEXT_BYTES);
-  // m-2 (round 4), m-1 (round 5): the helper does not depend on how the
-  // parent started. A `data:` URL always loads as an ES module (flags such as
-  // `--input-type=module` apply only to `-e` and stdin), `execArgv: []` drops
-  // the parent's command-line flags, and the worker gets the parent's
-  // environment without NODE_OPTIONS (a worker parses NODE_OPTIONS from its
-  // own environment), so no flag or preload of the parent runs in it.
+  // m-2 (round 4), m-1 (round 5): the helper is always CommonJS and runs no
+  // flag or preload of the parent. `execArgv: []` drops the parent's
+  // command-line flags (such as `--input-type=module`); a worker parses
+  // NODE_OPTIONS from its own environment, so it gets the parent's
+  // environment without NODE_OPTIONS.
   const env: Record<string, string | undefined> = { ...process.env };
   delete env["NODE_OPTIONS"];
-  const worker = new Worker(
-    new URL(`data:text/javascript,${encodeURIComponent(LOCK_HELPER_SOURCE)}`),
-    { execArgv: [], env, workerData: { state, errorText } },
-  );
+  const worker = new Worker(LOCK_HELPER_SOURCE, {
+    eval: true,
+    execArgv: [],
+    env,
+    workerData: { state, errorText },
+  });
   // The helper never keeps the process alive.
   worker.unref();
   const created: LockHelper = {
