@@ -10,6 +10,7 @@ import {
   isRuntimeStopUnconfirmedError,
   RuntimeStopUnconfirmedError,
   RUNTIME_STOP_UNCONFIRMED_ERROR_CODE,
+  RUNTIME_STOP_UNREADABLE_DETAIL,
   stopRuntime,
 } from "../runtime-stop.js";
 import {
@@ -243,6 +244,159 @@ describe("stopRuntime with Runtime.stop", () => {
       outcome: "absent",
       evidence: "gone",
     });
+  });
+});
+
+describe("stopRuntime never rejects, also for a plugin answer that AO cannot read (review r1, m-1)", () => {
+  /** A thrown value that String() cannot convert: no prototype, so no toString. */
+  function nullPrototypeError(): unknown {
+    return Object.create(null) as unknown;
+  }
+
+  it("a stop that throws a null-prototype object gives unknown, with that object as cause", async () => {
+    const thrown = nullPrototypeError();
+    const runtime = runtimeWith({
+      stop: async () => {
+        throw thrown;
+      },
+    });
+
+    const stopped = await stopRuntime(runtime, HANDLE);
+
+    expect(stopped).toEqual({
+      outcome: "unknown",
+      detail: "the stop of tmux session hash-app-1 failed: a value that cannot be shown as text",
+      cause: thrown,
+    });
+    expect(isRuntimeStopConfirmed(stopped)).toBe(false);
+  });
+
+  for (const alive of [true, false]) {
+    it(`a fallback destroy that throws a null-prototype object, isAlive ${alive}: the table applies`, async () => {
+      const thrown = nullPrototypeError();
+      const runtime = runtimeWith({
+        destroy: async () => {
+          throw thrown;
+        },
+        isAlive: vi.fn().mockResolvedValue(alive),
+      });
+
+      const stopped = await stopRuntime(runtime, HANDLE);
+
+      expect(stopped).toMatchObject(
+        alive
+          ? {
+              outcome: "unknown",
+              detail:
+                "the destroy of tmux session hash-app-1 failed (a value that cannot be shown as text), but the session still runs",
+              cause: thrown,
+            }
+          : {
+              outcome: "absent",
+              evidence: expect.stringContaining("failed (a value that cannot be shown as text)"),
+            },
+      );
+    });
+  }
+
+  it("an isAlive that throws a null-prototype object gives unknown", async () => {
+    const thrown = nullPrototypeError();
+    const runtime = runtimeWith({
+      isAlive: async () => {
+        throw thrown;
+      },
+    });
+
+    await expect(stopRuntime(runtime, HANDLE)).resolves.toMatchObject({
+      outcome: "unknown",
+      detail: expect.stringContaining(
+        "the liveness check failed (a value that cannot be shown as text)",
+      ),
+      cause: thrown,
+    });
+  });
+
+  it("an isAlive rejection whose code getter throws is no proof that no server runs", async () => {
+    const thrown = Object.defineProperty(new Error("probe failed"), "code", {
+      get() {
+        throw new Error("broken code getter");
+      },
+    });
+    const runtime = runtimeWith({ isAlive: vi.fn().mockRejectedValue(thrown) });
+
+    await expect(stopRuntime(runtime, HANDLE)).resolves.toMatchObject({
+      outcome: "unknown",
+      detail: expect.stringContaining("the liveness check failed (probe failed)"),
+    });
+  });
+
+  it("an answer whose outcome getter throws gives unknown with the constant detail", async () => {
+    const getterError = new Error("broken outcome getter");
+    const answer = Object.defineProperty({}, "outcome", {
+      get() {
+        throw getterError;
+      },
+    });
+    const runtime = runtimeWith({ stop: vi.fn().mockResolvedValue(answer) });
+
+    const stopped = await stopRuntime(runtime, HANDLE);
+
+    expect(stopped).toEqual({
+      outcome: "unknown",
+      detail: RUNTIME_STOP_UNREADABLE_DETAIL,
+      cause: getterError,
+    });
+    expect(runtime.destroy).not.toHaveBeenCalled();
+  });
+
+  it("an answer whose detail getter throws gives unknown with the constant detail", async () => {
+    const answer = Object.defineProperty({ outcome: "unknown" }, "detail", {
+      get() {
+        throw new Error("broken detail getter");
+      },
+    });
+    const runtime = runtimeWith({ stop: vi.fn().mockResolvedValue(answer) });
+
+    await expect(stopRuntime(runtime, HANDLE)).resolves.toMatchObject({
+      outcome: "unknown",
+      detail: RUNTIME_STOP_UNREADABLE_DETAIL,
+    });
+  });
+
+  it("a stop getter that throws gives unknown with the constant detail, and calls nothing", async () => {
+    const getterError = new Error("broken stop getter");
+    const runtime = runtimeWith({});
+    Object.defineProperty(runtime, "stop", {
+      get() {
+        throw getterError;
+      },
+    });
+
+    const stopped = await stopRuntime(runtime, HANDLE);
+
+    expect(stopped).toEqual({
+      outcome: "unknown",
+      detail: RUNTIME_STOP_UNREADABLE_DETAIL,
+      cause: getterError,
+    });
+    expect(runtime.destroy).not.toHaveBeenCalled();
+    expect(runtime.isAlive).not.toHaveBeenCalled();
+  });
+
+  it("an unshowable answer value still gives the not-a-stop-outcome detail", async () => {
+    const answer = Object.create(null) as unknown;
+    const runtime = runtimeWith({ stop: vi.fn().mockResolvedValue(answer) });
+
+    await expect(stopRuntime(runtime, HANDLE)).resolves.toMatchObject({
+      outcome: "unknown",
+      detail: expect.stringContaining("answered a value that is not a stop outcome: {}"),
+    });
+  });
+
+  it("a constant detail that names nothing from the plugin", () => {
+    expect(RUNTIME_STOP_UNREADABLE_DETAIL).toBe(
+      "AO could not read the runtime plugin or its answer to the stop (a property or a value threw), so nothing confirms that the session stopped",
+    );
   });
 });
 

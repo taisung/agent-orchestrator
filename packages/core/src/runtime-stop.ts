@@ -24,19 +24,46 @@ export function isRuntimeStopConfirmed(stop: RuntimeStopOutcome): stop is Confir
   return stop.outcome === "destroyed" || stop.outcome === "absent";
 }
 
-/** The error text on one line, at most 200 characters. */
+/**
+ * The `unknown` detail when AO cannot read the runtime plugin or its answer:
+ * a property or a value threw while `stopRuntime` read it (review r1, m-1).
+ * It names nothing that comes from the plugin, so it cannot throw itself.
+ */
+export const RUNTIME_STOP_UNREADABLE_DETAIL =
+  "AO could not read the runtime plugin or its answer to the stop (a property or a value threw), so nothing confirms that the session stopped";
+
+/** The text for a value that cannot be shown (its conversion throws). */
+const UNSHOWABLE = "a value that cannot be shown as text";
+
+/** `String(value)`, or UNSHOWABLE when the conversion throws. */
+function safeString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return UNSHOWABLE;
+  }
+}
+
+/** The error text on one line, at most 200 characters. It never throws. */
 function errorText(err: unknown): string {
-  const text = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
+  let text: string;
+  try {
+    const message: unknown = err instanceof Error ? err.message : err;
+    text = safeString(message);
+  } catch {
+    text = UNSHOWABLE;
+  }
+  text = text.replace(/\s+/g, " ").trim();
   return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
-/** A value for a message: JSON where it can, at most 120 characters. */
+/** A value for a message: JSON where it can, at most 120 characters. It never throws. */
 function describeValue(value: unknown): string {
   let text: string;
   try {
-    text = JSON.stringify(value) ?? String(value);
+    text = JSON.stringify(value) ?? safeString(value);
   } catch {
-    text = String(value);
+    text = safeString(value);
   }
   return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }
@@ -47,48 +74,55 @@ function nonEmptyString(value: unknown): value is string {
 
 /** True when a rejection of `Runtime.isAlive` reports that no runtime server runs. */
 function isNoServerRejection(err: unknown): boolean {
-  return (
-    !!err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as { code?: unknown }).code === RUNTIME_NO_SERVER_ERROR_CODE
-  );
+  try {
+    return (
+      !!err &&
+      typeof err === "object" &&
+      (err as { code?: unknown }).code === RUNTIME_NO_SERVER_ERROR_CODE
+    );
+  } catch {
+    // A `code` that cannot be read is no proof that no server runs.
+    return false;
+  }
 }
 
 /**
  * The answer of a `Runtime.stop` as an outcome, or null when it is not a
  * valid one. `absent` needs its evidence and the other two need their detail:
- * an answer without them cannot tell the operator what happened.
+ * an answer without them cannot tell the operator what happened. Each field
+ * is read once and copied, so a getter cannot change the answer later. A
+ * getter that throws makes this function throw; `stopRuntime` turns that
+ * into RUNTIME_STOP_UNREADABLE_DETAIL.
  */
 function asStopOutcome(value: unknown): RuntimeStopOutcome | null {
   if (!value || typeof value !== "object") return null;
   const answer = value as Record<string, unknown>;
-  switch (answer["outcome"]) {
+  const outcome = answer["outcome"];
+  switch (outcome) {
     case "destroyed":
       return { outcome: "destroyed" };
-    case "absent":
-      return nonEmptyString(answer["evidence"])
-        ? { outcome: "absent", evidence: answer["evidence"] }
-        : null;
+    case "absent": {
+      const evidence = answer["evidence"];
+      return nonEmptyString(evidence) ? { outcome: "absent", evidence } : null;
+    }
     case "other-launch":
-      return nonEmptyString(answer["detail"])
-        ? { outcome: "other-launch", detail: answer["detail"] }
-        : null;
-    case "unknown":
-      return nonEmptyString(answer["detail"])
-        ? {
-            outcome: "unknown",
-            detail: answer["detail"],
-            ...("cause" in answer && { cause: answer["cause"] }),
-          }
-        : null;
+    case "unknown": {
+      const detail = answer["detail"];
+      if (!nonEmptyString(detail)) return null;
+      if (outcome === "other-launch") return { outcome, detail };
+      const cause = answer["cause"];
+      return { outcome, detail, ...(cause !== undefined && { cause }) };
+    }
     default:
       return null;
   }
 }
 
 /**
- * Stop the runtime of `handle` and say what happened. It never rejects.
+ * Stop the runtime of `handle` and say what happened. It never rejects: when
+ * AO cannot read the plugin or its answer (a getter or a conversion throws),
+ * the answer is `unknown` with RUNTIME_STOP_UNREADABLE_DETAIL and the error
+ * as `cause` (review r1, m-1).
  *
  * With `runtime.stop`: its answer. A `stop` that rejects, or that answers a
  * value that is not a valid outcome, gives `unknown` (with the rejection as
@@ -127,12 +161,26 @@ export async function stopRuntime(
   runtime: Runtime,
   handle: RuntimeHandle,
 ): Promise<RuntimeStopOutcome> {
-  const target = `${runtime.name} session ${handle.id}`;
+  try {
+    return await stopOrThrow(runtime, handle);
+  } catch (err) {
+    return { outcome: "unknown", detail: RUNTIME_STOP_UNREADABLE_DETAIL, cause: err };
+  }
+}
 
-  if (runtime.stop) {
+/**
+ * `stopRuntime` without its outer guard. A rejection of `stop`, `destroy` or
+ * `isAlive` is an answer and gives its own outcome here; only a failure to
+ * read the plugin or an answer throws.
+ */
+async function stopOrThrow(runtime: Runtime, handle: RuntimeHandle): Promise<RuntimeStopOutcome> {
+  const target = `${safeString(runtime.name)} session ${safeString(handle.id)}`;
+
+  const stop = runtime.stop;
+  if (stop) {
     let answer: unknown;
     try {
-      answer = await runtime.stop(handle);
+      answer = await stop.call(runtime, handle);
     } catch (err) {
       return {
         outcome: "unknown",
@@ -148,10 +196,12 @@ export async function stopRuntime(
     );
   }
 
+  const destroy = runtime.destroy;
+  const isAlive = runtime.isAlive;
   let destroyFailed = false;
   let destroyError: unknown;
   try {
-    await runtime.destroy(handle);
+    await destroy.call(runtime, handle);
   } catch (err) {
     destroyFailed = true;
     destroyError = err;
@@ -163,14 +213,14 @@ export async function stopRuntime(
 
   let alive: unknown;
   try {
-    alive = await runtime.isAlive(handle);
+    alive = await isAlive.call(runtime, handle);
   } catch (err) {
     const noServer = isNoServerRejection(err);
     if (noServer && !destroyFailed) return { outcome: "destroyed" };
     return {
       outcome: "unknown",
       detail: noServer
-        ? `${destroyText}, and no ${runtime.name} server answers, so nothing can confirm that the session stopped (${errorText(err)}); when no server runs, start one so that it can answer`
+        ? `${destroyText}, and no ${safeString(runtime.name)} server answers, so nothing can confirm that the session stopped (${errorText(err)}); when no server runs, start one so that it can answer`
         : `${destroyText}, and the liveness check failed (${errorText(err)})`,
       cause: destroyFailed
         ? new AggregateError([destroyError, err], `${destroyText}; the liveness check failed`)
@@ -182,7 +232,7 @@ export async function stopRuntime(
     return destroyFailed
       ? {
           outcome: "absent",
-          evidence: `${runtime.name} answered that ${handle.id} does not exist, after ${destroyText}`,
+          evidence: `${safeString(runtime.name)} answered that ${safeString(handle.id)} does not exist, after ${destroyText}`,
         }
       : { outcome: "destroyed" };
   }
