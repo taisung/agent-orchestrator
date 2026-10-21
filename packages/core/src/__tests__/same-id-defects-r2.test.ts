@@ -349,6 +349,50 @@ describe("[same-id R2] B-6: a runtime stop that cannot be confirmed stops the ca
     );
   });
 
+  /** app-1's pane still runs, but its agent exited: a restore relaunches it (step 7, then 8). */
+  function restorableRecord(): string {
+    const worktree = managedWorktree("app-1");
+    launchedRecord("app-1", worktree);
+    vi.mocked(ctx.mockAgent.getActivityState).mockResolvedValue({ state: "exited" });
+    vi.mocked(ctx.mockAgent.isProcessRunning).mockResolvedValue(false);
+    vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-app-1-restored"));
+    return worktree;
+  }
+
+  defect("restore: a destroy of the old pane that rejects creates no second runtime", async () => {
+    // Today step 7 drops the rejection (session-manager.ts:4256-4262) and
+    // step 8 creates a runtime. With a tmux name per launch (design r2,
+    // R2b), tmux no longer refuses the second session by its name, so two
+    // launches of app-1 would run.
+    restorableRecord();
+    vi.mocked(ctx.mockRuntime.isAlive).mockResolvedValue(true);
+    vi.mocked(ctx.mockRuntime.destroy).mockRejectedValue(probeError());
+    const before = readMetadataRaw(sessionsDir, "app-1");
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await sm.restore("app-1").catch(() => undefined);
+
+    expect(ctx.mockRuntime.create, "a second runtime of app-1 was created").not.toHaveBeenCalled();
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["runtimeHandle"]).toBe(
+      before?.["runtimeHandle"],
+    );
+  });
+
+  it("control: restore relaunches a session whose old pane stops", async () => {
+    restorableRecord();
+    let alive = true;
+    vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async () => alive);
+    vi.mocked(ctx.mockRuntime.destroy).mockImplementation(async () => {
+      alive = false;
+    });
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    await sm.restore("app-1");
+
+    expect(ctx.mockRuntime.create).toHaveBeenCalledTimes(1);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["runtimeHandle"]).toContain("rt-app-1-restored");
+  });
+
   defect("recovery cleanup: a destroy that rejects keeps the worktree and the record", async () => {
     const worktree = managedWorktree("app-1");
     launchedRecord("app-1", worktree);
