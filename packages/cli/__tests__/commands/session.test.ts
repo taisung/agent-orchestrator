@@ -513,7 +513,7 @@ describe("session attach", () => {
     expect(mockRuntime.isAlive).toHaveBeenCalledWith(
       expect.objectContaining({ id: "tmux-target-1", runtimeName: "tmux" }),
     );
-    expect(mockSpawn).toHaveBeenCalledWith("tmux", ["attach", "-t", "tmux-target-1"], {
+    expect(mockSpawn).toHaveBeenCalledWith("tmux", ["attach", "-t", "=tmux-target-1"], {
       stdio: "inherit",
     });
   });

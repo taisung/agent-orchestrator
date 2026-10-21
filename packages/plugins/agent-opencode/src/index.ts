@@ -22,6 +22,7 @@ import {
   OpenCodeApiTimeoutError,
   OPENCODE_API_TIMEOUT_MS,
   HERDR_RUNTIME_NAME,
+  exactPaneTarget,
   getHerdrPaneProcesses,
   isHerdrProcessRunning,
   SessionNotRestorableError,
@@ -659,7 +660,7 @@ async function findPaneOpenCodeProcess(
     try {
       ({ stdout: ttyOut } = await execFileAsync(
         "tmux",
-        ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+        ["list-panes", "-t", exactPaneTarget(handle.id), "-F", "#{pane_tty}"],
         { timeout: 5_000 },
       ));
     } catch (err) {
@@ -1287,7 +1288,7 @@ function createOpenCodeAgent(): Agent {
         if (handle.runtimeName === "tmux" && handle.id) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",
-            ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+            ["list-panes", "-t", exactPaneTarget(handle.id), "-F", "#{pane_tty}"],
             { timeout: 30_000 },
           );
           const ttys = ttyOut

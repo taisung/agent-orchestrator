@@ -5,6 +5,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { exactPaneTarget, exactSessionTarget } from "@aoagents/ao-core";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +33,7 @@ export async function killSessionsByPrefix(prefix: string): Promise<void> {
       .filter((s) => s.startsWith(prefix));
     for (const name of sessions) {
       try {
-        await execFileAsync("tmux", ["kill-session", "-t", name], {
+        await execFileAsync("tmux", ["kill-session", "-t", exactSessionTarget(name)], {
           timeout: TIMEOUT,
         });
       } catch {
@@ -70,7 +71,7 @@ export async function capturePane(name: string, lines = 50): Promise<string> {
   try {
     const { stdout } = await execFileAsync(
       "tmux",
-      ["capture-pane", "-t", name, "-p", "-S", `-${lines}`],
+      ["capture-pane", "-t", exactPaneTarget(name), "-p", "-S", `-${lines}`],
       { timeout: TIMEOUT },
     );
     return stdout;
@@ -82,7 +83,7 @@ export async function capturePane(name: string, lines = 50): Promise<string> {
 /** Kill a specific tmux session by name. */
 export async function killSession(name: string): Promise<void> {
   try {
-    await execFileAsync("tmux", ["kill-session", "-t", name], {
+    await execFileAsync("tmux", ["kill-session", "-t", exactSessionTarget(name)], {
       timeout: TIMEOUT,
     });
   } catch {

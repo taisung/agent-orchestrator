@@ -319,32 +319,32 @@ describe("[same-id R1] D-A: a plain tmux target matches a longer session name by
     startServer(DEFAULT_SOCKET, ["kr-10"]);
   });
 
-  defect("isAlive answers false for a dead name while one live name starts with it", async () => {
+  it("isAlive answers false for a dead name while one live name starts with it", async () => {
     await expect(create().isAlive(tmuxHandle("kr-1"))).resolves.toBe(false);
   });
 
-  defect("destroy of a dead name does not end the live session whose name starts with it", async () => {
+  it("destroy of a dead name does not end the live session whose name starts with it", async () => {
     await create().destroy(tmuxHandle("kr-1"));
     expect(names(DEFAULT_SOCKET)).toEqual(["kr-10"]);
   });
 
-  defect("sendMessage to a dead name types nothing into another session", async () => {
+  it("sendMessage to a dead name types nothing into another session", async () => {
     await create()
       .sendMessage(tmuxHandle("kr-1"), "hello")
       .catch(() => undefined);
     expect(sessionAt(DEFAULT_SOCKET, "kr-10").keys).toEqual([]);
   });
 
-  defect("getOutput of a dead name does not read another session's screen", async () => {
+  it("getOutput of a dead name does not read another session's screen", async () => {
     await expect(create().getOutput(tmuxHandle("kr-1"))).resolves.not.toContain("screen of kr-10");
   });
 
-  defect("the attach target of a dead name resolves to no session", async () => {
+  it("the attach target of a dead name resolves to no session", async () => {
     const info = await create().getAttachInfo!(tmuxHandle("kr-1"));
     expect(resolveTarget(serverAt(DEFAULT_SOCKET), info.target, "session")).toBeUndefined();
   });
 
-  defect("create: the launch keys never reach another session when the new session ends first", async () => {
+  it("create: the launch keys never reach another session when the new session ends first", async () => {
     // The new pane's shell exits at once, before the launch keys arrive.
     afterNewSession = (server, name) => {
       if (name === "kr-1") server.sessions = server.sessions.filter((s) => s.name !== name);

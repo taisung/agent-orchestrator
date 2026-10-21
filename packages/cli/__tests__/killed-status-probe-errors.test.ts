@@ -92,7 +92,7 @@ describe("runtime-tmux isAlive when tmux cannot answer", () => {
 
     expect(execFileAsync).toHaveBeenCalledWith(
       "tmux",
-      ["has-session", "-t", handle.id],
+      ["has-session", "-t", `=${handle.id}`],
       expect.anything(),
     );
     expect(outcome).toEqual({ rejected: true });
@@ -105,7 +105,7 @@ describe("runtime-tmux isAlive when tmux cannot answer", () => {
 
     expect(execFileAsync).toHaveBeenCalledWith(
       "tmux",
-      ["has-session", "-t", handle.id],
+      ["has-session", "-t", `=${handle.id}`],
       expect.anything(),
     );
     expect(outcome).toEqual({ rejected: true });

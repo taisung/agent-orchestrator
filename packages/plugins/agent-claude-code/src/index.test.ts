@@ -513,7 +513,7 @@ describe("isProcessRunning", () => {
   it("rejects when tmux command fails", async () => {
     mockExecFileAsync.mockRejectedValue(new Error("fail"));
     await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
-      "tmux list-panes -t test-session failed",
+      "tmux list-panes -t =test-session: failed",
     );
   });
 

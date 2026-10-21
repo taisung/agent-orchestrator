@@ -1,5 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
+import { exactPaneTarget } from "@aoagents/ao-core";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -54,7 +55,16 @@ export async function getTmuxSessions(): Promise<string[]> {
 }
 
 export async function getTmuxActivity(session: string): Promise<number | null> {
-  const output = await tmux("display-message", "-t", session, "-p", "#{session_activity}");
+  let target: string;
+  try {
+    target = exactPaneTarget(session);
+  } catch {
+    // AO never gives a tmux session such a name: no activity to report.
+    return null;
+  }
+  // tmux prints empty values and exits 0 for a target that does not exist,
+  // so empty output means that the session is gone.
+  const output = await tmux("display-message", "-t", target, "-p", "#{session_activity}");
   if (!output) return null;
   const ts = parseInt(output, 10);
   return isNaN(ts) ? null : ts * 1000;

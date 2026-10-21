@@ -51,14 +51,21 @@ vi.mock("../../src/lib/session-utils.js", () => ({
   findProjectForSession: () => null,
 }));
 
-vi.mock("@aoagents/ao-core", () => ({
-  loadConfig: () => {
-    if (!mockConfigRef.current) {
-      throw new Error("no config");
-    }
-    return mockConfigRef.current;
-  },
-}));
+vi.mock("@aoagents/ao-core", async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+  const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+  return {
+    // The real target helpers: the tests check the targets that they build.
+    exactSessionTarget: actual.exactSessionTarget,
+    exactPaneTarget: actual.exactPaneTarget,
+    loadConfig: () => {
+      if (!mockConfigRef.current) {
+        throw new Error("no config");
+      }
+      return mockConfigRef.current;
+    },
+  };
+});
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async () => mockSessionManager,
@@ -112,6 +119,16 @@ describe("send command", () => {
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("does not exist"));
     });
+
+    it("exits with error and no tmux call for a name that AO never gives a session", async () => {
+      await expect(program.parseAsync(["node", "test", "send", "a.b", "hello"])).rejects.toThrow(
+        "process.exit(1)",
+      );
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("does not exist"));
+      expect(mockTmux).not.toHaveBeenCalled();
+      expect(mockExec).not.toHaveBeenCalled();
+    });
   });
 
   describe("busy detection", () => {
@@ -139,12 +156,12 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "my-session",
+        "=my-session:",
         "-l",
         "hello world",
       ]);
       // Should have sent Enter
-      expect(mockExec).toHaveBeenCalledWith("tmux", ["send-keys", "-t", "my-session", "Enter"]);
+      expect(mockExec).toHaveBeenCalledWith("tmux", ["send-keys", "-t", "=my-session:", "Enter"]);
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Message sent and processing"),
       );
@@ -169,7 +186,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "my-session",
+        "=my-session:",
         "-l",
         "fix the bug",
       ]);
@@ -191,7 +208,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "my-session",
+        "=my-session:",
         "-l",
         "urgent",
       ]);
@@ -255,7 +272,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "my-session",
+        "=my-session:",
         "-l",
         "short msg",
       ]);
@@ -275,7 +292,7 @@ describe("send command", () => {
       await program.parseAsync(["node", "test", "send", "my-session", "hello"]);
 
       // C-u should be called to clear input
-      expect(mockExec).toHaveBeenCalledWith("tmux", ["send-keys", "-t", "my-session", "C-u"]);
+      expect(mockExec).toHaveBeenCalledWith("tmux", ["send-keys", "-t", "=my-session:", "C-u"]);
     });
   });
 
@@ -339,7 +356,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "tmux-target-1",
+        "=tmux-target-1:",
         "-l",
         "hello opencode",
       ]);
@@ -385,7 +402,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "tmux-target-1",
+        "=tmux-target-1:",
         "-l",
         "fix mapping",
       ]);
@@ -456,7 +473,7 @@ describe("send command", () => {
       expect(mockExec).toHaveBeenCalledWith("tmux", [
         "send-keys",
         "-t",
-        "tmux-target-1",
+        "=tmux-target-1:",
         "-l",
         "from file",
       ]);
@@ -695,7 +712,7 @@ describe("send through the OpenCode API (I-5)", () => {
     expect(mockExec).toHaveBeenCalledWith("tmux", [
       "send-keys",
       "-t",
-      "tmux-target-1",
+      "=tmux-target-1:",
       "-l",
       "hello",
     ]);

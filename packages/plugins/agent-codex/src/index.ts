@@ -11,6 +11,7 @@ import {
   getActivityFallbackState,
   recordTerminalActivity,
   HERDR_RUNTIME_NAME,
+  exactPaneTarget,
   isHerdrProcessRunning,
   PREFERRED_GH_PATH,
   type Agent,
@@ -550,7 +551,7 @@ function createCodexAgent(): Agent {
         if (handle.runtimeName === "tmux" && handle.id) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",
-            ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+            ["list-panes", "-t", exactPaneTarget(handle.id), "-F", "#{pane_tty}"],
             { timeout: 30_000 },
           );
           const ttys = ttyOut

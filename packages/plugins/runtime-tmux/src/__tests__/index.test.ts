@@ -178,7 +178,7 @@ describe("runtime.create()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       2,
       "tmux",
-      ["send-keys", "-t", "path-session", "bash", "Enter"],
+      ["send-keys", "-t", "=path-session:", "bash", "Enter"],
       expectedTmuxOptions,
     );
     for (const call of mockExecFileCustom.mock.calls) {
@@ -274,7 +274,7 @@ describe("runtime.create()", () => {
     // Second call: send-keys with the launch command
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["send-keys", "-t", "launch-test", "claude --session abc", "Enter"],
+      ["send-keys", "-t", "=launch-test:", "claude --session abc", "Enter"],
       expectedTmuxOptions,
     );
   });
@@ -306,7 +306,7 @@ describe("runtime.create()", () => {
       [
         "send-keys",
         "-t",
-        "launch-long",
+        "=launch-long:",
         "-l",
         expect.stringContaining("bash "),
       ],
@@ -316,7 +316,7 @@ describe("runtime.create()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       3,
       "tmux",
-      ["send-keys", "-t", "launch-long", "Enter"],
+      ["send-keys", "-t", "=launch-long:", "Enter"],
       expectedTmuxOptions,
     );
   });
@@ -343,7 +343,7 @@ describe("runtime.create()", () => {
     // Verify kill-session was called for cleanup
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["kill-session", "-t", "fail-session"],
+      ["kill-session", "-t", "=fail-session"],
       expectedTmuxOptions,
     );
   });
@@ -419,7 +419,7 @@ describe("runtime.destroy()", () => {
 
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["kill-session", "-t", "destroy-test"],
+      ["kill-session", "-t", "=destroy-test"],
       expectedTmuxOptions,
     );
   });
@@ -432,6 +432,11 @@ describe("runtime.destroy()", () => {
 
     // Should not throw
     await expect(runtime.destroy(handle)).resolves.toBeUndefined();
+  });
+
+  it("ends no session for a handle ID that is not a safe tmux name", async () => {
+    await expect(create().destroy(makeHandle("bad.session"))).resolves.toBeUndefined();
+    expect(mockExecFileCustom).not.toHaveBeenCalled();
   });
 });
 
@@ -453,7 +458,7 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       1,
       "tmux",
-      ["send-keys", "-t", "msg-short", "C-u"],
+      ["send-keys", "-t", "=msg-short:", "C-u"],
       expectedTmuxOptions,
     );
 
@@ -461,7 +466,7 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       2,
       "tmux",
-      ["send-keys", "-t", "msg-short", "-l", "hello world"],
+      ["send-keys", "-t", "=msg-short:", "-l", "hello world"],
       expectedTmuxOptions,
     );
 
@@ -469,7 +474,7 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       3,
       "tmux",
-      ["send-keys", "-t", "msg-short", "Enter"],
+      ["send-keys", "-t", "=msg-short:", "Enter"],
       expectedTmuxOptions,
     );
   });
@@ -494,7 +499,7 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       1,
       "tmux",
-      ["send-keys", "-t", "msg-long", "C-u"],
+      ["send-keys", "-t", "=msg-long:", "C-u"],
       expectedTmuxOptions,
     );
 
@@ -515,7 +520,7 @@ describe("runtime.sendMessage()", () => {
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
       3,
       "tmux",
-      ["paste-buffer", "-b", "ao-test-uuid-1234", "-t", "msg-long", "-d"],
+      ["paste-buffer", "-b", "ao-test-uuid-1234", "-t", "=msg-long:", "-d"],
       expectedTmuxOptions,
     );
 
@@ -605,7 +610,7 @@ describe("runtime.getOutput()", () => {
     expect(output).toBe("some output\nfrom tmux");
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["capture-pane", "-t", "output-test", "-p", "-S", "-50"],
+      ["capture-pane", "-t", "=output-test:", "-p", "-S", "-50"],
       expectedTmuxOptions,
     );
   });
@@ -620,7 +625,7 @@ describe("runtime.getOutput()", () => {
 
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["capture-pane", "-t", "output-custom", "-p", "-S", "-100"],
+      ["capture-pane", "-t", "=output-custom:", "-p", "-S", "-100"],
       expectedTmuxOptions,
     );
   });
@@ -649,9 +654,16 @@ describe("runtime.isAlive()", () => {
     expect(alive).toBe(true);
     expect(mockExecFileCustom).toHaveBeenCalledWith(
       "tmux",
-      ["has-session", "-t", "alive-test"],
+      ["has-session", "-t", "=alive-test"],
       expectedTmuxOptions,
     );
+  });
+
+  it("rejects without a tmux call for a handle ID that is not a safe tmux name", async () => {
+    await expect(create().isAlive(makeHandle("bad.session"))).rejects.toThrow(
+      /^Invalid tmux session name/,
+    );
+    expect(mockExecFileCustom).not.toHaveBeenCalled();
   });
 
   it("returns false when tmux answers that the session does not exist", async () => {
@@ -791,8 +803,8 @@ describe("runtime.getAttachInfo()", () => {
 
     expect(info).toEqual({
       type: "tmux",
-      target: "attach-test",
-      command: "tmux attach -t attach-test",
+      target: "=attach-test",
+      command: "tmux attach -t '=attach-test'",
     });
   });
 });

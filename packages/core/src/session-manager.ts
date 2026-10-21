@@ -114,6 +114,7 @@ import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
+import { exactPaneTarget, exactSessionTarget } from "./tmux.js";
 
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = OPENCODE_API_TIMEOUT_MS;
@@ -515,15 +516,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getTmuxForegroundCommand(sessionName: string): Promise<string | null> {
+/** The answer of `getTmuxForegroundCommand` when no session of that exact name exists. */
+const TMUX_PANE_GONE = Symbol("tmux pane gone");
+
+/**
+ * The foreground command of the session's pane, `TMUX_PANE_GONE` when the
+ * session does not exist, or null when tmux could not answer. tmux 3.4
+ * prints empty format values and exits 0 for a target that does not exist,
+ * so empty output means gone, not unknown.
+ */
+async function getTmuxForegroundCommand(
+  sessionName: string,
+): Promise<string | typeof TMUX_PANE_GONE | null> {
   try {
     const { stdout } = await execFileAsync(
       "tmux",
-      ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
+      ["display-message", "-p", "-t", exactPaneTarget(sessionName), "#{pane_current_command}"],
       { timeout: 5_000 },
     );
     const command = stdout.trim();
-    return command.length > 0 ? command : null;
+    return command.length > 0 ? command : TMUX_PANE_GONE;
   } catch {
     return null;
   }
@@ -1030,7 +1042,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           if (handle.runtimeName === "herdr") return "unknown";
           if (handle.runtimeName === "tmux") {
             try {
-              await execFileAsync("tmux", ["has-session", "-t", `=${handle.id}`], {
+              await execFileAsync("tmux", ["has-session", "-t", exactSessionTarget(handle.id)], {
                 timeout: 1_500,
               });
               return "live";
@@ -3469,6 +3481,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ]);
 
         const outputReady = output.trim().length > 0;
+        // null (tmux could not answer) does not hold the wait; a gone pane does.
         const foregroundReady =
           foregroundCommand === null || foregroundCommand === agentPlugin.processName;
         const settledOutput = outputReady ? output.trimEnd() : null;
@@ -3515,6 +3528,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             : Promise.resolve(agentPlugin.processName),
         ]);
 
+        // null (tmux could not answer) does not hold the wait; a gone pane does.
         const foregroundReady =
           foregroundCommand === null || foregroundCommand === agentPlugin.processName;
 

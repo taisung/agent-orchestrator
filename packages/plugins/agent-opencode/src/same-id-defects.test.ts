@@ -141,7 +141,7 @@ function tmuxHandle(id: string, data: Record<string, unknown> = {}): RuntimeHand
 }
 
 describe("[same-id R1] D-A: the opencode pane read matches a longer session name by prefix", () => {
-  defect("isProcessRunning answers false for a dead name while the agent runs in a session whose name starts with it", async () => {
+  it("isProcessRunning answers false for a dead name while the agent runs in a session whose name starts with it", async () => {
     servers.set(`/tmp/tmux-${UID}/default`, new Map([["kr-10", "pts/40"]]));
     processes.set("pts/40", AGENT_ARGS);
     await expect(create().isProcessRunning(tmuxHandle("kr-1"))).resolves.toBe(false);

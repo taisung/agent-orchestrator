@@ -10,6 +10,8 @@ import {
   type Session,
   type SessionManager,
   type SessionMessageDelivery,
+  exactPaneTarget,
+  exactSessionTarget,
   loadConfig,
 } from "@aoagents/ao-core";
 import { exec, tmux } from "../lib/shell.js";
@@ -104,8 +106,21 @@ async function readMessageInput(opts: { file?: string }, messageParts: string[])
   }
 }
 
-async function sendViaTmux(tmuxTarget: string, message: string): Promise<void> {
-  await exec("tmux", ["send-keys", "-t", tmuxTarget, "C-u"]);
+/**
+ * The exact tmux targets of a session name, or null for a name that AO never
+ * gives a tmux session (so no such session exists). tmux 3.4 matches a plain
+ * `-t` target by prefix: a send to a dead `kr-1` would type into a live `kr-10`.
+ */
+function exactTmuxTargets(name: string): { session: string; pane: string } | null {
+  try {
+    return { session: exactSessionTarget(name), pane: exactPaneTarget(name) };
+  } catch {
+    return null;
+  }
+}
+
+async function sendViaTmux(pane: string, message: string): Promise<void> {
+  await exec("tmux", ["send-keys", "-t", pane, "C-u"]);
   await sleep(200);
 
   if (message.includes("\n") || message.length > 200) {
@@ -113,7 +128,7 @@ async function sendViaTmux(tmuxTarget: string, message: string): Promise<void> {
     writeFileSync(tmpFile, message);
     try {
       await exec("tmux", ["load-buffer", tmpFile]);
-      await exec("tmux", ["paste-buffer", "-t", tmuxTarget]);
+      await exec("tmux", ["paste-buffer", "-t", pane]);
     } finally {
       try {
         unlinkSync(tmpFile);
@@ -122,11 +137,11 @@ async function sendViaTmux(tmuxTarget: string, message: string): Promise<void> {
       }
     }
   } else {
-    await exec("tmux", ["send-keys", "-t", tmuxTarget, "-l", message]);
+    await exec("tmux", ["send-keys", "-t", pane, "-l", message]);
   }
 
   await sleep(300);
-  await exec("tmux", ["send-keys", "-t", tmuxTarget, "Enter"]);
+  await exec("tmux", ["send-keys", "-t", pane, "Enter"]);
 }
 
 /** The line about pending human answers, or null when there are none. */
@@ -255,10 +270,11 @@ export function registerSend(program: Command): void {
         const timeoutMs = (isNaN(parsedTimeout) || parsedTimeout <= 0 ? 600 : parsedTimeout) * 1000;
 
         const canUseTmux = runtimeName === "tmux";
+        const targets = canUseTmux ? exactTmuxTargets(tmuxTarget) : null;
 
         let tmuxSessionAlive = true;
         if (canUseTmux) {
-          const exists = await tmux("has-session", "-t", tmuxTarget);
+          const exists = targets ? await tmux("has-session", "-t", targets.session) : null;
           tmuxSessionAlive = exists !== null;
           if (!tmuxSessionAlive && !existingSession) {
             console.error(chalk.red(`Session '${session}' does not exist`));
@@ -268,8 +284,8 @@ export function registerSend(program: Command): void {
 
         // Helper to capture output from the resolved tmux target
         async function captureOutput(lines: number): Promise<string> {
-          if (!canUseTmux) return "";
-          const output = await tmux("capture-pane", "-t", tmuxTarget, "-p", "-S", String(-lines));
+          if (!targets) return "";
+          const output = await tmux("capture-pane", "-t", targets.pane, "-p", "-S", String(-lines));
           return output || "";
         }
 
@@ -326,7 +342,9 @@ export function registerSend(program: Command): void {
           return;
         }
 
-        await sendViaTmux(tmuxTarget, message);
+        // Only a live tmux session reaches this point, so its name is a valid target.
+        const pane = exactPaneTarget(tmuxTarget);
+        await sendViaTmux(pane, message);
 
         // Verify delivery with retries
         for (let attempt = 1; attempt <= 3; attempt++) {
@@ -341,12 +359,12 @@ export function registerSend(program: Command): void {
             return;
           }
           if (hasUnsubmittedCodexInput(output)) {
-            await tmux("send-keys", "-t", tmuxTarget, "Enter");
+            await tmux("send-keys", "-t", pane, "Enter");
             await sleep(1000);
             continue;
           }
           if (attempt < 3) {
-            await tmux("send-keys", "-t", tmuxTarget, "Enter");
+            await tmux("send-keys", "-t", pane, "Enter");
             await sleep(1000);
           }
         }

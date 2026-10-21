@@ -1,6 +1,7 @@
 import {
   shellEscape,
   HERDR_RUNTIME_NAME,
+  exactPaneTarget,
   isHerdrProcessRunning,
   setupPathWrapperWorkspace,
   buildAgentPath,
@@ -181,7 +182,7 @@ function createGeminiAgent(): Agent {
         if (handle.runtimeName === "tmux" && handle.id) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",
-            ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+            ["list-panes", "-t", exactPaneTarget(handle.id), "-F", "#{pane_tty}"],
             { timeout: 30_000 },
           );
           const ttys = ttyOut

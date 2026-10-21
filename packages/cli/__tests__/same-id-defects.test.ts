@@ -7,7 +7,8 @@
  * the defect is there, and the test turns red (vitest: "Expect test to fail")
  * as soon as a fix makes it pass. The fix round then changes `defect` to `it`.
  * Run `SAME_ID_DEFECTS=red pnpm vitest run same-id` to see the failures as
- * plain tests. Round R1 (exact tmux targets).
+ * plain tests. Round R1 (exact tmux targets) fixed every test of this file and
+ * changed each one to `it`, so the file has no `defect` helper any more.
  *
  * D-A in the CLI: `lib/shell.ts` `getTmuxActivity` (`ao status`,
  * `ao session ls`) and the raw tmux path of `ao send` use plain targets.
@@ -89,11 +90,18 @@ vi.mock("../src/lib/session-utils.js", () => ({
   findProjectForSession: () => null,
 }));
 
-vi.mock("@aoagents/ao-core", () => ({
-  loadConfig: () => {
-    throw new Error("no config");
-  },
-}));
+vi.mock("@aoagents/ao-core", async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+  const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+  return {
+    // The real target helpers, so that the R1 tests reach the stand-in.
+    exactSessionTarget: actual.exactSessionTarget,
+    exactPaneTarget: actual.exactPaneTarget,
+    loadConfig: () => {
+      throw new Error("no config");
+    },
+  };
+});
 
 vi.mock("../src/lib/create-session-manager.js", () => ({
   getSessionManager: async () => ({ get: vi.fn(), send: vi.fn(), deliver: vi.fn() }),
@@ -103,11 +111,6 @@ vi.mock("../src/lib/create-session-manager.js", () => ({
 import { Command } from "commander";
 import { getTmuxActivity } from "../src/lib/shell.js";
 import { registerSend } from "../src/commands/send.js";
-
-const RED = process.env["SAME_ID_DEFECTS"] === "red";
-function defect(name: string, fn: () => Promise<void>): void {
-  (RED ? it : it.fails)(name, fn);
-}
 
 beforeEach(() => {
   fake.sessions.clear();
@@ -125,12 +128,12 @@ afterEach(() => {
 });
 
 describe("[same-id R1] D-A: the CLI tmux calls match a longer session name by prefix", () => {
-  defect("getTmuxActivity of a dead name does not report another session's activity", async () => {
+  it("getTmuxActivity of a dead name does not report another session's activity", async () => {
     // `ao status` showed "1s ago" for the dead kr-1 (the bystander's activity).
     await expect(getTmuxActivity("kr-1")).resolves.toBeNull();
   });
 
-  defect("ao send --no-wait to a dead name types nothing into another session", async () => {
+  it("ao send --no-wait to a dead name types nothing into another session", async () => {
     const program = new Command();
     program.exitOverride();
     registerSend(program);

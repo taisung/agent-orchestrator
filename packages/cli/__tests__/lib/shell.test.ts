@@ -181,4 +181,29 @@ describe("getTmuxActivity", () => {
     const result = await getTmuxActivity("session-1");
     expect(result).toBeNull();
   });
+
+  it("reads the exact pane of the session", async () => {
+    mockSuccess("1700000000\n");
+    await getTmuxActivity("session-1");
+    expect(mockExecFile.mock.calls[0]?.[1]).toEqual([
+      "display-message",
+      "-t",
+      "=session-1:",
+      "-p",
+      "#{session_activity}",
+    ]);
+  });
+
+  it("returns null for empty output (tmux: the session does not exist)", async () => {
+    mockSuccess("\n");
+    const result = await getTmuxActivity("session-1");
+    expect(result).toBeNull();
+  });
+
+  it("returns null without a tmux call for a name that AO never gives a session", async () => {
+    mockSuccess("1700000000\n");
+    const result = await getTmuxActivity("a.b");
+    expect(result).toBeNull();
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
 });

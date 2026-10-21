@@ -1890,7 +1890,7 @@ describe("confirmLaunch (I-3)", () => {
     }
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "tmux") {
-        expect(args).toEqual(["list-panes", "-t", "abc-sess-1", "-F", "#{pane_tty}"]);
+        expect(args).toEqual(["list-panes", "-t", "=abc-sess-1:", "-F", "#{pane_tty}"]);
         return Promise.resolve({ stdout: "/dev/pts/7\n", stderr: "" });
       }
       if (cmd === "ps") {

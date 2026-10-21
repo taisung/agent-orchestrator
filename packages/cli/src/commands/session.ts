@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import chalk from "chalk";
 import type { Command } from "commander";
 import {
+  exactSessionTarget,
   isOrchestratorSession,
   loadConfig,
   SessionNotRestorableError,
@@ -188,7 +189,9 @@ export function registerSession(program: Command): void {
       let args: string[];
       if (handle.runtimeName === "tmux") {
         command = "tmux";
-        args = ["attach", "-t", target];
+        // An exact target: a plain `-t` also attaches to a session whose name
+        // only starts with this one.
+        args = ["attach", "-t", exactSessionTarget(handle.id)];
       } else if (handle.runtimeName === "herdr") {
         command = "herdr";
         args = ["agent", "attach", target];

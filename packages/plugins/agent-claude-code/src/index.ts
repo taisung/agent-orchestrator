@@ -5,6 +5,7 @@ import {
   DEFAULT_READY_THRESHOLD_MS,
   DEFAULT_ACTIVE_WINDOW_MS,
   HERDR_RUNTIME_NAME,
+  exactPaneTarget,
   getHerdrPaneProcesses,
   removeAoBinFromPath,
   type Agent,
@@ -582,16 +583,17 @@ async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> 
 
   // For tmux runtime, get the pane TTY and find claude on it
   if (handle.runtimeName === "tmux" && handle.id) {
+    const target = exactPaneTarget(handle.id);
     let ttyOut: string;
     try {
       ({ stdout: ttyOut } = await execFileAsync(
         "tmux",
-        ["list-panes", "-t", handle.id, "-F", "#{pane_tty}"],
+        ["list-panes", "-t", target, "-F", "#{pane_tty}"],
         { timeout: 5_000 },
       ));
     } catch (err: unknown) {
       if (isTmuxTargetNotFound(err)) return null;
-      throw new Error(`claude-code: tmux list-panes -t ${handle.id} failed`, { cause: err });
+      throw new Error(`claude-code: tmux list-panes -t ${target} failed`, { cause: err });
     }
     // Iterate all pane TTYs (multi-pane sessions) — succeed on any match
     const ttys = ttyOut

@@ -13,6 +13,8 @@ import {
   type RuntimeMetrics,
   type AttachInfo,
   shellEscape,
+  exactPaneTarget,
+  exactSessionTarget,
   RUNTIME_NO_SERVER_ERROR_CODE,
 } from "@aoagents/ao-core";
 
@@ -133,19 +135,22 @@ export function create(): Runtime {
 
       // Send the launch command — clean up the session if this fails.
       // Use a temp script for long commands so the pane shows a short
-      // invocation instead of a pasted wall of shell.
+      // invocation instead of a pasted wall of shell. Exact targets: if the
+      // new session ends first, a plain target would reach another session
+      // whose name starts with this one.
+      const pane = exactPaneTarget(sessionName);
       try {
         if (config.launchCommand.length > 200) {
           const invocation = writeLaunchScript(config.launchCommand);
-          await tmux("send-keys", "-t", sessionName, "-l", invocation);
+          await tmux("send-keys", "-t", pane, "-l", invocation);
           await sleep(300);
-          await tmux("send-keys", "-t", sessionName, "Enter");
+          await tmux("send-keys", "-t", pane, "Enter");
         } else {
-          await tmux("send-keys", "-t", sessionName, config.launchCommand, "Enter");
+          await tmux("send-keys", "-t", pane, config.launchCommand, "Enter");
         }
       } catch (err: unknown) {
         try {
-          await tmux("kill-session", "-t", sessionName);
+          await tmux("kill-session", "-t", exactSessionTarget(sessionName));
         } catch {
           // Best-effort cleanup
         }
@@ -167,15 +172,16 @@ export function create(): Runtime {
 
     async destroy(handle: RuntimeHandle): Promise<void> {
       try {
-        await tmux("kill-session", "-t", handle.id);
+        await tmux("kill-session", "-t", exactSessionTarget(handle.id));
       } catch {
         // Session may already be dead — that's fine
       }
     },
 
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
+      const pane = exactPaneTarget(handle.id);
       // Clear any partial input
-      await tmux("send-keys", "-t", handle.id, "C-u");
+      await tmux("send-keys", "-t", pane, "C-u");
 
       // For long or multiline messages, use load-buffer + paste-buffer
       // Use randomUUID to avoid temp file collisions on concurrent sends
@@ -185,7 +191,7 @@ export function create(): Runtime {
         writeFileSync(tmpPath, message, { encoding: "utf-8", mode: 0o600 });
         try {
           await tmux("load-buffer", "-b", bufferName, tmpPath);
-          await tmux("paste-buffer", "-b", bufferName, "-t", handle.id, "-d");
+          await tmux("paste-buffer", "-b", bufferName, "-t", pane, "-d");
         } finally {
           // Clean up temp file and tmux buffer (in case paste-buffer failed
           // and the -d flag didn't delete it)
@@ -203,32 +209,40 @@ export function create(): Runtime {
       } else {
         // Use -l (literal) so text like "Enter" or "Space" isn't interpreted
         // as tmux key names
-        await tmux("send-keys", "-t", handle.id, "-l", message);
+        await tmux("send-keys", "-t", pane, "-l", message);
       }
 
       // Small delay to let tmux process the pasted text before pressing Enter.
       // Without this, Enter can arrive before the text is fully rendered.
       await sleep(300);
-      await tmux("send-keys", "-t", handle.id, "Enter");
+      await tmux("send-keys", "-t", pane, "Enter");
     },
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {
       try {
-        return await tmux("capture-pane", "-t", handle.id, "-p", "-S", `-${lines}`);
+        return await tmux(
+          "capture-pane",
+          "-t",
+          exactPaneTarget(handle.id),
+          "-p",
+          "-S",
+          `-${lines}`,
+        );
       } catch {
         return "";
       }
     },
 
     async isAlive(handle: RuntimeHandle): Promise<boolean> {
+      const target = exactSessionTarget(handle.id);
       try {
-        await tmux("has-session", "-t", handle.id);
+        await tmux("has-session", "-t", target);
         return true;
       } catch (err: unknown) {
         // Only tmux's own "not found" answer is dead. An unreachable server, a
         // timeout or any other failure rejects: callers keep the session.
         if (isTmuxTargetNotFound(err)) return false;
-        throw tmuxProbeError(`has-session -t ${handle.id}`, err);
+        throw tmuxProbeError(`has-session -t ${target}`, err);
       }
     },
 
@@ -254,10 +268,12 @@ export function create(): Runtime {
     },
 
     async getAttachInfo(handle: RuntimeHandle): Promise<AttachInfo> {
+      const target = exactSessionTarget(handle.id);
       return {
         type: "tmux",
-        target: handle.id,
-        command: `tmux attach -t ${handle.id}`,
+        target,
+        // Quoted: zsh expands a word that starts with "=" to a command path.
+        command: `tmux attach -t ${shellEscape(target)}`,
       };
     },
   };
