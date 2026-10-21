@@ -94,7 +94,7 @@ describe("readCodexScreen on Codex 0.163.0 screens", () => {
     });
   });
 
-  it("reads a numbered list as a selection list only with a key hint or a hint row below it", () => {
+  it("reads a numbered list as a selection list only with a key hint, an approval label or a hint row below it", () => {
     // Derived: the hint rows are strings of the 0.163.0 binary ("Press … to
     // confirm or … to go back", "Press a number to choose · esc to dismiss").
     const picker = [
@@ -112,6 +112,24 @@ describe("readCodexScreen on Codex 0.163.0 screens", () => {
     );
     expect(numberPicker).not.toBe(picker);
     expect(readCodexScreen(numberPicker).composer).toBeNull();
+
+    // Derived: an approval view with no key hint and no hint row. Its labels
+    // are strings of the 0.163.0 binary.
+    const approval = [
+      "  Would you like to run the following command?",
+      "",
+      "  $ pnpm test",
+      "",
+      "› 1. Yes, proceed",
+      "  2. Yes, and don't ask again for this command in this session",
+      "  3. No, and tell Codex what to do differently",
+    ].join("\n");
+    expect(readCodexScreen(approval)).toEqual({ composer: null, runningTurn: false });
+    const cursorOnNo = approval
+      .replace("› 1. Yes, proceed", "  1. Yes, proceed")
+      .replace("  3. No, and tell", "› 3. No, and tell");
+    expect(cursorOnNo).not.toBe(approval);
+    expect(readCodexScreen(cursorOnNo).composer).toBeNull();
 
     // Control: the same two numbered rows with the composer's status line and
     // footer below them are a composer.

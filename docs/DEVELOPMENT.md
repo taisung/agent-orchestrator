@@ -256,8 +256,10 @@ The Codex parser reads the composer at its own position: the prompt row with `�
 indented or blank rows below it. Codex indents the further rows of the composer text by 2 columns, so an
 indented `›` row is message text. A numbered prompt row is the cursor of a selection list only when a
 numbered option row is next to it and the list shows a sign of a menu: a key hint such as `(y)` at the
-end of a list row, or a hint row below the list (`Press enter to confirm or esc to go back`,
-`Press a number to choose · esc to dismiss`). Otherwise a numbered list is composer text. The footer hint
+end of a list row, an approval label (a list row that starts with `Yes,` or `No,`, as in
+`No, and tell Codex what to do differently`), or a hint row below the list
+(`Press enter to confirm or esc to go back`, `Press a number to choose · esc to dismiss`). Otherwise a
+numbered list is composer text. The footer hint
 `? for shortcuts` (empty composer) counts only in the last row, below a blank row under a one-row
 composer. A running turn is only the status row in its 0.163.0 form, a bullet in column 0 and
 `esc to interrupt` in parentheses (`◦ Working (5m 47s • esc to interrupt)`), directly above the prompt

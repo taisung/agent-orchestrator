@@ -28,6 +28,13 @@ const OPTION_ROW = /^\s+\d+\.\s/;
 const KEY_HINT = /\((?:[a-z]|esc|enter|tab)\)\s*$/i;
 
 /**
+ * An option label of an approval view. The 0.163.0 binary holds "Yes, proceed",
+ * "No, and tell Codex what to do differently", "No, continue without running
+ * it" and more labels that start with "Yes," or "No,".
+ */
+const APPROVAL_LABEL = /^(?:[›❯]|\s)\s*\d+\.\s+(?:Yes|No),/;
+
+/**
  * The hint row below a selection list. The 0.163.0 binary holds "Press … to
  * confirm or … to go back" and "Press a number to choose · esc to dismiss".
  */
@@ -85,7 +92,8 @@ function findPromptRow(lines: string[]): number | null {
  * approval or picker view). The numbered prompt row and the numbered option
  * rows directly above and below it make the list. A composer whose text is a
  * numbered list has the same rows, so the list must also show a sign of a
- * menu: a key hint at the end of a list row, or a hint row below the list.
+ * menu: a key hint at the end of a list row, an approval label ("Yes, ...",
+ * "No, ...") in a list row, or a hint row below the list.
  */
 function isSelectionCursor(lines: string[], index: number): boolean {
   if (!NUMBERED_PROMPT_ROW.test(lines[index] ?? "")) return false;
@@ -94,7 +102,8 @@ function isSelectionCursor(lines: string[], index: number): boolean {
   let last = index;
   while (OPTION_ROW.test(lines[last + 1] ?? "")) last++;
   if (first === index && last === index) return false;
-  if (lines.slice(first, last + 1).some((line) => KEY_HINT.test(line))) return true;
+  const list = lines.slice(first, last + 1);
+  if (list.some((line) => KEY_HINT.test(line) || APPROVAL_LABEL.test(line))) return true;
   return lines.slice(last + 1).some((line) => LIST_HINT.test(line));
 }
 

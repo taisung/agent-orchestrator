@@ -765,6 +765,13 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
       .replace("  2. No, and tell", "› 2. No, and tell");
     expect(secondOption).not.toBe(approvalView);
     expect(agent.detectActivity(secondOption)).not.toBe("idle");
+
+    // The same view with no key hints: the "Yes," and "No," labels still
+    // make it a selection list, so the stricter rule of review r2 M-2 does
+    // not read it as an idle composer.
+    const noKeyHints = approvalView.replace(" (y)", "").replace(" (esc)", "");
+    expect(noKeyHints).not.toBe(approvalView);
+    expect(agent.detectActivity(noKeyHints)).not.toBe("idle");
   });
 
   it("M-2: reads a composer whose text starts with '1. ' as a composer when no option row is next to it", () => {
