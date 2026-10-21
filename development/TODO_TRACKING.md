@@ -951,6 +951,12 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     - Each interface has one implementation (`Workspace.destroy`: workspace-worktree;
       `PreparedAgentSession.discard`: agent-opencode).
     - R7: the Opus author failed a fifth review round. The next step is the owner's.
+  - **Fix round 7** (owner 2026-10-20, answers "1a 2a"): ao-46 on Opus; r5 M-1 (the orchestrator delete
+    check excludes only its own launch), M-2 (optional ownership check in `Workspace.destroy`, run before
+    `git worktree remove` and before the `rmSync` fallback), M-3 (optional ownership check in
+    `PreparedAgentSession.discard`, run before the interrupt and each removal); `types.ts` and the two
+    plugins allowed for these only. Dispatched 23:17:40 EDT, brief
+    `~/.cache/agent-skills-haiku55-arc/brief-aofork-killed-fix-r7.md`, on top of `7294d978`.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
