@@ -1032,6 +1032,16 @@ dispatch inside 10 min is recorded with no new input. Do not retry the rejected 
     brief `~/.cache/agent-skills-haiku55-arc/brief-review-killed-r8-astra.md`, output
     `development/reviews/killed_status_review_r8_astra6.md`): `69d6f467..ce49c9fd`, the audit, and a
     whole-fix statement for `0e3eabc2..ce49c9fd`.
+    Done 10:14 EDT: **LAND-SAFE**, 0 blockers, 0 majors, 1 nonblocking minor. r7 M-1 fixed; all five
+    mutants fail tests; full run 2866 passed.
+    - m-1 (nonblocking, code of this fix `ef6c73d9`): `readGenerationFloor` (`metadata.ts:506-516`)
+      answers 0 on a read error, so a reservation can repeat a generation and a delete can lower the floor;
+      `docs/DEVELOPMENT.md:446` states an absolute "never repeats". No removal bypass: every generation
+      compare also compares the launch identity. Qualify the doc or harden the read in a later change.
+    - New follow-ups (older code, do not block): F-8 the recovery validator `existsSync`
+      (`recovery/validator.ts:81,87`; with `escalatePartial: false` a live runtime is destroyed), F-9
+      `hasOtherOpenCodeRecord` (`session-manager.ts:971-985`), F-10 the session numbers
+      (`:1209-1216`, `:1265-1268`), F-11 other-plugin liveness false on an error.
   - **Later round "launches of one ID share a name and a path"** (owner 2026-10-21, 1a): every launch of a
     session ID uses the same tmux name and the same worktree path, so each step that awaits can act on a
     new launch. One structural fix (an exclusive hold per session ID for the whole launch, or a different
