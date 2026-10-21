@@ -488,6 +488,15 @@ describe("isProcessRunning", () => {
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
   });
 
+  it("rejects with the helper's error, before any tmux or ps call, for a name that is not a safe tmux name", async () => {
+    // A pane with opencode on it: an answer from tmux would be true.
+    mockTmuxWithProcess("opencode");
+    await expect(agent.isProcessRunning(makeTmuxHandle("bad name"))).rejects.toThrow(
+      'Invalid tmux session name "bad name": must match /^[a-zA-Z0-9_-]+$/',
+    );
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
   it("returns true when PID exists but throws EPERM", async () => {
     const epermErr = Object.assign(new Error("EPERM"), { code: "EPERM" });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {

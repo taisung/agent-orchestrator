@@ -1278,6 +1278,11 @@ function createOpenCodeAgent(): Agent {
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
+      // Built outside the catch below: a name that the helper refuses is not
+      // a pane that the check found without the agent, so the call rejects
+      // (unknown) instead of answering false.
+      const paneTarget =
+        handle.runtimeName === "tmux" && handle.id ? exactPaneTarget(handle.id) : null;
       try {
         // herdr owns the PTY and reports a pane's foreground processes directly,
         // so neither the tmux TTY scan nor the process-runtime PID applies.
@@ -1285,10 +1290,10 @@ function createOpenCodeAgent(): Agent {
           return await isHerdrProcessRunning(handle.id, /(?:^|\/)opencode(?:\s|$)/);
         }
 
-        if (handle.runtimeName === "tmux" && handle.id) {
+        if (paneTarget) {
           const { stdout: ttyOut } = await execFileAsync(
             "tmux",
-            ["list-panes", "-t", exactPaneTarget(handle.id), "-F", "#{pane_tty}"],
+            ["list-panes", "-t", paneTarget, "-F", "#{pane_tty}"],
             { timeout: 30_000 },
           );
           const ttys = ttyOut
