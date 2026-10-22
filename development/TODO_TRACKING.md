@@ -494,7 +494,11 @@ Durable progress record for this fork. Dated events only; the current state live
   (0 B 0 M 0 m; gates PASS on `13d3a129`: 3604 passed, 1 expected fail, 29 skipped; red 0/16/6/0; gitleaks
   clean) (`start_no_server_review_r4_astra6.md`, `..._r5_astra6.md`). Clean cherry-pick 16:50 EDT; tree equal
   to `13d3a129` outside `development/`; gitleaks on the 4 landed commits: no leaks (ao-66's first commit had
-  skipped the hook). Not built, not live, not pushed yet (each on the owner's word).
+  skipped the hook). Owner "1, 2, 3, 4": built 17:53:33 to 17:53:41 EDT (`pnpm build`); lifecycle workers
+  restarted by exact PID 17:53 (2087525 -> 4027448, 2087614 -> 4027591); first polls 2 of 2 success, 0
+  failures, health `ok`. Pushed `d5b6a180..9846cf6a` 17:55:04 EDT; CI of `9846cf6a`: 4 of 4 passed (the last
+  at 17:57:09 EDT). ao-66 killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`; branch kept, both commits
+  `-` in `git cherry main`).
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -609,7 +613,7 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   LANDED 2026-10-22 as `d1efcb94..de7c1bfc`, built and live 14:35 EDT (What Landed). The three items from the old
   code and the two follow-ups above stay open.
   The 30 s progress note (ao-63 `e08df7a3`, `3e366a01`, with ao-66's fix of review r4) LANDED 2026-10-22 as
-  `606869a0..fa6fd1ad` (What Landed); not built yet. Open from review r5 (accepted, not blocking): a slow
+  `606869a0..fa6fd1ad` (What Landed); built and live 17:53 EDT, pushed in `9846cf6a`. Open from review r5 (accepted, not blocking): a slow
   stderr holds the note until it drains or fails (the note never moves to stdout for slowness), and a reader
   that never reads holds the caller with no deadline, as before. ao-63's other suggestions (report R3-14):
   copy the two streams at the same time (a slow stderr reader holds back stdout), and move

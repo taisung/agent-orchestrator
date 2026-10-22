@@ -23,8 +23,10 @@
   (`9a3b8611`, `13d3a129`; 3604 passed). Review r5 by ao-64 (branch `review/progress-note-r5` at `13d3a129`,
   brief `.agent_task_r5.md`): LAND-SAFE, 0 B 0 M 0 m, gates PASS (3604 passed, 1 expected fail, 29 skipped;
   red 0/16/6/0; gitleaks clean). LANDED 16:50 by clean cherry-pick as `606869a0..fa6fd1ad` (tree equal to
-  `13d3a129` outside `development/`; gitleaks on the 4 commits: no leaks). NOT built, NOT live, NOT pushed:
-  the rebuild, the restart of 2087525 and 2087614 by exact PID, and the push wait for the owner's word.
+  `13d3a129` outside `development/`; gitleaks on the 4 commits: no leaks). Owner "1, 2, 3, 4 with ao-65":
+  built 17:53:33 to 17:53:41 (`pnpm build`), lifecycle workers restarted by exact PID 17:53 (2087525 ->
+  4027448, 2087614 -> 4027591; first polls 2 of 2 success, health `ok`), pushed `d5b6a180..9846cf6a` 17:55:04,
+  CI 4 of 4 passed by 17:57:09. ao-66 killed 17:55 and its watcher 3006099 stopped with TERM 17:54:06.
 - 16:13 ao-63 design checkpoint read and accepted with note 1
   (`~/.cache/agent-skills-haiku55-arc/note-ao-63-relaunch-1.md`): the SessionStart hook records only the
   pane's own agent; a sound record on every failure after the claim; the CLI `ao send` pastes into a live
@@ -86,29 +88,29 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | ao-orchestrator | new launch 2026-10-22 15:47:51 by the owner's `ao start`, `working`; the old record is archived as `ao-orchestrator_2026-10-22T19-47-51-588Z`. The old session's transcript: `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | the orchestrator |
 | tmux session `0` | the owner's hand-made session that ran the old orchestrator Claude; AO does not know it; still present, no client, at 16:00 | the owner ends it; never touch it |
 | ao-orchestrator-1 | stale `killed` record of 2026-10-14, no worktree | leave |
-| ao-63 | Claude Code Opus 5.5, working since 16:01 on the relaunch round, context 18%. Branch `feat/session-relaunch` at `3e366a01` (made 16:00; the old branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` stays at `3e366a01`): `dc7815d2..e6695161` landed, `e08df7a3` and `3e366a01` not landed | author of the relaunch round; report `.agent_report.md` (copies `reports/ao-63_start_no_server.report.md`, and `reports/ao-63_progress_note.report.md` with the addendum, 16:00) |
-| ao-64 | Codex gpt-6-astra xhigh, `fast` mode (the owner turned it on), working since 16:01 on review r4 and gates, context 15%. Branch `review/progress-note-r4` at `3e366a01` (made 16:00; `validate/main-start-no-server` stays at `de7c1bfc`). Its untracked copy of the gates file (equal to `main`) went to `backup/ao-64-reviews/` | reviewer of the progress note, then of the relaunch round |
-| ao-65 | Claude Code Opus 5.5, spawned 15:59, working since 16:01 on the Herdr 0.9.5 live check. Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` at `d5b6a180` | Herdr step 1; no code, no commit |
-| ao-66 | Claude Code Opus 5.5, spawned 16:19, working since 16:20 on the progress note fix. Branch `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it`, moved from `d5b6a180` (no commits) to `3e366a01` with `reset --keep` | author of the note fix; ao-64 re-checks it |
+| ao-63 | Claude Code Opus 5.5, working since 17:26 on relaunch round 2 (brief `.agent_task_relaunch_r2.md`, copy `brief-aofork-session-relaunch-r2.md`; notes 1 and 2 in `~/.cache/agent-skills-haiku55-arc/`), context 30%. Branch `feat/session-relaunch`: round 1 `3e366a01..554facd9` (6 commits), review r1 NOT-LAND-SAFE (0 B 7 M 1 m). The old branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` stays at `3e366a01` (all landed as cherry-picks) | author of the relaunch round; reports `reports/ao-63_session_relaunch.report.md` (round 1) |
+| ao-64 | Codex gpt-6-astra xhigh, `fast` mode (the owner turned it on), idle since 17:2x after relaunch review r1, context 62%. Branch `review/session-relaunch-r1` at `554facd9` (its earlier review branches: `review/progress-note-r4` at `3e366a01`, `review/progress-note-r5` at `13d3a129`, `validate/main-start-no-server` at `de7c1bfc`). Untracked: the r4, r5 and relaunch r1 review files (all on `main`) | reviewer of the relaunch round (r2 next); at 62% a new Codex reviewer can be better for r2 |
+| ao-65 | Claude Code Opus 5.5, step 1 done 16:3x (findings and fixtures on `main` in `7b940495`); working since 17:58 on Herdr step 2, the RH design r5 (brief `.agent_task_rh_r5.md`, copy `brief-aofork-rh-design-r5.md`), context 10% (compacted after step 1). Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` fast-forwarded to `main` `9846cf6a` 17:57; its untracked step 1 copies (equal to `main`) went to `backup/ao-65-herdr/` | author of Herdr step 2; deliverables uncommitted: `development/reviews/rh_design_r5_opus.md` and an update of doc 0004; a new Codex reviewer next |
+| ao-66 | killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`). Branch `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it` kept at `13d3a129`; both commits landed (`-` in `git cherry main`) | deletable branch |
 
-**Lifecycle workers (now)**: 2087525 (this config) and 2087614 (agent-skills), restarted 2026-10-22 14:35 EDT
-by exact PID on the build of `213fd5e9` (source `de7c1bfc`). First polls 14:36:12 and 14:36:14: 0 failures,
-health `ok`. Pid files: `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
+**Lifecycle workers (now)**: 4027448 (this config) and 4027591 (agent-skills), restarted 2026-10-22 17:53 EDT
+by exact PID on the build of `9846cf6a` (source `fa6fd1ad`, the progress note and its fix). First polls: 2 of
+2 success each, 0 failures, health `ok` (`~/.agent-orchestrator/<hash>-observability/processes/lifecycle-manager-<pid>.json`). Pid files: `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. `ao start` keeps a running worker
 ("already running"). The workers of Nexus, VSF and the Nexus config of this fork do not run until their
 orchestrators run `ao start`. The global OpenCode service does not run.
 
 **Watchers**: one runs since 2026-10-22 16:00:02: PID 2750995, state `~/.cache/fleet_watch/aofork-2026-10-22b`,
 watching ao-63, ao-64 and ao-65, notify and fallback `ao-orchestrator`, `-i 60 -s 20`, preseeded. The three
-briefs are sentinel-only (no `ao send` from the workers). A second one since 16:20:23: PID 3006099, state
-`~/.cache/fleet_watch/aofork-2026-10-22c`, watching ao-66 only, same options. Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
+briefs are sentinel-only (no `ao send` from the workers). A second one (PID 3006099, ao-66 only, state
+`~/.cache/fleet_watch/aofork-2026-10-22c`) ran 16:20:23 to 17:54:06 and was stopped with TERM before the kill of ao-66. Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
 -o ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20
 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop with TERM only, then check that the
 process ended.
 
 **Router log** (`development/artifacts/model_router_log/log.csv`): open rows: ao-63 (author, relaunch
-round, 16:05), ao-65 (investigator, Herdr live check, 16:05), ao-66 (author, note fix, 16:21). The ao-64 r4 row
-is closed (`in-review`, 1601962 in, 23727 out). The ao-63 rows (rounds 1 to 3)
+round 2, 17:27) and ao-65 (author, RH design r5, 17:58). Closed today after 16:00: ao-64 r4, r5 and relaunch r1,
+ao-66 (`606869a0..fa6fd1ad`), ao-65 step 1, ao-63 relaunch round 1 (its tokens include the 14:21 note commits). The ao-63 rows (rounds 1 to 3)
 and the ao-64 review rows read `landed=in-review`; the ao-64 gates row reads `yes`. Close a row with
 `router_log.py close ... --landed in-review` and token counts: Codex from the last `total_token_usage` of
 the rollout (ao-64: `~/.codex/sessions/2026/10/22/rollout-2026-10-22T12-06-42-01a1645d-*.jsonl`), Claude from
