@@ -64,7 +64,7 @@ check, and the push. Every step after the review waited for the owner's word.
 | 2026-10-22 08:24:02 | `7051f71d..407ee00d` | docs: the cleanup record | 4 of 4 passed |
 | 2026-10-22 09:02:02 | `407ee00d..b97a2500` | docs: design r7, reviews, answers "10a" to "14a" | 4 of 4 passed |
 | 2026-10-22 10:03:02 | `b97a2500..511c697e` | R4 (21 commits) and 9 docs commits | 4 of 4 passed (last at 10:09:12) |
-| 2026-10-22 10:06:58 | `511c697e..116cf549` | the handover | see HANDOVER close record |
+| 2026-10-22 10:06:58 | `511c697e..116cf549` | the handover | 4 of 4 passed (last at 10:17:42) |
 
 All pushes were fast-forward. No force-push, no PR.
 

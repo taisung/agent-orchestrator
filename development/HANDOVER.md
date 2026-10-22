@@ -2,6 +2,7 @@
 
 **Last Updated**: 2026-10-22
 **Latest Code Commit**: 56a385fb (docs: make rows 3, 4, 9 and 11 of the absence table exact) - the last commit of same-ID R4; built and live since 2026-10-22 10:00 EDT
+**Session Summary**: [0012_summary_session_2026_10_21_to_22.md](0012_summary_session_2026_10_21_to_22.md)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
@@ -16,8 +17,8 @@ Two rounds landed on 2026-10-22, and both are built, live in both lifecycle work
   10:00:11 EDT; lifecycle workers restarted by exact PID (2002324 → **3830765**, 2002831 → **3830929**). Live
   check PASS 10:02 EDT: 5 polls each, 0 failures, health `ok`, no live session `killed` or `exited`.
 
-`origin/main` = `main` after the push of 10:03:00 (`b97a2500..511c697e`) and the handover push. CI of
-`511c697e`: see "CI" under Live Sessions.
+`origin/main` = `main` after the last docs push (close record below). CI passed 4 of 4 for the R4 push
+(`511c697e`) and for the handover push (`116cf549`).
 
 The same-ID arc has R1, R2a and R4 on `main`. Its remaining rounds are RW, R2b-1, R2b-2 (in design), then
 R3a, R3b, RH and RO (later, owner "5b"). Design r8 of RW and R2b-2 is DONE and is in re-check by ao-62.
@@ -61,17 +62,36 @@ Codex from the last `total_token_usage` of the rollout, Claude from `trial_cost.
 = input + cache read + cache creation); subtract the sums of the earlier rows of that session. Eight rows
 of 2026-10-15 still have `landed=pending`.
 
-**CI**: the push of 10:03:00 (`511c697e`) - result recorded in the close record below.
+**CI**: 4 of 4 workflows passed for `511c697e` (last at 10:09:12 EDT) and for `116cf549` (last at 10:17:42 EDT).
 
 **Local branches**: `main`; `i3-r2-pre-rebase` (keep: two commits that `main` has only in rewritten
-form); the branches of the live sessions (above). The close record lists what this handover deleted.
+form); `review/same-id-design-r7` (kept, see the close record); the four branches of the live sessions
+(above). The close record lists what this handover deleted.
 
 **Codex model**: the global `~/.codex/config.toml` default is gpt-6-astra. Pin `--model` on every spawn;
 gpt-6.1-sol stops on lock and race texts (`cyber_policy`, Known Issues traps).
 
 ### Close record
 
-Filled in by the close steps of this handover (watcher retirement, session cleanup, branch deletion).
+- **Push**: `b97a2500..511c697e` at 10:03:00 (R4 and 9 docs commits) and `511c697e..116cf549` at 10:06:57
+  (the handover commit), both fast-forward, owner answer "16c"; CI 4 of 4 passed for each. The summary
+  doc (`1118b876`, owner request) and this close record go out in one more fast-forward docs push.
+- **Watcher retirement** (ao-lifecycle, Session Cleanup): watcher 3845635 (ao-55, state
+  `~/.cache/fleet_watch/ao-sameid-r2a-2026-10-21`) stopped by TERM at 10:07:03; its log ends with
+  `EXIT signal SIGTERM`, its `watch.pid` is removed, and the `grep -Flzx` check of its state found no
+  process. Its escalation "the fleet is unwatched" covers only ao-55; the four other watchers run.
+- **Session cleanup**: `ao session cleanup -p agent-orchestrator` found no sessions to clean up. ao-55 was
+  killed at 10:07:20 with `ao session kill`: record archived as `ao-55_2026-10-22T14-07-20-702Z`, tmux
+  session and worktree removed. Before the kill: only `.agent_report.md` and `.agent_task.md` were
+  untracked, its last report is saved as `reports/ao-55_same_id_r4_round4.report.md`, no client was attached.
+- **Branches** (log `~/.cache/agent-skills-haiku55-arc/branch-cleanup-2026-10-22-handover.log`): no branch
+  had a merge commit. Deleted with `-d` (ancestors of `main`): `validate/main-r4` 193d2c9e,
+  `feat/sdr7-review-read-agent-task-md-in-your-worktree-and-execute` 407ee00d. Deleted with `-D` (no `+`
+  line in `git cherry main`): `feat/same-id-r4` e3860672 (21 `-`), `review/same-id-r4-r2` 8e9efe95 (12 `-`),
+  `review/same-id-r4-r3` c02c0c02 (18 `-`), `review/same-id-r4-r4` e3860672 (21 `-`),
+  `feat/claude-detect-activity` 53cfd6a8 (4 `-`). KEPT: `review/same-id-design-r7` fe5d6575 with 13 `+`
+  commits (design test commits of ao-52, not on `main`); its tip is an ancestor of ao-52's branch, so it
+  can go with that branch.
 
 ## Open and Blocked Items
 
