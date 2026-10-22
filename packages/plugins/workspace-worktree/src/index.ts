@@ -261,17 +261,52 @@ export function create(config?: Record<string, unknown>): Workspace {
       return infos;
     },
 
+    /**
+     * Same-ID R4 (B-7 item 7, design r3 m-1): true only when git answers the
+     * expected success (`git rev-parse --is-inside-work-tree` prints `true`
+     * and exits 0). False only for an explicit absence: the path does not
+     * exist (`lstat` answers `ENOENT`), or git answers "not a git
+     * repository" (exit 128). Every other answer rejects with the cause,
+     * because the check could not run: other output, `EACCES`, I/O, a
+     * signal, a git that cannot start, a timeout. Callers treat the
+     * rejection as unknown, never as "no workspace".
+     */
     async exists(workspacePath: string): Promise<boolean> {
-      if (!existsSync(workspacePath)) return false;
       try {
-        await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+        lstatSync(workspacePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw new Error(
+          `workspace check of ${workspacePath} could not run: the path could not be checked`,
+          {
+            cause: err,
+          },
+        );
+      }
+      let stdout: string;
+      try {
+        ({ stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
           cwd: workspacePath,
           timeout: GIT_TIMEOUT,
-        });
-        return true;
-      } catch {
-        return false;
+        }));
+      } catch (err) {
+        const failure = err as { code?: unknown; stderr?: unknown };
+        if (
+          failure.code === 128 &&
+          typeof failure.stderr === "string" &&
+          /not a git repository/i.test(failure.stderr)
+        ) {
+          return false;
+        }
+        throw new Error(
+          `workspace check of ${workspacePath} could not run: git rev-parse --is-inside-work-tree failed`,
+          { cause: err },
+        );
       }
+      if (stdout.trim() === "true") return true;
+      throw new Error(
+        `workspace check of ${workspacePath} could not run: git rev-parse --is-inside-work-tree answered ${JSON.stringify(stdout.trim())}, not "true"`,
+      );
     },
 
     async restore(cfg: WorkspaceCreateConfig, workspacePath: string): Promise<WorkspaceInfo> {

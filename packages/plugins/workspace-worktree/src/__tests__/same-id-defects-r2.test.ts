@@ -42,10 +42,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import { create } from "../index.js";
 
-const RED = process.env["SAME_ID_DEFECTS"] === "red";
-function defect(name: string, fn: () => Promise<void>): void {
-  (RED ? it : it.fails)(name, fn);
-}
+// Same-ID R4 made every defect of this file a plain test, so no `defect`
+// marking is left.
 
 let root: string;
 
@@ -65,24 +63,21 @@ function existingDirectory(): string {
 }
 
 describe("[same-id R4] B-7 item 2: workspace exists tells a missing path from a check that could not run", () => {
-  defect(
-    "exists rejects when the git binary cannot start (spawn ENOENT) for an existing directory",
-    async () => {
-      const path = existingDirectory();
-      git.handler = async () => {
-        throw Object.assign(new Error("spawn git ENOENT"), {
-          code: "ENOENT",
-          errno: -2,
-          syscall: "spawn git",
-        });
-      };
-      // Measured in code (workspace-worktree/src/index.ts:264-274): every
-      // failure answers false; recovery then reads "no workspace".
-      await expect(create().exists!(path)).rejects.toThrow();
-    },
-  );
+  it("exists rejects when the git binary cannot start (spawn ENOENT) for an existing directory", async () => {
+    const path = existingDirectory();
+    git.handler = async () => {
+      throw Object.assign(new Error("spawn git ENOENT"), {
+        code: "ENOENT",
+        errno: -2,
+        syscall: "spawn git",
+      });
+    };
+    // Measured in code (workspace-worktree/src/index.ts:264-274): every
+    // failure answers false; recovery then reads "no workspace".
+    await expect(create().exists!(path)).rejects.toThrow();
+  });
 
-  defect("exists rejects when git times out for an existing directory", async () => {
+  it("exists rejects when git times out for an existing directory", async () => {
     const path = existingDirectory();
     git.handler = async () => {
       throw Object.assign(new Error("Command failed: git rev-parse --is-inside-work-tree"), {
