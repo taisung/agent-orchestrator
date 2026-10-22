@@ -469,6 +469,19 @@ Durable progress record for this fork. Dated events only; the current state live
   each, 0 failures, health ok; the Claude Code sessions read `working` or `stuck`, none `killed` or `exited`.
   Pushed `8ae3efba..dee08849` at 10:45:23. Follow-ups F-8 and F-9 (Known Issues).
 
+- `d1efcb94..de7c1bfc` (2026-10-22, ao-63 Claude Opus 5.5, rounds 1 to 3; reviews by ao-64, Codex gpt-6-astra) -
+  **`ao start` with no tmux server, and the always-detached `ao stop`** (owner "1", "proceed 1", "2"). `ao start`
+  asks the runtime for each orchestrator record that is not terminal: alive is reused, not alive or no server
+  starts a new orchestrator (`does not run: ... Starting a new one.`), anything else refuses with exit 1. In core,
+  an `isAlive` answer that is not a boolean is unknown (`enrichSessionWithRuntimeState`, `isOrchestratorRuntimeAlive`).
+  `ao stop` runs the stop of every existing record in a detached process (own session, two logs per stop, pruned
+  after 7 days, generated regular files only); the caller copies all output with backpressure, ends with the
+  child's exit code, and Ctrl-C exits 130 while the stop goes on. Reviews r1 LAND-WITH-CHANGES (0 B 3 M 2 m), r2
+  LAND-WITH-CHANGES (0 B 1 M 1 m), r3 LAND-SAFE (0 B 0 M 0 m) (`start_no_server_review_r1..r3_astra6.md`). Clean
+  cherry-pick of `dc7815d2..e6695161` (14 commits; tree equal to the `git merge-tree` result `ab13588b`). Gates of
+  `main` `de7c1bfc` PASS (ao-64: 3596 passed, 1 expected fail, 29 skipped; red 0/16/6/0; incident and no-server
+  smokes; `gates_main_start_no_server_astra6.md`). Built 14:34:52 to 14:34:59 EDT; lifecycle workers restarted by
+  exact PID 14:35 (65891 -> 2087525, 68422 -> 2087614); first polls 14:36:12 and 14:36:14, 0 failures, health `ok`.
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -580,6 +593,8 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
     colors back (ANSI codes then go into the logs); the owner decides.
   - Test gap (review r3): removing the fallback that reports a stderr output error on stdout
     (`start.ts` about 1436-1441) passes all 82 targeted tests. The live path works.
+  LANDED 2026-10-22 as `d1efcb94..de7c1bfc`, built and live 14:35 EDT (What Landed). The three items from the old
+  code and the two follow-ups above stay open.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then

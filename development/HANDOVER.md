@@ -1,7 +1,7 @@
 # Handover
 
 **Last Updated**: 2026-10-22
-**Latest Code Commit**: a20883a0 (test(agents): check the Herdr PID tests against the core they run on) - the last commit of the claude-code F-6 and m-1 round; built and live since 2026-10-22 10:43 EDT
+**Latest Code Commit**: de7c1bfc (docs(development): state when Ctrl-C of ao stop exits) - the last commit of the `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`); built and live since 2026-10-22 14:35 EDT
 **Session Summary**: [0012_summary_session_2026_10_21_to_22.md](0012_summary_session_2026_10_21_to_22.md)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
@@ -50,8 +50,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 **Closed by this handover**: ao-55 (R4 landed), ao-54 (F-6 landed), and ao-52, ao-60, ao-62 (idle, owner
 "clean up inactive agents, worktrees, and branches"). See "Close record" below.
 
-**Lifecycle workers (now)**: 65891 (this config) and 68422 (agent-skills), restarted 2026-10-22 10:43 EDT
-by exact PID on the build of `dee08849` (source `a20883a0`). Pid files:
+**Lifecycle workers (now)**: 2087525 (this config) and 2087614 (agent-skills), restarted 2026-10-22 14:35 EDT
+by exact PID on the build of `213fd5e9` (source `de7c1bfc`). Pid files:
 `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. The workers of Nexus, VSF and the
 Nexus config of this fork do not run until their orchestrators run `ao start`. The global OpenCode service
@@ -151,10 +151,10 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 ## Next Priorities
 
-0. **Finish the `ao start` / `ao stop` round (ao-63)** - it runs now (Known Issues, first entry). After its
-   `done|`: a Codex gpt-6-astra review, then landing, gates of `main`, build, restart of 65891 and 68422 by
-   exact PID, live check and push, each on the owner's word. Then run `ao start` from a shell OUTSIDE tmux to
-   get an AO-managed orchestrator again, and continue there.
+0. **The `ao start` / `ao stop` round is LANDED, built and live** (`d1efcb94..de7c1bfc`, 14:35 EDT; What Landed).
+   What is left: run `ao start` from a shell OUTSIDE tmux to get an AO-managed orchestrator again, and continue
+   there; this session (tmux session `0`, not known to AO) then ends. Kill ao-63 and ao-64 and delete their
+   branches after the push (Live Sessions).
    - Then **`ao session relaunch <id> [--continue]`** (owner, 2026-10-22: a separate worker round after the
      ao-63 fix lands, because both change the launch code): restart the agent in its existing pane with the
      launch command that `ao` builds at that time; `--continue` keeps a Claude Code conversation. Known
@@ -213,7 +213,7 @@ add the missing-`TMUX_TMPDIR` fallback.
    leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
    agent-orchestrator` - expect only `ao-orchestrator` and the stale `ao-orchestrator-1`. `ps -o pid=,args= -p
-   65891,68422` - expect the two lifecycle workers.
+   2087525,2087614` - expect the two lifecycle workers.
    `herdr --version` - expect 0.9.5.
 3. Ask the owner for the Herdr step 1 and design r9 decisions (Next Priorities 1 and 2), in plain text with
    numbered options.
@@ -249,7 +249,7 @@ You are the orchestrator of the personal `ao` fork at `/home/taisung/local/agent
 profile `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md` once. The global `ao` of this host
 runs from this checkout's `dist`, so every fleet runs what you land after a rebuild. Only you rebuild, only
 on the owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker` only after a restart by
-exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py` (now 65891 and 68422).
+exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py` (now 2087525 and 2087614).
 
 The owner wants this session to focus on Herdr. Same-ID R4 and both claude-code rounds are landed, live and
 pushed; no worker session and no watcher exists. `herdr` is 0.9.5 now, but AO's Herdr code was measured only on 0.8.0, and until the
