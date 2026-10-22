@@ -13,6 +13,8 @@ import {
   type AgentLaunchConfig,
   type ActivityDetection,
   type ActivityState,
+  type AgentConversationContext,
+  type AgentConversationLookup,
   type CostEstimate,
   type PluginModule,
   type ProjectConfig,
@@ -267,6 +269,117 @@ fi
 
 # No matching command, exit silently
 echo '{}'
+exit 0
+`;
+
+// =============================================================================
+// Session Start Hook Script (session relaunch, 2026-10-22)
+// =============================================================================
+
+/** The file name of the SessionStart hook script in `.claude/`. */
+const SESSION_START_SCRIPT_NAME = "ao-session-start.sh";
+
+/** The directory in the sessions directory where the hook records conversations. */
+const CONVERSATIONS_DIR_NAME = ".agent-conversations";
+
+/**
+ * A recorded conversation counts for a launch when the hook wrote it at most
+ * this long before the record's launch time: a restore writes `restoredAt`
+ * only after its runtime started the agent.
+ */
+const CONVERSATION_LAUNCH_TOLERANCE_MS = 5_000;
+
+const CONVERSATION_ID =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * SessionStart hook: records the conversation ID of the pane's own Claude
+ * Code for `ao session relaunch --continue`. Claude Code runs it when a
+ * conversation starts, is resumed, cleared or compacted (`source`), with
+ * `session_id` and `transcript_path` on stdin. It writes
+ * `$AO_DATA_DIR/.agent-conversations/$AO_SESSION` (a temp file, then mv)
+ * only for the pane's own agent: the nearest claude process above the hook
+ * that has no claude process above it (a `claude -p` that the agent starts
+ * from a Bash tool call inherits AO_SESSION and the settings, but has the
+ * agent above it) and whose stdin is the terminal of the hook's tmux pane
+ * (a claude in another pane or window of the session has another
+ * terminal). It prints nothing to stdout (Claude Code adds the stdout of a
+ * SessionStart hook to the conversation) and exits 0 in every case.
+ * Exported for testing.
+ */
+export const SESSION_START_SCRIPT = `#!/usr/bin/env bash
+# Session Start Hook for Agent Orchestrator (session relaunch, 2026-10-22)
+# Records the conversation ID of the pane's own Claude Code for
+# \`ao session relaunch --continue\`. Prints nothing; always exits 0.
+
+set -uo pipefail
+exec >/dev/null
+
+input=$(cat)
+
+[[ -n "\${AO_SESSION:-}" && -n "\${AO_DATA_DIR:-}" && -d "\${AO_DATA_DIR:-}" ]] || exit 0
+[[ "$AO_SESSION" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 0
+
+if command -v jq &>/dev/null; then
+  session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+  source=$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)
+  transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+else
+  session_id=$(printf '%s' "$input" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  source=$(printf '%s' "$input" | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  transcript=$(printf '%s' "$input" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+fi
+uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+[[ "$session_id" =~ $uuid_re ]] || exit 0
+[[ "$source" =~ ^[a-z_]{1,32}$ ]] || source=unknown
+[[ "$transcript" == /* && "$transcript" != *$'\\n'* ]] || transcript=""
+
+claude_re='(^|/)claude( |$)'
+is_claude() {
+  local args
+  args=$(tr '\\0' ' ' < "/proc/$1/cmdline" 2>/dev/null) || return 1
+  [[ "$args" =~ $claude_re ]]
+}
+parent_of() {
+  local stat
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  stat=\${stat##*) }
+  set -- $stat
+  [[ "\${2:-}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$2"
+}
+
+# The claude process that runs this hook: the nearest claude process above it.
+agent=""
+pid=$PPID
+while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+  if is_claude "$pid"; then agent=$pid; break; fi
+  pid=$(parent_of "$pid") || exit 0
+done
+[[ -n "$agent" ]] || exit 0
+
+# Not the pane's agent when a claude process runs above it.
+pid=$(parent_of "$agent") || exit 0
+while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+  is_claude "$pid" && exit 0
+  pid=$(parent_of "$pid") || exit 0
+done
+
+# Not the pane's agent unless its stdin is the terminal of this tmux pane.
+[[ -n "\${TMUX_PANE:-}" ]] || exit 0
+pane_tty=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || exit 0
+agent_tty=$(readlink "/proc/$agent/fd/0" 2>/dev/null) || exit 0
+[[ -n "$pane_tty" && "$agent_tty" == "$pane_tty" ]] || exit 0
+
+dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
+mkdir -p "$dir" 2>/dev/null || exit 0
+tmp="$dir/.$AO_SESSION.$$.tmp"
+if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\n' \\
+  "$session_id" "$source" "$transcript" "$agent" > "$tmp" 2>/dev/null; then
+  mv -f "$tmp" "$dir/$AO_SESSION" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+else
+  rm -f "$tmp" 2>/dev/null
+fi
 exit 0
 `;
 
@@ -805,6 +918,50 @@ function classifyTerminalOutput(terminalOutput: string): ActivityState {
 // =============================================================================
 
 /**
+ * Session relaunch: the SessionStart entries with AO's hook in them (no
+ * matcher: every source). An entry that already runs the hook script gets
+ * the relative command; other entries stay as they are.
+ */
+function withSessionStartHook(existing: unknown): unknown[] {
+  const command = `.claude/${SESSION_START_SCRIPT_NAME}`;
+  const entries = Array.isArray(existing) ? [...existing] : [];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const hooksList = (entry as Record<string, unknown>)["hooks"];
+    if (!Array.isArray(hooksList)) continue;
+    for (const def of hooksList) {
+      if (typeof def !== "object" || def === null || Array.isArray(def)) continue;
+      const d = def as Record<string, unknown>;
+      if (typeof d["command"] === "string" && d["command"].includes(SESSION_START_SCRIPT_NAME)) {
+        d["command"] = command;
+        return entries;
+      }
+    }
+  }
+  entries.push({ hooks: [{ type: "command", command, timeout: 10 }] });
+  return entries;
+}
+
+/** Session relaunch: the `key=value` lines of a recorded conversation. */
+function parseConversationRecord(content: string): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const line of content.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq > 0) record[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  return record;
+}
+
+/** True when `path` is an existing regular file. */
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Shared helper to setup PostToolUse hooks in a workspace.
  * Writes metadata-updater.sh script and updates settings.json.
  *
@@ -826,6 +983,11 @@ async function setupHookInWorkspace(workspacePath: string, hookCommand: string):
   // Write the metadata updater script
   await writeFile(hookScriptPath, METADATA_UPDATER_SCRIPT, "utf-8");
   await chmod(hookScriptPath, 0o755); // Make executable
+
+  // Session relaunch: the SessionStart hook that records the conversation ID
+  const sessionStartScriptPath = join(claudeDir, SESSION_START_SCRIPT_NAME);
+  await writeFile(sessionStartScriptPath, SESSION_START_SCRIPT, "utf-8");
+  await chmod(sessionStartScriptPath, 0o755);
 
   // Read existing settings if present
   let existingSettings: Record<string, unknown> = {};
@@ -885,6 +1047,7 @@ async function setupHookInWorkspace(workspacePath: string, hookCommand: string):
   }
 
   hooks["PostToolUse"] = postToolUse;
+  hooks["SessionStart"] = withSessionStartHook(hooks["SessionStart"]);
   existingSettings["hooks"] = hooks;
 
   // Write updated settings
@@ -927,6 +1090,13 @@ function createClaudeCodeAgent(): Agent {
       // NOTE: prompt is NOT included here — it's delivered post-launch via
       // runtime.sendMessage() to keep Claude in interactive mode.
       // Using -p causes one-shot mode (Claude exits after responding).
+
+      // Session relaunch --continue: the session's own conversation, by the
+      // ID that getOwnConversationId found. Last, so the arguments of a
+      // spawn stay in front unchanged. A plain --resume keeps the ID.
+      if (config.continueConversationId) {
+        parts.push("--resume", shellEscape(config.continueConversationId));
+      }
 
       return parts.join(" ");
     },
@@ -1129,6 +1299,72 @@ function createClaudeCodeAgent(): Agent {
       }
 
       return parts.join(" ");
+    },
+
+    /**
+     * Session relaunch --continue: the conversation ID that the SessionStart
+     * hook recorded for this session's own agent (SESSION_START_SCRIPT).
+     * Never the newest transcript of the workspace. The ID counts only when
+     * the record is a claude-code record with a conversation UUID, the hook
+     * wrote it at or after the session's last launch (an older file can
+     * belong to an earlier session with the same ID), and the transcript of
+     * that conversation exists (Claude Code writes it with the first
+     * message; `--resume` needs it).
+     */
+    async getOwnConversationId(
+      session: Session,
+      context: AgentConversationContext,
+    ): Promise<AgentConversationLookup> {
+      const file = join(context.dataDir, CONVERSATIONS_DIR_NAME, session.id);
+      let content: string;
+      let writtenAt: number;
+      try {
+        writtenAt = (await stat(file)).mtimeMs;
+        content = await readFile(file, "utf-8");
+      } catch (err: unknown) {
+        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+          return {
+            id: null,
+            reason: `no conversation of this session is recorded in ${file} (its Claude Code started before AO recorded conversations, or its SessionStart hook did not run)`,
+          };
+        }
+        throw new Error(`claude-code: cannot read ${file}`, { cause: err });
+      }
+      const record = parseConversationRecord(content);
+      const id = record["conversationId"] ?? "";
+      if (record["agent"] !== "claude-code" || !CONVERSATION_ID.test(id)) {
+        return { id: null, reason: `${file} holds no Claude Code conversation ID` };
+      }
+      const launchedAt = context.launchedAt?.getTime();
+      if (launchedAt !== undefined && writtenAt < launchedAt - CONVERSATION_LAUNCH_TOLERANCE_MS) {
+        return {
+          id: null,
+          reason: `${file} was written at ${new Date(writtenAt).toISOString()}, before the session's last launch at ${new Date(launchedAt).toISOString()} (it can belong to an earlier session with the same ID)`,
+        };
+      }
+      const recorded = record["transcriptPath"] ?? "";
+      const transcript =
+        recorded && basename(recorded) === `${id}.jsonl`
+          ? recorded
+          : session.workspacePath
+            ? join(
+                homedir(),
+                ".claude",
+                "projects",
+                toClaudeProjectPath(session.workspacePath),
+                `${id}.jsonl`,
+              )
+            : "";
+      if (!transcript || !(await isFile(transcript))) {
+        return {
+          id: null,
+          reason: `conversation ${id} has no transcript${transcript ? ` at ${transcript}` : ""} (it ended before its first message)`,
+        };
+      }
+      return {
+        id,
+        source: `the SessionStart hook record ${file} (source ${record["source"] || "unknown"}, written ${new Date(writtenAt).toISOString()})`,
+      };
     },
 
     async setupWorkspaceHooks(workspacePath: string, _config: WorkspaceHooksConfig): Promise<void> {
