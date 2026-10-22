@@ -570,6 +570,10 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   cherry-picks into `~/agent-skills` (commit by name; another session can edit that repository) and asks
   the owner before a push there.
 - **Traps found in the killed-status and same-ID rounds (2026-10-20 to 2026-10-21):**
+  - A clean `git merge-tree` does not prove that two rounds pass together (ao-54, 2026-10-22). F-6
+    (`b97a2500..20e9c6bb`) merged with R4 (`c02c0c02`) as clean text, but 3 new claude-code Herdr PID tests
+    failed on the merged tree: R4's core rejects a Herdr entry with no positive PID, the old core gave PID 0.
+    Run the suites of both rounds on the merged tree before a landing (`6ea435a8` makes those tests ask core).
   - A Codex gpt-6.1-sol reviewer of lock and race work ended two turns with `codex_error_info:
     cyber_policy` (review r4, 2026-10-21 00:50Z and 00:58Z); the pane only looks idle. The owner moved the
     reviewer to gpt-6-astra with `/model`, which also set the global `~/.codex/config.toml` default to
@@ -1266,6 +1270,16 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
     per-ID lease, one `git worktree add`, `stillOwned` in `postCreate`, a claim before the reuse read,
     an `ao status` list of unowned runtimes; HIGH, L). Owner decisions OD-1 to OD-12 (design section 9).
     New trap: tmux silently uses the default socket when `TMUX_TMPDIR` names a missing directory.
+    2026-10-22: R4 (the fail-open reads, D-D) LANDED as `32c687b2..56a385fb` and is live (What Landed).
+    Open follow-ups of the R4 reviews (`development/reviews/same_id_r4_review_r4_astra6.md` section
+    "Follow-ups"): F-1 R2b launch and server identity; F-2 R3 operation, workspace and OpenCode ownership
+    (6 red tests); F-3 cleanup picks the project runtime, not the stored handle's; F-4 older missing or
+    malformed runtime-handle and unloaded-plugin guards in kill and recovery; F-5 the lenient
+    `findLiveOpenCodeSessionHolder` and other old holder and removal routes; F-6 claude-code
+    `findClaudeProcess` (fixed on `feat/claude-strict-process` at `6ea435a8`, not on `main`); F-7 OpenCode
+    `readProcessArgv` maps every `/proc` failure to null. F-8 (owner "go 1a", 2026-10-22): codex, gemini and
+    opencode answer `false` for a handle with no positive PID, while Claude Code with F-6 rejects; one
+    change for those three agents.
   - **Real records** (`ao-orchestrator`, agent-skills `as-orchestrator`) still read `killed`. Safe
     correction (analysis section 6): check the pane runs `claude`, then a one-key `status=working` merge
     with an atomic replace; never `ao session restore` or core `send` first (they relaunch the pane).
@@ -1297,6 +1311,8 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   live check PASS on 2.1.308 (What Landed). Follow-ups:
   m-1 (a quoted numbered list with no live input box reads as a dialog: a false refusal, no key), and F-6
   of R4 review r2 (claude-code `findClaudeProcess`, owner "2a": a round after this landing).
+  2026-10-22: ao-54 fixed both on `feat/claude-strict-process` (`b97a2500..6ea435a8`, 5 commits; owner
+  "go 1a" allowed 4 `index.test.ts` oracle changes); not on `main`.
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;
