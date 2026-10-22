@@ -520,7 +520,7 @@ describe("restore that recreates a workspace or copies an archive back (review r
         expect(message).toContain(
           archived
             ? "nothing was restored: the archive copy-back of this restore was removed again, this restore did not change the workspace, and no new runtime was created"
-            : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
+            : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
         );
         expect(message, "the message claims a worktree").not.toContain("worktree kept");
       });

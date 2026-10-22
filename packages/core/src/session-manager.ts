@@ -4440,7 +4440,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           stop: stopped,
           kept: fromArchive
             ? releaseCopyBack(sessionsDir, sessionId, owned)
-            : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
+            : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
           retry: `ao session restore ${sessionId}`,
         });
       }
