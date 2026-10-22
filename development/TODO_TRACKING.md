@@ -588,6 +588,8 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   `--append-system-prompt`), or `ao stop` and `ao start`. A worker round in the fork (MEDIUM: one CLI
   command and the agent launch path). Until then: the helper `scripts/ao_relaunch.py` in `~/agent-skills`
   (ao-49, below).
+  Owner 2026-10-22: a separate worker round after the fix of the `ao start` / `ao stop` defects (ao-63)
+  lands, because both rounds change the launch code.
 - **Session helpers moved out of `~/.cache`** (owner 2026-10-21, "1a"): `restart_lifecycle.py` and a
   generic `ao_relaunch.py` (save the live argv of a session's agent, run it again in the pane shell) go to
   `~/agent-skills/scripts/` with tests. ao-49 (Claude Code Opus 5.5; OpenCode Muse skipped because an

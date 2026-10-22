@@ -150,6 +150,15 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 ## Next Priorities
 
+0. **Finish the `ao start` / `ao stop` round (ao-63)** - it runs now (Known Issues, first entry). After its
+   `done|`: a Codex gpt-6-astra review, then landing, gates of `main`, build, restart of 65891 and 68422 by
+   exact PID, live check and push, each on the owner's word. Then run `ao start` from a shell OUTSIDE tmux to
+   get an AO-managed orchestrator again, and continue there.
+   - Then **`ao session relaunch <id> [--continue]`** (owner, 2026-10-22: a separate worker round after the
+     ao-63 fix lands, because both change the launch code): restart the agent in its existing pane with the
+     launch command that `ao` builds at that time; `--continue` keeps a Claude Code conversation. Known
+     Issues, the feature entry; the helper `~/agent-skills/scripts/ao_relaunch.py` (`save` before `/exit`,
+     `run` after) is the model and the stopgap. It can run beside Herdr step 1 (other code).
 1. **Herdr: a live check of AO on Herdr 0.9.5, then the RH round** (owner "18a").
    - State: `~/.local/bin/herdr` is 0.9.5 (the owner ran `herdr update`; binary replaced 10:31:34 EDT). No
      0.8.0 copy exists; a rollback takes the asset `herdr-linux-x86_64` of release v0.8.0 (`gh release
