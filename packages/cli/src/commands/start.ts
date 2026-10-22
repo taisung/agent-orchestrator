@@ -32,13 +32,17 @@ import {
   isTerminalSession,
   isRuntimeStopUnconfirmedError,
   ConfigNotFoundError,
+  RUNTIME_NO_SERVER_ERROR_CODE,
   type OrchestratorConfig,
   type ProjectConfig,
   type ParsedRepoUrl,
+  type PluginRegistry,
+  type Runtime,
+  type Session,
 } from "@aoagents/ao-core";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { exec, execSilent, git } from "../lib/shell.js";
-import { getSessionManager } from "../lib/create-session-manager.js";
+import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker, stopLifecycleWorker } from "../lib/lifecycle-service.js";
 import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
@@ -858,6 +862,67 @@ async function ensureTmux(): Promise<void> {
 }
 
 /**
+ * The liveness of an orchestrator record that `ao start` may reuse.
+ * `unchecked`: the record stores no runtime handle (a launch that is not done
+ * yet, or an external record), so it is not probed, as in `sm.list`.
+ */
+type OrchestratorLiveness =
+  | { state: "alive" }
+  | { state: "unchecked" }
+  | { state: "gone"; reason: string }
+  | { state: "unknown"; reason: string };
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Defect A (2026-10-22): `sm.list` keeps the stored status when
+ * `Runtime.isAlive` rejects, so the record of an orchestrator whose tmux
+ * server ended still reads `working`, and `ao start` reused it. `ao start`
+ * now asks the runtime itself, with the rule of `isOrchestratorRuntimeAlive`
+ * in core: true is alive; false, or a rejection with
+ * RUNTIME_NO_SERVER_ERROR_CODE (no server runs at all, so no session can
+ * exist), is gone; any other rejection, or an answer that is not a boolean,
+ * is unknown. Only a record with a stored handle is probed (the records whose
+ * liveness `sm.list` trusts).
+ */
+async function checkOrchestratorLiveness(
+  registry: PluginRegistry,
+  config: OrchestratorConfig,
+  project: ProjectConfig,
+  session: Session,
+): Promise<OrchestratorLiveness> {
+  const handle = session.runtimeHandle;
+  const storedHandle =
+    Boolean(session.metadata?.["runtimeHandle"]) || Boolean(session.metadata?.["tmuxName"]?.trim());
+  if (!handle || !storedHandle) return { state: "unchecked" };
+
+  const runtimeName = handle.runtimeName || project.runtime || config.defaults.runtime;
+  const runtime = registry.get<Runtime>("runtime", runtimeName);
+  if (!runtime) {
+    return { state: "unknown", reason: `no runtime plugin "${runtimeName}" is loaded` };
+  }
+  try {
+    const alive: unknown = await runtime.isAlive(handle);
+    if (alive === true) return { state: "alive" };
+    if (alive === false) {
+      return { state: "gone", reason: `${runtimeName} answered that ${handle.id} does not exist` };
+    }
+    return {
+      state: "unknown",
+      reason: `the liveness check of ${runtimeName} session ${handle.id} answered ${String(alive)}, not true or false`,
+    };
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+    if (code === RUNTIME_NO_SERVER_ERROR_CODE) {
+      return { state: "gone", reason: `no ${runtimeName} server runs (${errorMessage(err)})` };
+    }
+    return { state: "unknown", reason: errorMessage(err) };
+  }
+}
+
+/**
  * Shared startup logic: launch the lifecycle worker and orchestrator session.
  * Used by both normal and URL-based start flows.
  */
@@ -924,11 +989,55 @@ async function runStartup(
     const allSessionPrefixes = Object.entries(config.projects).map(
       ([, p]) => p.sessionPrefix ?? generateSessionPrefix(p.name ?? ""),
     );
-    const existingOrchestrators = allSessions.filter(
+    const candidates = allSessions.filter(
       (s) =>
         isOrchestratorSession(s, project.sessionPrefix ?? projectId, allSessionPrefixes) &&
         !isTerminalSession(s),
     );
+
+    // Defect A: a candidate is reused only when it is alive (or unchecked, as
+    // before); a gone one is left to `spawnOrchestrator`, which archives or
+    // replaces its record (project mode) or starts the next ID (isolated
+    // mode). An unknown one stops the start: it may still run.
+    const registry = candidates.length > 0 ? await getPluginRegistry(config) : null;
+    const checked = registry
+      ? await Promise.all(
+          candidates.map(async (session) => ({
+            session,
+            liveness: await checkOrchestratorLiveness(registry, config, project, session),
+          })),
+        )
+      : [];
+    const existingOrchestrators = checked
+      .filter((c) => c.liveness.state === "alive" || c.liveness.state === "unchecked")
+      .map((c) => c.session);
+    const unknownOrchestrators = checked.flatMap((c) =>
+      c.liveness.state === "unknown"
+        ? [
+            `Cannot tell whether orchestrator session ${c.session.id} is alive (${c.liveness.reason}).`,
+          ]
+        : [],
+    );
+
+    if (existingOrchestrators.length === 0 && unknownOrchestrators.length > 0) {
+      spinner.fail("Orchestrator liveness unknown");
+      throw new Error(
+        [
+          ...unknownOrchestrators,
+          `${unknownOrchestrators.length === 1 ? "It is" : "They are"} neither reused nor replaced, ` +
+            "and no new orchestrator was started. Check the runtime and run `ao start` again.",
+        ].join(" "),
+      );
+    }
+    if (existingOrchestrators.length === 0) {
+      for (const c of checked) {
+        if (c.liveness.state === "gone") {
+          spinner.info(
+            `Orchestrator session ${c.session.id} does not run: ${c.liveness.reason}. Starting a new one.`,
+          );
+        }
+      }
+    }
 
     if (existingOrchestrators.length > 0) {
       // Existing orchestrators found — use the most recently active one.

@@ -10,7 +10,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
-import { RuntimeStopUnconfirmedError, type SessionManager } from "@aoagents/ao-core";
+import {
+  RUNTIME_NO_SERVER_ERROR_CODE,
+  RuntimeStopUnconfirmedError,
+  type SessionManager,
+} from "@aoagents/ao-core";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
@@ -49,6 +53,8 @@ const {
   mockSessionManager,
   mockEnsureLifecycleWorker,
   mockStopLifecycleWorker,
+  mockRuntime,
+  oraLog,
 } = vi.hoisted(() => ({
   mockExec: vi.fn(),
   mockExecSilent: vi.fn(),
@@ -65,6 +71,8 @@ const {
   },
   mockEnsureLifecycleWorker: vi.fn(),
   mockStopLifecycleWorker: vi.fn(),
+  mockRuntime: { name: "tmux", isAlive: vi.fn() },
+  oraLog: [] as Array<[string, string | undefined]>,
 }));
 
 const { mockProcessCwd } = vi.hoisted(() => ({
@@ -82,14 +90,22 @@ vi.mock("../../src/lib/shell.js", () => ({
 }));
 
 vi.mock("ora", () => ({
-  default: () => ({
-    start: vi.fn().mockReturnThis(),
-    stop: vi.fn().mockReturnThis(),
-    succeed: vi.fn().mockReturnThis(),
-    fail: vi.fn().mockReturnThis(),
-    info: vi.fn().mockReturnThis(),
-    text: "",
-  }),
+  default: () => {
+    // Each call is logged as [method, text], so a test can read the spinner lines.
+    const logged = (method: string) =>
+      function (this: unknown, text?: string) {
+        oraLog.push([method, text]);
+        return this;
+      };
+    return {
+      start: vi.fn(logged("start")),
+      stop: vi.fn(logged("stop")),
+      succeed: vi.fn(logged("succeed")),
+      fail: vi.fn(logged("fail")),
+      info: vi.fn(logged("info")),
+      text: "",
+    };
+  },
 }));
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
@@ -115,6 +131,10 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async (): Promise<SessionManager> => mockSessionManager as SessionManager,
+  getPluginRegistry: async () => ({
+    get: (slot: string, name: string) =>
+      slot === "runtime" && name === "tmux" ? mockRuntime : null,
+  }),
 }));
 
 vi.mock("../../src/lib/lifecycle-service.js", () => ({
@@ -196,6 +216,7 @@ let cwdSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "ao-start-test-"));
   spawnCalls.length = 0;
+  oraLog.length = 0;
 
   program = new Command();
   program.exitOverride();
@@ -235,6 +256,7 @@ beforeEach(() => {
   });
   mockStopLifecycleWorker.mockReset();
   mockStopLifecycleWorker.mockResolvedValue(true);
+  mockRuntime.isAlive.mockReset();
   mockProcessCwd.mockReset();
   // Install-prompt defaults: skip the runtime install and decline optional
   // tool installs, preserving the pre-TTY behavior for tests that never
@@ -933,6 +955,213 @@ describe("stop command", () => {
     expect(mockSessionManager.kill).toHaveBeenCalledWith("app-orchestrator", {
       purgeOpenCode: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect A (2026-10-22): `ao start` and an orchestrator with no server
+// ---------------------------------------------------------------------------
+
+describe("start command — orchestrator liveness (defect A)", () => {
+  const handle = { id: "hash-app-orchestrator", runtimeName: "tmux", data: {} };
+
+  /** An orchestrator record as `sm.list` returns it: a stored handle, status working. */
+  function orchestratorRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "app-orchestrator",
+      projectId: "my-app",
+      status: "working",
+      activity: null,
+      metadata: { role: "orchestrator", runtimeHandle: JSON.stringify(handle) },
+      runtimeHandle: handle,
+      lastActivityAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  function errors(): string {
+    return vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+  }
+
+  beforeEach(() => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.spawnOrchestrator.mockResolvedValue({
+      id: "app-orchestrator",
+      metadata: {},
+    });
+  });
+
+  it("A1: a runtime with no server at all starts a new orchestrator and says so", async () => {
+    mockSessionManager.list.mockResolvedValue([orchestratorRecord()]);
+    mockRuntime.isAlive.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "tmux has-session -t =hash-app-orchestrator could not answer: no server running on /tmp/tmux-1000/default",
+        ),
+        { code: RUNTIME_NO_SERVER_ERROR_CODE },
+      ),
+    );
+
+    await program.parseAsync(["node", "test", "start"]);
+
+    expect(mockRuntime.isAlive).toHaveBeenCalledWith(handle);
+    expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
+    expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "my-app" }),
+    );
+    expect(oraLog).toContainEqual([
+      "info",
+      "Orchestrator session app-orchestrator does not run: no tmux server runs (tmux has-session -t =hash-app-orchestrator could not answer: no server running on /tmp/tmux-1000/default). Starting a new one.",
+    ]);
+    expect(oraLog).toContainEqual(["succeed", "Orchestrator session created"]);
+    expect(oraLog.some(([, text]) => text?.startsWith("Using existing orchestrator session"))).toBe(
+      false,
+    );
+  });
+
+  it("A2: a live orchestrator is reused as before, with no second session", async () => {
+    mockSessionManager.list.mockResolvedValue([orchestratorRecord()]);
+    mockRuntime.isAlive.mockResolvedValue(true);
+
+    await program.parseAsync(["node", "test", "start"]);
+
+    expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+    expect(oraLog).toContainEqual([
+      "succeed",
+      "Using existing orchestrator session: app-orchestrator",
+    ]);
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(output).toContain("ao session attach app-orchestrator");
+  });
+
+  it.each([
+    {
+      answer: "a timeout",
+      probe: () =>
+        mockRuntime.isAlive.mockRejectedValue(
+          Object.assign(
+            new Error(
+              "tmux has-session -t =hash-app-orchestrator could not answer: timed out after 5000 ms",
+            ),
+            { code: "ERR_RUNTIME_PROBE" },
+          ),
+        ),
+      reason:
+        "tmux has-session -t =hash-app-orchestrator could not answer: timed out after 5000 ms",
+    },
+    {
+      answer: "an answer that is not a boolean",
+      probe: () => mockRuntime.isAlive.mockResolvedValue("yes"),
+      reason:
+        "the liveness check of tmux session hash-app-orchestrator answered yes, not true or false",
+    },
+  ])(
+    "A3: an unknown liveness ($answer) starts no orchestrator, claims no reuse, and exits 1",
+    async ({ probe, reason }) => {
+      mockSessionManager.list.mockResolvedValue([orchestratorRecord()]);
+      probe();
+
+      await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow(
+        "process.exit(1)",
+      );
+
+      expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+      expect(
+        oraLog.some(([, text]) => text?.startsWith("Using existing orchestrator session")),
+      ).toBe(false);
+      expect(errors()).toContain(
+        `Cannot tell whether orchestrator session app-orchestrator is alive (${reason}). It is neither reused nor replaced, and no new orchestrator was started. Check the runtime and run \`ao start\` again.`,
+      );
+      const output = vi
+        .mocked(console.log)
+        .mock.calls.map((c) => c.join(" "))
+        .join("\n");
+      expect(output).not.toContain("Startup complete");
+    },
+  );
+
+  it("A3: a gone orchestrator next to an unknown one still starts nothing", async () => {
+    mockSessionManager.list.mockResolvedValue([
+      orchestratorRecord(),
+      orchestratorRecord({
+        id: "app-orchestrator-1",
+        runtimeHandle: { ...handle, id: "hash-app-orchestrator-1" },
+      }),
+    ]);
+    mockRuntime.isAlive.mockImplementation(async (h: { id: string }) => {
+      if (h.id === "hash-app-orchestrator") return false;
+      throw Object.assign(new Error("tmux has-session could not answer: timed out"), {
+        code: "ERR_RUNTIME_PROBE",
+      });
+    });
+
+    await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow("process.exit(1)");
+
+    expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+    expect(errors()).toContain(
+      "Cannot tell whether orchestrator session app-orchestrator-1 is alive (tmux has-session could not answer: timed out).",
+    );
+  });
+
+  it("A2: a live orchestrator is reused even when another candidate is unknown", async () => {
+    mockSessionManager.list.mockResolvedValue([
+      orchestratorRecord(),
+      orchestratorRecord({
+        id: "app-orchestrator-1",
+        runtimeHandle: { ...handle, id: "hash-app-orchestrator-1" },
+      }),
+    ]);
+    mockRuntime.isAlive.mockImplementation(async (h: { id: string }) => {
+      if (h.id === "hash-app-orchestrator") return true;
+      throw Object.assign(new Error("tmux has-session could not answer: timed out"), {
+        code: "ERR_RUNTIME_PROBE",
+      });
+    });
+
+    await program.parseAsync(["node", "test", "start"]);
+
+    expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+    expect(oraLog).toContainEqual([
+      "succeed",
+      "Using existing orchestrator session: app-orchestrator",
+    ]);
+  });
+
+  it.each([
+    { terminal: "status killed", overrides: { status: "killed" } },
+    { terminal: "activity exited", overrides: { activity: "exited" } },
+  ])(
+    "A4: a terminal record ($terminal) starts a new orchestrator without a probe",
+    async ({ overrides }) => {
+      mockSessionManager.list.mockResolvedValue([orchestratorRecord(overrides)]);
+
+      await program.parseAsync(["node", "test", "start"]);
+
+      expect(mockRuntime.isAlive).not.toHaveBeenCalled();
+      expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
+      expect(oraLog).toContainEqual(["succeed", "Orchestrator session created"]);
+    },
+  );
+
+  it("a record with no stored handle is not probed and is reused as before", async () => {
+    mockSessionManager.list.mockResolvedValue([
+      orchestratorRecord({ metadata: { role: "orchestrator" } }),
+    ]);
+
+    await program.parseAsync(["node", "test", "start"]);
+
+    expect(mockRuntime.isAlive).not.toHaveBeenCalled();
+    expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+    expect(oraLog).toContainEqual([
+      "succeed",
+      "Using existing orchestrator session: app-orchestrator",
+    ]);
   });
 });
 
