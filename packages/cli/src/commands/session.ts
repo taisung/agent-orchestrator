@@ -7,13 +7,16 @@ import {
   isRuntimeStopUnconfirmedError,
   loadConfig,
   SessionNotRestorableError,
+  SessionRelaunchRefusedError,
   WorkspaceMissingError,
   type Runtime,
+  type SessionRelaunchPlan,
 } from "@aoagents/ao-core";
 import { git, getTmuxActivity } from "../lib/shell.js";
 import { formatAge } from "../lib/format.js";
 import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
 import { isOrchestratorSessionName } from "../lib/session-utils.js";
+import { callerTerminal, runInCallerTerminal } from "../lib/relaunch-terminal.js";
 
 interface SessionListEntry {
   id: string;
@@ -31,7 +34,7 @@ interface SessionListEntry {
 export function registerSession(program: Command): void {
   const session = program
     .command("session")
-    .description("Session management (ls, attach, kill, cleanup, restore, claim-pr)");
+    .description("Session management (ls, attach, kill, cleanup, restore, relaunch, claim-pr)");
 
   session
     .command("ls")
@@ -423,6 +426,101 @@ export function registerSession(program: Command): void {
         }
         process.exit(1);
       }
+    });
+
+  session
+    .command("relaunch")
+    .description(
+      "Start the agent of a session again in its existing tmux pane, after the agent ended (for example after /exit)",
+    )
+    .argument("<session>", "Session ID")
+    .option("--continue", "Continue the session's own agent conversation, by its recorded ID")
+    .addHelpText(
+      "after",
+      `
+Run it after the agent process ended, from another shell or from the session's
+own pane. The launch command is built now, from the current config and prompt,
+with the agent, runtime and model of the session (an orchestrator keeps its
+prompt and its permissionless mode).
+
+It refuses (exit 1, nothing changed) when the agent process still runs, when
+its liveness is unknown, when the tmux pane does not exist, when another launch
+of the session runs, when the session is terminal or has no active record, and
+for a runtime other than tmux.
+
+From another shell, it exits 0 only when the agent process runs within 15 s.
+In the session's own pane, the agent runs as a child of this command on the
+same terminal, and the command ends with the agent's exit code.
+
+--continue resumes the conversation that AO recorded for this session when its
+agent started (Claude Code: a SessionStart hook). It refuses when that ID is not
+known. Without --continue, the agent starts a new conversation.`,
+    )
+    .action(async (sessionName: string, opts: { continue?: boolean }) => {
+      const config = loadConfig();
+      const sm = await getSessionManager(config);
+      if (!sm.relaunch) {
+        console.error(chalk.red("This session manager cannot relaunch a session."));
+        process.exit(1);
+      }
+
+      const describe = (plan: SessionRelaunchPlan): void => {
+        const where = plan.mode === "pane" ? "in its tmux pane" : "in this terminal";
+        const model = plan.model ? `, model ${plan.model}` : "";
+        console.log(
+          chalk.green(`Relaunching ${plan.sessionId} (${plan.agentName}${model}) ${where}.`),
+        );
+        console.log(
+          chalk.dim(
+            plan.conversation
+              ? `  Conversation: ${plan.conversation.id} (from ${plan.conversation.source})`
+              : "  Conversation: new",
+          ),
+        );
+      };
+
+      let result: Awaited<ReturnType<NonNullable<typeof sm.relaunch>>>;
+      try {
+        result = await sm.relaunch(sessionName, {
+          continueConversation: opts.continue === true,
+          callerTty: callerTerminal(),
+          runInCallerTerminal: (launch) => runInCallerTerminal(launch),
+          onStart: describe,
+        });
+      } catch (err) {
+        if (err instanceof SessionRelaunchRefusedError) {
+          console.error(chalk.red(err.message));
+          console.error(chalk.yellow(`Next: ${err.next}`));
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(chalk.red(`Failed to relaunch session ${sessionName}: ${message}`));
+        }
+        process.exit(1);
+      }
+
+      if (result.plan.mode === "caller-terminal" && result.child) {
+        // The agent owns the terminal now: nothing is written until it ends.
+        const code = await result.child.exited;
+        for (const warning of result.warnings) console.error(chalk.yellow(`Warning: ${warning}`));
+        if (!result.running) {
+          console.error(
+            chalk.red(`The agent of ${sessionName} ended before its process was seen running.`),
+          );
+          process.exit(code === 0 ? 1 : code);
+        }
+        process.exit(code);
+      }
+
+      for (const warning of result.warnings) console.error(chalk.yellow(`Warning: ${warning}`));
+      if (!result.running) {
+        console.error(chalk.red(`The agent process of ${sessionName} did not start within 15 s.`));
+        console.error(
+          chalk.yellow(`Next: look at the pane with \`ao session attach ${sessionName}\``),
+        );
+        process.exit(1);
+      }
+      console.log(chalk.green(`Session ${sessionName} relaunched: its agent process runs.`));
+      console.log(chalk.dim(`  Attach:   ao session attach ${sessionName}`));
     });
 
   session
