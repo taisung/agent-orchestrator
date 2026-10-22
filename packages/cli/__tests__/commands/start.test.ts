@@ -1276,6 +1276,15 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
     return (code) => finish(code);
   }
 
+  /** A stream write that ends at once: it calls its callback (with `error`, when one is given). */
+  function callWriteCallback(this: unknown, ...args: unknown[]): boolean {
+    const callback = args.find((arg) => typeof arg === "function") as
+      | ((err?: Error | null) => void)
+      | undefined;
+    callback?.(null);
+    return true;
+  }
+
   function expectNoStopInThisProcess(): void {
     expect(mockSessionManager.kill).not.toHaveBeenCalled();
     expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
@@ -1292,8 +1301,14 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
     mockSessionManager.kill.mockResolvedValue(undefined);
     stdoutLog = join(tmpDir, "orchestrator-stop-test.stdout.log");
     stderrLog = join(tmpDir, "orchestrator-stop-test.stderr.log");
-    stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // A write "ends" at once: its callback runs (the relay awaits it, review r2 M-1).
+    stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(callWriteCallback);
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(callWriteCallback);
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
   });
 
   it("from outside: the stop runs detached, and its stdout, stderr and exit code 0 are this command's", async () => {
@@ -1317,32 +1332,62 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
   it("from outside: a refused kill gives today's text on stderr and exit code 1, with no line of its own", async () => {
     detachedStop({ stderr: REFUSED_STDERR }, () => Promise.resolve(1));
 
-    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+    await program.parseAsync(["node", "test", "stop"]);
 
     expectNoStopInThisProcess();
     expect(written()).toBe("");
     expect(writtenToStderr()).toBe(REFUSED_STDERR);
     expect(errors()).toBe("");
-    expect(process.exit).toHaveBeenCalledTimes(1);
-    expect(process.exit).toHaveBeenCalledWith(1);
+    // Review r2 M-1: the exit code is set, so the process ends after its output.
+    expect(process.exitCode).toBe(1);
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   it("ends with the exit code of the detached process", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop({}, () => Promise.resolve(3));
 
-    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(3)");
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(process.exitCode).toBe(3);
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   it("a detached process ended by a signal: exit 1, and the logs are named", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop({ stderr: "- Stopping orchestrator session\n" }, () => Promise.resolve(null));
 
-    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+    await program.parseAsync(["node", "test", "stop"]);
 
-    expect(errors()).toContain(
-      `The detached stop was ended by a signal; its output: ${stdoutLog} and ${stderrLog}`,
+    expect(process.exitCode).toBe(1);
+    expect(process.exit).not.toHaveBeenCalled();
+    expect(writtenToStderr()).toBe(
+      "- Stopping orchestrator session\n" +
+        `\nThe detached stop was ended by a signal; its output: ${stdoutLog} and ${stderrLog}\n`,
     );
+  });
+
+  it("an output error of stdout ends only the stdout copy, is reported on stderr, and keeps the exit code", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    stdoutWrite.mockImplementation((...args: unknown[]) => {
+      const callback = args.find((arg) => typeof arg === "function") as
+        | ((err?: Error | null) => void)
+        | undefined;
+      callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      return false;
+    });
+    detachedStop(STOPPED, () => Promise.resolve(7));
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(stdoutWrite).toHaveBeenCalledTimes(1);
+    expect(writtenToStderr()).toBe(
+      STOPPED.stderr +
+        `ao stop: could not write the stdout of the detached stop (write EPIPE); all of it is in ${stdoutLog}\n`,
+    );
+    expect(writtenToStderr()).not.toContain("did not start");
+    expect(process.exitCode).toBe(7);
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   it("inside the pane (AO_SESSION names the session): the same detached stop", async () => {
@@ -1457,9 +1502,11 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop({}, () => Promise.reject(new Error("spawn ao ENOENT")));
 
-    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+    await program.parseAsync(["node", "test", "stop"]);
 
-    expect(errors()).toContain(
+    expect(process.exitCode).toBe(1);
+    expect(process.exit).not.toHaveBeenCalled();
+    expect(writtenToStderr()).toContain(
       "The detached stop did not start (spawn ao ENOENT); nothing was stopped. Check that this ao can run, then run `ao stop my-app` again.",
     );
     expect(mockSessionManager.kill).not.toHaveBeenCalled();
