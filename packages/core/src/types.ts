@@ -345,29 +345,37 @@ export interface Runtime {
   getAttachInfo?(handle: RuntimeHandle): Promise<AttachInfo>;
 
   /**
-   * Optional (session relaunch, 2026-10-22): the terminal of the session's
-   * pane and the name of its foreground process (tmux `#{pane_tty}` and
-   * `#{pane_current_command}`). Resolves null only when the runtime answers
-   * that the pane does not exist; rejects when it cannot tell. Without it,
-   * core does not relaunch an agent in the pane.
+   * Optional (session relaunch, 2026-10-22): every pane of the session, in
+   * every window. Resolves null only when the runtime answers that the
+   * session does not exist; rejects when it cannot tell. Without it, core
+   * does not relaunch an agent in a pane.
    */
-  getPaneState?(handle: RuntimeHandle): Promise<RuntimePaneState | null>;
+  listPanes?(handle: RuntimeHandle): Promise<RuntimePaneState[] | null>;
 
   /**
-   * Optional (session relaunch, 2026-10-22): type `command` and Enter into
-   * the shell of the session's existing pane, as `create` types a launch
-   * command into a new pane. Core calls it only after it saw that the pane's
-   * foreground process is a shell.
+   * Optional (session relaunch, 2026-10-22): put the shell of pane `paneId`
+   * (an ID from `listPanes`) into an empty input state, then type `command`
+   * and Enter into it. Every call targets that pane ID, never the active
+   * pane. Core calls it only after `listPanes` showed the pane's own shell
+   * in the foreground (`shellIdle`).
    */
-  runInPane?(handle: RuntimeHandle, command: string): Promise<void>;
+  runInPane?(handle: RuntimeHandle, paneId: string, command: string): Promise<void>;
 }
 
-/** What `Runtime.getPaneState` reports (session relaunch, 2026-10-22). */
+/** One pane of `Runtime.listPanes` (session relaunch, 2026-10-22). */
 export interface RuntimePaneState {
+  /** The runtime's ID of the pane, for example tmux `%4`. */
+  paneId: string;
   /** The pane's terminal device, for example `/dev/pts/4`. */
   tty: string;
   /** The name of the pane's foreground process, for example `bash` or `claude`. */
   foregroundCommand: string;
+  /**
+   * True when the pane's own shell is the foreground process group of the
+   * pane's terminal (no job runs, the shell reads input); false when another
+   * process group is in the foreground; null when the runtime cannot tell.
+   */
+  shellIdle: boolean | null;
 }
 
 /**
@@ -626,8 +634,14 @@ export interface Agent {
 export interface AgentConversationContext {
   /** The session's data directory: the `AO_DATA_DIR` of its pane. */
   dataDir: string;
-  /** The session's last launch (`restoredAt`, else `createdAt`); null when unknown. */
-  launchedAt: Date | null;
+  /**
+   * The launch token of the session's last launch (`AgentLaunchConfig.launchToken`,
+   * kept in the record). Only a conversation that the agent of that launch
+   * recorded counts.
+   */
+  launchToken: string;
+  /** The pane of that launch: its runtime pane ID and its terminal. */
+  pane: { id: string; tty: string };
 }
 
 /** The answer of `Agent.getOwnConversationId`. */
@@ -679,6 +693,15 @@ export interface AgentLaunchConfig {
    * Core sets it only for an agent that has `getOwnConversationId`.
    */
   continueConversationId?: string;
+  /**
+   * Session relaunch (2026-10-22): a random token of this launch, which core
+   * keeps in the record. An agent that records its conversation for
+   * `getOwnConversationId` gives it to the agent process only (Claude Code:
+   * `env AO_LAUNCH_TOKEN=<token> claude ...` in the launch command), never to
+   * the runtime environment, so a process in another pane of the session
+   * does not have it.
+   */
+  launchToken?: string;
 }
 
 /** What `Agent.prepareAgentSession` gets besides the launch config. */
@@ -1824,13 +1847,21 @@ export interface SessionRelaunchOptions {
    * caller to write to a terminal that the agent then takes.
    */
   onStart?: (plan: SessionRelaunchPlan) => void;
+  /**
+   * Called at once for each problem of the record's end state (for example
+   * the launch keys could not be cleared yet), also while the agent runs.
+   */
+  onWarning?: (message: string) => void;
 }
 
 /** The launch that `SessionRelaunchOptions.runInCallerTerminal` runs. */
 export interface SessionRelaunchLaunch {
   /** The launch script: run it with `bash <script>`. */
   script: string;
-  /** The working directory of the agent (the session's workspace). */
+  /**
+   * The working directory of the agent (the session's workspace). The script
+   * replaces itself with the agent (`exec`), so the child is the agent.
+   */
   cwd: string;
 }
 
@@ -1857,6 +1888,12 @@ export interface SessionRelaunchResult {
   plan: SessionRelaunchPlan;
   /** True when the agent process ran within the bounded wait after the start. */
   running: boolean;
+  /**
+   * "running": seen running; "absent": a definite answer that it does not run
+   * (or the caller's child ended); "unknown": no definite answer within the
+   * bound (a probe that did not answer or rejected), so it may have started.
+   */
+  agentState: "running" | "absent" | "unknown";
   /** Lines for the operator: a record write of the end state that did not happen. */
   warnings: string[];
   /** Mode "caller-terminal": the agent's child process. */
