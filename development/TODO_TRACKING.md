@@ -409,6 +409,18 @@ Durable progress record for this fork. Dated events only; the current state live
   r4 LAND-SAFE, 1 nonblocking m-1 folded into R4). Clean cherry-pick of `09546110..26368d76` (21 commits;
   source equal to `26368d76`; gates green in the author's and the reviewer's full runs). NOT built and NOT
   live yet (owner "1a": one rebuild after the Codex send fix). Follow-ups F-1 to F-4 of review r4.
+- `2c5c4f88..e3be12a9` (2026-10-21, ao-54 Claude Opus 5.5; reviews by ao-56, Codex gpt-6-astra) - **`ao
+  send` to a Codex pane** (owner "1a", "6a", "3a"): no key after the message to a Codex pane; one shared
+  parser of the Codex 0.163.0 screen; "processing" only for the status block (status row with `esc to
+  interrupt`, at most 2 `└` rows, at most 2 blank rows) directly above the composer; `waiting_input` first
+  with its own approval line; an unclear layout gives "could not confirm"; the six real running captures
+  are test fixtures. `ccec6ee4` (long messages as a bracketed paste, `paste-buffer -p`) is its own commit
+  (`0e961344` on `main`). 4 author rounds and 4 reviews
+  (`development/reviews/codex_send_idle_review_r{1..4}_astra6.md`; r4 LAND-SAFE, `-p` LAND-WITH-REST).
+  Limits L-1 (an unrecognized running layout such as a wrapped status row or a queued row reads idle, and
+  the idle wait sends at once) and L-2 (a status-shaped history block reads running); follow-ups F-1 to
+  F-7. Clean cherry-pick of `09546110..f39d63db` (15 commits; the source outside `development/` equals
+  the three-way merge of `26368d76` and `f39d63db`). NOT built and NOT live yet.
 
 ## Decisions
 
