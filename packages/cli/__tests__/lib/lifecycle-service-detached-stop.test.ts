@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -72,6 +73,14 @@ beforeEach(() => {
   });
 });
 
+/** The contents of the stop logs in the project base directory, sorted. */
+function stopLogContents(): string[] {
+  return readdirSync(baseDir)
+    .filter((name) => name.startsWith("orchestrator-stop"))
+    .map((name) => readFileSync(join(baseDir, name), "utf-8"))
+    .sort();
+}
+
 afterEach(() => {
   for (const key of ["TMUX", "PATH"] as const) {
     const saved = savedEnv[key];
@@ -126,6 +135,13 @@ describe("startDetachedStop", () => {
     const first = startDetachedStop(config, "app", ["stop", "app"]);
     const second = startDetachedStop(config, "app", ["stop", "app"]);
 
+    // Two files per stop, none shared, each with only that stop's output.
+    expect(stopLogContents()).toEqual([
+      "- Stopping orchestrator session\n",
+      "- Stopping orchestrator session\n",
+      "Orchestrator stopped\n",
+      "Orchestrator stopped\n",
+    ]);
     expect(second.stdoutLog).not.toBe(first.stdoutLog);
     expect(second.stderrLog).not.toBe(first.stderrLog);
     for (const stop of [first, second]) {
@@ -156,6 +172,7 @@ describe("startDetachedStop", () => {
     const codes = await Promise.all([a.done, b.done]);
 
     expect(codes).toEqual([0, 1]);
+    expect(stopLogContents()).toEqual(["", "A finished\n", "A started\n", "B refused\n"]);
     expect(b.stdoutLog).not.toBe(a.stdoutLog);
     expect(b.stderrLog).not.toBe(a.stderrLog);
     expect(readFileSync(a.stderrLog, "utf-8")).toBe("A started\n");
