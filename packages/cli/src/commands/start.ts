@@ -1263,6 +1263,12 @@ interface LogRelay {
    * and its write has ended, before the next chunk is read (backpressure).
    */
   copy(): Promise<void>;
+  /**
+   * Writes `text` to `out` between two chunk writes, and only when `due()`
+   * still answers true at that time. An output error of this write becomes
+   * `outputError`. Resolves false when `out` has an output error, else true.
+   */
+  write(text: string, due: () => boolean): Promise<boolean>;
   close(): void;
   /** The first error of `out` (EPIPE, for example); nothing more goes to `out` after it. */
   readonly outputError: unknown;
@@ -1273,27 +1279,50 @@ function logRelay(file: string, out: NodeJS.WriteStream): LogRelay {
   let offset = 0;
   let outputError: unknown = null;
   const chunk = Buffer.alloc(64 * 1024);
+  // One write to `out` at a time, in the order asked. A text of `write` thus
+  // goes between two chunks, never into one. A chunk ends where the log ended
+  // when it was read, not at the end of a line, so the text can split a line.
+  let turns: Promise<unknown> = Promise.resolve();
+  const inTurn = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = turns.then(task);
+    turns = result.catch(() => {}); // The caller of inTurn gets the rejection.
+    return result;
+  };
+  const send = async (data: string | Uint8Array): Promise<void> => {
+    try {
+      await writeOut(out, data);
+    } catch (err) {
+      outputError = err;
+    }
+  };
+  /** Copies one chunk; resolves false when there is nothing more to copy now. */
+  const copyChunk = async (): Promise<boolean> => {
+    if (outputError !== null) return false;
+    let read: number;
+    try {
+      fd ??= openSync(file, "r");
+      read = readSync(fd, chunk, 0, chunk.length, offset);
+    } catch {
+      return false; // The next copy tries again; the log stays for the operator.
+    }
+    if (read <= 0) return false;
+    offset += read;
+    await send(Buffer.from(chunk.subarray(0, read)));
+    return outputError === null;
+  };
   return {
     get outputError(): unknown {
       return outputError;
     },
     async copy(): Promise<void> {
-      while (outputError === null) {
-        let read: number;
-        try {
-          fd ??= openSync(file, "r");
-          read = readSync(fd, chunk, 0, chunk.length, offset);
-        } catch {
-          return; // The next copy tries again; the log stays for the operator.
-        }
-        if (read <= 0) return;
-        offset += read;
-        try {
-          await writeOut(out, Buffer.from(chunk.subarray(0, read)));
-        } catch (err) {
-          outputError = err;
-        }
-      }
+      let more = true;
+      while (more) more = await inTurn(copyChunk);
+    },
+    write(text: string, due: () => boolean): Promise<boolean> {
+      return inTurn(async () => {
+        if (outputError === null && due()) await send(text);
+        return outputError === null;
+      });
     },
     close(): void {
       if (fd !== null) closeSync(fd);
@@ -1319,13 +1348,15 @@ function settledOrAfter(promise: Promise<unknown>, ms: number): Promise<void> {
  * byte, and no output is still queued when this returns). The stderr relay
  * comes first, as the stop writes its stderr lines (the spinner, a refusal)
  * before its stdout lines. When the stop still runs after
- * DETACHED_STOP_PROGRESS_MS, `onStillRunning` runs once. Resolves with its
+ * DETACHED_STOP_PROGRESS_MS, `onStillRunning` runs once, at that time, also
+ * while a copy waits for a slow reader (review r4 m-2); its `running`
+ * answers false from when this sees the end of the stop. Resolves with its
  * exit code (null after a signal); rejects when it did not start.
  */
 async function relayDetachedStop(
   stop: DetachedStop,
   relays: LogRelay[],
-  onStillRunning: () => Promise<void>,
+  onStillRunning: (running: () => boolean) => Promise<void>,
 ): Promise<number | null> {
   let ended = false;
   const end = stop.done.then(
@@ -1336,9 +1367,9 @@ async function relayDetachedStop(
       ended = true;
     },
   );
-  let progressDue = false;
+  let progress: Promise<void> = Promise.resolve();
   const progressTimer = setTimeout(() => {
-    progressDue = true;
+    progress = onStillRunning(() => !ended);
   }, DETACHED_STOP_PROGRESS_MS);
   try {
     for (;;) {
@@ -1346,15 +1377,12 @@ async function relayDetachedStop(
       const last = ended;
       for (const relay of relays) await relay.copy();
       if (last) break;
-      // Between two passes, so the note does not split a relayed line.
-      if (progressDue && !ended) {
-        progressDue = false;
-        await onStillRunning();
-      }
       await settledOrAfter(end, DETACHED_STOP_RELAY_MS);
     }
   } finally {
     clearTimeout(progressTimer);
+    // A write of the note that has not started by now finds `running` false.
+    await progress;
     relays.forEach((relay) => relay.close());
   }
   return await stop.done;
@@ -1397,8 +1425,9 @@ async function stopInDetachedProcess(
   ]);
   const logs = `${stop.stdoutLog} and ${stop.stderrLog}`;
   // Ctrl-C: exit 130 when the note is written (it waits behind at most one
-  // relayed chunk), or after DETACHED_STOP_NOTE_MS when the reader does not
-  // take it. A second Ctrl-C ends this process at once (the handler is gone).
+  // relayed chunk or the progress note), or after DETACHED_STOP_NOTE_MS when
+  // the reader does not take it. A second Ctrl-C ends this process at once
+  // (the handler is gone).
   const onInterrupt = (): void => {
     const exit = (): void => {
       clearTimeout(timer);
@@ -1421,19 +1450,14 @@ async function stopInDetachedProcess(
   try {
     const stderrRelay = logRelay(stop.stderrLog, process.stderr);
     const stdoutRelay = logRelay(stop.stdoutLog, process.stdout);
-    const stillRunning = async (): Promise<void> => {
-      const out =
-        stderrRelay.outputError === null
-          ? process.stderr
-          : stdoutRelay.outputError === null
-            ? process.stdout
-            : null;
-      if (!out) return;
-      await writeOut(
-        out,
+    // The note goes to stderr, or to stdout when stderr has an output error,
+    // also one that the note's own write finds (review r4 m-1). The relay
+    // keeps that error and reports it at the end.
+    const stillRunning = async (running: () => boolean): Promise<void> => {
+      const note =
         `ao stop: the stop still runs in the detached process${stop.pid ? ` (PID ${stop.pid})` : ""} ` +
-          `after ${DETACHED_STOP_PROGRESS_MS / 1_000} s; Ctrl-C leaves it running; its output: ${logs}\n`,
-      ).catch(() => {}); // The relay finds a broken stream on its next write.
+        `after ${DETACHED_STOP_PROGRESS_MS / 1_000} s; Ctrl-C leaves it running; its output: ${logs}\n`;
+      if (!(await stderrRelay.write(note, running))) await stdoutRelay.write(note, running);
     };
     let code: number;
     let message = "";
