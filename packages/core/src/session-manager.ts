@@ -90,6 +90,7 @@ import {
   launchIdentity,
   listMetadata,
   reserveSessionRecord,
+  withRecordLock,
 } from "./metadata.js";
 import { buildPrompt } from "./prompt-builder.js";
 import { generateOrchestratorPrompt } from "./orchestrator-prompt.js";
@@ -165,6 +166,29 @@ const RELAUNCH_PROBE_TIMEOUT_MS = 10_000;
 /** How often a relaunch looks for the agent process after the start. */
 const RELAUNCH_CONFIRM_POLL_MS = 500;
 
+/** Immediate tries of the end-state write of a relaunch, before the later tries. */
+const RELAUNCH_SETTLE_TRIES = 3;
+
+/**
+ * The first wait before a later try of the end-state write (review r1 M-3);
+ * it doubles up to RELAUNCH_SETTLE_RETRY_MAX_MS.
+ */
+const RELAUNCH_SETTLE_RETRY_MS = 1_000;
+const RELAUNCH_SETTLE_RETRY_MAX_MS = 30_000;
+
+/**
+ * Session relaunch (review r1 M-1, M-4): the record keys of a launch's token.
+ * A spawn, an orchestrator start and a relaunch write a new random token
+ * (`AgentLaunchConfig.launchToken`), the launch time that it belongs to
+ * (`createdAt` of a spawn, `restoredAt` of a relaunch) and, for a relaunch,
+ * the pane ID. They count only while that launch time is still the
+ * record's last launch: a restore (which does not write them) changes
+ * `restoredAt`, so the token of the launch before it no longer counts.
+ */
+const LAUNCH_TOKEN_KEY = "launchToken";
+const LAUNCH_TOKEN_AT_KEY = "launchTokenAt";
+const LAUNCH_PANE_KEY = "launchPane";
+
 /**
  * The foreground commands of a pane that shows a shell prompt. A relaunch
  * from another shell types its launch line only into one of these.
@@ -190,12 +214,15 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * directory, mode 0700, it removes itself). It goes to the workspace and
  * exports the relaunch environment before the launch command, so the agent
  * gets the environment of a spawn whether the pane's shell or the caller
- * runs it.
+ * runs it. With `exec` (a launch command that is one simple command), bash
+ * replaces itself with the agent, so a signal to the script's process
+ * reaches the agent itself (review r1 M-2).
  */
 function writeRelaunchScript(
   workspacePath: string,
   environment: Record<string, string>,
   launchCommand: string,
+  exec: boolean,
 ): string {
   const exports = Object.entries(environment).map(([key, value]) => {
     if (!ENV_NAME.test(key)) {
@@ -209,11 +236,108 @@ function writeRelaunchScript(
     'rm -- "$0" 2>/dev/null || true',
     `cd -- ${shellEscape(workspacePath)} || exit 1`,
     ...exports,
-    launchCommand,
+    exec ? `exec ${launchCommand}` : launchCommand,
     "",
   ].join("\n");
   writeFileSync(scriptPath, content, { encoding: "utf-8", mode: 0o700 });
   return scriptPath;
+}
+
+/** Shell words that start a compound command, so `exec <word> ...` does not work. */
+const SHELL_RESERVED_WORDS: ReadonlySet<string> = new Set([
+  "!",
+  "[[",
+  "{",
+  "case",
+  "coproc",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "fi",
+  "for",
+  "function",
+  "if",
+  "select",
+  "then",
+  "time",
+  "until",
+  "while",
+]);
+
+/**
+ * Session relaunch (review r1 M-2): true when `command` is one simple shell
+ * command that `exec` can replace bash with. Its first word is a plain
+ * command name (not a variable assignment, not a reserved word), and no
+ * control operator, redirection, grouping, backquote or newline is outside
+ * quotes. A `$(...)` command substitution counts when its own text follows
+ * the same rule (Claude Code: `--append-system-prompt "$(cat '<file>')"`).
+ */
+function isExecableCommand(command: string): boolean {
+  const first = /^([^\s'"\\]+)(?:\s|$)/.exec(command)?.[1];
+  if (!first || first.includes("=") || first.includes("$") || SHELL_RESERVED_WORDS.has(first)) {
+    return false;
+  }
+  // Scan from `start` until the end (depth 0) or the `)` of a `$(` (depth > 0).
+  const scan = (start: number, depth: number): number => {
+    let i = start;
+    let quoted = false;
+    while (i < command.length) {
+      const char = command[i];
+      if (char === "\\") {
+        i += 2;
+        continue;
+      }
+      if (!quoted && char === "'") {
+        const end = command.indexOf("'", i + 1);
+        if (end < 0) return -1;
+        i = end + 1;
+        continue;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+        i += 1;
+        continue;
+      }
+      if (char === "$" && command[i + 1] === "(") {
+        const end = scan(i + 2, depth + 1);
+        if (end < 0) return -1;
+        i = end + 1;
+        continue;
+      }
+      if (char === "`" || char === "\n") return -1;
+      if (!quoted) {
+        if (char === ")" && depth > 0) return i;
+        if (";&|<>(){}".includes(char)) return -1;
+      }
+      i += 1;
+    }
+    return depth === 0 && !quoted ? i : -1;
+  };
+  return scan(0, 0) === command.length;
+}
+
+/**
+ * The record's last launch time as stored: a valid `restoredAt`, else
+ * `createdAt` (the string of `lastLaunchOf`).
+ */
+function lastLaunchValue(raw: Readonly<Record<string, string>>): string {
+  const restoredAt = raw["restoredAt"] ?? "";
+  return Number.isFinite(Date.parse(restoredAt)) ? restoredAt : (raw["createdAt"] ?? "");
+}
+
+/**
+ * The launch token and pane of the record's last launch, or null when the
+ * last launch wrote none (a restore, or a launch of an older build).
+ */
+function lastLaunchBinding(
+  raw: Readonly<Record<string, string>>,
+): { token: string; pane: string | null } | null {
+  const token = raw[LAUNCH_TOKEN_KEY];
+  const at = raw[LAUNCH_TOKEN_AT_KEY];
+  if (!token || !at || at !== lastLaunchValue(raw)) return null;
+  return { token, pane: raw[LAUNCH_PANE_KEY] || null };
 }
 
 /**
@@ -262,6 +386,30 @@ async function answerWithin<T>(what: string, check: () => Promise<T>): Promise<T
             ),
           RELAUNCH_PROBE_TIMEOUT_MS,
         );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Session relaunch (review r1 M-7): how `run` ended within `ms`: its value,
+ * its rejection, or no answer in time (the promise is then left alone).
+ */
+async function outcomeWithin<T>(
+  run: () => Promise<T>,
+  ms: number,
+): Promise<{ kind: "value"; value: T } | { kind: "error"; error: unknown } | { kind: "timeout" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run().then(
+        (value) => ({ kind: "value" as const, value }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      new Promise<{ kind: "timeout" }>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "timeout" }), Math.max(0, ms));
       }),
     ]);
   } finally {
@@ -2338,8 +2486,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       await rollbackLaunch({ own, workspace: spawnWorkspace() });
       throw err;
     }
+    // Session relaunch (review r1 M-1, M-4): a new token of this launch. The
+    // agent gives it to its process alone; the record keeps it with the
+    // launch time, so `relaunch --continue` knows the conversation of this
+    // launch's agent from the conversation of any other claude.
+    const launchToken = randomUUID();
     const agentLaunchConfig: AgentLaunchConfig = {
       ...baseLaunchConfig,
+      launchToken,
       projectConfig: {
         ...project,
         agentConfig: {
@@ -2444,6 +2598,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // Later operations reuse both before the config. Only `ao spawn`
       // supplies a model (batch-spawn has no --model flag); the mode comes
       // from the config.
+      const launchCreatedAt = preparedCreatedAt ?? new Date().toISOString();
       const launchedRecord = {
         worktree: workspacePath,
         branch,
@@ -2454,7 +2609,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         agent: selection.agentName, // Persist agent name for lifecycle manager
         model: selection.model,
         permissions: selection.permissions ?? "default",
-        createdAt: preparedCreatedAt ?? new Date().toISOString(),
+        createdAt: launchCreatedAt,
+        [LAUNCH_TOKEN_KEY]: launchToken,
+        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
       };
@@ -2901,8 +3058,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw err;
     }
 
+    // Session relaunch (review r1 M-1, M-4): a new token of this launch. The
+    // agent gives it to its process alone; the record keeps it with the
+    // launch time, so `relaunch --continue` knows the conversation of this
+    // launch's agent from the conversation of any other claude.
+    const launchToken = randomUUID();
     const agentLaunchConfig: AgentLaunchConfig = {
       ...baseLaunchConfig,
+      launchToken,
       projectConfig: {
         ...project,
         agentConfig: {
@@ -2998,6 +3161,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     try {
+      const launchCreatedAt = preparedCreatedAt ?? new Date().toISOString();
       const launchedRecord = {
         worktree: workspacePath,
         branch,
@@ -3006,7 +3170,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         tmuxName,
         project: orchestratorConfig.projectId,
         agent: selection.agentName,
-        createdAt: preparedCreatedAt ?? new Date().toISOString(),
+        createdAt: launchCreatedAt,
+        [LAUNCH_TOKEN_KEY]: launchToken,
+        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: session.metadata["opencodeSessionId"],
       };
@@ -4777,20 +4943,23 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * Every check runs before the first change, and a refusal throws
    * `SessionRelaunchRefusedError` and changes nothing. Then one
    * compare-and-set under the record lock takes the launch claim (the launch
-   * keys of this `ao` process, as a spawn holds them) and starts the launch
-   * grace (`restoredAt`, as a restore). While the claim lives, `restore`,
-   * `kill`, `remap`, an orchestrator start and another relaunch refuse
-   * (`assertNoLiveLauncher`), so no `send-to-agent` reaction can restore the
-   * session during the relaunch. From another shell, the runtime types the
-   * launch line into the pane's shell (`runInPane`); from the session's own
-   * pane, the caller runs it as its own child (`runInCallerTerminal`). Then
-   * the relaunch waits (bounded) for the agent process. The end state (Note
-   * 1, item 2): the claim always goes. When the agent runs, a recoverable
-   * `killed` status becomes `working` and any other status stays. When the
-   * agent did not start (the start failed, the agent did not appear in time,
-   * or the caller's child ended first), `restoredAt` goes back to its value
-   * before the relaunch, so the record is as it was. The status is never set
-   * to `spawning`.
+   * keys of this `ao` process, as a spawn holds them), starts the launch
+   * grace (`restoredAt`, as a restore) and stores the token and the pane of
+   * this launch. While the claim lives, a `restore`, `kill`, `remap`,
+   * orchestrator start or relaunch that starts later refuses
+   * (`assertNoLiveLauncher`); a restore or kill that started before the
+   * claim is not excluded (review r1 M-6, see the docs). From another shell,
+   * the runtime types the launch line into the pane's shell (`runInPane`, by
+   * the pane's ID); from the session's own pane, the caller runs it as its
+   * own child (`runInCallerTerminal`), and the script `exec`s the agent.
+   * Then the relaunch waits, bounded by one deadline for every awaited call
+   * (review r1 M-7), for the agent process. The end state: the claim always
+   * goes (later tries while this process lives, review r1 M-3). Agent seen
+   * running: a recoverable `killed` status becomes `working`. Agent absent
+   * (a definite "not running", a failed start, or the caller's child ended):
+   * `restoredAt` and the launch token go back to their values before the
+   * relaunch. Unknown (no definite answer in time, the agent may run): the
+   * new `restoredAt` and token stay. The status is never set to `spawning`.
    */
   async function relaunch(
     sessionId: SessionId,
@@ -4863,9 +5032,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
     }
     const runtime = registry.get<Runtime>("runtime", handle.runtimeName);
-    const getPaneState = runtime?.getPaneState?.bind(runtime);
+    const listPanes = runtime?.listPanes?.bind(runtime);
     const runInPane = runtime?.runInPane?.bind(runtime);
-    if (!runtime || !getPaneState || !runInPane) {
+    if (!runtime || !listPanes || !runInPane) {
       return refuse(
         `runtime plugin "${handle.runtimeName}" cannot run a command in an existing pane`,
         "update the runtime plugin",
@@ -4885,8 +5054,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
     }
 
-    // 6. Liveness: the pane exists, the agent process does not run, and (from
-    //    another shell) the pane shows a shell prompt.
+    // 6. Liveness: the tmux session exists, the agent process does not run,
+    //    and the pane of the agent is known (the pane of the last relaunch,
+    //    else the only pane of the session; review r1 M-1). From another
+    //    shell, that pane's own shell must wait for input.
     const probe = async (what: string, check: () => Promise<unknown>): Promise<boolean> => {
       try {
         return await booleanAnswerWithin(what, check);
@@ -4906,16 +5077,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "end the agent first (Claude Code: /exit), then try again",
       );
     }
-    let pane: RuntimePaneState | null = null;
+    let panes: RuntimePaneState[] | null = null;
     try {
-      pane = await answerWithin("the pane check", () => getPaneState(handle));
+      panes = await answerWithin("the pane check", () => listPanes(handle));
     } catch (err) {
       refuse(
         `the pane check could not tell (${shortErrorText(err)})`,
         "check the tmux server, then try again",
       );
     }
-    if (!pane) return refuse(`the pane of tmux session ${handle.id} does not exist`, restoreNext);
+    if (!panes) return refuse(`its tmux session ${handle.id} does not exist`, restoreNext);
+    const binding = lastLaunchBinding(raw);
+    const recordedPane = binding?.pane ? panes.find((p) => p.paneId === binding.pane) : undefined;
+    const pane = recordedPane ?? (panes.length === 1 ? panes[0] : undefined);
+    if (!pane) {
+      return refuse(
+        `its tmux session ${handle.id} has ${panes.length} panes, and its record does not name the pane of its agent`,
+        `close the other windows and panes of tmux session ${handle.id} (keep the agent's pane), then try again`,
+      );
+    }
     const runInCallerTerminal = options.runInCallerTerminal;
     const inOwnPane = !!options.callerTty && options.callerTty === pane.tty;
     if (inOwnPane && !runInCallerTerminal) {
@@ -4924,28 +5104,47 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "run the relaunch from another shell",
       );
     }
-    if (!inOwnPane && !RELAUNCH_SHELLS.has(pane.foregroundCommand)) {
-      refuse(
-        `its pane runs ${pane.foregroundCommand}, not a shell prompt`,
-        "end that program in the pane, or run the relaunch in the pane itself, then try again",
-      );
+    if (!inOwnPane) {
+      if (!RELAUNCH_SHELLS.has(pane.foregroundCommand) || pane.shellIdle === false) {
+        refuse(
+          `its pane ${pane.paneId} runs ${pane.foregroundCommand}, not a shell that waits for input`,
+          "end that program in the pane, or run the relaunch in the pane itself, then try again",
+        );
+      }
+      if (pane.shellIdle !== true) {
+        refuse(
+          `the runtime cannot tell whether the shell of its pane ${pane.paneId} waits for input`,
+          "start the agent by hand in its pane",
+        );
+      }
     }
 
-    // 7. The conversation to continue: only the session's own, by its ID (R-2).
+    // 7. The conversation to continue: only the one that the agent of the
+    //    last launch recorded, by that launch's token and pane (R-2).
     let conversation: { id: string; source: string } | undefined;
     if (options.continueConversation) {
-      if (!agent.getOwnConversationId) {
+      const getOwnConversationId = agent.getOwnConversationId?.bind(agent);
+      if (!getOwnConversationId) {
         return refuse(
           `agent ${agent.name} cannot continue a conversation by its ID`,
           "relaunch without --continue to start a new conversation",
         );
       }
+      if (!binding) {
+        return refuse(
+          "its last launch has no launch token (a restore, or a launch by an older AO build), so the conversation of its agent is not known",
+          "relaunch without --continue to start a new conversation",
+        );
+      }
       let lookup: Awaited<ReturnType<NonNullable<Agent["getOwnConversationId"]>>>;
       try {
-        lookup = await agent.getOwnConversationId(session, {
-          dataDir: sessionsDir,
-          launchedAt: Number.isFinite(launchedAt) ? new Date(launchedAt) : null,
-        });
+        lookup = await answerWithin("the conversation lookup", () =>
+          getOwnConversationId(session, {
+            dataDir: sessionsDir,
+            launchToken: binding.token,
+            pane: { id: pane.paneId, tty: pane.tty },
+          }),
+        );
       } catch (err) {
         return refuse(
           `the ID of its own conversation could not be read (${shortErrorText(err)})`,
@@ -4962,9 +5161,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     // 8. The launch command and the environment, as restore builds them
-    //    (steps 5 and 9 of restore). An orchestrator keeps its permissionless
-    //    mode and gets the orchestrator prompt of this build in the prompt
-    //    file of spawnOrchestrator (written after the claim, step 10).
+    //    (steps 5 and 9 of restore), with a new launch token. An
+    //    orchestrator keeps its permissionless mode and gets the
+    //    orchestrator prompt of this build in the prompt file of
+    //    spawnOrchestrator (written after the claim, step 10).
     const workspacePath = raw["worktree"] || project.path;
     const orchestrator = selection.role === "orchestrator";
     const systemPromptFile = orchestrator
@@ -4973,6 +5173,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           `orchestrator-prompt-${sessionId}.md`,
         )
       : undefined;
+    const launchToken = randomUUID();
     const launchConfig: AgentLaunchConfig = {
       sessionId,
       projectConfig: {
@@ -4986,10 +5187,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       permissions: orchestrator ? "permissionless" : selection.permissions,
       model: selection.model,
       subagent: selection.subagent,
+      launchToken,
       ...(systemPromptFile ? { systemPromptFile } : {}),
       ...(conversation ? { continueConversationId: conversation.id } : {}),
     };
     const launchCommand = agent.getLaunchCommand(launchConfig);
+    const exec = isExecableCommand(launchCommand);
+    if (inOwnPane && !exec) {
+      refuse(
+        "its launch command is not one simple command, so this pane cannot run its agent as a child of ao",
+        "run the relaunch from another shell",
+      );
+    }
     const tmuxName = raw["tmuxName"];
     const environment: Record<string, string> = {
       ...agent.getEnvironment(launchConfig),
@@ -5003,9 +5212,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       AO_STATE_ROOT: getStateRoot(),
     };
 
-    // 9. The launch claim and the launch grace: one compare-and-set against
-    //    the launch identity and the launch keys as read (a dead launcher's
-    //    keys are replaced). A second relaunch fails here or at step 2.
+    // 9. The launch claim, the launch grace and the token and pane of this
+    //    launch: one compare-and-set against the launch identity and the
+    //    launch keys as read (a dead launcher's keys are replaced). A second
+    //    relaunch fails here or at step 2.
     const claim = await currentLaunchClaim();
     if (!claim) {
       return refuse(
@@ -5013,6 +5223,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "try again; if it repeats, use `ao session restore`",
       );
     }
+    const claimedAt = new Date().toISOString();
     const claimed = updateMetadataIf(
       sessionsDir,
       sessionId,
@@ -5021,7 +5232,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         [LAUNCH_PID_KEY]: raw[LAUNCH_PID_KEY] ?? "",
         [LAUNCH_PID_START_KEY]: raw[LAUNCH_PID_START_KEY] ?? "",
       },
-      { ...claim, restoredAt: new Date().toISOString() },
+      {
+        ...claim,
+        restoredAt: claimedAt,
+        [LAUNCH_TOKEN_KEY]: launchToken,
+        [LAUNCH_TOKEN_AT_KEY]: claimedAt,
+        [LAUNCH_PANE_KEY]: pane.paneId,
+      },
     );
     if (!claimed) {
       return refuse(
@@ -5029,53 +5246,87 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "check it with `ao session ls`, then try again",
       );
     }
-    let owned = claimed;
     const warnings: string[] = [];
+    const warn = (message: string): void => {
+      warnings.push(message);
+      options.onWarning?.(message);
+    };
 
     /**
-     * The end state (Note 1, item 2), written only into this relaunch's
-     * version of the record (its launch identity). `started` false: the
-     * claim goes and `restoredAt` gets its value before the relaunch back.
-     * `started` true: the claim goes, and a recoverable `killed` status
-     * (the lifecycle can persist it between `/exit` and the relaunch)
-     * becomes `working`, so no reaction takes the running agent for a dead
-     * one; any other status stays. A compare that fails because another
-     * write came between the read and the write is tried again.
+     * The end state, written only while the record holds this relaunch's
+     * launch keys (nobody else can take them while this process lives).
+     * The keys always go. "running": a recoverable `killed` status (the
+     * lifecycle can persist it between `/exit` and the relaunch) becomes
+     * `working`. "absent": `restoredAt`, the token and the pane get their
+     * values before the relaunch back. "unknown": the agent may run, so the
+     * new values stay. When the write fails (an I/O error, or a compare
+     * that fails three times), the failure is reported at once and later
+     * tries run while this process lives (review r1 M-3): an `ao` that
+     * stays for the agent's life never holds the claim for that life.
      */
-    const settle = (started: boolean): void => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const current = readMetadataRaw(sessionsDir, sessionId);
-          if (!current || !holdsExpected(current, launchIdentity(owned))) {
-            warnings.push(
-              `the record of ${sessionId} was replaced or removed during the relaunch; the relaunch did not write its end state`,
-            );
-            return;
-          }
-          const updates: Record<string, string> = started
-            ? {
-                ...CLEARED_LAUNCH_CLAIM,
-                ...(isRecoverableKillRecord(current) ? { status: SESSION_STATUS.WORKING } : {}),
-              }
-            : { ...CLEARED_LAUNCH_CLAIM, restoredAt: raw["restoredAt"] ?? "" };
-          const written = updateMetadataIf(
-            sessionsDir,
-            sessionId,
-            { ...launchIdentity(owned), [GENERATION_KEY]: current[GENERATION_KEY] ?? "" },
-            updates,
-          );
-          if (written) {
-            owned = written;
-            return;
-          }
-        } catch (err) {
-          warnings.push(`the end state of the relaunch was not written: ${shortErrorText(err)}`);
-          return;
+    const before = {
+      restoredAt: raw["restoredAt"] ?? "",
+      [LAUNCH_TOKEN_KEY]: raw[LAUNCH_TOKEN_KEY] ?? "",
+      [LAUNCH_TOKEN_AT_KEY]: raw[LAUNCH_TOKEN_AT_KEY] ?? "",
+      [LAUNCH_PANE_KEY]: raw[LAUNCH_PANE_KEY] ?? "",
+    };
+    const ownKeys = {
+      [LAUNCH_PID_KEY]: claim[LAUNCH_PID_KEY],
+      [LAUNCH_PID_START_KEY]: claim[LAUNCH_PID_START_KEY],
+    };
+    const settleOnce = (state: SessionRelaunchResult["agentState"]): "done" | "gone" | "retry" =>
+      withRecordLock(sessionsDir, sessionId, () => {
+        const current = readMetadataRaw(sessionsDir, sessionId);
+        if (!current || !holdsExpected(current, ownKeys)) return "gone";
+        const updates: Record<string, string> = { ...CLEARED_LAUNCH_CLAIM };
+        if (state === "running" && isRecoverableKillRecord(current)) {
+          updates["status"] = SESSION_STATUS.WORKING;
         }
-      }
-      warnings.push(
-        `the end state of the relaunch was not written: the record of ${sessionId} changed three times while it was written`,
-      );
+        if (state === "absent" && current["restoredAt"] === claimedAt)
+          Object.assign(updates, before);
+        return updateMetadataIf(sessionsDir, sessionId, ownKeys, updates) ? "done" : "retry";
+      });
+    const settle = (state: SessionRelaunchResult["agentState"]): void => {
+      let tries = 0;
+      const attempt = (): boolean => {
+        tries += 1;
+        let outcome: "done" | "gone" | "retry";
+        let failure = "its record changed during each write";
+        try {
+          outcome = settleOnce(state);
+        } catch (err) {
+          outcome = "retry";
+          failure = shortErrorText(err);
+        }
+        if (outcome === "gone") {
+          warn(
+            `the record of ${sessionId} was replaced or removed during the relaunch; the relaunch did not write its end state`,
+          );
+          return true;
+        }
+        if (outcome === "done") {
+          if (tries > RELAUNCH_SETTLE_TRIES) {
+            warn(`the launch keys of ${sessionId} were cleared at try ${tries}`);
+          }
+          return true;
+        }
+        if (tries === RELAUNCH_SETTLE_TRIES) {
+          warn(
+            `the launch keys of ${sessionId} could not be cleared yet (${failure}); this ao process tries again while it runs, and a restore, kill or stop of the session refuses until then`,
+          );
+        }
+        return false;
+      };
+      for (let i = 0; i < RELAUNCH_SETTLE_TRIES; i++) if (attempt()) return;
+      let delay = RELAUNCH_SETTLE_RETRY_MS;
+      const later = (): void => {
+        if (attempt()) return;
+        delay = Math.min(delay * 2, RELAUNCH_SETTLE_RETRY_MAX_MS);
+        setTimeout(later, delay).unref();
+      };
+      // The timer does not keep this process alive: an ao that ends leaves
+      // keys of a dead process, which no launch check counts.
+      setTimeout(later, delay).unref();
     };
 
     // 10. The prompt file, the workspace hooks (before the agent reads its
@@ -5091,19 +5342,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           "utf-8",
         );
       }
-      if (agent.setupWorkspaceHooks) {
-        await agent.setupWorkspaceHooks(workspacePath, { dataDir: sessionsDir, sessionId });
+      const setupHooks = agent.setupWorkspaceHooks?.bind(agent);
+      if (setupHooks) {
+        await answerWithin("the setup of the workspace hooks", () =>
+          setupHooks(workspacePath, { dataDir: sessionsDir, sessionId }),
+        );
       }
-      script = writeRelaunchScript(workspacePath, environment, launchCommand);
+      script = writeRelaunchScript(workspacePath, environment, launchCommand, exec);
     } catch (err) {
-      settle(false);
+      settle("absent");
       throw new Error(
         `The relaunch of ${sessionId} could not prepare its launch (${shortErrorText(err)}); no agent was started`,
         { cause: err },
       );
     }
 
-    // 11. The start.
+    // 11. The start, within one deadline for every awaited call after it.
     const plan: SessionRelaunchPlan = {
       sessionId,
       mode: inOwnPane ? "caller-terminal" : "pane",
@@ -5112,25 +5366,42 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       launchCommand,
       ...(conversation ? { conversation } : {}),
     };
+    const deadline = Date.now() + LAUNCH_CONFIRM_TIMEOUT_MS;
+    const startFailed = (err: unknown): never => {
+      try {
+        rmSync(script, { force: true });
+      } catch (rmErr) {
+        warn(`the launch script ${script} could not be removed (${shortErrorText(rmErr)})`);
+      }
+      settle("absent");
+      throw new Error(
+        `The relaunch of ${sessionId} could not start its agent (${shortErrorText(err)})`,
+        { cause: err },
+      );
+    };
     let child: SessionRelaunchChild | undefined;
     try {
       options.onStart?.(plan);
       if (inOwnPane && runInCallerTerminal) {
         child = runInCallerTerminal({ script, cwd: workspacePath });
-      } else {
-        await runInPane(handle, `bash ${shellEscape(script)}`);
       }
     } catch (err) {
-      rmSync(script, { force: true });
-      settle(false);
-      throw new Error(
-        `The relaunch of ${sessionId} could not start its agent (${shortErrorText(err)})`,
-        { cause: err },
+      startFailed(err);
+    }
+    if (!child) {
+      const typed = await outcomeWithin(
+        () => runInPane(handle, pane.paneId, `bash ${shellEscape(script)}`),
+        deadline - Date.now(),
       );
+      // A failure means nothing ran (the runtime typed no Enter); no answer
+      // in time means the line may run, so the check below decides.
+      if (typed.kind === "error") startFailed(typed.error);
     }
 
-    // 12. The bounded wait for the agent process (the spawn bound). A check
-    //     that cannot run is no answer yet; a child that ended is a failed start.
+    // 12. The bounded wait for the agent process (the spawn bound). Each
+    //     check gets only the time left; an answer that is not true or
+    //     false, a rejection or no answer is unknown (the agent may run); a
+    //     child that ended is absent.
     let childEnded = false;
     child?.exited.then(
       () => {
@@ -5140,35 +5411,64 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         childEnded = true;
       },
     );
-    const deadline = Date.now() + LAUNCH_CONFIRM_TIMEOUT_MS;
-    let running = false;
+    let agentState: SessionRelaunchResult["agentState"] | null = null;
+    let lastAnswer: "absent" | "unknown" = "unknown";
     for (;;) {
-      if (childEnded) break;
-      running = (await agent.isProcessRunning(handle).catch(() => false)) === true;
-      if (running || childEnded || Date.now() >= deadline) break;
-      await sleep(RELAUNCH_CONFIRM_POLL_MS);
+      if (childEnded) {
+        agentState = "absent";
+        break;
+      }
+      const left = deadline - Date.now();
+      if (left <= 0) break;
+      const answer = await outcomeWithin(() => agent.isProcessRunning(handle), left);
+      if (childEnded) {
+        agentState = "absent";
+        break;
+      }
+      if (answer.kind === "value" && answer.value === true) {
+        agentState = "running";
+        break;
+      }
+      lastAnswer = answer.kind === "value" && answer.value === false ? "absent" : "unknown";
+      const wait = Math.min(RELAUNCH_CONFIRM_POLL_MS, deadline - Date.now());
+      if (wait <= 0) break;
+      await sleep(wait);
     }
-    running = running && !childEnded;
+    const finalState = agentState ?? lastAnswer;
 
-    // 13. The end state, then postLaunchSetup (non-fatal), as restore.
-    settle(running);
-    if (running && agent.postLaunchSetup) {
+    // 13. The end state, then postLaunchSetup (bounded, non-fatal), as restore.
+    settle(finalState);
+    const postLaunchSetup = agent.postLaunchSetup?.bind(agent);
+    if (finalState === "running" && postLaunchSetup) {
       const relaunched: Session = { ...session, workspacePath, restoredAt: new Date() };
-      try {
-        const before = { ...(relaunched.metadata ?? {}) };
-        await agent.postLaunchSetup(relaunched);
+      const metadataBefore = { ...(relaunched.metadata ?? {}) };
+      const setup = await outcomeWithin(
+        () => postLaunchSetup(relaunched),
+        RELAUNCH_PROBE_TIMEOUT_MS,
+      );
+      if (setup.kind === "value") {
         const updates = Object.fromEntries(
-          Object.entries(relaunched.metadata ?? {}).filter(([key, value]) => before[key] !== value),
+          Object.entries(relaunched.metadata ?? {}).filter(
+            ([key, value]) => metadataBefore[key] !== value,
+          ),
         );
         if (Object.keys(updates).length > 0) {
-          updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), updates);
+          updateMetadataIf(sessionsDir, sessionId, launchIdentity(claimed), updates);
         }
-      } catch {
-        // Non-fatal: the agent already runs.
+      } else {
+        warn(
+          `the post-launch setup of agent ${agent.name} ${setup.kind === "timeout" ? `did not finish within ${RELAUNCH_PROBE_TIMEOUT_MS / 1000} s` : `failed (${shortErrorText(setup.error)})`}; the agent runs`,
+        );
       }
     }
 
-    return { plan, running, warnings, ...(child ? { child } : {}) };
+    return {
+      plan,
+      running: finalState === "running",
+      agentState: finalState,
+      warnings,
+      ...(child ? { child } : {}),
+    };
   }
 
   return {

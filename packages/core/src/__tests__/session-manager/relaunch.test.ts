@@ -11,10 +11,23 @@
  *   grace; the claim blocks a restore and another relaunch.
  * - Note 1, item 2: every path after the claim ends with the claim cleared
  *   and the record sound.
+ * - Review r1 (round 2): the pane by its ID and the launch token (M-1, M-4),
+ *   the agent as the caller's own child through `exec` (M-2), one deadline
+ *   for every awaited call after the claim (M-7), the script mode.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { createLifecycleManager } from "../../lifecycle-manager.js";
@@ -32,6 +45,7 @@ import {
   type OrchestratorConfig,
   type PluginRegistry,
   type RuntimeHandle,
+  type RuntimePaneState,
   type SessionManager,
   type SessionRelaunchChild,
 } from "../../types.js";
@@ -44,6 +58,9 @@ import {
 } from "../test-utils.js";
 
 const PANE_TTY = "/dev/pts/77";
+const PANE = "%3";
+const THIS_LAUNCH = "5e0c2b7a-1d3f-4a6b-9c8d-7e6f5a4b3c2d";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CONVERSATION = "0b5c3a52-6c55-4a0e-9d1f-6f0f3d2a9e11";
 const EXITED: ActivityDetection = { state: "exited", timestamp: new Date() };
 
@@ -55,7 +72,10 @@ let sm: SessionManager;
 let lifecycle: LifecycleManager | null;
 let agentRunning: boolean;
 let paneCommand: string;
+let paneIdle: boolean | null;
+let extraPanes: RuntimePaneState[];
 let scripts: string[];
+let ownPids: number[];
 
 /** A launch time older than the launch grace. */
 const LONG_AGO = () => new Date(Date.now() - LAUNCH_GRACE_MS - 60_000).toISOString();
@@ -85,6 +105,11 @@ function writeRecord(sessionId: string, fields: Record<string, string> = {}): vo
 
 function recordOf(sessionId: string): Record<string, string> | null {
   return readMetadataRaw(env.sessionsDir, sessionId);
+}
+
+/** The record fields of a spawn that stored its launch token (its `createdAt` is the launch). */
+function tokenOfSpawn(sessionId: string): Record<string, string> {
+  return { launchToken: THIS_LAUNCH, launchTokenAt: recordOf(sessionId)!["createdAt"] };
 }
 
 /** The launch script path of a `runInPane` call (`bash '<path>'`). */
@@ -125,12 +150,20 @@ beforeEach(() => {
   plugins = createMockPlugins();
   agentRunning = false;
   paneCommand = "bash";
+  paneIdle = true;
+  extraPanes = [];
   scripts = [];
+  ownPids = [];
   Object.assign(plugins.runtime, {
     name: "tmux",
     isAlive: vi.fn().mockResolvedValue(true),
-    getPaneState: vi.fn(async () => ({ tty: PANE_TTY, foregroundCommand: paneCommand })),
-    runInPane: vi.fn(async (_handle: RuntimeHandle, command: string) => {
+    listPanes: vi.fn(
+      async (): Promise<RuntimePaneState[]> => [
+        { paneId: PANE, tty: PANE_TTY, foregroundCommand: paneCommand, shellIdle: paneIdle },
+        ...extraPanes,
+      ],
+    ),
+    runInPane: vi.fn(async (_handle: RuntimeHandle, _paneId: string, command: string) => {
       scriptOf(command);
       agentRunning = true;
     }),
@@ -146,6 +179,16 @@ afterEach(() => {
   vi.useRealTimers();
   lifecycle?.stop();
   for (const script of scripts) rmSync(script, { force: true });
+  // Stand-in agents of the process tests that still run (only when a test failed).
+  for (const pid of ownPids) {
+    // Only a real PID of a stand-in: 0 or a negative number would signal a process group.
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already ended.
+    }
+  }
   env.cleanup();
 });
 
@@ -167,11 +210,15 @@ describe("R-1: the launch command and the environment", () => {
     });
     const launchConfig = launchConfigOf();
     expect(launchConfig).toMatchObject({ sessionId: "app-1", model: "record-model" });
+    expect(launchConfig.launchToken).toMatch(UUID);
     expect(launchConfig.systemPromptFile).toBeUndefined();
     expect(launchConfig.continueConversationId).toBeUndefined();
 
-    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][1];
-    const lines = readFileSync(scriptOf(command), "utf-8").split("\n");
+    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2];
+    const script = scriptOf(command);
+    // Only the owner can read or run it (review r1: the mode was not pinned).
+    expect(statSync(script).mode & 0o777).toBe(0o700);
+    const lines = readFileSync(script, "utf-8").split("\n");
     expect(lines[0]).toBe("#!/usr/bin/env bash");
     expect(lines[1]).toBe('rm -- "$0" 2>/dev/null || true');
     expect(lines[2]).toBe(`cd -- '${workspaceOf()}' || exit 1`);
@@ -183,7 +230,31 @@ describe("R-1: the launch command and the environment", () => {
     expect(lines).toContain("export AO_CALLER_TYPE='agent'");
     expect(lines).toContain("export AO_PROJECT_ID='my-app'");
     expect(lines).toContain(`export AO_CONFIG_PATH='${config.configPath}'`);
-    expect(lines.filter(Boolean).at(-1)).toBe("mock-agent --start");
+    // Review r1 M-2: one simple command, so bash replaces itself with the agent.
+    expect(lines.filter(Boolean).at(-1)).toBe("exec mock-agent --start");
+    expect(lines.join("\n")).not.toContain("AO_LAUNCH_TOKEN");
+  });
+
+  it("does not exec a launch command that is not one simple command", async () => {
+    vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue("cp a GEMINI.md && mock-agent");
+    writeRecord("app-1");
+
+    await sm.relaunch!("app-1");
+
+    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2];
+    const lines = readFileSync(scriptOf(command), "utf-8").split("\n");
+    expect(lines.filter(Boolean).at(-1)).toBe("cp a GEMINI.md && mock-agent");
+  });
+
+  it("execs a launch command whose command substitution is in quotes (the Claude Code form)", async () => {
+    const claude = `env AO_LAUNCH_TOKEN='${THIS_LAUNCH}' claude --model 'opus' --append-system-prompt "$(cat '/p/x.md')" --resume 'id'`;
+    vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue(claude);
+    writeRecord("app-1");
+
+    await sm.relaunch!("app-1");
+
+    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2];
+    expect(readFileSync(scriptOf(command), "utf-8")).toContain(`\nexec ${claude}\n`);
   });
 
   it("gives an orchestrator its permissionless mode and the orchestrator prompt of this build", async () => {
@@ -205,7 +276,7 @@ describe("R-1: the launch command and the environment", () => {
     expect(readFileSync(promptFile, "utf-8")).toBe(
       generateOrchestratorPrompt({ config, projectId: "my-app", project }),
     );
-    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][1];
+    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2];
     expect(readFileSync(scriptOf(command), "utf-8")).toContain(
       "export AO_CALLER_TYPE='orchestrator'",
     );
@@ -213,9 +284,9 @@ describe("R-1: the launch command and the environment", () => {
 });
 
 describe("R-2: --continue by the session's own conversation ID", () => {
-  it("passes the ID that the agent found for this session, with its source", async () => {
+  it("passes the ID that the agent of the last launch recorded, by its launch token and pane", async () => {
     writeRecord("app-1");
-    const createdAt = Date.parse(recordOf("app-1")!["createdAt"]);
+    updateMetadata(env.sessionsDir, "app-1", tokenOfSpawn("app-1"));
     plugins.agent.getOwnConversationId = vi
       .fn()
       .mockResolvedValue({ id: CONVERSATION, source: "the hook record" });
@@ -226,12 +297,36 @@ describe("R-2: --continue by the session's own conversation ID", () => {
     expect(launchConfigOf().continueConversationId).toBe(CONVERSATION);
     expect(plugins.agent.getOwnConversationId).toHaveBeenCalledWith(
       expect.objectContaining({ id: "app-1", workspacePath: workspaceOf() }),
-      { dataDir: env.sessionsDir, launchedAt: new Date(createdAt) },
+      { dataDir: env.sessionsDir, launchToken: THIS_LAUNCH, pane: { id: PANE, tty: PANE_TTY } },
     );
+    // The new launch has a new token, which the record keeps with its launch time.
+    const after = recordOf("app-1")!;
+    expect(launchConfigOf().launchToken).not.toBe(THIS_LAUNCH);
+    expect(after["launchToken"]).toBe(launchConfigOf().launchToken);
+    expect(after["launchTokenAt"]).toBe(after["restoredAt"]);
+    expect(after["launchPane"]).toBe(PANE);
+  });
+
+  it("refuses --continue when a restore came after the launch that stored the token (review r1 M-4)", async () => {
+    writeRecord("app-1");
+    const spawnedAt = Date.parse(recordOf("app-1")!["createdAt"]);
+    updateMetadata(env.sessionsDir, "app-1", {
+      ...tokenOfSpawn("app-1"),
+      restoredAt: new Date(spawnedAt + 1_000).toISOString(),
+    });
+    const before = recordOf("app-1");
+    plugins.agent.getOwnConversationId = vi.fn();
+
+    await expect(sm.relaunch!("app-1", { continueConversation: true })).rejects.toThrow(
+      /its last launch has no launch token \(a restore, or a launch by an older AO build\)/,
+    );
+    expect(plugins.agent.getOwnConversationId).not.toHaveBeenCalled();
+    expect(recordOf("app-1")).toEqual(before);
   });
 
   it("refuses --continue when the ID is not known, and changes nothing", async () => {
     writeRecord("app-1");
+    updateMetadata(env.sessionsDir, "app-1", tokenOfSpawn("app-1"));
     const before = recordOf("app-1");
     plugins.agent.getOwnConversationId = vi
       .fn()
@@ -319,18 +414,18 @@ describe("R-3: each refusal changes nothing", () => {
       reason: /the tmux liveness check could not tell \(no server\)/,
     },
     {
-      name: "the pane does not exist",
+      name: "the tmux session ends before the pane check",
       setup: () => {
         writeRecord("app-1");
-        vi.mocked(plugins.runtime.getPaneState!).mockResolvedValue(null);
+        vi.mocked(plugins.runtime.listPanes!).mockResolvedValue(null);
       },
-      reason: /the pane of tmux session h-app-1 does not exist/,
+      reason: /its tmux session h-app-1 does not exist/,
     },
     {
       name: "the pane check rejects",
       setup: () => {
         writeRecord("app-1");
-        vi.mocked(plugins.runtime.getPaneState!).mockRejectedValue(new Error("tmux timed out"));
+        vi.mocked(plugins.runtime.listPanes!).mockRejectedValue(new Error("tmux timed out"));
       },
       reason: /the pane check could not tell \(tmux timed out\)/,
     },
@@ -339,8 +434,45 @@ describe("R-3: each refusal changes nothing", () => {
       setup: () => {
         writeRecord("app-1");
         paneCommand = "vim";
+        paneIdle = false;
       },
-      reason: /its pane runs vim, not a shell prompt/,
+      reason: /its pane %3 runs vim, not a shell that waits for input/,
+    },
+    {
+      name: "a job runs in the foreground of the pane's shell",
+      setup: () => {
+        writeRecord("app-1");
+        paneIdle = false;
+      },
+      reason: /its pane %3 runs bash, not a shell that waits for input/,
+    },
+    {
+      name: "the runtime cannot tell whether the pane's shell waits for input",
+      setup: () => {
+        writeRecord("app-1");
+        paneIdle = null;
+      },
+      reason: /cannot tell whether the shell of its pane %3 waits for input/,
+    },
+    {
+      name: "the session has several panes and the record names none (review r1 M-1)",
+      setup: () => {
+        writeRecord("app-1");
+        extraPanes = [
+          { paneId: "%8", tty: "/dev/pts/78", foregroundCommand: "bash", shellIdle: true },
+        ];
+      },
+      reason:
+        /its tmux session h-app-1 has 2 panes, and its record does not name the pane of its agent/,
+    },
+    {
+      name: "the caller's own pane cannot exec a launch command that is not one simple command (review r1 M-2)",
+      setup: () => {
+        writeRecord("app-1");
+        vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue("cp a b && mock-agent");
+      },
+      options: () => ({ callerTty: PANE_TTY, runInCallerTerminal: vi.fn() }),
+      reason: /its launch command is not one simple command/,
     },
     {
       name: "the caller is in the session's own pane and cannot run the agent there",
@@ -464,7 +596,7 @@ describe("R-4: the launch claim, the record fields and the launch grace", () => 
     writeRecord("app-1");
     const before = recordOf("app-1")!;
     let during: Record<string, string> | null = null;
-    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, command) => {
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
       scriptOf(command);
       during = recordOf("app-1");
       agentRunning = true;
@@ -496,7 +628,7 @@ describe("R-4: the launch claim, the record fields and the launch grace", () => 
     writeRecord("app-1");
     let restoreRefusal: unknown = null;
     let relaunchRefusal: unknown = null;
-    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, command) => {
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
       scriptOf(command);
       restoreRefusal = await sm.restore("app-1").catch((e: unknown) => e);
       relaunchRefusal = await sm.relaunch!("app-1").catch((e: unknown) => e);
@@ -520,11 +652,11 @@ describe("R-4: the launch claim, the record fields and the launch grace", () => 
     const bothChecked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    vi.mocked(plugins.runtime.getPaneState!).mockImplementation(async () => {
+    vi.mocked(plugins.runtime.listPanes!).mockImplementation(async () => {
       arrived += 1;
       if (arrived === 2) release();
       await bothChecked;
-      return { tty: PANE_TTY, foregroundCommand: "bash" };
+      return [{ paneId: PANE, tty: PANE_TTY, foregroundCommand: "bash", shellIdle: true }];
     });
 
     const results = await Promise.allSettled([sm.relaunch!("app-1"), sm.relaunch!("app-1")]);
@@ -561,7 +693,7 @@ describe("R-4: the launch claim, the record fields and the launch grace", () => 
       projectId: "my-app",
     });
     const lm = lifecycle;
-    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, command) => {
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
       scriptOf(command);
       // Two polls while the claim lives and the agent is not visible yet.
       await pollOnce(lm);
@@ -580,9 +712,10 @@ describe("R-4: the launch claim, the record fields and the launch grace", () => 
 describe("Note 1, item 2: the end state of each path after the claim", () => {
   it("clears the claim and restores the launch time when the runtime cannot type the command", async () => {
     writeRecord("app-1");
+    updateMetadata(env.sessionsDir, "app-1", tokenOfSpawn("app-1"));
     const before = recordOf("app-1")!;
     let script = "";
-    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, command) => {
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
       script = scriptOf(command);
       throw new Error("send-keys failed");
     });
@@ -596,6 +729,10 @@ describe("Note 1, item 2: the end state of each path after the claim", () => {
     expect(after["launchPidStart"]).toBeUndefined();
     expect(after["restoredAt"]).toBeUndefined();
     expect(after["status"]).toBe(before["status"]);
+    // The token and the pane of the launch before it are back too.
+    expect(after["launchToken"]).toBe(THIS_LAUNCH);
+    expect(after["launchTokenAt"]).toBe(before["launchTokenAt"]);
+    expect(after["launchPane"]).toBeUndefined();
     expect(existsSync(script)).toBe(false);
   });
 
@@ -604,7 +741,7 @@ describe("Note 1, item 2: the end state of each path after the claim", () => {
     writeRecord("app-1", { restoredAt: LONG_AGO() });
     const before = recordOf("app-1")!;
     let started = false;
-    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, command) => {
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
       scriptOf(command);
       started = true;
     });
@@ -696,5 +833,224 @@ describe("Note 1, item 2: the end state of each path after the claim", () => {
 
     expect(result.running).toBe(true);
     expect(recordOf("app-1")!["launchPid"]).toBeUndefined();
+  });
+});
+
+describe("Review r1 M-1: the pane of the agent, by its ID", () => {
+  it("types into the pane of the last relaunch by its ID, not into the active pane", async () => {
+    const at = LONG_AGO();
+    writeRecord("app-1", {
+      restoredAt: at,
+      launchToken: THIS_LAUNCH,
+      launchTokenAt: at,
+      launchPane: "%8",
+    });
+    // %3 (listed first, as the active pane) runs vim; %8 is the agent's pane.
+    paneCommand = "vim";
+    paneIdle = false;
+    extraPanes = [{ paneId: "%8", tty: "/dev/pts/78", foregroundCommand: "bash", shellIdle: true }];
+
+    const result = await sm.relaunch!("app-1");
+
+    expect(result.running).toBe(true);
+    expect(vi.mocked(plugins.runtime.runInPane!).mock.calls[0][1]).toBe("%8");
+    expect(recordOf("app-1")!["launchPane"]).toBe("%8");
+  });
+
+  it("does not use the pane of a launch that a restore replaced", async () => {
+    const at = LONG_AGO();
+    writeRecord("app-1", {
+      restoredAt: new Date(Date.parse(at) + 1_000).toISOString(),
+      launchToken: THIS_LAUNCH,
+      launchTokenAt: at,
+      launchPane: "%8",
+    });
+    extraPanes = [{ paneId: "%8", tty: "/dev/pts/78", foregroundCommand: "bash", shellIdle: true }];
+
+    await expect(sm.relaunch!("app-1")).rejects.toThrow(
+      /has 2 panes, and its record does not name/,
+    );
+    expect(plugins.runtime.runInPane).not.toHaveBeenCalled();
+  });
+});
+
+describe("Review r1 M-7: one deadline for every awaited call after the claim", () => {
+  it("settles as unknown when a process check after the start never answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    writeRecord("app-1");
+    let started = false;
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
+      scriptOf(command);
+      started = true;
+    });
+    let held = 0;
+    vi.mocked(plugins.agent.isProcessRunning).mockImplementation(async () => {
+      if (!started) return false;
+      held += 1;
+      return new Promise<boolean>(() => {});
+    });
+
+    const relaunched = sm.relaunch!("app-1");
+    await vi.waitFor(() => expect(held).toBe(1));
+    const during = recordOf("app-1")!;
+    expect(during["launchPid"]).toBe(String(process.pid));
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await relaunched;
+
+    expect(result).toMatchObject({ running: false, agentState: "unknown" });
+    const after = recordOf("app-1")!;
+    expect(after["launchPid"]).toBeUndefined();
+    // The agent may run: the launch time and the token of this launch stay.
+    expect(after["restoredAt"]).toBe(during["restoredAt"]);
+    expect(after["launchToken"]).toBe(during["launchToken"]);
+  });
+
+  it("does not wait for a late answer, and the late answer changes nothing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    writeRecord("app-1");
+    let started = false;
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
+      scriptOf(command);
+      started = true;
+    });
+    let answerLate: (value: boolean) => void = () => {};
+    vi.mocked(plugins.agent.isProcessRunning).mockImplementation(async () => {
+      if (!started) return false;
+      return new Promise<boolean>((resolve) => {
+        answerLate = resolve;
+      });
+    });
+
+    const relaunched = sm.relaunch!("app-1");
+    await vi.waitFor(() => expect(started).toBe(true));
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await relaunched;
+    const settled = recordOf("app-1");
+    answerLate(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(result.agentState).toBe("unknown");
+    expect(recordOf("app-1")).toEqual(settled);
+  });
+
+  it("goes on to the process check when the runtime does not answer within the bound (the line may run)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    writeRecord("app-1");
+    let typed = false;
+    vi.mocked(plugins.runtime.runInPane!).mockImplementation(async (_handle, _paneId, command) => {
+      scriptOf(command);
+      typed = true;
+      return new Promise<void>(() => {});
+    });
+
+    const relaunched = sm.relaunch!("app-1");
+    await vi.waitFor(() => expect(typed).toBe(true));
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await relaunched;
+
+    expect(result.agentState).toBe("unknown");
+    expect(recordOf("app-1")!["launchPid"]).toBeUndefined();
+  });
+});
+
+describe("Review r1 M-2: a signal to the caller's child reaches the agent itself", () => {
+  it("execs the agent, so SIGTERM to the child ends the agent and its own child", async () => {
+    const work = mkdtempSync(join(tmpdir(), "ao-relaunch-m2-"));
+    const standIn = join(work, "agent.sh");
+    writeFileSync(
+      standIn,
+      [
+        "#!/bin/bash",
+        'echo $$ > "$1/agent.pid"',
+        "sleep 300 &",
+        'echo $! > "$1/grandchild.pid"',
+        'trap \'kill "$(cat "$1/grandchild.pid")" 2>/dev/null; exit 143\' TERM',
+        "wait",
+        "",
+      ].join("\n"),
+    );
+    vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue(`bash '${standIn}' '${work}'`);
+    // A PID file counts once it holds a PID (the shell creates it before it writes).
+    const pidOf = (name: string): number | null => {
+      const text = existsSync(join(work, name))
+        ? readFileSync(join(work, name), "utf-8").trim()
+        : "";
+      return /^[1-9]\d*$/.test(text) ? Number(text) : null;
+    };
+    const alive = (pid: number | null): boolean => {
+      if (pid === null || pid <= 1) return false;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    vi.mocked(plugins.agent.isProcessRunning).mockImplementation(async () =>
+      alive(pidOf("grandchild.pid")) ? alive(pidOf("agent.pid")) : false,
+    );
+    writeRecord("app-1");
+    mkdirSync(workspaceOf(), { recursive: true });
+    let childPid = 0;
+    let killChild: (signal: NodeJS.Signals) => void = () => {};
+    const runInCallerTerminal = (launch: { script: string; cwd: string }): SessionRelaunchChild => {
+      // As the CLI runs it: `bash <script>` as the caller's child.
+      const child = spawn("bash", [launch.script], { cwd: launch.cwd, stdio: "ignore" });
+      childPid = child.pid ?? -1;
+      ownPids.push(childPid);
+      killChild = (signal) => child.kill(signal);
+      return {
+        exited: new Promise<number>((resolve) => child.on("exit", (code) => resolve(code ?? 128))),
+      };
+    };
+
+    try {
+      const result = await sm.relaunch!("app-1", { callerTty: PANE_TTY, runInCallerTerminal });
+      const agentPid = pidOf("agent.pid");
+      const grandchildPid = pidOf("grandchild.pid");
+      if (agentPid) ownPids.push(agentPid);
+      if (grandchildPid) ownPids.push(grandchildPid);
+
+      expect(result.running).toBe(true);
+      expect(agentPid).toBe(childPid);
+      // What the CLI does on SIGTERM or SIGHUP: pass it on to its child.
+      killChild("SIGTERM");
+      await result.child!.exited;
+      await vi.waitFor(() => expect(alive(agentPid)).toBe(false), { timeout: 3_000 });
+      await vi.waitFor(() => expect(alive(grandchildPid)).toBe(false), { timeout: 3_000 });
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
+describe("Review r1 M-1, M-4: a spawn and an orchestrator start store their launch token", () => {
+  /** A session manager whose registry also has the workspace plugin, as spawn needs it. */
+  const spawningManager = (): SessionManager =>
+    createSessionManager({
+      config,
+      registry: createMockRegistry({
+        runtime: plugins.runtime,
+        agent: plugins.agent,
+        workspace: plugins.workspace,
+      }),
+    });
+
+  it("gives the agent of a spawn a new token and stores it with the spawn's launch time", async () => {
+    const spawned = await spawningManager().spawn({ projectId: "my-app" });
+
+    const record = recordOf(spawned.id)!;
+    expect(launchConfigOf().launchToken).toMatch(UUID);
+    expect(record["launchToken"]).toBe(launchConfigOf().launchToken);
+    expect(record["launchTokenAt"]).toBe(record["createdAt"]);
+  });
+
+  it("gives the agent of an orchestrator start a new token and stores it with its launch time", async () => {
+    const started = await spawningManager().spawnOrchestrator({ projectId: "my-app" });
+
+    const record = recordOf(started.id)!;
+    expect(launchConfigOf().launchToken).toMatch(UUID);
+    expect(record["launchToken"]).toBe(launchConfigOf().launchToken);
+    expect(record["launchTokenAt"]).toBe(record["createdAt"]);
   });
 });
