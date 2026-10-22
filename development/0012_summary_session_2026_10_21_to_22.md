@@ -107,15 +107,15 @@ Token counts are the sums of the router log rows (`development/artifacts/model_r
 | ao-49 | Claude Code, Opus 5.5 | session helpers in `~/agent-skills` (`f121d03`) | 6.6M / 91K | killed 2026-10-21 12:26 |
 | ao-50 | Claude Code, Opus 5.5 | R1 author (2 rounds) | 49.6M / 169K | killed 13:48 |
 | ao-51 | Codex, gpt-6-astra | design reviewer r1 to r6 | 26.2M / 211K | killed 2026-10-22 08:19 (context 90%) |
-| ao-52 | Claude Code, Opus 5.5 | design r2 to r8 | 319.1M / 2.18M | live, waits for the r8 re-check |
+| ao-52 | Claude Code, Opus 5.5 | design r2 to r8 | 319.1M / 2.18M | killed 2026-10-22 10:54 (owner cleanup) |
 | ao-53 | Codex, gpt-6-astra | R1 reviewer (2 reviews) | 7.3M / 60K | killed 13:48 |
 | ao-54 | Claude Code, Opus 5.5 | Codex send fix (4 rounds), claude-code `detectActivity`, F-6 and m-1 | 166.9M / 948K | killed by the handover 10:45 |
 | ao-55 | Claude Code, Opus 5.5 | R2a (4 rounds), R4 (4 rounds) | 294.9M / 1.21M | killed by the handover 10:07 |
 | ao-56 | Codex, gpt-6-astra | Codex send and claude-code reviewer, gate runs | 23.0M / 193K | killed 08:19 |
 | ao-57 | Codex, gpt-6-astra | R2a reviewer r1 to r4, R4 review r1 | 18.7M / 137K | killed 08:19 (context 90%) |
 | ao-58, ao-59, ao-61 | Codex gpt-6-luna; Claude Code Haiku 5.5; Claude Code Sonnet 5.5 | disposable live-check sessions | not logged | killed after each check |
-| ao-60 | Codex, gpt-6-astra | R4 reviewer r2 to r4, gates of `main` after R4 and after F-6, F-6 review r1 | 18.4M / 149K | live, idle |
-| ao-62 | Codex, gpt-6-astra | design reviewer r7, re-check r8 | 10.2M / 65K | live, idle |
+| ao-60 | Codex, gpt-6-astra | R4 reviewer r2 to r4, gates of `main` after R4 and after F-6, F-6 review r1 | 18.4M / 149K | killed 10:54 (owner cleanup) |
+| ao-62 | Codex, gpt-6-astra | design reviewer r7, re-check r8 | 10.2M / 65K | killed 10:54 (owner cleanup) |
 
 Every author was Claude Code on Opus 5.5 and every reviewer was Codex on gpt-6-astra (cross-family). Every
 brief forbade push and PR, protected the lifecycle PIDs, and required `env -i` with a fake `HOME`, private

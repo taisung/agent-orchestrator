@@ -24,23 +24,22 @@ then the RH round (Next Priorities 1). The owner updated `herdr` from 0.8.0 to *
 
 The same-ID arc has R1, R2a and R4 on `main`. Design r8 of RW and R2b-2 got re-check r8 by ao-62:
 SOUND-WITH-CHANGES for both (0 B, 3 M, 0 m). Design r9 waits for the owner's word (Next Priorities 2).
-No worker runs at the handover.
+No worker session and no watcher exists at the handover: the owner asked between 10:51 and 10:54 EDT to clean up the
+inactive agents, worktrees and branches, so ao-52, ao-60 and ao-62 are closed too. New workers start the
+next tasks.
 
 ## Live Sessions and Worktrees
 
 All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees under
-`/home/taisung/.worktrees/agent-orchestrator/`. Briefs and reports: `~/.cache/agent-skills-haiku55-arc/`.
-Context and Codex weekly limit read at 10:46 EDT.
+`/home/taisung/.worktrees/agent-orchestrator/` (now empty). Briefs and reports: `~/.cache/agent-skills-haiku55-arc/`.
 
 | Session | State | Disposition |
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`. Transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | a new session continues here |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-52 | Claude Code Opus 5.5, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` at `48c26129`. Design r8 DONE 09:57 EDT (design on `main`; tests `fe5d6575..48c26129`, not on `main`; report `reports/ao-52_same_id_design_r8.report.md`). Context 36% | idle; the author of design r9 and of the RH design revision. Watcher 2833081 |
-| ao-60 | Codex `gpt-6-astra` xhigh, branch `validate/main-claude-strict` at `33a2c74c`. F-6 review r1 LAND-SAFE (10:24) and gates of `main` PASS (10:43, `development/reviews/gates_main_claude_strict_astra6.md`); router rows closed. Context 56%, weekly limit 22% left. Rollout `~/.codex/sessions/2026/10/21/rollout-2026-10-21T23-44-26-01a161b5-cb34-7da3-af23-97acdd286c51.jsonl` | idle; knows R4's Herdr rows 8 and 9: a good reviewer for RH. Watcher 2246299 |
-| ao-62 | Codex `gpt-6-astra` xhigh, branch `review/same-id-design-r8` at `48c26129`. Re-check r8 DONE 10:28 (`development/reviews/same_id_design_review_r8_astra6.md`); router row closed. Context 83%, weekly limit 22% left. Rollout `~/.codex/sessions/2026/10/22/rollout-2026-10-22T08-31-13-01a16398-1496-7b53-8d52-9433cae946a1.jsonl` | idle; the reviewer of design r9. Watcher 2610857 |
 
-**Closed by this handover**: ao-55 (R4 landed) and ao-54 (F-6 landed). See "Close record" below.
+**Closed by this handover**: ao-55 (R4 landed), ao-54 (F-6 landed), and ao-52, ao-60, ao-62 (idle, owner
+"clean up inactive agents, worktrees, and branches"). See "Close record" below.
 
 **Lifecycle workers (now)**: 65891 (this config) and 68422 (agent-skills), restarted 2026-10-22 10:43 EDT
 by exact PID on the build of `dee08849` (source `a20883a0`). Pid files:
@@ -49,9 +48,7 @@ by exact PID on the build of `dee08849` (source `a20883a0`). Pid files:
 Nexus config of this fork do not run until their orchestrators run `ao start`. The global OpenCode service
 does not run: an `opencode api` call starts one with the caller's environment.
 
-**Watchers** (each watches one session, `-o ao-orchestrator --fallback ao-orchestrator -i 60 -s 20`):
-2833081 ao-52 (`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`), 2246299 ao-60
-(`~/.cache/fleet_watch/ao-r4r2-rev-2026-10-21`), 2610857 ao-62 (`~/.cache/fleet_watch/ao-62`). Start form:
+**Watchers**: none runs (the last three stopped 10:54:35 EDT). Give each new worker one watcher. Start form:
 `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh -o
 ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20
 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop with TERM only, then check that the
@@ -68,7 +65,9 @@ subtract the sums of the earlier rows of that session. The rows of the rounds la
 22% left at 10:46 EDT: plan the reviews of the next session with that.
 
 **Local branches**: `main`; `i3-r2-pre-rebase` (keep: two commits that `main` has only in rewritten
-form); `review/same-id-design-r7` (kept, see the close record); the branches of the live sessions (above).
+form); `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` at `48c26129` (keep: 17 test commits
+`73fb5b13..48c26129`, the failing reproducers of the same-ID design r2 to r8, not on `main`; the base of
+design r9 and of the RW and R2b-2 rounds). No other branch and no worker worktree exists.
 
 ### Close record
 
@@ -79,20 +78,24 @@ form); `review/same-id-design-r7` (kept, see the close record); the branches of 
 - **Watcher retirement** (ao-lifecycle, Session Cleanup), each by TERM, each log ends with `EXIT signal
   SIGTERM`, each `watch.pid` removed, and the `grep -Flzx` check of each state found no process:
   3845635 (ao-55) at 10:07:03 and 3760585 (ao-54) at 10:45:47. Their escalations "the fleet is unwatched"
-  covered only that session.
+  covered only that session. Then 2833081 (ao-52), 2246299 (ao-60) and 2610857 (ao-62) at 10:54:35, all
+  three ended by 10:54:38.
 - **Sessions**: `ao session cleanup -p agent-orchestrator` found no sessions to clean up. `ao session kill`
   archived ao-55 at 10:07:20 (`ao-55_2026-10-22T14-07-20-702Z`) and ao-54 at 10:45:57
-  (`ao-54_2026-10-22T14-45-57-812Z`), and removed their tmux sessions and worktrees. Before each kill: only
-  `.agent_report.md` and `.agent_task.md` were untracked, the last report was saved under `reports/`, and no
-  client was attached.
+  (`ao-54_2026-10-22T14-45-57-812Z`), then ao-52, ao-60 and ao-62 at 10:54:45 to 10:54:46
+  (`ao-52_2026-10-22T14-54-45-500Z`, `ao-60_2026-10-22T14-54-46-011Z`, `ao-62_2026-10-22T14-54-46-453Z`), and
+  removed their tmux sessions and worktrees. Before each kill: the last report was saved under `reports/`,
+  every other untracked file was equal to its copy on `main`, and no client was attached.
 - **Branches** (log `~/.cache/agent-skills-haiku55-arc/branch-cleanup-2026-10-22-handover.log`): no branch
   had a merge commit. Deleted with `-d` (ancestors of `main`): `validate/main-r4` 193d2c9e,
   `feat/sdr7-review-read-agent-task-md-in-your-worktree-and-execute` 407ee00d. Deleted with `-D` (no `+`
   line in `git cherry main`): `feat/same-id-r4` e3860672 (21 `-`), `review/same-id-r4-r2` 8e9efe95 (12 `-`),
   `review/same-id-r4-r3` c02c0c02 (18 `-`), `review/same-id-r4-r4` e3860672 (21 `-`),
   `feat/claude-detect-activity` 53cfd6a8 (4 `-`), `feat/claude-strict-process` 6ea435a8 (5 `-`),
-  `review/claude-strict-process` 6ea435a8 (5 `-`). KEPT: `review/same-id-design-r7` fe5d6575 with 13 `+`
-  commits (design test commits of ao-52, not on `main`); its tip is an ancestor of ao-52's branch.
+  `review/claude-strict-process` 6ea435a8 (5 `-`); `validate/main-claude-strict` 33a2c74c with `-d` (an
+  ancestor of `main`). Deleted with `-D` because the tip is a commit of the kept design-test branch (no
+  commit lost): `review/same-id-design-r7` fe5d6575 and `review/same-id-design-r8` 48c26129. KEPT:
+  `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` (17 `+` commits) and `i3-r2-pre-rebase`.
 
 ## Open and Blocked Items
 
@@ -163,9 +166,10 @@ add the missing-`TMUX_TMPDIR` fallback.
      envelope, `pane_not_found`), the kill refusal, and the three release-note paths. A stand-in agent
      process covers the runtime paths; a real agent turn needs the owner's word. Save the real answers as
      fixtures, and list what doc 0004 must change.
-   - Step 2, RH design revision (ao-52, from design r4 section 7): fix review r4 M-4 (the ID check rejects
-     the IDs that herdr emits) with the IDs measured in step 1, name the qualified version and protocol of
-     0.9.5, and state what RH needs from RW, R2b and R3. Re-check by ao-60.
+   - Step 2, RH design revision (a new Claude Code Opus 5.5 author, from design r4 section 7): fix review
+     r4 M-4 (the ID check rejects the IDs that herdr emits) with the IDs measured in step 1, name the
+     qualified version and protocol of 0.9.5, and state what RH needs from RW, R2b and R3. Re-check by a new
+     Codex gpt-6-astra reviewer.
    - Step 3, the RH implementation, review, landing, rebuild and live check, each on the owner's word.
    - Expected outcome: a measured table of AO's Herdr paths on 0.9.5, then an RH design that the reviewer
      finds SOUND, then `ao session kill` that stops a Herdr session safely.
@@ -173,9 +177,10 @@ add the missing-`TMUX_TMPDIR` fallback.
    recovery must make the directory durable (`fsync` of the archive directory and of the moved inbox) before
    it removes the active record; M-2 (R2b-2) keep r7's existing-session fence in the replacement creation
    order; M-3 (both) the core caller tests must accept the required `launchToken` and check the durability
-   order. On the owner's word: design r9 by ao-52 (template `brief-aofork-same-id-design-r8.md`; commit the
-   design to `main` before the reviewer pointer), re-check by ao-62. It can run beside Herdr step 1 (other
-   files), but ao-52 is also the planned RH author: run them one after the other in ao-52.
+   order. On the owner's word: design r9 by a new Claude Code Opus 5.5 author on a new branch from
+   `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` (`48c26129`), with design r8 and review r8 as its
+   input (template `brief-aofork-same-id-design-r8.md`; commit the design to `main` before the reviewer
+   pointer), re-check by a new Codex reviewer. It can run beside Herdr step 1 (other files).
 3. **F-8, F-9 and the small R4 follow-ups** - F-8: codex, gemini and opencode reject a handle with no
    positive PID, as Claude Code does now. F-9: the 5-second `ps` cache of claude-code keeps a "no process"
    answer for up to 5 s after a process starts. Owner choice.
@@ -187,8 +192,8 @@ add the missing-`TMUX_TMPDIR` fallback.
    `origin/main` at the commit of this handover. ` D test-ao-config2.yaml` is an old working-tree deletion;
    leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-52, ao-60, ao-62 and the orchestrator records. `ps -o pid=,args= -p
-   65891,68422,2833081,2246299,2610857` - expect the two lifecycle workers and the three watchers.
+   agent-orchestrator` - expect only `ao-orchestrator` and the stale `ao-orchestrator-1`. `ps -o pid=,args= -p
+   65891,68422` - expect the two lifecycle workers.
    `herdr --version` - expect 0.9.5.
 3. Ask the owner for the Herdr step 1 and design r9 decisions (Next Priorities 1 and 2), in plain text with
    numbered options.
@@ -227,7 +232,7 @@ on the owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker`
 exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py` (now 65891 and 68422).
 
 The owner wants this session to focus on Herdr. Same-ID R4 and both claude-code rounds are landed, live and
-pushed; no worker runs. `herdr` is 0.9.5 now, but AO's Herdr code was measured only on 0.8.0, and until the
+pushed; no worker session and no watcher exists. `herdr` is 0.9.5 now, but AO's Herdr code was measured only on 0.8.0, and until the
 RH round lands `ao` cannot stop a Herdr session. Do First Actions 1 to 3, then propose Herdr step 1 (a
 scratch-only live check on 0.9.5) as Next Priorities 1 describes, and ask about design r9. Ask the owner in
 plain text with numbered options (a watcher can paste into this pane, so never open an AskUserQuestion
