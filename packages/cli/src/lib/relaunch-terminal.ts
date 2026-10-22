@@ -4,7 +4,10 @@
  * When the command runs in the session's own pane, `ao` is the pane's
  * foreground process, so keys typed into the pane would reach `ao` and not
  * the pane's shell. The agent then runs as a child of `ao` on the inherited
- * terminal, and `ao` waits for it.
+ * terminal, and `ao` waits for it. Core gives this caller only a launch
+ * script that `exec`s the agent (review r1 M-2), so the child is the agent
+ * itself: a signal that `ao` passes on reaches the agent, and the child ends
+ * only when the agent ends.
  */
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
@@ -42,12 +45,13 @@ const FORWARDED_SIGNALS = ["SIGTERM", "SIGHUP"] as const;
 type Spawn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
 /**
- * Run the launch script as a child of `ao` on the inherited terminal. While
- * the child runs, `ao` ignores SIGINT and SIGQUIT (the terminal sends them to
- * the child too) and passes SIGTERM and SIGHUP on to the child, so the pane's
- * shell never gets the terminal back while the agent still runs. `exited`
- * resolves with the child's exit code, 128 plus the signal number when a
- * signal ended it, or 127 when it could not start.
+ * Run the launch script as a child of `ao` on the inherited terminal (the
+ * script execs the agent, so the child is the agent). While the child runs,
+ * `ao` ignores SIGINT and SIGQUIT (the terminal sends them to the child too)
+ * and passes SIGTERM and SIGHUP on to the child, and `ao` ends only after the
+ * child ended, so the pane's shell never gets the terminal back while the
+ * agent still runs. `exited` resolves with the child's exit code, 128 plus
+ * the signal number when a signal ended it, or 127 when it could not start.
  */
 export function runInCallerTerminal(
   launch: SessionRelaunchLaunch,

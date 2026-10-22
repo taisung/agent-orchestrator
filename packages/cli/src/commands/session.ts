@@ -444,17 +444,26 @@ with the agent, runtime and model of the session (an orchestrator keeps its
 prompt and its permissionless mode).
 
 It refuses (exit 1, nothing changed) when the agent process still runs, when
-its liveness is unknown, when the tmux pane does not exist, when another launch
-of the session runs, when the session is terminal or has no active record, and
-for a runtime other than tmux.
+its liveness is unknown, when the tmux session does not exist, when the pane of
+the agent is not known (a session with several panes that no relaunch named),
+when another launch of the session runs, when the session is terminal or has no
+active record, and for a runtime other than tmux.
 
-From another shell, it exits 0 only when the agent process runs within 15 s.
-In the session's own pane, the agent runs as a child of this command on the
-same terminal, and the command ends with the agent's exit code.
+From another shell, it types the launch line into the shell of the agent's pane
+(by its pane ID) and exits 0 only when the agent process runs within 15 s. The
+pane's shell must wait for input; any half-typed text in it is dropped (C-c),
+never run. In the session's own pane, the agent runs as a child of this command
+on the same terminal (the launch script execs it), and the command ends with
+the agent's exit code.
 
---continue resumes the conversation that AO recorded for this session when its
-agent started (Claude Code: a SessionStart hook). It refuses when that ID is not
-known. Without --continue, the agent starts a new conversation.`,
+--continue resumes the conversation that the agent of the session's last
+launch recorded (Claude Code: a SessionStart hook, bound to that launch's token
+and pane). It refuses when that ID is not known, also after a restore. Without
+--continue, the agent starts a new conversation.
+
+Do not run it while a restore or a kill of the same session runs (also a
+lifecycle reaction that restores it): a restore or kill that started before the
+relaunch is not excluded.`,
     )
     .action(async (sessionName: string, opts: { continue?: boolean }) => {
       const config = loadConfig();
@@ -486,6 +495,8 @@ known. Without --continue, the agent starts a new conversation.`,
           callerTty: callerTerminal(),
           runInCallerTerminal: (launch) => runInCallerTerminal(launch),
           onStart: describe,
+          // At once (review r1 M-3), also while the agent owns the terminal.
+          onWarning: (warning) => console.error(chalk.yellow(`Warning: ${warning}`)),
         });
       } catch (err) {
         if (err instanceof SessionRelaunchRefusedError) {
@@ -498,24 +509,36 @@ known. Without --continue, the agent starts a new conversation.`,
         process.exit(1);
       }
 
+      const unknown = result.agentState === "unknown";
       if (result.plan.mode === "caller-terminal" && result.child) {
-        // The agent owns the terminal now: nothing is written until it ends.
+        // The agent owns the terminal now: only warnings are written until it
+        // ends, and the terminal goes back to the shell only when it ended.
         const code = await result.child.exited;
-        for (const warning of result.warnings) console.error(chalk.yellow(`Warning: ${warning}`));
         if (!result.running) {
           console.error(
-            chalk.red(`The agent of ${sessionName} ended before its process was seen running.`),
+            chalk.red(
+              unknown
+                ? `AO could not tell within 15 s whether the agent process of ${sessionName} ran (the process check did not answer).`
+                : `The agent of ${sessionName} ended before its process was seen running.`,
+            ),
           );
           process.exit(code === 0 ? 1 : code);
         }
         process.exit(code);
       }
 
-      for (const warning of result.warnings) console.error(chalk.yellow(`Warning: ${warning}`));
       if (!result.running) {
-        console.error(chalk.red(`The agent process of ${sessionName} did not start within 15 s.`));
         console.error(
-          chalk.yellow(`Next: look at the pane with \`ao session attach ${sessionName}\``),
+          chalk.red(
+            unknown
+              ? `AO could not tell within 15 s whether the agent process of ${sessionName} runs (the process check did not answer); it may run.`
+              : `The agent process of ${sessionName} did not start within 15 s.`,
+          ),
+        );
+        console.error(
+          chalk.yellow(
+            `Next: look at the pane with \`ao session attach ${sessionName}\`${unknown ? ", and check `ao session ls`" : ""}`,
+          ),
         );
         process.exit(1);
       }

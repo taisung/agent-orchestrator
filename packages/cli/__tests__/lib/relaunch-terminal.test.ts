@@ -4,6 +4,9 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { callerTerminal, runInCallerTerminal } from "../../src/lib/relaunch-terminal.js";
 
@@ -93,6 +96,64 @@ describe("runInCallerTerminal", () => {
 
     expect(await run.exited).toBe(3);
   });
+
+  it("passes SIGTERM to a real agent that the script execs, and resolves only after the agent and its own child ended (review r1 M-2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ao-relaunch-term-"));
+    const pidOf = (name: string): number | null => {
+      const path = join(dir, name);
+      const text = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
+      return /^[1-9]\d*$/.test(text) ? Number(text) : null;
+    };
+    const alive = (pid: number | null): boolean => {
+      if (pid === null || pid <= 1) return false;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    writeFileSync(
+      join(dir, "agent.sh"),
+      [
+        "#!/bin/bash",
+        'echo $$ > "$1/agent.pid"',
+        "sleep 300 &",
+        'echo $! > "$1/grandchild.pid"',
+        'trap \'kill "$(cat "$1/grandchild.pid")" 2>/dev/null; exit 143\' TERM',
+        "wait",
+        "",
+      ].join("\n"),
+    );
+    // The form of a core launch script: cd, then exec the agent.
+    writeFileSync(
+      join(dir, "launch.sh"),
+      `#!/usr/bin/env bash\ncd -- '${dir}' || exit 1\nexec bash '${join(dir, "agent.sh")}' '${dir}'\n`,
+    );
+    let ended = false;
+
+    try {
+      const run = runInCallerTerminal({ script: join(dir, "launch.sh"), cwd: dir });
+      void run.exited.then(() => {
+        ended = true;
+      });
+      await vi.waitFor(() => expect(alive(pidOf("grandchild.pid"))).toBe(true), { timeout: 5_000 });
+      const agent = pidOf("agent.pid");
+      const grandchild = pidOf("grandchild.pid");
+      expect(ended).toBe(false);
+
+      process.emit("SIGTERM", "SIGTERM");
+
+      expect(await run.exited).toBe(143);
+      expect(alive(agent)).toBe(false);
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 3_000 });
+    } finally {
+      for (const pid of [pidOf("agent.pid"), pidOf("grandchild.pid")]) {
+        if (alive(pid)) process.kill(pid as number, "SIGKILL");
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("resolves 127 when the child cannot start", async () => {
     const child = fakeChild();

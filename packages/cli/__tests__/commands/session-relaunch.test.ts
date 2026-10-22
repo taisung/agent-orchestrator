@@ -47,7 +47,8 @@ function relaunchAnswers(result: Partial<SessionRelaunchResult>): void {
   mockSessionManager.relaunch = vi.fn(async (_id: string, options: SessionRelaunchOptions) => {
     const plan = result.plan ?? PLAN;
     options.onStart?.(plan);
-    return { plan, running: true, warnings: [], ...result };
+    for (const warning of result.warnings ?? []) options.onWarning?.(warning);
+    return { plan, running: true, agentState: "running", warnings: [], ...result };
   });
 }
 
@@ -152,7 +153,7 @@ describe("session relaunch", () => {
   });
 
   it("exits 1 when the agent process does not start within the bound", async () => {
-    relaunchAnswers({ running: false });
+    relaunchAnswers({ running: false, agentState: "absent" });
 
     expect(await run("app-1")).toBe("process.exit(1)");
 
@@ -161,12 +162,36 @@ describe("session relaunch", () => {
     expect(logs.join("\n")).not.toContain("relaunched: its agent process runs");
   });
 
-  it("prints the warnings of the end state", async () => {
-    relaunchAnswers({ warnings: ["the end state of the relaunch was not written: busy"] });
+  it("exits 1 and says that it may run when the process check gave no answer in time (review r1 M-7)", async () => {
+    relaunchAnswers({ running: false, agentState: "unknown" });
 
-    expect(await run("app-1")).toBeNull();
+    expect(await run("app-1")).toBe("process.exit(1)");
 
-    expect(errors).toContain("Warning: the end state of the relaunch was not written: busy");
+    expect(errors.join("\n")).toContain(
+      "AO could not tell within 15 s whether the agent process of app-1 runs (the process check did not answer); it may run.",
+    );
+    expect(errors.join("\n")).toContain("and check `ao session ls`");
+  });
+
+  it("prints each warning of the end state at once, also while the agent still runs in the own pane (review r1 M-3)", async () => {
+    let endChild: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+      endChild = resolve;
+    });
+    relaunchAnswers({
+      plan: { ...PLAN, mode: "caller-terminal" },
+      child: { exited },
+      warnings: ["the launch keys of app-1 could not be cleared yet (EIO)"],
+    });
+
+    const finished = run("app-1");
+    await vi.waitFor(() => expect(mockSessionManager.relaunch).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(errors).toEqual(["Warning: the launch keys of app-1 could not be cleared yet (EIO)"]);
+    endChild(0);
+    expect(await finished).toBe("process.exit(0)");
+    expect(errors).toHaveLength(1);
   });
 
   it("in the session's own pane, waits for the agent and exits with its exit code", async () => {
@@ -196,6 +221,7 @@ describe("session relaunch", () => {
     relaunchAnswers({
       plan: { ...PLAN, mode: "caller-terminal" },
       running: false,
+      agentState: "absent",
       child: { exited: Promise.resolve(0) },
     });
 
@@ -223,6 +249,8 @@ describe("session relaunch", () => {
     expect(help).toContain("--continue");
     expect(help).toContain("when the agent process still runs");
     expect(help).toContain("In the session's own pane, the agent runs as a child of this command");
-    expect(help).toContain("it exits 0 only when the agent process runs within 15 s");
+    expect(help).toContain("exits 0 only when the agent process runs within 15 s");
+    expect(help).toContain("any half-typed text in it is dropped (C-c),");
+    expect(help).toContain("a restore or kill that started before the");
   });
 });
