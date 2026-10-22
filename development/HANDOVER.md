@@ -249,7 +249,7 @@ add the missing-`TMUX_TMPDIR` fallback.
    - Design r7 by ao-52 DONE 08:27 (`same_id_design_r7_opus.md`); its review r7 by the NEW reviewer ao-62 DONE
      08:52 (`same_id_design_review_r7_astra6.md`): RW SOUND-WITH-CHANGES, R2b-2 SOUND-WITH-CHANGES (0 B, 3 M,
      1 m). R4 review r3 by ao-60 DONE 08:57 (`same_id_r4_review_r3_astra6.md`): NOT-LAND-SAFE (0 B, 1 M, 2 m).
-     The owner answered "10a 11a 12a 13a 14a" (2026-10-22, read 09:0x EDT): 10a design r8 by ao-52 (r7 M-1 atomic
+     The owner answered "10a 11a 12a 13a 14a" (2026-10-22, read by 09:01:40 EDT): 10a design r8 by ao-52 (r7 M-1 atomic
      archive publication, M-2 both spawn callers in the creation fence and the wider bootstrap residual, M-3
      discriminating tests, m-1 the audit holder field), re-check by ao-62; 11a OD-29 (a) with a `processScope`
      that only the tests use (TODO D-8); 12a ao-54 fixes F-6 (claude-code `findClaudeProcess`) and the
