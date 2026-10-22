@@ -428,7 +428,7 @@ if (fallback) return fallback;
 
 - Resolve liveness through the session's persisted tmux or Herdr runtime evidence
 - Match BOTH the node wrapper name AND the actual binary name (some agents install as `.agentname` with a dot prefix — the regex must handle this)
-- Return `false` only when the check ran and found no agent process (or the runtime answered that the pane does not exist). Reject, with the failure as `cause`, when the check cannot run (`tmux` or `ps` fails, a timeout); never answer `false` or `null` for an error. Callers treat a rejection as unknown, never as exited (claude-code follows this; codex, gemini, opencode and runtime-herdr still answer `false` on error)
+- Return `false` only when the check ran and found no agent process (or the runtime answered that the pane does not exist). Reject, with the failure as `cause`, when the check cannot run (`tmux` or `ps` fails, a timeout); never answer `false` or `null` for an error. Callers treat a rejection as unknown, never as exited (claude-code, codex, gemini and opencode follow this, also on a Herdr pane, where the core Herdr helper rejects when herdr cannot answer; runtime-herdr `isAlive` likewise answers false only for `pane_not_found` or a pane ID that now names another terminal)
 
 ## Constraints
 
