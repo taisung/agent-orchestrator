@@ -11,6 +11,7 @@ import {
   type RuntimeCreateConfig,
   type RuntimeHandle,
   type RuntimeMetrics,
+  type RuntimePaneState,
   type AttachInfo,
   shellEscape,
   exactPaneTarget,
@@ -283,6 +284,59 @@ export function create(): Runtime {
         // Quoted: zsh expands a word that starts with "=" to a command path.
         command: `tmux attach -t ${shellEscape(target)}`,
       };
+    },
+
+    /**
+     * Session relaunch (2026-10-22): the TTY and the foreground command of
+     * the pane that sendMessage and runInPane type into (the exact target
+     * `=name:`: the active pane of the session's current window). Null only
+     * for tmux's own "not found" answer. Any other failure, or an answer
+     * that is not a TTY and a command, rejects.
+     */
+    async getPaneState(handle: RuntimeHandle): Promise<RuntimePaneState | null> {
+      const pane = exactPaneTarget(handle.id);
+      let answer: string;
+      try {
+        answer = await tmux(
+          "display-message",
+          "-p",
+          "-t",
+          pane,
+          "#{pane_tty} #{pane_current_command}",
+        );
+      } catch (err: unknown) {
+        if (isTmuxTargetNotFound(err)) return null;
+        throw tmuxProbeError(`display-message -t ${pane}`, err);
+      }
+      const space = answer.indexOf(" ");
+      const tty = space > 0 ? answer.slice(0, space) : "";
+      const foregroundCommand = space > 0 ? answer.slice(space + 1).trim() : "";
+      if (!tty.startsWith("/dev/") || !foregroundCommand || answer.includes("\n")) {
+        throw new TmuxProbeError(
+          `tmux display-message -t ${pane} answered ${JSON.stringify(answer.slice(0, 80))}, not a pane TTY and a command`,
+          "ERR_RUNTIME_PROBE",
+          { cause: undefined },
+        );
+      }
+      return { tty, foregroundCommand };
+    },
+
+    /**
+     * Session relaunch (2026-10-22): type `command` and Enter into the shell
+     * of the existing pane, with the steps of `create` for a long launch
+     * command: clear the partial input, type the text literally, wait 300 ms,
+     * then Enter.
+     */
+    async runInPane(handle: RuntimeHandle, command: string): Promise<void> {
+      const pane = exactPaneTarget(handle.id);
+      try {
+        await tmux("send-keys", "-t", pane, "C-u");
+        await tmux("send-keys", "-t", pane, "-l", command);
+        await sleep(300);
+        await tmux("send-keys", "-t", pane, "Enter");
+      } catch (err: unknown) {
+        throw new Error(`Failed to type the command into tmux pane ${pane}`, { cause: err });
+      }
     },
   };
 }
