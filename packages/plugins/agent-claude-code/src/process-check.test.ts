@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { RuntimeHandle, Session } from "@aoagents/ao-core";
+import { getHerdrPaneProcesses, type RuntimeHandle, type Session } from "@aoagents/ao-core";
 
 // F-6: `isProcessRunning` answers false only for explicit, well-formed
 // evidence of absence (the forms of same-ID R4 for the other agents). Every
@@ -214,9 +214,22 @@ describe("isProcessRunning: the Herdr pane list (F-6)", () => {
     ["no PID", { cmdline: "claude --model sonnet", name: "claude" }],
     ["PID 0", { cmdline: "claude --model sonnet", name: "claude", pid: 0 }],
     ["a PID that is text", { cmdline: "claude --model sonnet", name: "claude", pid: "42" }],
-  ])("reads a claude process with %s as running (core gives PID 0)", async (_, proc) => {
+  ])("never reads a claude process with %s as no process", async (_, proc) => {
+    // Core decides whether such a list is valid: this core gives PID 0 for
+    // the entry, and the core of same-ID R4 rejects the whole reply. The
+    // plugin answers true for the first and rejects with the second, never
+    // false.
     mockExecFileAsync.mockResolvedValueOnce(herdrReply([proc]));
-    expect(await agent.isProcessRunning(herdrHandle())).toBe(true);
+    const coreReadsList = await getHerdrPaneProcesses("w8:p1").then(
+      () => true,
+      () => false,
+    );
+    mockExecFileAsync.mockResolvedValueOnce(herdrReply([proc]));
+    if (coreReadsList) {
+      expect(await agent.isProcessRunning(herdrHandle())).toBe(true);
+    } else {
+      await expect(agent.isProcessRunning(herdrHandle())).rejects.toThrow();
+    }
   });
 
   it("control: a claude process with a PID answers true, and a list without claude false", async () => {
