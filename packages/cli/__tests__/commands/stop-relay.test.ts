@@ -112,7 +112,6 @@ function startReader(script: string): Reader {
   const proc = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "inherit"] });
   readers.push(proc);
   const pipe = proc.stdin as Socket;
-  pipe.on("error", () => {}); // EPIPE in the early-close case
   let output = "";
   proc.stdout?.on("data", (data: Buffer) => {
     output += data.toString();
@@ -204,9 +203,13 @@ async function runStop(mode: string, out: Reader, err: Reader): Promise<number |
   const program = new Command();
   program.exitOverride();
   registerStop(program);
+  // No test listener for "error" until the command returns: an output error
+  // that the command does not handle fails the test (an unhandled error).
   await program.parseAsync(["node", "test", "stop", "my-app"]).catch(() => {});
-  out.pipe.end();
-  err.pipe.end();
+  for (const pipe of [out.pipe, err.pipe]) {
+    pipe.on("error", () => {});
+    pipe.end();
+  }
   const code = exitCodes[0] ?? process.exitCode;
   return code === undefined ? undefined : Number(code);
 }
