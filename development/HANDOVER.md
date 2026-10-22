@@ -33,7 +33,13 @@
 - Next Priorities 2: ao-63 authors `ao session relaunch` on the new branch `feat/session-relaunch` at
   `3e366a01`, brief `.agent_task_relaunch.md` (copy `brief-aofork-session-relaunch.md`). It writes a design
   checkpoint (`running|none|relaunch design ...`) and goes on without a wait; read it when the watcher
-  reports it.
+  reports it. ao-63 done 17:0x at `554facd9` (`3e366a01..554facd9`, 6 commits, 12 files, +2800; 3694
+  passed, 1 expected fail, 25 skipped (+4 integration tests un-skipped by the fake HOME transcript); red
+  0/16/6/0; note 1 items 1 to 4 done). Report copy `reports/ao-63_session_relaunch.report.md`. Review r1 by
+  ao-64 dispatched 17:08 (branch `review/session-relaunch-r1` at `554facd9`, brief
+  `.agent_task_relaunch_r1.md`, copy `brief-review-session-relaunch-r1-astra.md`; ao-64 context 59% at
+  dispatch). The relaunch branch sits on `3e366a01`; at landing, cherry-pick `cd4b8db1..554facd9` onto
+  `main` (which has the note and its fix) and run the suites on the merged tree.
 - Next Priorities 3: ao-65 (new, Claude Code Opus 5.5) runs the Herdr 0.9.5 live check, scratch only,
   with the update check off (the owner did not allow it), no code, no commit. Branch
   `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` at `d5b6a180`, brief `.agent_task.md`
