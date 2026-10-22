@@ -218,6 +218,12 @@ add the missing-`TMUX_TMPDIR` fallback.
      `brief-aofork-codex-send-idle-r4.md`). After both re-checks pass: cherry-pick, one rebuild and one
      restart of 3624110 and 3626937 on the owner's word, then the live check, with the six captures fed
      through the rebuilt parser.
+   - Round-4 results: R2a re-check r4 by ao-57 LAND-SAFE (21:29, 1 nonblocking m-1: the active-record
+     refusal text); Codex send round 4 by ao-54 DONE at `f39d63db` (21:33), its re-check r4 by ao-56
+     DISPATCHED 21:37. The owner answered "1a 2a 3a" (about 21:45 EDT): R2a LANDED on `main` now as
+     `f98aa6e7..18810ae4` (clean cherry-pick of `09546110..26368d76`, 21 commits, source equal to
+     `26368d76`), NOT built and NOT live (one rebuild after the Codex send fix); m-1 goes into R4; R4 by
+     ao-55, review by ao-57. `git merge-tree` of `main` with `f39d63db` is clean.
 4. **claude-code `detectActivity` dialog fix** - one worker round (Known Issues, the 2026-10-20 entry).
 5. **Killed-status r8 m-1** - a small worker change (generation-floor read or doc text).
 6. **I-5 follow-ups, project guide, test isolation, `0005` phases** - as before; owner choice.

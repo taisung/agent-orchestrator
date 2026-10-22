@@ -396,6 +396,19 @@ Durable progress record for this fork. Dated events only; the current state live
   LAND-SAFE). Clean cherry-pick of `ce49c9fd..4034ece7` (8 commits; source equal to `4034ece7`, gates
   2938 passed, 4 expected fail, 29 skipped). NOT built and NOT live yet (owner decision). Follow-up F-1:
   `core/src/orchestrator-prompt.ts:61` does not teach `=name:`.
+- `f98aa6e7..18810ae4` (2026-10-21, ao-52 tests, ao-55 Claude Opus 5.5; reviews by ao-57, Codex
+  gpt-6-astra) - **same-ID R2a, refusals only** (owner "1a"): the runtime stop outcome `stopRuntime`
+  (stopped, still runs, unknown); a kill, cleanup, restore or stop keeps the record and the worktree after
+  an unconfirmed stop and says the next action; runtime-tmux rejects a destroy that tmux could not
+  complete; runtime-herdr `stop` answers `unknown` and closes nothing (OD-19 (a)); an agent negative
+  counts only after the runtime answered alive; a restore decides the old runtime stop before any change,
+  and a refused archived restore removes its copy-back only while its launch identity, generation, `pr`,
+  `status` and `branch` are unchanged. Rule in `docs/DEVELOPMENT.md`. Includes ao-52's reproducer
+  commits `f98aa6e7` (`73fb5b13`) and the restore reproducer (`cbfbc182`); red after R2a: R1 0, R2 16, R3
+  6, R4 22 (44). 4 author rounds and 4 reviews (`development/reviews/same_id_r2a_review_r{1..4}_astra6.md`;
+  r4 LAND-SAFE, 1 nonblocking m-1 folded into R4). Clean cherry-pick of `09546110..26368d76` (21 commits;
+  source equal to `26368d76`; gates green in the author's and the reviewer's full runs). NOT built and NOT
+  live yet (owner "1a": one rebuild after the Codex send fix). Follow-ups F-1 to F-4 of review r4.
 
 ## Decisions
 
