@@ -150,3 +150,80 @@ describe("isHerdrProcessRunning", () => {
     expect(await isHerdrProcessRunning("w8:p1", /codex/)).toBe(false);
   });
 });
+
+// Same-ID R4 round 2 (review r1, M-3): `pane_not_found` counts only as the
+// code of the error envelope of a command that exits 0. A command that fails
+// rejects whatever its text holds, and an entry with a field of the wrong
+// type rejects the whole reply.
+describe("getHerdrPaneProcesses: only well-formed evidence is a negative", () => {
+  const SERVER_UNAVAILABLE = JSON.stringify({
+    error: { code: "server_unavailable", message: "cannot determine whether pane not found" },
+  });
+
+  it("rejects a command that fails with a server_unavailable envelope that mentions pane not found", async () => {
+    mockExecFile.mockRejectedValueOnce(
+      Object.assign(new Error("Command failed: herdr pane process-info --pane w8:p1"), {
+        code: 1,
+        stderr: `${SERVER_UNAVAILABLE}\n`,
+      }),
+    );
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects a command that fails with the pane_not_found envelope (a non-zero exit)", async () => {
+    mockExecFile.mockRejectedValueOnce(
+      Object.assign(new Error("Command failed: herdr pane process-info --pane w8:p1"), {
+        code: 1,
+        stdout: JSON.stringify({ error: { code: "pane_not_found", message: "gone" } }),
+        stderr: "",
+      }),
+    );
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects a herdr that cannot start at a path that holds pane_not_found", async () => {
+    mockExecFile.mockRejectedValueOnce(
+      Object.assign(new Error("spawn /opt/pane_not_found/herdr ENOENT"), {
+        code: "ENOENT",
+        path: "/opt/pane_not_found/herdr",
+      }),
+    );
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects the server_unavailable envelope at exit 0 (control of round 1)", async () => {
+    mockExecFile.mockResolvedValueOnce({ stdout: SERVER_UNAVAILABLE, stderr: "" });
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow(/server_unavailable/);
+  });
+
+  for (const [label, entry] of [
+    ["an argv that is not a list of text", { pid: 123, name: "node", argv: [12] }],
+    ["no pid", { name: "codex", cmdline: "codex" }],
+    ["a pid that is not a positive integer", { pid: "123", name: "codex", cmdline: "codex" }],
+    ["a name that is not text", { pid: 123, name: 5, cmdline: "bash" }],
+    ["a cmdline that is not text", { pid: 123, name: "node", cmdline: null }],
+  ] as const) {
+    it(`rejects the whole reply for an entry with ${label}`, async () => {
+      mockExecFile.mockResolvedValueOnce(paneProcesses([BASH, entry]));
+      await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow(/could not answer/);
+    });
+  }
+
+  it("isHerdrProcessRunning rejects a malformed argv instead of answering 'no agent'", async () => {
+    mockExecFile.mockResolvedValueOnce(paneProcesses([{ pid: 123, name: "node", argv: [12] }]));
+    await expect(isHerdrProcessRunning("w8:p1", /(?:^|\/)codex(?:\s|$)/)).rejects.toThrow();
+  });
+
+  it("control: the pane_not_found envelope at exit 0 answers an empty list", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ error: { code: "pane_not_found", message: "Pane not found" } }),
+      stderr: "",
+    });
+    expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
+  });
+
+  it("control: a valid empty process list answers an empty list", async () => {
+    mockExecFile.mockResolvedValueOnce(paneProcesses([]));
+    expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
+  });
+});

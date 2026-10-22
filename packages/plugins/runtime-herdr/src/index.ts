@@ -128,15 +128,14 @@ function parseHerdrResult(stdout: string): Record<string, unknown> {
 
 /**
  * Same-ID R4 (B-7 item 9): herdr's explicit answer that a pane does not
- * exist: the `pane_not_found` error envelope, or an exec error whose text
- * names it. Any other failure means that the check could not run.
+ * exist. Round 2 (M-3): only the `pane_not_found` code of the error envelope
+ * of a command that exits 0 (`herdrCode`, set by parseHerdrResult), never
+ * text: a command that fails (herdr cannot start, a timeout, a signal, a
+ * non-zero exit) has no `herdrCode`, whatever its message or binary path
+ * holds. Any other failure means that the check could not run.
  */
 function isPaneNotFound(err: unknown): boolean {
-  const herdrCode = (err as { herdrCode?: unknown } | null)?.herdrCode;
-  if (herdrCode !== undefined) return herdrCode === "pane_not_found";
-  const stderr = (err as { stderr?: unknown } | null)?.stderr;
-  const text = `${err instanceof Error ? err.message : String(err)} ${typeof stderr === "string" ? stderr : ""}`;
-  return /pane_not_found|pane not found/i.test(text);
+  return (err as { herdrCode?: unknown } | null)?.herdrCode === "pane_not_found";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -211,8 +210,9 @@ export function create(config?: Record<string, unknown>): Runtime {
   /**
    * Same-ID R4 (B-7 item 9): the pane, or null only for herdr's explicit
    * `pane_not_found`. Rejects with the cause when the check could not run:
-   * another error envelope, a reply without a pane, an exec error that does
-   * not name a missing pane (herdr cannot start, a timeout, a signal).
+   * another error envelope, a reply without a pane, a command that fails
+   * (herdr cannot start, a timeout, a signal, a non-zero exit), and (round
+   * 2, M-3) a reply for another pane, which says nothing about this one.
    */
   async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
     let result: Record<string, unknown>;
@@ -225,6 +225,9 @@ export function create(config?: Record<string, unknown>): Runtime {
     }
     const pane = toPane(result.pane);
     if (!pane) throw new Error(`herdr pane get ${paneId} answered without a pane`);
+    if (pane.pane_id !== paneId) {
+      throw new Error(`herdr pane get ${paneId} answered for another pane (${pane.pane_id})`);
+    }
     return pane;
   }
 

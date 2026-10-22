@@ -34,9 +34,8 @@ interface RawProcess {
   argv?: unknown;
 }
 
-/** herdr's answer that a pane does not exist: the envelope code, and the text of an exec error. */
+/** herdr's answer that a pane does not exist: the code of its error envelope (exit 0). */
 const PANE_NOT_FOUND_CODE = "pane_not_found";
-const PANE_NOT_FOUND_TEXT = /pane_not_found|pane not found/i;
 
 /** A malformed or failed answer of `herdr pane process-info`: the check could not run. */
 function herdrCannotAnswer(paneId: string, detail: string, cause?: unknown): Error {
@@ -50,13 +49,17 @@ function herdrCannotAnswer(paneId: string, detail: string, cause?: unknown): Err
  * List the foreground processes running in a herdr pane.
  *
  * Same-ID R4 (B-7 item 8): an empty array only for herdr's explicit
- * `pane_not_found` (the error envelope, or an exec error that names it) and
- * for a valid empty process list. Every other failure rejects with the
- * cause, because the check could not run: herdr cannot start, a timeout or
- * a signal, text that is not JSON, another error envelope, a reply without
- * `result.process_info.foreground_processes` as a list, and an entry of that
- * list that is not an object or has no name and no command line (it may be
- * the agent).
+ * `pane_not_found` and for a valid empty process list. Every other answer
+ * rejects with the cause, because the check could not run: herdr cannot
+ * start, a timeout or a signal, text that is not JSON, another error
+ * envelope, a reply without `result.process_info.foreground_processes` as a
+ * list, and an entry of that list that is not an object or has no name and
+ * no command line (it may be the agent).
+ * Round 2 (M-3): `pane_not_found` counts only as the `code` of the error
+ * envelope of a command that exits 0, never as text: a command that fails
+ * rejects whatever its message or binary path holds. An entry with a field
+ * of the wrong type (`pid` not a positive integer, `name` or `cmdline` not a
+ * string, `argv` not a list of strings) rejects the whole reply.
  * Callers treat the rejection as unknown, never as "nothing running".
  */
 export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPaneProcess[]> {
@@ -68,9 +71,6 @@ export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPanePr
       timeout: HERDR_COMMAND_TIMEOUT_MS,
     }));
   } catch (err) {
-    const stderr = (err as { stderr?: unknown }).stderr;
-    const text = `${err instanceof Error ? err.message : String(err)} ${typeof stderr === "string" ? stderr : ""}`;
-    if (PANE_NOT_FOUND_TEXT.test(text)) return [];
     throw herdrCannotAnswer(paneId, "the command failed", err);
   }
 
@@ -118,15 +118,33 @@ export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPanePr
       throw herdrCannotAnswer(paneId, "a foreground process is not an object");
     }
     const proc = entry as RawProcess;
+    if (typeof proc.pid !== "number" || !Number.isSafeInteger(proc.pid) || proc.pid <= 0) {
+      throw herdrCannotAnswer(paneId, "a foreground process has no valid pid");
+    }
+    if (proc.name !== undefined && typeof proc.name !== "string") {
+      throw herdrCannotAnswer(paneId, "a foreground process has a name that is not text");
+    }
+    if (proc.cmdline !== undefined && typeof proc.cmdline !== "string") {
+      throw herdrCannotAnswer(paneId, "a foreground process has a cmdline that is not text");
+    }
+    if (
+      proc.argv !== undefined &&
+      !(Array.isArray(proc.argv) && proc.argv.every((a) => typeof a === "string"))
+    ) {
+      throw herdrCannotAnswer(
+        paneId,
+        "a foreground process has an argv that is not a list of text",
+      );
+    }
 
     const name = typeof proc.name === "string" ? proc.name : "";
     const cmdline =
       typeof proc.cmdline === "string"
         ? proc.cmdline
         : Array.isArray(proc.argv)
-          ? proc.argv.filter((a): a is string => typeof a === "string").join(" ")
+          ? proc.argv.join(" ")
           : "";
-    const pid = typeof proc.pid === "number" ? proc.pid : 0;
+    const pid = proc.pid;
 
     if (!name && !cmdline) {
       throw herdrCannotAnswer(paneId, "a foreground process has no name and no command line");

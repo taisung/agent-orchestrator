@@ -446,9 +446,9 @@ describe("isAlive()", () => {
     expect(await create().isAlive(HANDLE)).toBe(true);
   });
 
-  it("is false when the pane is gone", async () => {
+  it("rejects when the herdr command fails with text that names pane_not_found", async () => {
     mockExecFile.mockRejectedValueOnce(new Error("pane_not_found"));
-    expect(await create().isAlive(HANDLE)).toBe(false);
+    await expect(create().isAlive(HANDLE)).rejects.toThrow();
   });
 
   it("is false when the pane id was recycled onto a different terminal", async () => {
@@ -465,6 +465,54 @@ describe("isAlive()", () => {
     expect(await create().isAlive({ ...HANDLE, data: { ...HANDLE.data, terminalId: "" } })).toBe(
       true,
     );
+  });
+});
+
+// Same-ID R4 round 2 (review r1, M-3): false only for the `pane_not_found`
+// code of the error envelope of a command that exits 0, and for the same pane
+// with another terminal. A command that fails, an envelope without that code
+// and a reply for another pane reject, whatever their text holds.
+describe("isAlive(): only well-formed evidence is a negative", () => {
+  it("rejects when herdr fails with a server_unavailable envelope that mentions pane not found", async () => {
+    mockExecFile.mockRejectedValueOnce(
+      Object.assign(new Error("Command failed: herdr pane get w7:p1"), {
+        code: 1,
+        stderr:
+          '{"error":{"code":"server_unavailable","message":"cannot determine whether pane not found"}}\n',
+      }),
+    );
+    await expect(create().isAlive(HANDLE)).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects when the herdr binary cannot start at a path that holds pane_not_found", async () => {
+    const binPath = "/opt/herdr-probe/pane_not_found/missing-binary";
+    mockExecFile.mockRejectedValueOnce(
+      Object.assign(new Error(`spawn ${binPath} ENOENT`), { code: "ENOENT", path: binPath }),
+    );
+    await expect(create({ binPath }).isAlive(HANDLE)).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects an error envelope without a code whose message says pane not found", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ id: "cli:test", error: { message: "pane not found" } }),
+      stderr: "",
+    });
+    await expect(create().isAlive(HANDLE)).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects a reply for another pane, also with another terminal", async () => {
+    mockExecFile.mockResolvedValueOnce(ok({ pane: { pane_id: "w99:p8", terminal_id: "other" } }));
+    await expect(create().isAlive(HANDLE)).rejects.toThrow(/answered for another pane \(w99:p8\)/);
+  });
+
+  it("control: the pane_not_found envelope at exit 0 answers false", async () => {
+    mockExecFile.mockResolvedValueOnce(herdrError("pane_not_found", "Pane not found"));
+    expect(await create().isAlive(HANDLE)).toBe(false);
+  });
+
+  it("control: the same pane with a replaced terminal answers false", async () => {
+    mockExecFile.mockResolvedValueOnce(ok({ pane: { pane_id: "w7:p1", terminal_id: "term_b" } }));
+    expect(await create().isAlive(HANDLE)).toBe(false);
   });
 });
 
