@@ -26,6 +26,22 @@ import {
   RUNNING_ROW_0163,
   UNSUBMITTED_NOTICE_0163,
 } from "../../../plugins/agent-codex/src/__fixtures__/panes-0.163.0.js";
+import RUNNING_01 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-01.txt?raw";
+import RUNNING_02 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-02.txt?raw";
+import RUNNING_03 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-03.txt?raw";
+import RUNNING_04 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-04.txt?raw";
+import RUNNING_05 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-05.txt?raw";
+import RUNNING_06 from "../../../plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-06.txt?raw";
+
+/** The six real captures of a running turn (see `agent-codex/src/__fixtures__/panes-0.163.0.ts`). */
+const REAL_RUNNING: Array<[string, string]> = [
+  ["01", RUNNING_01],
+  ["02", RUNNING_02],
+  ["03", RUNNING_03],
+  ["04", RUNNING_04],
+  ["05", RUNNING_05],
+  ["06", RUNNING_06],
+];
 
 const { mockTmux, mockExec, mockConfigRef, mockSessionManager, mockAgentRef } = vi.hoisted(() => ({
   mockTmux: vi.fn(),
@@ -357,6 +373,52 @@ describe("ao send to a Codex 0.163.0 pane", () => {
     await send("--no-wait", "codex-1", "hello");
 
     expect(keys).toEqual(sendOnly("hello"));
+    expect(printed()).toEqual([NOT_CONFIRMED]);
+  });
+
+  it.each(REAL_RUNNING)(
+    "prints processing for real running capture %s with --no-wait, and sends no key",
+    async (_n, capture) => {
+      screens = [capture];
+
+      await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
+
+      expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+      expect(printed()).toEqual([PROCESSING]);
+    },
+  );
+
+  it("waits for real running capture 01 in a regular send and pastes only after the timeout", async () => {
+    screens = [RUNNING_01];
+    const start = Date.now();
+    /** Each printed line with the number of key vectors sent before it and the time. */
+    const lines: Array<[string, number, number]> = [];
+    logSpy.mockImplementation((line: unknown) => {
+      lines.push([String(line), keys.length, Date.now() - start]);
+    });
+
+    await send("--timeout", "5", "codex-1", UNSUBMITTED_NOTICE_0163);
+
+    expect(lines.map(([line, sent]) => [line, sent])).toEqual([
+      ["Waiting for codex-1 to become idle...", 0],
+      ["Timeout waiting for idle. Sending anyway.", 0],
+      [PROCESSING, 3],
+    ]);
+    expect(lines[1]?.[2]).toBeGreaterThan(5000);
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
+  });
+
+  it("prints the could-not-confirm line for a status row with a row of another kind above the composer", async () => {
+    // Derived from real capture 02: a "Worked for" row between the Tip row
+    // and the two blank rows makes the status row a row of the transcript.
+    const tip = "  └ Tip: Type / to open the command popup; Tab autocompletes slash commands.\n";
+    const ended = RUNNING_02.replace(tip, `${tip}  Worked for 1s\n`);
+    expect(ended).not.toBe(RUNNING_02);
+    screens = [ended];
+
+    await send("--no-wait", "codex-1", UNSUBMITTED_NOTICE_0163);
+
+    expect(keys).toEqual(sendOnly(UNSUBMITTED_NOTICE_0163));
     expect(printed()).toEqual([NOT_CONFIRMED]);
   });
 

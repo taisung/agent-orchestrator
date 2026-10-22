@@ -371,7 +371,7 @@ export function registerSend(program: Command): void {
         // reads the screen up to three times and reports what it shows; exit
         // code 0 in every case. At each check the agent's detectActivity goes
         // first: an approval prompt (waiting_input) gets a line of its own.
-        // Then "processing" needs the status row of a running turn directly
+        // Then "processing" needs the status block of a running turn directly
         // above the composer (the parser of the Codex plugin); words on the
         // screen and an unclear layout never give "processing". The loop
         // below is the loop of every other agent, unchanged.
