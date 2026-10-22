@@ -83,6 +83,21 @@
 - If a sol reviewer goes quiet with no report, search its rollout for `cyber_policy` (stops on ao-47,
   2026-10-21).
 
+**Update 2026-10-22 19:55 EDT.**
+- RH review r6 by ao-69 (`bb6e4a2b`): NOT-SOUND, 2 B 3 M 2 m. B-1: a changing `/proc` scan misses a
+  forked child of S's session, so RH-A's `absent` is not proved. B-2: S is taken before the unguarded
+  `pane run`, which can reach a replacement server. M-1: F-4's partial create is invisible to core
+  rollback. M-2: startup admits through `killed` records and the isolated core path. M-3: a shell-only
+  `isAlive=false` gives startup replacement authority. m-2: `spawn.ts` joins the fit round (14 files).
+  r5 B-1 is closed for ordinary transitions. The next RH step waits for the owner (options: r7 for the
+  fit round only, full r7, or pause).
+- Relaunch review r2 by ao-68 (`7860ac0d`): NOT-LAND-SAFE, 0 B 4 new M (other-window pane declared
+  absent and killed; ignored or trapped SIGINT lets owner text run; async hooks out of order; missing
+  stored pane falls back to another pane); r1 M-6 open; gates pass. ao-63 works on round 3 since 19:52
+  (brief `.agent_task_relaunch_r3.md`, copy `brief-aofork-session-relaunch-r3.md`; scratch `/tmp/aorl3`).
+- ao-67, ao-68 and ao-69 are done and idle; close them only on the owner's word. Watcher 932326
+  (ao-68, ao-69) and 386227 (ao-67) still run.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
