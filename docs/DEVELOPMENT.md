@@ -423,6 +423,23 @@ If issue validation fails, nothing is created — fail before allocating resourc
 
 ---
 
+## Session relaunch (2026-10-22)
+
+`ao session relaunch <id> [--continue]` (`relaunch` in `packages/core/src/session-manager.ts`, the command in `packages/cli/src/commands/session.ts`) starts the agent of a session again in its existing tmux pane after the agent process ended (Claude Code: `/exit`), for example to run a newer installed agent. It builds the launch command and the environment now, as `restore` does: the agent, runtime handle and spawn `model=` of the record (C-04), the persisted worker `permissions=`, and for an orchestrator the permissionless mode and a new orchestrator prompt in `orchestrator-prompt-<id>.md` (`--append-system-prompt "$(cat <file>)"`). It writes one launch script (`$TMPDIR/ao-launch-<uuid>.sh`, mode 0700, removed when it runs) that changes to the workspace, exports `getEnvironment` plus the `AO_*` keys of a spawn, and runs the command.
+
+Two callers, found only by comparing the caller's terminal (`/proc/self/fd/0`, else 2, else 1) with the pane's `#{pane_tty}` (never by `AO_SESSION` or `TMUX`):
+
+- From another shell: the pane's foreground command must be a shell. The runtime types `bash '<script>'` and Enter into it (`Runtime.runInPane`), and the command exits 0 only when `isProcessRunning` is true within 15 s. The Claude Code plugin caches `ps` for 5 s, so the confirmation can take that long.
+- From the session's own pane: `ao` is the pane's foreground process, so typed keys would reach `ao`. It runs the script as its own child on the inherited terminal, ignores SIGINT and SIGQUIT, passes SIGTERM and SIGHUP on, and exits with the agent's exit code. The `ao` node process stays for the life of the agent (measured in scratch: 88 MiB to 90 MiB RSS for that `ao` process).
+
+`--continue` resumes only the session's own conversation: a Claude Code `SessionStart` hook (`.claude/ao-session-start.sh`, installed by `setupWorkspaceHooks` next to the PostToolUse hook) writes `<sessions dir>/.agent-conversations/<id>` at each start, resume, `/clear` and compact, only for the pane's own agent (the nearest claude above the hook, with no claude above it, whose stdin is the pane's terminal). The relaunch uses it only when it is newer than the record's last launch (`restoredAt`, else `createdAt`, 5 s tolerance) and its transcript exists; else it refuses. It never takes the newest `.jsonl` (`getRestoreCommand` of `restore` still does). A session whose Claude Code started before this build has no record, so its first `--continue` is refused.
+
+Every check runs before the first write, and a refusal (exit 1) changes nothing: no active record (archived: use `ao session restore`), a terminal status (a `killed` record is accepted only for `killedReason` `agent-exited` or `runtime`, or a legacy kill without a PR), a runtime other than tmux (Herdr: the relaunch waits for the Herdr live check), a missing pane, unknown liveness (a rejection, a non-boolean answer, or no answer within 10 s), a running agent process, a pane that runs another program, live launch keys, a reservation record, a last launch younger than `LAUNCH_GRACE_MS`, and `--continue` without a sound ID. Then one compare-and-set under the record lock writes the launch keys of the `ao` process and `restoredAt` (the launch grace of the lifecycle); `restore`, `kill`, `remap`, an orchestrator start and another relaunch refuse while the keys live. The keys always go again. When the agent did not start (the start failed, it did not appear within 15 s, or the child ended first), `restoredAt` gets its old value back; when it runs, a recoverable `killed` status becomes `working`. The status is never set to `spawning`. An `ao` that is killed with SIGKILL leaves keys of a dead process, which do not block.
+
+The gap between `/exit` and the relaunch: the lifecycle marks the record `killed` (`agent-exited`) at its second poll and runs the `agent-exited` reaction (default: notify). `ao send` to a session whose tmux session is alive pastes straight into the pane (`packages/cli/src/commands/send.ts`, the `sendViaTmux` path), so in the gap the pane's shell runs the message as a command (measured: a short and a two-line message both ran). Relaunch at once after `/exit`, or stop the senders (watchers, scripts) first.
+
+---
+
 ## Prompt Assembly
 
 Prompts are built in three layers (`packages/core/src/prompt-builder.ts`):
