@@ -211,6 +211,17 @@ add the missing-`TMUX_TMPDIR` fallback.
      dead holder's shim client, M-1 barrier order after an archive crash, M-2 E5 inventory). The owner
      answered "1b 2a": a stopped-fleet barrier for RW; OD-25 (a) decided (TODO D-8). Design r6 by ao-52
      DISPATCHED 22:51 EDT (`brief-aofork-same-id-design-r6.md`, base `f907c4c1`); ao-51 re-checks it.
+   - Design r6 re-check by ao-51 DONE (00:09 EDT 2026-10-22): RW NOT-SOUND, R2b-2 SOUND-WITH-CHANGES (1 B,
+     2 M; `same_id_design_review_r6_astra6.md`). R4 review r2 by ao-60 DONE (23:59 EDT): NOT-LAND-SAFE for
+     `75f1c98b..8e9efe95` (0 B, 4 M; `same_id_r4_review_r2_astra6.md`). The owner answered
+     "1a 2a 3a 4a 5b 6b" (2026-10-22, read 07:34 EDT): 1a R4 round 3 by ao-55 (M-2 to M-5, plus a table of
+     the accepted "explicitly gone" form for each of the 11 reads), re-check by ao-60; 2a F-6 (claude-code
+     `findClaudeProcess`) is a follow-up after the claude-code round; 3a design r7 by ao-52 (r6 B-1, M-1,
+     M-2), re-check by a NEW Codex gpt-6-astra reviewer (ao-51 is at 90% context); 4a OD-26 (a): RW changes
+     the core r4 `:262` oracle to a refusal while the writer lives and an admission after it ends; 5b OD-27
+     (b): an unreadable identity blocks admission unless the owner allows that exact PID and start time;
+     6b OD-28 (b): R2b-2 fences pending names on a running server, and the no-server case is a named
+     residual until R3a (TODO D-8).
 3. **`ao send` to an idle Codex pane says "processing" for an unsubmitted paste** - ao-54 DONE at
    `4ec62a0a` (owner "4a", 2026-10-21; Known Issues, first entry); review r1 by ao-56 is DONE:
    NOT-LAND-SAFE (2 B, 2 M, 1 m; `development/reviews/codex_send_idle_review_r1_astra6.md`), and `-p`
@@ -265,7 +276,15 @@ add the missing-`TMUX_TMPDIR` fallback.
      ao-54 DISPATCHED 23:04 (`brief-aofork-claude-detect-activity.md`, new branch
      `feat/claude-detect-activity` at `48f500af`; four real Claude Code fixtures
      `fixtures/claude-2.1.30{6,7}-*.txt`).
-4. **claude-code `detectActivity` dialog fix** - one worker round (Known Issues, the 2026-10-20 entry).
+4. **claude-code `detectActivity` dialog fix** - ao-54 DONE at `53cfd6a8` (`48f500af..53cfd6a8`, 4
+   commits; the `send.ts` verify loop changed by Amendment 1, owner "1a"); review r1 by ao-56 LAND-SAFE (0 B,
+   0 M, 1 m; `claude_detect_activity_review_r1_astra6.md`). The owner answered "7a 8a" (2026-10-22, read
+   07:34 EDT). LANDED on `main` as `63932b9a..9938d5d1` (clean cherry-pick at 07:36 EDT; tree equal to the
+   `git merge-tree` result `c4f5340b`; `packages` and `docs` equal to `53cfd6a8`), NOT built and NOT live
+   yet. m-1 (a quoted numbered list with no live input box reads as a dialog: a false refusal, no key) is a
+   follow-up. Next (8a): ao-56 runs the gates on `main`, then the rebuild and the restart of 1294181 and
+   1294364 by exact PID, then a live check with one disposable Claude Code session on Sonnet (a regular
+   send to an idle pane and to a running pane, a long paste during a turn), then the push.
 5. **Killed-status r8 m-1** - a small worker change (generation-floor read or doc text).
 6. **I-5 follow-ups, project guide, test isolation, `0005` phases** - as before; owner choice.
 

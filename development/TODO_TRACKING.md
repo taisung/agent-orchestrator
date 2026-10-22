@@ -498,7 +498,7 @@ R3a, R3b, RH and RO come later. After re-check r5 (answer "1b 2a", 2026-10-21 af
 barrier (before the RW upgrade the owner stops every AO session and every resident `ao` process; the
 barrier checks that none remains and keeps admission closed otherwise); OD-25 (a): a standing hash check
 detects a wrapper rewrite by an old build and closes admission until a new fence and check, with the
-no-old-build operating rule (detection and response, not prevention). Design r6 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
+no-old-build operating rule (detection and response, not prevention). Design r6 covers RW and R2b-2. After re-check r6 (answer "4a 5b 6b", 2026-10-22, read 07:34 EDT): OD-26 (a): RW changes the core r4 `:262` oracle to a refusal while the old writer lives and an admission after it ends; OD-27 (b): a process with an unreadable identity (environment or exe EACCES) blocks admission unless the owner allows that exact PID and start time; OD-28 (b): R2b-2 fences pending creation names on a running server, and the no-server case is a named residual until R3a. Design r7 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
 `same_id_design_review_r{1..4}_astra6.md`.
 
 ## Known Issues
@@ -1257,6 +1257,11 @@ no-old-build operating rule (detection and response, not prevention). Design r6 
   waiting for interactive input; not sending`); 3 of 3 such sends were refused. `--no-wait` delivers
   (short, and a 4-line message over 200 characters as one message). Not caused by the landing of
   2026-10-21. Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-21/`.
+  FIXED on `main` 2026-10-22 as `63932b9a..9938d5d1` (ao-54, review r1 LAND-SAFE by ao-56): the rule reads the
+  input box and the rows above it, the footer is no evidence, a dialog reads `waiting_input`, and the
+  `send.ts` verify loop sends no retry Enter to a pane that waits for an answer. Not built yet. Follow-ups:
+  m-1 (a quoted numbered list with no live input box reads as a dialog: a false refusal, no key), and F-6
+  of R4 review r2 (claude-code `findClaudeProcess`, owner "2a": a round after this landing).
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;
