@@ -113,7 +113,10 @@ function parseHerdrResult(stdout: string): Record<string, unknown> {
   const error = obj.error;
   if (typeof error === "object" && error !== null) {
     const e = error as Record<string, unknown>;
-    throw new Error(`herdr error ${String(e.code ?? "unknown")}: ${String(e.message ?? "")}`);
+    throw Object.assign(
+      new Error(`herdr error ${String(e.code ?? "unknown")}: ${String(e.message ?? "")}`),
+      { herdrCode: e.code },
+    );
   }
 
   const result = obj.result;
@@ -121,6 +124,19 @@ function parseHerdrResult(stdout: string): Record<string, unknown> {
     return result as Record<string, unknown>;
   }
   return obj;
+}
+
+/**
+ * Same-ID R4 (B-7 item 9): herdr's explicit answer that a pane does not
+ * exist: the `pane_not_found` error envelope, or an exec error whose text
+ * names it. Any other failure means that the check could not run.
+ */
+function isPaneNotFound(err: unknown): boolean {
+  const herdrCode = (err as { herdrCode?: unknown } | null)?.herdrCode;
+  if (herdrCode !== undefined) return herdrCode === "pane_not_found";
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  const text = `${err instanceof Error ? err.message : String(err)} ${typeof stderr === "string" ? stderr : ""}`;
+  return /pane_not_found|pane not found/i.test(text);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -192,13 +208,32 @@ export function create(config?: Record<string, unknown>): Runtime {
     return stdout.trimEnd();
   }
 
-  async function getPane(paneId: string): Promise<HerdrPane | null> {
+  /**
+   * Same-ID R4 (B-7 item 9): the pane, or null only for herdr's explicit
+   * `pane_not_found`. Rejects with the cause when the check could not run:
+   * another error envelope, a reply without a pane, an exec error that does
+   * not name a missing pane (herdr cannot start, a timeout, a signal).
+   */
+  async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
+    let result: Record<string, unknown>;
     try {
-      const result = await herdr("pane", "get", paneId);
-      return toPane(result.pane);
-    } catch {
-      return null;
+      result = await herdr("pane", "get", paneId);
+    } catch (err) {
+      if (isPaneNotFound(err)) return null;
+      const detail = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
+      throw new Error(`herdr pane get ${paneId} could not answer: ${detail}`, { cause: err });
     }
+    const pane = toPane(result.pane);
+    if (!pane) throw new Error(`herdr pane get ${paneId} answered without a pane`);
+    return pane;
+  }
+
+  /**
+   * The pane for the delivery waits (`sendMessage`), null for any failure:
+   * a wait polls again, and no stop or removal decides from it.
+   */
+  async function getPane(paneId: string): Promise<HerdrPane | null> {
+    return getPaneStrict(paneId).catch(() => null);
   }
 
   /**
@@ -422,7 +457,9 @@ export function create(config?: Record<string, unknown>): Runtime {
     },
 
     async isAlive(handle: RuntimeHandle): Promise<boolean> {
-      const pane = await getPane(handle.id);
+      // Same-ID R4 (B-7 item 9): false only for `pane_not_found` and for a
+      // pane ID that names another terminal; rejects when herdr cannot answer.
+      const pane = await getPaneStrict(handle.id);
       if (!pane) return false;
 
       // Guard against a recycled pane id pointing at somebody else's terminal.

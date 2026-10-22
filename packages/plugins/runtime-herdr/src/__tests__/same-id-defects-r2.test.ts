@@ -76,17 +76,14 @@ beforeEach(() => {
 });
 
 describe("[same-id R4] B-7 item 3: runtime-herdr isAlive reads a failure answer as 'no pane'", () => {
-  defect(
-    "isAlive rejects when herdr answers an error envelope that is not 'pane not found'",
-    async () => {
-      herdrWith(() =>
-        JSON.stringify({ error: { code: "server_unavailable", message: "no server" } }),
-      );
-      await expect(create().isAlive(HANDLE)).rejects.toThrow();
-    },
-  );
+  it("isAlive rejects when herdr answers an error envelope that is not 'pane not found'", async () => {
+    herdrWith(() =>
+      JSON.stringify({ error: { code: "server_unavailable", message: "no server" } }),
+    );
+    await expect(create().isAlive(HANDLE)).rejects.toThrow();
+  });
 
-  defect("isAlive rejects when herdr answers a reply without a pane", async () => {
+  it("isAlive rejects when herdr answers a reply without a pane", async () => {
     herdrWith(() => JSON.stringify({ id: "cli:pane:get", result: {} }));
     await expect(create().isAlive(HANDLE)).rejects.toThrow();
   });

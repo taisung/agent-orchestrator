@@ -41,10 +41,8 @@ vi.mock("node:timers/promises", () => ({
 
 const { create } = await import("../index.js");
 
-const RED = process.env["SAME_ID_DEFECTS"] === "red";
-function defect(name: string, fn: () => Promise<void>): void {
-  (RED ? it : it.fails)(name, fn);
-}
+// Same-ID R4 made every defect of this file a plain test, so no `defect`
+// marking is left.
 
 const HANDLE = {
   id: "w7:p1",
@@ -57,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("[same-id R4] D-D: runtime-herdr isAlive answers false when it cannot check", () => {
-  defect("isAlive rejects when the herdr command times out", async () => {
+  it("isAlive rejects when the herdr command times out", async () => {
     mockExecFile.mockRejectedValueOnce(
       Object.assign(new Error("Command failed: herdr pane get w7:p1"), {
         code: null,
@@ -70,7 +68,7 @@ describe("[same-id R4] D-D: runtime-herdr isAlive answers false when it cannot c
     await expect(create().isAlive(HANDLE)).rejects.toThrow();
   });
 
-  defect("isAlive rejects when the herdr binary cannot start", async () => {
+  it("isAlive rejects when the herdr binary cannot start", async () => {
     mockExecFile.mockRejectedValueOnce(
       Object.assign(new Error("spawn herdr ENOENT"), { code: "ENOENT", errno: -2 }),
     );
