@@ -494,7 +494,11 @@ interrupt, and from R3b on ao refuses to reuse an existing OpenCode session (it 
 the optional round RO qualifies a bound transport and an actual-store hold check; OD-23 (a): the
 `@ao_launch ""` trust limit is accepted and documented; OD-24 (a): a moved Herdr socket leaves the session
 `unknown`. Design r5 covers only RW and R2b-2 (with the association serialization moved before R2b-2);
-R3a, R3b, RH and RO come later. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
+R3a, R3b, RH and RO come later. After re-check r5 (answer "1b 2a", 2026-10-21 after 22:44 EDT): RW uses a stopped-fleet
+barrier (before the RW upgrade the owner stops every AO session and every resident `ao` process; the
+barrier checks that none remains and keeps admission closed otherwise); OD-25 (a): a standing hash check
+detects a wrapper rewrite by an old build and closes admission until a new fence and check, with the
+no-old-build operating rule (detection and response, not prevention). Design r6 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
 `same_id_design_review_r{1..4}_astra6.md`.
 
 ## Known Issues

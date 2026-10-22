@@ -205,6 +205,11 @@ add the missing-`TMUX_TMPDIR` fallback.
      (a) with existing-session OpenCode reuse refused from R3b on until RO qualifies, OD-23 (a), OD-24 (a)
      (TODO D-8). Design r5 by ao-52 DISPATCHED 21:00 EDT
      (`brief-aofork-same-id-design-r5.md`, base `13c58b2c`, no Herdr or OpenCode process allowed).
+   - Design r5 by ao-52 DONE 22:03 (`same_id_design_r5_opus.md`); its re-check r5 by ao-51 DONE 22:42
+     (`same_id_design_review_r5_astra6.md`): RW and R2b-2 NOT-SOUND (B-1 inbox candidate ownership, B-2 a
+     dead holder's shim client, M-1 barrier order after an archive crash, M-2 E5 inventory). The owner
+     answered "1b 2a": a stopped-fleet barrier for RW; OD-25 (a) decided (TODO D-8). Design r6 by ao-52
+     DISPATCHED 22:51 EDT (`brief-aofork-same-id-design-r6.md`, base `f907c4c1`); ao-51 re-checks it.
 3. **`ao send` to an idle Codex pane says "processing" for an unsubmitted paste** - ao-54 DONE at
    `4ec62a0a` (owner "4a", 2026-10-21; Known Issues, first entry); review r1 by ao-56 is DONE:
    NOT-LAND-SAFE (2 B, 2 M, 1 m; `development/reviews/codex_send_idle_review_r1_astra6.md`), and `-p`
