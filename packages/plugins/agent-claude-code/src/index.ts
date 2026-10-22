@@ -6,7 +6,7 @@ import {
   DEFAULT_ACTIVE_WINDOW_MS,
   HERDR_RUNTIME_NAME,
   exactPaneTarget,
-  getHerdrPaneProcesses,
+  isHerdrProcessRunning,
   removeAoBinFromPath,
   type Agent,
   type AgentSessionInfo,
@@ -542,18 +542,54 @@ async function getCachedProcessList(): Promise<string> {
 }
 
 /**
- * tmux 3.4 answers for a missing target: "can't find window: X" from
- * list-panes, and "no current target" from a server with no session at all
- * (`exit-empty off`).
+ * tmux 3.4's whole answer for a missing target `=<name>:`: exit code 1, no
+ * signal, and the stderr "can't find session: <name>", or "no current
+ * target" from a server with no session at all (`exit-empty off`). The
+ * same forms as the other agents (same-ID R4). A line for another target or
+ * among other lines, "can't find window" or "can't find pane", another exit
+ * code, a signal or a timeout says nothing about this pane.
  */
-const TMUX_TARGET_NOT_FOUND = /^(?:can't find (?:session|window|pane): |no current target$)/m;
+function isTmuxSessionGone(err: unknown, sessionName: string): boolean {
+  const failure = (typeof err === "object" && err !== null ? err : {}) as {
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+    stderr?: unknown;
+  };
+  const diagnostic =
+    typeof failure.stderr === "string" ? failure.stderr.replace(/\n$/, "") : undefined;
+  return (
+    failure.code === 1 &&
+    !failure.signal &&
+    failure.killed !== true &&
+    (diagnostic === `can't find session: ${sessionName}` || diagnostic === "no current target")
+  );
+}
 
-function isTmuxTargetNotFound(err: unknown): boolean {
-  const stderr =
-    err && typeof err === "object" && "stderr" in err && typeof err.stderr === "string"
-      ? err.stderr
-      : "";
-  return TMUX_TARGET_NOT_FOUND.test(stderr);
+/** The header of `ps -eo pid,tty,args` (procps `TT` and `COMMAND`, BSD `TTY` and `ARGS`). */
+const PS_HEADER = /^\s*PID\s+TTY?\s+(?:ARGS|COMMAND|CMD)\s*$/;
+/** A row of `ps -eo pid,tty,args`: a PID with no leading zero, the TTY, the arguments. */
+const PS_ROW = /^\s*([1-9]\d*)\s+(\S+)\s+(\S.*)$/;
+
+/**
+ * The rows of a `ps -eo pid,tty,args` reply. Throws for a reply that is not
+ * a process list (no header, no row, a malformed row, a PID that is not a
+ * positive safe integer): it proves nothing about the agent.
+ */
+function parseProcessList(psOut: string): Array<{ tty: string; args: string }> {
+  const [header = "", ...rows] = psOut.trimEnd().split("\n");
+  const processes = rows.map((row) => {
+    const match = PS_ROW.exec(row);
+    return match && Number.isSafeInteger(Number(match[1]))
+      ? { tty: match[2] ?? "", args: match[3] ?? "" }
+      : null;
+  });
+  if (!PS_HEADER.test(header) || processes.length === 0 || processes.includes(null)) {
+    throw new Error(
+      `claude-code: ps -eo pid,tty,args answered a reply that is not a process list (first line ${JSON.stringify(header.slice(0, 80))})`,
+    );
+  }
+  return processes.filter((proc): proc is { tty: string; args: string } => proc !== null);
 }
 
 /**
@@ -565,20 +601,20 @@ const CLAUDE_PROCESS_RE = /(?:^|\/)claude(?:\s|$)/;
 /**
  * Check if a process named "claude" is running in the given runtime handle's context.
  * Uses herdr's pane process list, ps by TTY (for tmux), or a stored PID.
- * Returns null when the check ran and found none (or tmux answered that the
- * pane does not exist); rejects when `tmux list-panes` or `ps` cannot run.
+ * Answers false only for explicit, well-formed evidence of absence: tmux's
+ * whole answer that the session does not exist, a valid process list with no
+ * claude on a pane TTY, a Herdr list with no claude, or ESRCH for a stored
+ * PID. Every other answer rejects with the cause (a check that cannot run, a
+ * malformed or ambiguous answer), and callers read the rejection as unknown.
  */
-async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> {
+async function isClaudeProcessRunning(handle: RuntimeHandle): Promise<boolean> {
   // herdr owns the PTY and reports a pane's foreground processes directly, so
   // neither the tmux TTY scan nor the process-runtime PID applies. Without this
   // a herdr handle falls through to the PID branch, finds none, and reports the
-  // session exited.
+  // session exited. A match is the agent whatever its PID (core gives 0 for a
+  // PID that herdr does not report); core rejects when herdr cannot answer.
   if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-    const processes = await getHerdrPaneProcesses(handle.id);
-    const match = processes.find(
-      (proc) => CLAUDE_PROCESS_RE.test(proc.cmdline) || CLAUDE_PROCESS_RE.test(proc.name),
-    );
-    return match ? (match.pid || null) : null;
+    return isHerdrProcessRunning(handle.id, CLAUDE_PROCESS_RE);
   }
 
   // For tmux runtime, get the pane TTY and find claude on it
@@ -592,50 +628,52 @@ async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> 
         { timeout: 5_000 },
       ));
     } catch (err: unknown) {
-      if (isTmuxTargetNotFound(err)) return null;
+      if (isTmuxSessionGone(err, handle.id)) return false;
       throw new Error(`claude-code: tmux list-panes -t ${target} failed`, { cause: err });
     }
-    // Iterate all pane TTYs (multi-pane sessions) — succeed on any match
+    // One TTY path per pane (multi-pane sessions: succeed on any match). An
+    // empty answer or other text is not a list of panes.
     const ttys = ttyOut
       .trim()
       .split("\n")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (ttys.length === 0) return null;
+      .map((t) => t.trim());
+    if (!ttys.every((t) => /^\/dev\/\S+$/.test(t))) {
+      throw new Error(
+        `claude-code: tmux list-panes -t ${target} answered ${JSON.stringify(ttyOut.trim().slice(0, 80))}, not a list of pane TTYs`,
+      );
+    }
 
-    const psOut = await getCachedProcessList();
-    if (!psOut) return null;
-
+    const processes = parseProcessList(await getCachedProcessList());
     const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-    for (const line of psOut.split("\n")) {
-      const cols = line.trimStart().split(/\s+/);
-      if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
-      const args = cols.slice(2).join(" ");
-      if (CLAUDE_PROCESS_RE.test(args)) {
-        return parseInt(cols[0] ?? "0", 10);
-      }
-    }
-    return null;
+    return processes.some((proc) => ttySet.has(proc.tty) && CLAUDE_PROCESS_RE.test(proc.args));
   }
 
-  // For process runtime, check if the PID stored in handle data is alive
+  // No retained runtime (tmux, Herdr) stores a PID: a handle that gets here is
+  // a pane handle with no ID or the record of a runtime that this fork does not
+  // ship. With no positive PID the check cannot run, so it rejects.
   const rawPid = handle.data["pid"];
-  const pid = typeof rawPid === "number" ? rawPid : Number(rawPid);
-  if (Number.isFinite(pid) && pid > 0) {
-    try {
-      process.kill(pid, 0); // Signal 0 = check existence
-      return pid;
-    } catch (err: unknown) {
-      // EPERM means the process exists but we lack permission to signal it
-      if (err instanceof Error && "code" in err && err.code === "EPERM") {
-        return pid;
-      }
-      return null;
-    }
+  const pid =
+    typeof rawPid === "number"
+      ? rawPid
+      : typeof rawPid === "string" && /^[1-9]\d*$/.test(rawPid)
+        ? Number(rawPid)
+        : Number.NaN;
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(
+      `claude-code: no pane and no valid PID to check (runtime ${JSON.stringify(handle.runtimeName)}, pid ${String(rawPid).slice(0, 40)})`,
+    );
   }
-
-  // No reliable way to identify the correct process for this session
-  return null;
+  try {
+    process.kill(pid, 0); // Signal 0 = check existence
+    return true;
+  } catch (err: unknown) {
+    const code = err instanceof Error && "code" in err ? err.code : undefined;
+    // EPERM means the process exists but we lack permission to signal it
+    if (code === "EPERM") return true;
+    // ESRCH: no process has this PID. Any other error proves nothing.
+    if (code === "ESRCH") return false;
+    throw new Error(`claude-code: kill(${pid}, 0) failed`, { cause: err });
+  }
 }
 
 // =============================================================================
@@ -930,8 +968,7 @@ function createClaudeCodeAgent(): Agent {
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
-      const pid = await findClaudeProcess(handle);
-      return pid !== null;
+      return isClaudeProcessRunning(handle);
     },
 
     async getActivityState(

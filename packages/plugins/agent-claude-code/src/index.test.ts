@@ -502,9 +502,12 @@ describe("isProcessRunning", () => {
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
   });
 
-  it("returns false when tmux list-panes returns empty", async () => {
+  it("rejects when tmux list-panes returns empty (F-6)", async () => {
+    // An empty answer is not a list of panes: it proves nothing about claude.
     mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
-    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
+      "not a list of pane TTYs",
+    );
   });
 
   it("returns true for process runtime with alive PID", async () => {
@@ -516,15 +519,18 @@ describe("isProcessRunning", () => {
 
   it("returns false for process runtime with dead PID", async () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw new Error("ESRCH");
+      throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
     });
     expect(await agent.isProcessRunning(makeProcessHandle(999))).toBe(false);
     killSpy.mockRestore();
   });
 
-  it("returns false for unknown runtime without PID (no pgrep fallback)", async () => {
+  it("rejects for unknown runtime without PID (no pgrep fallback) (F-6)", async () => {
+    // No pane and no PID: the check cannot run, so it is no evidence of exit.
     const handle: RuntimeHandle = { id: "x", runtimeName: "other", data: {} };
-    expect(await agent.isProcessRunning(handle)).toBe(false);
+    await expect(agent.isProcessRunning(handle)).rejects.toThrow(
+      "no pane and no valid PID to check",
+    );
     // Must NOT call pgrep — could match wrong session
     expect(mockExecFileAsync).not.toHaveBeenCalled();
   });
@@ -537,11 +543,12 @@ describe("isProcessRunning", () => {
   });
 
   it("returns false when tmux answers that the pane does not exist", async () => {
-    // tmux 3.4: list-panes -t on a missing session prints "can't find window".
+    // tmux 3.4: list-panes -t =<name>: on a missing session prints
+    // "can't find session: <name>" (F-6: "can't find window" rejects).
     mockExecFileAsync.mockRejectedValue(
       Object.assign(new Error("Command failed: tmux list-panes"), {
         code: 1,
-        stderr: "can't find window: test-session\n",
+        stderr: "can't find session: test-session\n",
       }),
     );
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
