@@ -1,7 +1,7 @@
 # Handover
 
-**Last Updated**: 2026-10-21
-**Latest Code Commit**: 8fe2e1aa (docs: state that an archive directory that cannot be checked keeps the session) - the last commit of the killed-status fix; built and live since 2026-10-21 10:25 EDT, pushed
+**Last Updated**: 2026-10-22
+**Latest Code Commit**: 9938d5d1 (docs: state the Claude Code screen rule and the waits-for-an-answer line) - the last commit of the claude-code `detectActivity` round; built and live since 2026-10-22 07:46 EDT
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
@@ -32,6 +32,13 @@ by exact PID with `restart_lifecycle.py`: 3624110 → **1294181** (agent-orchest
 22:38:03. First live result: `ao send --no-wait ao-57` (22:39) printed "Message sent and processing" for a
 real running Codex turn. Not pushed yet (owner "4a": push after the live check). Same-ID R4 is in review
 (ao-57); design r5 is in re-check (ao-51).
+
+Update 2026-10-22 08:00 EDT: the claude-code `detectActivity` round is LANDED (`63932b9a..9938d5d1`),
+BUILT (07:46:03 to 07:46:10, 12 packages, `~/.ao/bin` unchanged) and LIVE: the gates of `main` passed first
+(ao-56, `ce93ba67`), and the lifecycle workers were restarted by exact PID: 1294181 → **2002324**
+(agent-orchestrator, 07:46:21) and 1294364 → **2002831** (agent-skills, 07:46:24). Live check PASS on Claude
+Code 2.1.308 with the disposable session ao-61 (Sonnet 5.5; killed and archived 08:00): Priority 4. In
+progress: R4 round 3 (ao-55) and design r7 (ao-52).
 
 ## Live Sessions and Worktrees
 
@@ -67,7 +74,8 @@ worktree.
 form), and the branches of ao-51 (`feat/same-id-design-review-...`) and ao-52 (`feat/same-id-design-r2-...`),
 both at `628e0fbf` (ao-52's 50 design-r2 tests, `a5d57b41` and `628e0fbf`, not on `main`).
 
-**Lifecycle workers**: 3624110 (this config, started 2026-10-21 13:46:55) and 3626937 (agent-skills,
+**Lifecycle workers (now)**: 2002324 (this config) and 2002831 (agent-skills), restarted 2026-10-22 07:46
+by exact PID on the build of `a4cb1470` (source `9938d5d1`). Earlier history: 3624110 (this config, started 2026-10-21 13:46:55) and 3626937 (agent-skills,
 13:47:07), both on the R1 build (`5e8fc14b`, built 13:46:27), restarted by exact PID with
 `~/agent-skills/scripts/restart_lifecycle.py <pid> --do` after a dry run (1470866 → 3624110, 1471311 →
 3626937). No session record changed at the restart. Every brief protects these PIDs (check with `ps` at
@@ -282,9 +290,17 @@ add the missing-`TMUX_TMPDIR` fallback.
    07:34 EDT). LANDED on `main` as `63932b9a..9938d5d1` (clean cherry-pick at 07:36 EDT; tree equal to the
    `git merge-tree` result `c4f5340b`; `packages` and `docs` equal to `53cfd6a8`), NOT built and NOT live
    yet. m-1 (a quoted numbered list with no live input box reads as a dialog: a false refusal, no key) is a
-   follow-up. Next (8a): ao-56 runs the gates on `main`, then the rebuild and the restart of 1294181 and
-   1294364 by exact PID, then a live check with one disposable Claude Code session on Sonnet (a regular
-   send to an idle pane and to a running pane, a long paste during a turn), then the push.
+   follow-up. Owner "8a" DONE: gates of `main` `ce93ba67` PASS (ao-56, 07:44); BUILT 07:46; lifecycle workers
+   restarted (1294181 → 2002324, 1294364 → 2002831); LIVE CHECK PASS 07:47 to 07:56 EDT on Claude Code 2.1.308
+   (disposable ao-61, Sonnet 5.5): a regular send to an idle pane sent at once (2.9 s); a regular send during a
+   150 s foreground tool turn printed the Waiting line and sent once after 144 s (then a false "could not
+   confirm": the reply took 1 s); a 2176-character 8-line `--no-wait` paste during a turn printed
+   "processing", queued, and arrived once and whole. The built rule read all eight 2.1.308 captures right
+   (a `Tip` row under the spinner, a background shell in the footer, a queued message). Notes: the harness
+   of Claude Code blocks a foreground `sleep 150` (the agent moved it to the background); `python3 -c
+   "import time; time.sleep(150)"` ran in the foreground. ao-61 killed and archived
+   (`ao-61_2026-10-22T12-00-04-370Z`); its branch `feat/live-send-check-claude-...` stays (no own commits,
+   at `48f500af`). Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-22/`. Push next.
 5. **Killed-status r8 m-1** - a small worker change (generation-floor read or doc text).
 6. **I-5 follow-ups, project guide, test isolation, `0005` phases** - as before; owner choice.
 

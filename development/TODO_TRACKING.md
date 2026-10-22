@@ -424,6 +424,25 @@ Durable progress record for this fork. Dated events only; the current state live
   F-7. Clean cherry-pick of `09546110..f39d63db` (15 commits; the source outside `development/` equals
   the three-way merge of `26368d76` and `f39d63db`). Built and live with R2a at 22:37 EDT (see above); the
   live check of review r4 follows (owner "3a"), then the push (owner "4a").
+- `63932b9a..9938d5d1` (2026-10-22, ao-54 Claude Opus 5.5; review by ao-56, Codex gpt-6-astra) - **claude-code
+  `detectActivity` reads the input box, not words** (owner "1a" Amendment 1, "7a 8a"): idle means no spinner
+  row above the input box; running means a spinner row `<glyph> <Word>… (<time> ...)` above the box, also
+  with rows between them; a permission prompt and an open AskUserQuestion dialog are `waiting_input`; the
+  footer `bypass permissions` is no evidence. The other-agent verify loop of `send.ts` prints `Message sent —
+  the pane waits for an answer: check <session> (tmux pane <pane>)` on `waiting_input` and sends no retry
+  Enter. 17 real fixtures (2.1.304 to 2.1.307). Review r1 LAND-SAFE (`claude_detect_activity_review_r1_astra6.md`;
+  1 m: a quoted numbered list with no live input box reads as a dialog, a false refusal with no key; limits
+  L-1 to L-3). Clean cherry-pick of `48f500af..53cfd6a8` (4 commits; source equal to `53cfd6a8`). Gates of
+  `main` `ce93ba67` PASS (ao-56: 3269 passed, 11 expected fail, 29 skipped; `gates_main_claude_detect_astra6.md`).
+  Built 07:46:03 to 07:46:10 EDT (12 packages; `~/.ao/bin` unchanged); lifecycle workers restarted by exact
+  PID (1294181 → 2002324, 1294364 → 2002831). Live check PASS on Claude Code 2.1.308 (07:47 to 07:56 EDT,
+  disposable ao-61 on Sonnet 5.5, killed and archived 08:00): a regular send to an idle pane sent at once;
+  a regular send during a 150 s foreground tool turn printed the Waiting line, waited 144 s, then sent once
+  (it then printed `could not confirm it was received`, a false alarm: the reply took 1 s, so the verify loop
+  saw no running screen);
+  a 2176-character 8-line `--no-wait` paste during a turn printed "processing", queued, and arrived once and
+  whole (answer `LONG-OK 8`). The built rule read all eight 2.1.308 captures right. Evidence:
+  `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-22/`.
 
 ## Decisions
 
@@ -1259,7 +1278,8 @@ no-old-build operating rule (detection and response, not prevention). Design r6 
   2026-10-21. Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-21/`.
   FIXED on `main` 2026-10-22 as `63932b9a..9938d5d1` (ao-54, review r1 LAND-SAFE by ao-56): the rule reads the
   input box and the rows above it, the footer is no evidence, a dialog reads `waiting_input`, and the
-  `send.ts` verify loop sends no retry Enter to a pane that waits for an answer. Not built yet. Follow-ups:
+  `send.ts` verify loop sends no retry Enter to a pane that waits for an answer. Built and live 07:46 EDT;
+  live check PASS on 2.1.308 (What Landed). Follow-ups:
   m-1 (a quoted numbered list with no live input box reads as a dialog: a false refusal, no key), and F-6
   of R4 review r2 (claude-code `findClaudeProcess`, owner "2a": a round after this landing).
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
