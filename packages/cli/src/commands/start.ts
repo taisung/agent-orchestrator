@@ -9,7 +9,7 @@
  * (or equivalent flag) at launch time — no file writing required.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve, basename } from "node:path";
 import { cwd } from "node:process";
@@ -38,7 +38,6 @@ import {
   type ParsedRepoUrl,
   type PluginRegistry,
   type Runtime,
-  type RuntimeHandle,
   type Session,
 } from "@aoagents/ao-core";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
@@ -48,6 +47,7 @@ import {
   ensureLifecycleWorker,
   startDetachedStop,
   stopLifecycleWorker,
+  type DetachedStop,
 } from "../lib/lifecycle-service.js";
 import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
@@ -1240,50 +1240,88 @@ interface StopOptions {
 /** The hidden flag of the `ao stop` that runs in the detached process (defect B). */
 const DETACHED_STOP_FLAG = "--detached-stop-process";
 
-/**
- * Defect B (2026-10-22): true when this process may run inside the session
- * that `ao stop` kills. tmux hangs up every pane of a killed session, and the
- * hangup ends an `ao stop` that runs in one of them after the kill and before
- * the archive and the lifecycle stop. AO gives the panes of a session
- * AO_SESSION (and AO_SESSION_NAME); for a pane without them, tmux names the
- * session of TMUX_PANE (the runtime's tmux calls reach the same server, as
- * they inherit TMUX). A tmux check that cannot answer counts as inside: the
- * detached stop gives the same end state when this process runs outside.
- */
-async function mayRunInsideSession(
-  sessionId: string,
-  handle: RuntimeHandle | null,
-): Promise<boolean> {
-  if (process.env["AO_SESSION"] === sessionId || process.env["AO_SESSION_NAME"] === sessionId) {
-    return true;
-  }
-  const pane = process.env["TMUX_PANE"];
-  if (!process.env["TMUX"] || !pane || handle?.runtimeName !== "tmux") return false;
-  const name = await execSilent("tmux", ["display-message", "-p", "-t", pane, "#{session_name}"]);
-  return name === null || name.trim() === handle.id;
-}
+/** How often the caller copies new output of the detached stop to its stdout. */
+const DETACHED_STOP_RELAY_MS = 100;
 
-/** The detached stop ended with an error; its output was printed. */
+/**
+ * The detached stop failed, or it did not start. Its output (or `message`)
+ * was printed; the caller exits with `exitCode`.
+ */
 class DetachedStopFailedError extends Error {
-  constructor(message: string) {
+  readonly exitCode: number;
+
+  constructor(exitCode: number, message = "") {
     super(message);
     this.name = "DetachedStopFailedError";
+    this.exitCode = exitCode;
+  }
+}
+
+/** Copies what a log file gained since the last copy to `out`. */
+function logRelay(file: string, out: NodeJS.WriteStream): { copy(): void; close(): void } {
+  let fd: number | null = null;
+  let offset = 0;
+  const chunk = Buffer.alloc(64 * 1024);
+  return {
+    copy(): void {
+      try {
+        fd ??= openSync(file, "r");
+        for (;;) {
+          const read = readSync(fd, chunk, 0, chunk.length, offset);
+          if (read <= 0) return;
+          offset += read;
+          out.write(Buffer.from(chunk.subarray(0, read)));
+        }
+      } catch {
+        // The next copy tries again; the log stays for the operator.
+      }
+    },
+    close(): void {
+      if (fd !== null) closeSync(fd);
+    },
+  };
+}
+
+/**
+ * Copy the stderr and stdout logs of the detached stop to this process's
+ * stderr and stdout while the stop runs, and the rest after it ends; stderr
+ * first, as the stop writes its stderr lines (the spinner, a refusal) before
+ * its stdout lines. Resolves with its exit code (null after a signal);
+ * rejects when it did not start.
+ */
+async function relayDetachedStop(stop: DetachedStop): Promise<number | null> {
+  const relays = [
+    logRelay(stop.stderrLog, process.stderr),
+    logRelay(stop.stdoutLog, process.stdout),
+  ];
+  const copy = (): void => relays.forEach((relay) => relay.copy());
+  const timer = setInterval(copy, DETACHED_STOP_RELAY_MS);
+  try {
+    return await stop.done;
+  } finally {
+    clearInterval(timer);
+    copy();
+    relays.forEach((relay) => relay.close());
   }
 }
 
 /**
- * Defect B: the stop of the session that this process runs in. The kill, the
- * archive and the lifecycle stop run in a detached process, in the order of
- * a stop from outside (the lifecycle worker stops only after a confirmed
- * kill, same-ID R2a). This process waits for it: when the kill works, the
- * hangup ends this process and the detached one finishes; when the session
- * is kept (a refusal or an error), this process prints the detached output
- * and fails.
+ * Defect B (2026-10-22), review r1 M-1 and M-2: the stop of an existing
+ * orchestrator record runs in a detached process, from every caller. A kill
+ * hangs up every pane of the killed session, and the hangup ends an `ao stop`
+ * that runs in one of them after the kill and before the archive and the
+ * lifecycle stop. A check of where the caller runs could read "outside"
+ * wrongly (an empty tmux answer, no TMUX_PANE) or wait without a bound, so
+ * there is none. The detached process runs the stop that ran here before:
+ * kill, archive, then the lifecycle stop (only after a confirmed kill,
+ * same-ID R2a). This process prints its stdout and stderr while it runs
+ * and ends with its exit code. When the kill hangs up this process, the detached one goes
+ * on. Ctrl-C ends only this process: the stop goes on, and this process
+ * names the detached PID and the logs.
  */
-async function stopFromDetachedProcess(
+async function stopInDetachedProcess(
   config: OrchestratorConfig,
   projectId: string,
-  sessionId: string,
   purgeSession: boolean,
 ): Promise<void> {
   const stop = startDetachedStop(config, projectId, [
@@ -1292,35 +1330,34 @@ async function stopFromDetachedProcess(
     ...(purgeSession ? ["--purge-session"] : []),
     DETACHED_STOP_FLAG,
   ]);
-  console.log(
-    chalk.yellow(
-      `ao stop runs inside orchestrator session ${sessionId}, so its kill ends this pane and this command. ` +
-        `A detached process${stop.pid ? ` (PID ${stop.pid})` : ""} stops the session, archives its record ` +
-        `and then stops the lifecycle worker. Its output: ${stop.logFile}`,
-    ),
-  );
+  const onInterrupt = (): void => {
+    process.stderr.write(
+      `\nao stop: the stop goes on in the detached process${stop.pid ? ` (PID ${stop.pid})` : ""}; ` +
+        `its output: ${stop.stdoutLog} and ${stop.stderrLog}\n`,
+    );
+    process.exit(130);
+  };
+  process.once("SIGINT", onInterrupt);
 
   let code: number | null;
   try {
-    code = await stop.done;
+    code = await relayDetachedStop(stop);
   } catch (err) {
     throw new DetachedStopFailedError(
+      1,
       `The detached stop did not start (${errorMessage(err)}); nothing was stopped. ` +
-        `Run \`ao stop ${projectId}\` from a shell outside session ${sessionId}.`,
+        `Check that this ao can run, then run \`ao stop ${projectId}\` again.`,
     );
+  } finally {
+    process.removeListener("SIGINT", onInterrupt);
   }
-  let output: string;
-  try {
-    output = readFileSync(stop.logFile, "utf-8");
-  } catch {
-    output = `(could not read ${stop.logFile})\n`;
-  }
-  process.stdout.write(output);
-  if (code !== 0) {
-    throw new DetachedStopFailedError(
-      `The detached stop ended with ${code === null ? "a signal" : `exit code ${code}`}; its output is above.`,
-    );
-  }
+  if (code === 0) return;
+  throw new DetachedStopFailedError(
+    code ?? 1,
+    code === null
+      ? `The detached stop was ended by a signal; its output: ${stop.stdoutLog} and ${stop.stderrLog}`
+      : "",
+  );
 }
 
 export function registerStop(program: Command): void {
@@ -1336,19 +1373,22 @@ export function registerStop(program: Command): void {
         const { projectId: _projectId, project } = await resolveProject(config, projectArg, "stop");
         const sessionId = `${project.sessionPrefix}-orchestrator`;
         retry = `ao stop ${_projectId}`;
+        const inDetachedProcess = opts.detachedStopProcess === true;
 
-        console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
+        // The detached process prints no heading: its caller printed it.
+        if (!inDetachedProcess) {
+          console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
+        }
 
         // Kill orchestrator session via SessionManager
         const sm = await getSessionManager(config);
         const existing = await sm.get(sessionId);
 
-        if (
-          existing &&
-          opts.detachedStopProcess !== true &&
-          (await mayRunInsideSession(sessionId, existing.runtimeHandle))
-        ) {
-          await stopFromDetachedProcess(config, _projectId, sessionId, opts.purgeSession === true);
+        // Defect B: the kill, the archive and the lifecycle stop of an
+        // existing record run in the detached process (this command with
+        // DETACHED_STOP_FLAG), never in the caller.
+        if (existing && !inDetachedProcess) {
+          await stopInDetachedProcess(config, _projectId, opts.purgeSession === true);
           return;
         }
 
@@ -1377,8 +1417,8 @@ export function registerStop(program: Command): void {
         console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
       } catch (err) {
         if (err instanceof DetachedStopFailedError) {
-          console.error(chalk.red(`\n${err.message}`));
-          process.exit(1);
+          if (err.message) console.error(chalk.red(`\n${err.message}`));
+          process.exit(err.exitCode);
         }
         if (isRuntimeStopUnconfirmedError(err)) {
           // Same-ID R2a (review r1, F-3): the refusal names the outcome, its

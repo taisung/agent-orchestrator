@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -13,7 +16,11 @@ import { getProjectBaseDir, getStateRoot, type OrchestratorConfig } from "@aoage
 
 const LIFECYCLE_PID_FILE = "lifecycle-worker.pid";
 const LIFECYCLE_LOG_FILE = "lifecycle-worker.log";
-const DETACHED_STOP_LOG_FILE = "orchestrator-stop.log";
+/** The logs of one detached stop: `orchestrator-stop-<time>-<caller PID>-<random>.{stdout,stderr}.log`. */
+const DETACHED_STOP_LOG_PREFIX = "orchestrator-stop-";
+const DETACHED_STOP_LOG_PATTERN = /^orchestrator-stop-.+\.log$/;
+/** Logs of detached stops older than this are removed when the next one starts. */
+const DETACHED_STOP_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_START_TIMEOUT_MS = 5_000;
 const STOP_TIMEOUT_MS = 5_000;
 
@@ -223,23 +230,48 @@ export async function ensureLifecycleWorker(
   return { ...status, started: true };
 }
 
-/** A detached `ao stop`: its PID, its log file, and its end. */
+/** A detached `ao stop`: its PID, its two log files, and its end. */
 export interface DetachedStop {
   pid: number | null;
-  logFile: string;
+  /** Its stdout, in a file of this stop only. */
+  stdoutLog: string;
+  /** Its stderr, in a file of this stop only. */
+  stderrLog: string;
   /** The exit code (null after a signal); rejects when the process did not start. */
   done: Promise<number | null>;
 }
 
+/** Remove the logs of detached stops that are older than the max age. Best effort. */
+function pruneDetachedStopLogs(baseDir: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(baseDir);
+  } catch {
+    return;
+  }
+  const oldest = Date.now() - DETACHED_STOP_LOG_MAX_AGE_MS;
+  for (const name of names) {
+    if (!DETACHED_STOP_LOG_PATTERN.test(name)) continue;
+    const path = join(baseDir, name);
+    try {
+      if (statSync(path).mtimeMs < oldest) unlinkSync(path);
+    } catch {
+      // Another stop removed it, or it cannot be read: leave it.
+    }
+  }
+}
+
 /**
  * Run `ao <aoArgs>` (an `ao stop`) in a detached process: its own session
- * with no controlling terminal, stdin closed, and its output in the
- * project's `orchestrator-stop.log` (written new each time). A hangup of the
- * caller's terminal does not reach it. `ao stop` uses it when it runs inside
- * the session that it stops (defect B, 2026-10-22). The child gets the
- * config path and the state root of this process, so it reads the same
- * files, and the rest of this environment (TMUX too), so its runtime calls
- * reach the same server.
+ * with no controlling terminal, stdin closed, and its stdout and stderr in
+ * logs of its own (`orchestrator-stop-<time>-<caller PID>-<random>.stdout.log`
+ * and `.stderr.log` in the project base directory, created exclusively, so
+ * two stops never share one; logs older than 7 days are removed first). A
+ * hangup of the caller's terminal does not reach it. `ao stop` runs the stop of every existing orchestrator record
+ * this way (defect B, 2026-10-22). The child gets the config path and the
+ * state root of this process, so it reads the same files, and the rest of
+ * this environment (TMUX and PATH too), so its runtime calls reach the same
+ * server.
  */
 export function startDetachedStop(
   config: OrchestratorConfig,
@@ -247,17 +279,23 @@ export function startDetachedStop(
   aoArgs: string[],
 ): DetachedStop {
   const baseDir = getProjectBase(config, projectId);
-  const logFile = join(baseDir, DETACHED_STOP_LOG_FILE);
   mkdirSync(baseDir, { recursive: true });
+  pruneDetachedStopLogs(baseDir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const unique = `${stamp}-${process.pid}-${randomUUID().slice(0, 8)}`;
+  const stdoutLog = join(baseDir, `${DETACHED_STOP_LOG_PREFIX}${unique}.stdout.log`);
+  const stderrLog = join(baseDir, `${DETACHED_STOP_LOG_PREFIX}${unique}.stderr.log`);
 
-  const outputFd = openSync(logFile, "w");
+  const stdoutFd = openSync(stdoutLog, "wx");
+  let stderrFd: number | null = null;
   let child: ReturnType<typeof spawn>;
   try {
+    stderrFd = openSync(stderrLog, "wx");
     const launch = resolveAoLaunch(aoArgs);
     child = spawn(launch.command, launch.args, {
       cwd: dirname(config.configPath),
       detached: true,
-      stdio: ["ignore", outputFd, outputFd],
+      stdio: ["ignore", stdoutFd, stderrFd],
       env: {
         ...process.env,
         AO_CONFIG_PATH: config.configPath,
@@ -265,14 +303,15 @@ export function startDetachedStop(
       },
     });
   } finally {
-    closeSync(outputFd);
+    closeSync(stdoutFd);
+    if (stderrFd !== null) closeSync(stderrFd);
   }
 
   const done = new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code: number | null) => resolve(code));
   });
-  return { pid: child.pid ?? null, logFile, done };
+  return { pid: child.pid ?? null, stdoutLog, stderrLog, done };
 }
 
 export async function stopLifecycleWorker(
