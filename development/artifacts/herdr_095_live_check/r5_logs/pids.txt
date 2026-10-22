@@ -1,0 +1,6 @@
+herdr server aohd2-1 pid 4158055 (strace 4158051) started 18:05:26
+herdr server aohd2-2 (binary copy /tmp/aohd2/bin2/herdr) pid 4174594 (strace 4174589) started 18:06:42
+herdr server aohd2-1 pid 4158055 stopped 18:09:03 by herdr server stop
+herdr server aohd2-2 pid 4174594 stopped by herdr server stop (r5_e_server_stop)
+herdr server aohd2-3 pid 56174 (strace 56169) started 18:13:06 for the handoff check
+herdr server aohd2-3 successor pid 59284 (after live handoff; old pid 56174 ended in the handoff) stopped 18:16:36 by herdr server stop; strace 56169 ended

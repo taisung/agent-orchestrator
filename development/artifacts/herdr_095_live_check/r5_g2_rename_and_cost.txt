@@ -1,0 +1,8 @@
+note: transcribed from the console output of r5_setup/r5_g_rename.py (run 2026-10-22 about 18:15 EDT); the copy step
+note: missed the original file (the glob r5_g_* does not match r5_g2_*) and /tmp/aohd2 was already removed.
+server A bound at P: [{'inode': '28539684', 'listen': True}]; stat ino 124257999
+after rename P -> P.old: entries(P) [{'inode': '28539684', 'listen': True}]; entries(P.old) []; P exists False
+server B bound at P: entries(P) [{'inode': '28539684', 'listen': True}, {'inode': '28539687', 'listen': True}]; stat ino 124258000
+server A closed: entries(P) [{'inode': '28539687', 'listen': True}]
+/proc/net/unix: 1054 lines, one read 0.65 ms
+holder scan of every own process: 1801 fd links, 9 ms

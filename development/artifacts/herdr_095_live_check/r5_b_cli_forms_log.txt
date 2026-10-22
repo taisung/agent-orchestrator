@@ -1,0 +1,151 @@
+b_pane_get_result: exit=0
+  stdout='{"id":"cli:pane:get","result":{"pane":{"agent":"claude","agent_status":"idle","pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1},"type":"pane_info"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_pane_not_found: exit=1
+  stdout=''
+  stderr='{"error":{"code":"pane_not_found","message":"pane w1:p1 not found"},"id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_unknown_code: exit=1
+  stdout=''
+  stderr='{"error":{"code":"zz_unknown_code","message":"fake"},"id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_error_and_result: exit=1
+  stdout=''
+  stderr='{"error":{"code":"pane_not_found","message":"x"},"id":"cli:pane:get","result":{"pane":{"agent":"claude","agent_status":"idle","pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1},"type":"pane_info"}}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_error_not_object: exit=1
+  stdout=''
+  stderr='{"error":"pane_not_found","id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_error_no_code: exit=1
+  stdout=''
+  stderr='{"error":{"message":"no code"},"id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_garbage: exit=1
+  stdout=''
+  stderr='Error: Custom { kind: Other, error: Json(Error("expected ident", line: 1, column: 2)) }\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_partial: exit=1
+  stdout=''
+  stderr='Error: Custom { kind: Other, error: Json(Error("EOF while parsing a string", line: 1, column: 34)) }\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_close_no_answer: exit=1
+  stdout=''
+  stderr='Error: Custom { kind: Other, error: EmptyResponse }\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_hang: exit=timeout after 45 s (killed by the capture)
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_other_pane: exit=0
+  stdout='{"id":"cli:pane:get","result":{"pane":{"agent":"claude","agent_status":"idle","pane_id":"w9:p9","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1},"type":"pane_info"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_wrong_id: exit=0
+  stdout='{"id":"someone-else","result":{"pane":{"agent":"claude","agent_status":"idle","pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1},"type":"pane_info"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_two_lines: exit=1
+  stdout=''
+  stderr='{"error":{"code":"pane_not_found","message":"x"},"id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_no_result_no_error: exit=0
+  stdout='{"id":"cli:pane:get","pane":{"agent":"claude","agent_status":"idle","pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_pane_get_server_not_running_from_server: exit=1
+  stdout=''
+  stderr='{"error":{"code":"server_not_running","message":"fake server says so"},"id":"cli:pane:get"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_ping_protocol_19: exit=1
+  stdout=''
+  stderr='{"id":"cli:pane:get","error":{"code":"protocol_mismatch","message":"client protocol 22 is newer than server protocol 19; restart the Herdr server before using this command. Stop the old server to use the new version.\\nStopping exits pane processes.\\nRun `HERDR_SOCKET_PATH=/tmp/aohd2/fake/b_ping_protocol_19.sock herdr server stop`, then restart Herdr with the same socket override."}}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b_ping_version_0_9_4: exit=0
+  stdout='{"id":"cli:pane:get","result":{"pane":{"agent":"claude","agent_status":"idle","pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"term_65e7000000000a1","workspace_id":"w1","zz_extra":1},"type":"pane_info"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:get","method":"pane.get","params":{"pane_id":"w1:p1"}}
+b_ping_hang: exit=timeout after 45 s (killed by the capture)
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b_ping_garbage: exit=1
+  stdout=''
+  stderr='Error: Custom { kind: Other, error: Json(Error("expected value", line: 1, column: 1)) }\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b_ping_close: exit=1
+  stdout=''
+  stderr='Error: Custom { kind: Other, error: EmptyResponse }\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b_process_info_result: exit=0
+  stdout='{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":12,"foreground_processes":[{"argv":["claude","--x"],"cmdline":"claude --x","cwd":"/tmp","name":"claude","pid":12}],"pane_id":"w1:p1","shell_pid":11},"type":"pane_process_info"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:process_info","method":"pane.process_info","params":{"pane_id":"w1:p1"}}
+b_process_info_pane_not_found: exit=1
+  stdout=''
+  stderr='{"error":{"code":"pane_not_found","message":"pane not found"},"id":"cli:pane:process_info"}\n'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:process_info","method":"pane.process_info","params":{"pane_id":"w1:p1"}}
+b_req_workspace_close: exit=0
+  stdout='{"id":"cli:workspace:close","result":{"type":"ok"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:workspace:close","method":"workspace.close","params":{"workspace_id":"w1"}}
+b_req_workspace_close_group: exit=0
+  stdout='{"id":"cli:workspace:close","result":{"type":"ok"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:workspace:close","method":"workspace.close","params":{"workspace_id":"w1","close_group":true}}
+b_req_pane_close: exit=0
+  stdout='{"id":"cli:pane:close","result":{"type":"ok"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:close","method":"pane.close","params":{"pane_id":"w1:p1"}}
+b_req_agent_prompt: exit=0
+  stdout='{"id":"cli:agent:prompt","result":{"type":"ok"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:agent:prompt","method":"agent.prompt","params":{"target":"w1:p1","text":"hello"}}
+b_req_pane_send_text: exit=0
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:request","method":"pane.send_text","params":{"pane_id":"w1:p1","text":"hello"}}
+b_req_pane_send_keys: exit=0
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:request","method":"pane.send_keys","params":{"pane_id":"w1:p1","keys":["Enter"]}}
+b_req_pane_read: exit=0
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:pane:read","method":"pane.read","params":{"pane_id":"w1:p1","source":"recent_unwrapped","lines":5,"format":"text","strip_ansi":true}}
+b_req_pane_run: exit=0
+  stdout=''
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:request","method":"pane.send_input","params":{"pane_id":"w1:p1","text":"bash /tmp/aohd2/tmp/x.sh","keys":["Enter"]}}
+b_req_workspace_create: exit=0
+  stdout='{"id":"cli:workspace:create","result":{"type":"ok"}}\n'
+  stderr=''
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  connection 2: {"id":"cli:workspace:create","method":"workspace.create","params":{"cwd":"/tmp/aohd2/tmp","focus":false,"label":"aohd2-x","env":{"A":"1"}}}
