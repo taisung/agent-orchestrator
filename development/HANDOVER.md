@@ -44,8 +44,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`. Transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | a new session continues here |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-63 | Claude Code Opus 5.5, branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it`. Round 1 `dc7815d2..f095f5ce`, round 2 `..04e720bb`, round 3 `..e6695161` (6 commits: relay with backpressure and `process.exitCode`, Ctrl-C note before exit 130, prune of generated regular files only). 3596 passed, red 0/16/6/0. Router row closed in-review | done 14:10; keep until landed |
-| ao-64 | Codex gpt-6-astra xhigh, branch `review/start-no-server-r3` at `e6695161`. Reviews r1 and r2 on `main`. Re-check r3 brief `brief-review-start-no-server-r3-astra.md` (`.agent_task_r3.md`, scratch `/tmp/aosnr3`, no network, no `npx`) sent 14:12 with the owner's leave; router row open | running; the orchestrator's background loop reads `.agent_report.md` |
+| ao-63 | Claude Code Opus 5.5, branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it`, `dc7815d2..e6695161` (14 commits, rounds 1 to 3), LANDED on `main` as `d1efcb94..de7c1bfc` (owner "2", 14:27) | done; kill and delete the branch after the push |
+| ao-64 | Codex gpt-6-astra xhigh. Reviews r1, r2 and r3 (LAND-SAFE 14:23) on `main`. Gates of `main` brief `brief-validate-main-start-no-server-astra.md` (`.agent_task_gates.md`, branch `validate/main-start-no-server` at `de7c1bfc`, switched 14:28:00 after a failed first switch and a correction note; its review copies backed up in `backup/ao-64-reviews/`) sent 14:27; router row open | running; then build, restart, live check and push (owner "2": push without a second question) |
 
 **Closed by this handover**: ao-55 (R4 landed), ao-54 (F-6 landed), and ao-52, ao-60, ao-62 (idle, owner
 "clean up inactive agents, worktrees, and branches"). See "Close record" below.
