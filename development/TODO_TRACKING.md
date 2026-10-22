@@ -443,6 +443,19 @@ Durable progress record for this fork. Dated events only; the current state live
   a 2176-character 8-line `--no-wait` paste during a turn printed "processing", queued, and arrived once and
   whole (answer `LONG-OK 8`). The built rule read all eight 2.1.308 captures right. Evidence:
   `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-22/`.
+- `32c687b2..56a385fb` (2026-10-22, ao-55 Claude Opus 5.5; reviews by ao-57 and ao-60, Codex gpt-6-astra) - **same-ID
+  R4, strict reads** (owner "1a", "2a", "14a", "16c"): a read that a destructive or allocating decision uses
+  answers its negative only for the exact, well-formed absence form of the table "Absence forms of the R4
+  reads" in `docs/DEVELOPMENT.md` (11 rows: archive allocation, holder listing and content, latest archive,
+  recovery path and workspace probe, worktree `exists`, core and runtime Herdr, the codex, gemini and opencode
+  liveness, the OpenCode send and launch); every other form rejects with the cause (or "held" for a holder
+  read), and callers keep the unknown. 4 author rounds and 4 reviews (`same_id_r4_review_r{1..4}_astra6.md`;
+  r4 LAND-SAFE, 0 B 0 M 0 m). Clean cherry-pick of `75f1c98b..e3860672` (21 commits; tree equal to the
+  `git merge-tree` result `0fdab16c`; `WRAPPER_VERSION` still 0.2.6). Gates of `main` `193d2c9e` PASS (ao-60:
+  3464 passed, 1 expected fail (R3 F-5), 29 skipped; red R1 0, R2 16, R3 6, R4 0; `gates_main_r4_astra6.md`).
+  Built 10:00:04 to 10:00:11 EDT; lifecycle workers restarted by exact PID (2002324 → 3830765, 2002831 →
+  3830929). Live check PASS (10:02 EDT): 5 polls each, 0 failures, health ok; no live session `killed` or
+  `exited`. Follow-ups F-1 to F-7 of the R4 reviews; F-8 (a handle with no PID rejects for Claude Code only).
 
 ## Decisions
 
