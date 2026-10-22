@@ -364,6 +364,19 @@ describe("same-id R4, B-7 item 5: the recovery validator keeps a path that canno
     },
   );
 
+  // Same-ID R4 round 3: a workspace check (item 6, for a missing path) that
+  // answers a value other than true or false is unknown, not "no workspace".
+  it("round 3: a workspace.exists that answers a value that is not a boolean gives a live session no action", async () => {
+    ctx.mockWorkspace.exists = vi.fn(async () => undefined as unknown as boolean);
+
+    const assessment = await assess(join(ctx.tmpDir, "missing-path"));
+
+    expect(assessment.action).toBe("skip");
+    expect(assessment.reason).toMatch(
+      /^Liveness unknown \(workspace check answered undefined, not true or false/,
+    );
+  });
+
   it("control: a path that does not exist (ENOENT) is 'no workspace', not unknown", async () => {
     const assessment = await assess(join(ctx.tmpDir, "missing-path"));
 

@@ -91,7 +91,11 @@ export async function validateSession(
     }
     if (pathMissing && workspace?.exists) {
       try {
-        workspaceExists = await workspace.exists(workspacePath);
+        // Same-ID R4 round 3: only `false` is "no workspace"; an answer that
+        // is not a boolean says nothing, so it is unknown too.
+        const answer: unknown = await workspace.exists(workspacePath);
+        if (typeof answer === "boolean") workspaceExists = answer;
+        else probeError ??= `workspace check answered ${String(answer)}, not true or false`;
       } catch (err) {
         probeError ??= `workspace check could not run: ${describe(err)}`;
       }
