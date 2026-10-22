@@ -1025,11 +1025,11 @@ describe("start command — orchestrator liveness (defect A)", () => {
 
     await program.parseAsync(["node", "test", "start"]);
 
-    expect(mockRuntime.isAlive).toHaveBeenCalledWith(handle);
     expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
     expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: "my-app" }),
     );
+    expect(mockRuntime.isAlive).toHaveBeenCalledWith(handle);
     expect(oraLog).toContainEqual([
       "info",
       "Orchestrator session app-orchestrator does not run: no tmux server runs (tmux has-session -t =hash-app-orchestrator could not answer: no server running on /tmp/tmux-1000/default). Starting a new one.",
@@ -1128,11 +1128,13 @@ describe("start command — orchestrator liveness (defect A)", () => {
   });
 
   it("A2: a live orchestrator is reused even when another candidate is unknown", async () => {
+    // The unknown candidate is the most recent one, so a reuse by recency alone picks it.
     mockSessionManager.list.mockResolvedValue([
-      orchestratorRecord(),
+      orchestratorRecord({ lastActivityAt: new Date(1_000) }),
       orchestratorRecord({
         id: "app-orchestrator-1",
         runtimeHandle: { ...handle, id: "hash-app-orchestrator-1" },
+        lastActivityAt: new Date(2_000),
       }),
     ]);
     mockRuntime.isAlive.mockImplementation(async (h: { id: string }) => {
@@ -1211,9 +1213,9 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
   }
 
   /** The detached stop, as `startDetachedStop` returns it; `output` is its log. */
-  function detachedStop(output: string, done: Promise<number | null>): void {
+  function detachedStop(output: string, done: () => Promise<number | null>): void {
     writeFileSync(logFile, output);
-    mockStartDetachedStop.mockReturnValue({ pid: 4321, logFile, done });
+    mockStartDetachedStop.mockImplementation(() => ({ pid: 4321, logFile, done: done() }));
   }
 
   beforeEach(() => {
@@ -1230,19 +1232,19 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
 
   it("hands the kill, the archive and the lifecycle stop to a detached process when AO_SESSION names the session", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
-    detachedStop("✓ Orchestrator stopped\n", Promise.resolve(0));
+    detachedStop("✓ Orchestrator stopped\n", () => Promise.resolve(0));
 
     await program.parseAsync(["node", "test", "stop"]);
 
+    // This process is hung up by the kill, so it neither kills nor stops the
+    // lifecycle worker itself: the detached process does both, in order.
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
     expect(mockStartDetachedStop).toHaveBeenCalledWith(
       expect.objectContaining({ configPath: expect.any(String) }),
       "my-app",
       ["stop", "my-app", "--detached-stop-process"],
     );
-    // This process is hung up by the kill, so it neither kills nor stops the
-    // lifecycle worker itself: the detached process does both, in order.
-    expect(mockSessionManager.kill).not.toHaveBeenCalled();
-    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
     expect(logged()).toContain(
       `ao stop runs inside orchestrator session app-orchestrator, so its kill ends this pane and this command. A detached process (PID 4321) stops the session, archives its record and then stops the lifecycle worker. Its output: ${logFile}`,
     );
@@ -1252,7 +1254,7 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
 
   it("passes --purge-session on to the detached process", async () => {
     process.env["AO_SESSION_NAME"] = "app-orchestrator";
-    detachedStop("", Promise.resolve(0));
+    detachedStop("", () => Promise.resolve(0));
 
     await program.parseAsync(["node", "test", "stop", "--purge-session"]);
 
@@ -1273,7 +1275,7 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
       }
       return null;
     });
-    detachedStop("", Promise.resolve(0));
+    detachedStop("", () => Promise.resolve(0));
 
     await program.parseAsync(["node", "test", "stop"]);
 
@@ -1285,7 +1287,7 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
   it("counts a tmux check that cannot answer as inside", async () => {
     process.env["TMUX"] = "/tmp/tmux-1000/default,123,0";
     process.env["TMUX_PANE"] = "%7";
-    detachedStop("", Promise.resolve(0));
+    detachedStop("", () => Promise.resolve(0));
 
     await program.parseAsync(["node", "test", "stop"]);
 
@@ -1297,7 +1299,7 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop(
       "Failed to stop orchestrator session app-orchestrator: runtime stop unconfirmed (unknown): the destroy failed\nThe lifecycle worker was not stopped.\n",
-      Promise.resolve(1),
+      () => Promise.resolve(1),
     );
 
     await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
@@ -1315,7 +1317,7 @@ describe("stop command — inside the orchestrator's own session (defect B)", ()
 
   it("a detached process that does not start changes nothing and names the next action", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
-    detachedStop("", Promise.reject(new Error("spawn ao ENOENT")));
+    detachedStop("", () => Promise.reject(new Error("spawn ao ENOENT")));
 
     await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
 
