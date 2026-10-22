@@ -74,7 +74,9 @@ design r9 and of the RW and R2b-2 rounds). No other branch and no worker worktre
 - **Pushes** (all fast-forward, owner answers "16c" and "17a"): `b97a2500..511c697e` at 10:03:00 (R4 and 9
   docs commits), `511c697e..116cf549` at 10:06:57 (the first handover), `116cf549..8ae3efba` at 10:18:10
   (the summary doc `1118b876` and the first close record), `8ae3efba..dee08849` at 10:45:23 (F-6 and 4 docs
-  commits). CI passed 4 of 4 for `511c697e` and `116cf549`; for `dee08849` see the CI line added after it.
+  commits). CI passed 4 of 4 for `511c697e` and `116cf549`. For `dee08849`, CI, Security and Integration Tests passed;
+  the one job of the Onboarding Integration Test (run 39798472621) passed at 10:46:52 EDT, but the run status
+  still read `in_progress` at 10:57:37 (a GitHub status delay; its last update was 10:45:56).
 - **Watcher retirement** (ao-lifecycle, Session Cleanup), each by TERM, each log ends with `EXIT signal
   SIGTERM`, each `watch.pid` removed, and the `grep -Flzx` check of each state found no process:
   3845635 (ao-55) at 10:07:03 and 3760585 (ao-54) at 10:45:47. Their escalations "the fleet is unwatched"
