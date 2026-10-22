@@ -313,8 +313,11 @@ with at most 4 rows below it, the rule row above it, and the prompt row directly
   is `idle`. A transcript entry starts at column 0 and indents its other rows, so a spinner row, a
   prompt or a footer that a message quotes, and any text in the input box, do not change the answer.
 - With no box in view, an open dialog is `waiting_input`: the last row that starts with `❯` is a cursor
-  on a numbered choice (`❯ 1. Red`), the dialog shows another numbered choice, and no `●` row follows the
-  cursor. The older rules stay for screens with no box: a bare prompt on the last row is `idle`,
+  on a numbered choice (`❯ 1. Red`), a rule row (the top edge of the dialog) is above the cursor with no
+  transcript entry (a `●` or `❯` row at column 0) between them, the dialog shows another numbered choice,
+  and no `●` row follows the cursor. A numbered list that a message or a user turn quotes has no such
+  rule row above it, or its entry row lies between, so it reads as the same screen without the list. The
+  older rules stay for screens with no box: a bare prompt on the last row is `idle`,
   `Do you want to proceed?` or `(Y)es ... (N)o` in the last 5 rows is `waiting_input`, and everything
   else is `active`.
 
