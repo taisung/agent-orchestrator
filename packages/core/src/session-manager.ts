@@ -20,12 +20,13 @@ import {
   utimesSync,
   unlinkSync,
   realpathSync,
+  rmSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   AgentNotAttachedError,
@@ -33,11 +34,15 @@ import {
   isAgentNotAttachedError,
   isIssueNotFoundError,
   isRestorable,
+  LAUNCH_GRACE_MS,
   NON_RESTORABLE_STATUSES,
   RUNTIME_NO_SERVER_ERROR_CODE,
+  SESSION_STATUS,
   SessionLaunchInProgressError,
   SessionNotFoundError,
   SessionNotRestorableError,
+  SessionRelaunchRefusedError,
+  TERMINAL_STATUSES,
   WorkspaceMissingError,
   type OpenCodeSessionManager,
   type Session,
@@ -63,6 +68,12 @@ import {
   type AgentMessageDelivery,
   type PreparedAgentSession,
   type SessionMessageDelivery,
+  type SessionRelaunchChild,
+  type SessionRelaunchOptions,
+  type SessionRelaunchPlan,
+  type SessionRelaunchResult,
+  type SessionStatus,
+  type RuntimePaneState,
   PR_STATE,
 } from "./types.js";
 import {
@@ -81,6 +92,9 @@ import {
   reserveSessionRecord,
 } from "./metadata.js";
 import { buildPrompt } from "./prompt-builder.js";
+import { generateOrchestratorPrompt } from "./orchestrator-prompt.js";
+import { HERDR_RUNTIME_NAME } from "./herdr.js";
+import { shellEscape } from "./utils.js";
 import {
   getSessionsDir,
   getStateRoot,
@@ -140,6 +154,132 @@ const LAUNCH_CONFIRM_TIMEOUT_MS = 15_000;
  * showed the first `user` message 1.5 s after the TUI started.
  */
 const LAUNCH_PROMPT_CONFIRM_TIMEOUT_MS = 10_000;
+
+/**
+ * Session relaunch (2026-10-22): the bound on each liveness answer that a
+ * relaunch needs before it acts. No answer in time is unknown, and unknown
+ * refuses.
+ */
+const RELAUNCH_PROBE_TIMEOUT_MS = 10_000;
+
+/** How often a relaunch looks for the agent process after the start. */
+const RELAUNCH_CONFIRM_POLL_MS = 500;
+
+/**
+ * The foreground commands of a pane that shows a shell prompt. A relaunch
+ * from another shell types its launch line only into one of these.
+ */
+const RELAUNCH_SHELLS: ReadonlySet<string> = new Set([
+  "bash",
+  "zsh",
+  "sh",
+  "dash",
+  "fish",
+  "ksh",
+  "mksh",
+  "tcsh",
+  "csh",
+]);
+
+/** A shell variable name, for the `export` lines of a relaunch script. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Session relaunch: write the launch script of a relaunch, as runtime-tmux
+ * writes one for a long launch command (`ao-launch-<uuid>.sh` in the temp
+ * directory, mode 0700, it removes itself). It goes to the workspace and
+ * exports the relaunch environment before the launch command, so the agent
+ * gets the environment of a spawn whether the pane's shell or the caller
+ * runs it.
+ */
+function writeRelaunchScript(
+  workspacePath: string,
+  environment: Record<string, string>,
+  launchCommand: string,
+): string {
+  const exports = Object.entries(environment).map(([key, value]) => {
+    if (!ENV_NAME.test(key)) {
+      throw new Error(`Invalid environment variable name for a relaunch: ${JSON.stringify(key)}`);
+    }
+    return `export ${key}=${shellEscape(value)}`;
+  });
+  const scriptPath = join(tmpdir(), `ao-launch-${randomUUID()}.sh`);
+  const content = [
+    "#!/usr/bin/env bash",
+    'rm -- "$0" 2>/dev/null || true',
+    `cd -- ${shellEscape(workspacePath)} || exit 1`,
+    ...exports,
+    launchCommand,
+    "",
+  ].join("\n");
+  writeFileSync(scriptPath, content, { encoding: "utf-8", mode: 0o700 });
+  return scriptPath;
+}
+
+/**
+ * Session relaunch: true when the record's status lets a relaunch go on. A
+ * terminal status refuses, except a kill that a liveness probe gave (the
+ * rule of the lifecycle's `isRecoverableKill`: `killedReason` `runtime` or
+ * `agent-exited`, or a kill from before the key without a PR). That is the
+ * record of an agent that ended while its pane can still run it.
+ */
+function isRelaunchableStatus(raw: Readonly<Record<string, string>>): boolean {
+  const status = raw["status"] ?? "";
+  if (status === SESSION_STATUS.KILLED) return isRecoverableKillRecord(raw);
+  return !TERMINAL_STATUSES.has(status as SessionStatus);
+}
+
+/** A killed record whose kill came from a liveness probe (see isRelaunchableStatus). */
+function isRecoverableKillRecord(raw: Readonly<Record<string, string>>): boolean {
+  if (raw["status"] !== SESSION_STATUS.KILLED) return false;
+  const reason = raw["killedReason"];
+  return reason === "runtime" || reason === "agent-exited" || (!reason && !raw["pr"]);
+}
+
+/**
+ * The record's last launch: a valid `restoredAt`, else `createdAt` (the
+ * lifecycle's `launchedAt`); NaN when neither parses.
+ */
+function lastLaunchOf(raw: Readonly<Record<string, string>>): number {
+  const restoredAt = Date.parse(raw["restoredAt"] ?? "");
+  return Number.isFinite(restoredAt) ? restoredAt : Date.parse(raw["createdAt"] ?? "");
+}
+
+/**
+ * Session relaunch: the answer of `check` within RELAUNCH_PROBE_TIMEOUT_MS.
+ * A rejection, or no answer in time, throws.
+ */
+async function answerWithin<T>(what: string, check: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      check(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(`${what} did not answer within ${RELAUNCH_PROBE_TIMEOUT_MS / 1000} s`),
+            ),
+          RELAUNCH_PROBE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Session relaunch: `answerWithin`, and only a boolean is an answer (an
+ * answer that is not a boolean is no proof either way, review r1 M-3).
+ */
+async function booleanAnswerWithin(what: string, check: () => Promise<unknown>): Promise<boolean> {
+  const answer = await answerWithin(what, check);
+  if (typeof answer !== "boolean") {
+    throw new Error(`${what} answered ${String(answer)}, not true or false`);
+  }
+  return answer;
+}
 
 /** One line for the operator on stderr, where the command itself still succeeds. */
 function warnOperator(message: string): void {
@@ -4628,10 +4768,414 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return restoredSession;
   }
 
+  /**
+   * Session relaunch (2026-10-22): start the agent of a session again in its
+   * existing tmux pane, after its agent process ended (for example after
+   * `/exit`), with the launch command that AO builds now, as `restore`
+   * builds it. See `docs/DEVELOPMENT.md`, "Session relaunch (2026-10-22)".
+   *
+   * Every check runs before the first change, and a refusal throws
+   * `SessionRelaunchRefusedError` and changes nothing. Then one
+   * compare-and-set under the record lock takes the launch claim (the launch
+   * keys of this `ao` process, as a spawn holds them) and starts the launch
+   * grace (`restoredAt`, as a restore). While the claim lives, `restore`,
+   * `kill`, `remap`, an orchestrator start and another relaunch refuse
+   * (`assertNoLiveLauncher`), so no `send-to-agent` reaction can restore the
+   * session during the relaunch. From another shell, the runtime types the
+   * launch line into the pane's shell (`runInPane`); from the session's own
+   * pane, the caller runs it as its own child (`runInCallerTerminal`). Then
+   * the relaunch waits (bounded) for the agent process. The end state (Note
+   * 1, item 2): the claim always goes. When the agent runs, a recoverable
+   * `killed` status becomes `working` and any other status stays. When the
+   * agent did not start (the start failed, the agent did not appear in time,
+   * or the caller's child ended first), `restoredAt` goes back to its value
+   * before the relaunch, so the record is as it was. The status is never set
+   * to `spawning`.
+   */
+  async function relaunch(
+    sessionId: SessionId,
+    options: SessionRelaunchOptions = {},
+  ): Promise<SessionRelaunchResult> {
+    const refuse = (reason: string, next: string): never => {
+      throw new SessionRelaunchRefusedError(sessionId, reason, next);
+    };
+    const restoreNext = `restore it with \`ao session restore ${sessionId}\` (that replaces its tmux session)`;
+
+    // 1. The active record. A killed and archived session is restored, not relaunched.
+    const located = findSessionRecord(sessionId);
+    if (!located) {
+      return findArchivedSessionRecord(sessionId)
+        ? refuse("it has no active record (it was killed and archived)", restoreNext)
+        : refuse("no session has this ID", "check the ID with `ao session ls`");
+    }
+    const { raw, sessionsDir, project, projectId } = located;
+
+    // 2. Another launch of the ID: live launch keys (a relaunch, an OpenCode
+    //    spawn or start), a reservation (a spawn, start or archive restore
+    //    before its runtime exists), or a launch younger than the launch
+    //    grace (a Claude Code spawn or start writes no launch keys, and its
+    //    agent can still be starting).
+    const launcher = await liveLaunchOwner(raw);
+    if (launcher !== null) {
+      refuse(
+        `ao process ${launcher} is still launching it`,
+        `wait until that launch ends (or stop ao process ${launcher}), then try again`,
+      );
+    }
+    if (raw[RESERVATION_KEY]) {
+      refuse(
+        "its record is the reservation of a launch in progress (a spawn, an orchestrator start or a restore)",
+        "wait until that launch ends, then try again",
+      );
+    }
+    const launchedAt = lastLaunchOf(raw);
+    const sinceLaunch = Date.now() - launchedAt;
+    if (Number.isFinite(launchedAt) && sinceLaunch >= 0 && sinceLaunch < LAUNCH_GRACE_MS) {
+      refuse(
+        `its last launch was ${Math.floor(sinceLaunch / 1000)} s ago, and that launch can still be starting its agent`,
+        `wait ${Math.ceil((LAUNCH_GRACE_MS - sinceLaunch) / 1000)} s, then try again`,
+      );
+    }
+
+    // 3. The status.
+    if (!isRelaunchableStatus(raw)) {
+      const reason = raw["killedReason"];
+      refuse(
+        `its status is "${raw["status"] ?? "unknown"}"${reason ? ` (${reason})` : ""}`,
+        "a session in this state is not relaunched; spawn a new session for new work",
+      );
+    }
+
+    // 4. The runtime pane of the record (C-04: the handle's runtime, never the config's).
+    const session = metadataToSession(sessionId, raw, projectId);
+    const handle = session.runtimeHandle;
+    if (!handle) return refuse("its record names no runtime pane", restoreNext);
+    if (handle.runtimeName === HERDR_RUNTIME_NAME) {
+      refuse(
+        "it runs in a Herdr pane, and a Herdr relaunch waits for the Herdr live check",
+        "restart its agent by hand in its Herdr pane",
+      );
+    }
+    if (handle.runtimeName !== "tmux") {
+      refuse(
+        `its runtime is "${handle.runtimeName}", and only a tmux pane can be relaunched`,
+        restoreNext,
+      );
+    }
+    const runtime = registry.get<Runtime>("runtime", handle.runtimeName);
+    const getPaneState = runtime?.getPaneState?.bind(runtime);
+    const runInPane = runtime?.runInPane?.bind(runtime);
+    if (!runtime || !getPaneState || !runInPane) {
+      return refuse(
+        `runtime plugin "${handle.runtimeName}" cannot run a command in an existing pane`,
+        "update the runtime plugin",
+      );
+    }
+
+    // 5. The agent of the record (C-04).
+    const selection = resolveSelectionForSession(project, sessionId, raw);
+    const agent = registry.get<Agent>("agent", selection.agentName);
+    if (!agent) {
+      return refuse(`agent plugin "${selection.agentName}" is not available`, "install it");
+    }
+    if (agent.prepareAgentSession) {
+      refuse(
+        `agent ${agent.name} prepares its own session before its pane starts, and a relaunch does not do that`,
+        restoreNext,
+      );
+    }
+
+    // 6. Liveness: the pane exists, the agent process does not run, and (from
+    //    another shell) the pane shows a shell prompt.
+    const probe = async (what: string, check: () => Promise<unknown>): Promise<boolean> => {
+      try {
+        return await booleanAnswerWithin(what, check);
+      } catch (err) {
+        return refuse(
+          `${what} could not tell (${shortErrorText(err)})`,
+          "check the tmux server and `ps`, then try again",
+        );
+      }
+    };
+    if (!(await probe("the tmux liveness check", () => runtime.isAlive(handle)))) {
+      refuse(`its tmux session ${handle.id} does not exist`, restoreNext);
+    }
+    if (await probe("the agent process check", () => agent.isProcessRunning(handle))) {
+      refuse(
+        `its agent process (${agent.processName}) still runs`,
+        "end the agent first (Claude Code: /exit), then try again",
+      );
+    }
+    let pane: RuntimePaneState | null = null;
+    try {
+      pane = await answerWithin("the pane check", () => getPaneState(handle));
+    } catch (err) {
+      refuse(
+        `the pane check could not tell (${shortErrorText(err)})`,
+        "check the tmux server, then try again",
+      );
+    }
+    if (!pane) return refuse(`the pane of tmux session ${handle.id} does not exist`, restoreNext);
+    const runInCallerTerminal = options.runInCallerTerminal;
+    const inOwnPane = !!options.callerTty && options.callerTty === pane.tty;
+    if (inOwnPane && !runInCallerTerminal) {
+      refuse(
+        "this command runs in the session's own pane, and this caller cannot start the agent here",
+        "run the relaunch from another shell",
+      );
+    }
+    if (!inOwnPane && !RELAUNCH_SHELLS.has(pane.foregroundCommand)) {
+      refuse(
+        `its pane runs ${pane.foregroundCommand}, not a shell prompt`,
+        "end that program in the pane, or run the relaunch in the pane itself, then try again",
+      );
+    }
+
+    // 7. The conversation to continue: only the session's own, by its ID (R-2).
+    let conversation: { id: string; source: string } | undefined;
+    if (options.continueConversation) {
+      if (!agent.getOwnConversationId) {
+        return refuse(
+          `agent ${agent.name} cannot continue a conversation by its ID`,
+          "relaunch without --continue to start a new conversation",
+        );
+      }
+      let lookup: Awaited<ReturnType<NonNullable<Agent["getOwnConversationId"]>>>;
+      try {
+        lookup = await agent.getOwnConversationId(session, {
+          dataDir: sessionsDir,
+          launchedAt: Number.isFinite(launchedAt) ? new Date(launchedAt) : null,
+        });
+      } catch (err) {
+        return refuse(
+          `the ID of its own conversation could not be read (${shortErrorText(err)})`,
+          "relaunch without --continue to start a new conversation",
+        );
+      }
+      if (lookup.id === null) {
+        return refuse(
+          `the ID of its own conversation is not known: ${lookup.reason}`,
+          "relaunch without --continue to start a new conversation, or resume the conversation by hand in the pane",
+        );
+      }
+      conversation = { id: lookup.id, source: lookup.source };
+    }
+
+    // 8. The launch command and the environment, as restore builds them
+    //    (steps 5 and 9 of restore). An orchestrator keeps its permissionless
+    //    mode and gets the orchestrator prompt of this build in the prompt
+    //    file of spawnOrchestrator (written after the claim, step 10).
+    const workspacePath = raw["worktree"] || project.path;
+    const orchestrator = selection.role === "orchestrator";
+    const systemPromptFile = orchestrator
+      ? join(
+          getProjectBaseDir(config.configPath, project.path),
+          `orchestrator-prompt-${sessionId}.md`,
+        )
+      : undefined;
+    const launchConfig: AgentLaunchConfig = {
+      sessionId,
+      projectConfig: {
+        ...project,
+        agentConfig: {
+          ...selection.agentConfig,
+          ...(orchestrator ? { permissions: "permissionless" as const } : {}),
+        },
+      },
+      issueId: session.issueId ?? undefined,
+      permissions: orchestrator ? "permissionless" : selection.permissions,
+      model: selection.model,
+      subagent: selection.subagent,
+      ...(systemPromptFile ? { systemPromptFile } : {}),
+      ...(conversation ? { continueConversationId: conversation.id } : {}),
+    };
+    const launchCommand = agent.getLaunchCommand(launchConfig);
+    const tmuxName = raw["tmuxName"];
+    const environment: Record<string, string> = {
+      ...agent.getEnvironment(launchConfig),
+      AO_SESSION: sessionId,
+      AO_DATA_DIR: sessionsDir,
+      AO_SESSION_NAME: sessionId,
+      ...(tmuxName && { AO_TMUX_NAME: tmuxName }),
+      AO_CALLER_TYPE: orchestrator ? "orchestrator" : "agent",
+      AO_PROJECT_ID: projectId,
+      AO_CONFIG_PATH: config.configPath,
+      AO_STATE_ROOT: getStateRoot(),
+    };
+
+    // 9. The launch claim and the launch grace: one compare-and-set against
+    //    the launch identity and the launch keys as read (a dead launcher's
+    //    keys are replaced). A second relaunch fails here or at step 2.
+    const claim = await currentLaunchClaim();
+    if (!claim) {
+      return refuse(
+        `the start time of ao process ${process.pid} cannot be read, so the relaunch cannot hold its launch claim`,
+        "try again; if it repeats, use `ao session restore`",
+      );
+    }
+    const claimed = updateMetadataIf(
+      sessionsDir,
+      sessionId,
+      {
+        ...launchIdentity(raw),
+        [LAUNCH_PID_KEY]: raw[LAUNCH_PID_KEY] ?? "",
+        [LAUNCH_PID_START_KEY]: raw[LAUNCH_PID_START_KEY] ?? "",
+      },
+      { ...claim, restoredAt: new Date().toISOString() },
+    );
+    if (!claimed) {
+      return refuse(
+        "its record changed while the relaunch checked it (another launch, a restore or a kill of the ID)",
+        "check it with `ao session ls`, then try again",
+      );
+    }
+    let owned = claimed;
+    const warnings: string[] = [];
+
+    /**
+     * The end state (Note 1, item 2), written only into this relaunch's
+     * version of the record (its launch identity). `started` false: the
+     * claim goes and `restoredAt` gets its value before the relaunch back.
+     * `started` true: the claim goes, and a recoverable `killed` status
+     * (the lifecycle can persist it between `/exit` and the relaunch)
+     * becomes `working`, so no reaction takes the running agent for a dead
+     * one; any other status stays. A compare that fails because another
+     * write came between the read and the write is tried again.
+     */
+    const settle = (started: boolean): void => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const current = readMetadataRaw(sessionsDir, sessionId);
+          if (!current || !holdsExpected(current, launchIdentity(owned))) {
+            warnings.push(
+              `the record of ${sessionId} was replaced or removed during the relaunch; the relaunch did not write its end state`,
+            );
+            return;
+          }
+          const updates: Record<string, string> = started
+            ? {
+                ...CLEARED_LAUNCH_CLAIM,
+                ...(isRecoverableKillRecord(current) ? { status: SESSION_STATUS.WORKING } : {}),
+              }
+            : { ...CLEARED_LAUNCH_CLAIM, restoredAt: raw["restoredAt"] ?? "" };
+          const written = updateMetadataIf(
+            sessionsDir,
+            sessionId,
+            { ...launchIdentity(owned), [GENERATION_KEY]: current[GENERATION_KEY] ?? "" },
+            updates,
+          );
+          if (written) {
+            owned = written;
+            return;
+          }
+        } catch (err) {
+          warnings.push(`the end state of the relaunch was not written: ${shortErrorText(err)}`);
+          return;
+        }
+      }
+      warnings.push(
+        `the end state of the relaunch was not written: the record of ${sessionId} changed three times while it was written`,
+      );
+    };
+
+    // 10. The prompt file, the workspace hooks (before the agent reads its
+    //     settings, so its SessionStart hook records its conversation) and
+    //     the launch script.
+    let script: string;
+    try {
+      if (systemPromptFile) {
+        mkdirSync(getProjectBaseDir(config.configPath, project.path), { recursive: true });
+        writeFileSync(
+          systemPromptFile,
+          generateOrchestratorPrompt({ config, projectId, project }),
+          "utf-8",
+        );
+      }
+      if (agent.setupWorkspaceHooks) {
+        await agent.setupWorkspaceHooks(workspacePath, { dataDir: sessionsDir, sessionId });
+      }
+      script = writeRelaunchScript(workspacePath, environment, launchCommand);
+    } catch (err) {
+      settle(false);
+      throw new Error(
+        `The relaunch of ${sessionId} could not prepare its launch (${shortErrorText(err)}); no agent was started`,
+        { cause: err },
+      );
+    }
+
+    // 11. The start.
+    const plan: SessionRelaunchPlan = {
+      sessionId,
+      mode: inOwnPane ? "caller-terminal" : "pane",
+      agentName: agent.name,
+      ...(selection.model ? { model: selection.model } : {}),
+      launchCommand,
+      ...(conversation ? { conversation } : {}),
+    };
+    let child: SessionRelaunchChild | undefined;
+    try {
+      options.onStart?.(plan);
+      if (inOwnPane && runInCallerTerminal) {
+        child = runInCallerTerminal({ script, cwd: workspacePath });
+      } else {
+        await runInPane(handle, `bash ${shellEscape(script)}`);
+      }
+    } catch (err) {
+      rmSync(script, { force: true });
+      settle(false);
+      throw new Error(
+        `The relaunch of ${sessionId} could not start its agent (${shortErrorText(err)})`,
+        { cause: err },
+      );
+    }
+
+    // 12. The bounded wait for the agent process (the spawn bound). A check
+    //     that cannot run is no answer yet; a child that ended is a failed start.
+    let childEnded = false;
+    child?.exited.then(
+      () => {
+        childEnded = true;
+      },
+      () => {
+        childEnded = true;
+      },
+    );
+    const deadline = Date.now() + LAUNCH_CONFIRM_TIMEOUT_MS;
+    let running = false;
+    for (;;) {
+      if (childEnded) break;
+      running = (await agent.isProcessRunning(handle).catch(() => false)) === true;
+      if (running || childEnded || Date.now() >= deadline) break;
+      await sleep(RELAUNCH_CONFIRM_POLL_MS);
+    }
+    running = running && !childEnded;
+
+    // 13. The end state, then postLaunchSetup (non-fatal), as restore.
+    settle(running);
+    if (running && agent.postLaunchSetup) {
+      const relaunched: Session = { ...session, workspacePath, restoredAt: new Date() };
+      try {
+        const before = { ...(relaunched.metadata ?? {}) };
+        await agent.postLaunchSetup(relaunched);
+        const updates = Object.fromEntries(
+          Object.entries(relaunched.metadata ?? {}).filter(([key, value]) => before[key] !== value),
+        );
+        if (Object.keys(updates).length > 0) {
+          updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), updates);
+        }
+      } catch {
+        // Non-fatal: the agent already runs.
+      }
+    }
+
+    return { plan, running, warnings, ...(child ? { child } : {}) };
+  }
+
   return {
     spawn,
     spawnOrchestrator,
     restore,
+    relaunch,
     list,
     get,
     kill,
