@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -90,6 +90,65 @@ function tmuxProbeError(command: string, err: unknown): TmuxProbeError {
     : stderr || (err instanceof Error ? err.message : String(err));
   const code = TMUX_NO_SERVER.test(stderr) ? RUNTIME_NO_SERVER_ERROR_CODE : "ERR_RUNTIME_PROBE";
   return new TmuxProbeError(`tmux ${command} could not answer: ${detail}`, code, { cause: err });
+}
+
+/** A tmux pane ID, for example `%4`. */
+const PANE_ID = /^%\d+$/;
+
+/**
+ * The fields of `listPanes`, one pane per line, separated by spaces (tmux
+ * 3.4 prints a tab in a format as "_"). Only the last field, the foreground
+ * command, can hold a space.
+ */
+const PANE_LIST_FORMAT = "#{pane_id} #{pane_tty} #{pane_pid} #{pane_current_command}";
+
+/** How long `runInPane` waits after C-c, so the shell shows its new prompt first. */
+const RUN_IN_PANE_CLEAR_MS = 300;
+
+interface ParsedPane {
+  paneId: string;
+  tty: string;
+  pid: number;
+  foregroundCommand: string;
+}
+
+/** One line of PANE_LIST_FORMAT, or null when it is not one. */
+function parsePaneLine(line: string): ParsedPane | null {
+  const match = /^(\S+) (\S+) (\S+) (.*)$/.exec(line);
+  const [, paneId = "", tty = "", pid = "", rawCommand = ""] = match ?? [];
+  const foregroundCommand = rawCommand.trim();
+  if (
+    !match ||
+    !PANE_ID.test(paneId) ||
+    !/^\/dev\/\S+$/.test(tty) ||
+    !/^[1-9]\d*$/.test(pid) ||
+    !foregroundCommand
+  ) {
+    return null;
+  }
+  return { paneId, tty, pid: Number(pid), foregroundCommand };
+}
+
+/**
+ * Session relaunch: true when the process group of the pane's shell `pid` is
+ * the foreground process group of its terminal (no job runs, so the shell
+ * reads the next input line), false when another group is in the
+ * foreground, null when /proc cannot tell (no Linux /proc, or the process
+ * ended). Fields 5 and 8 of /proc/<pid>/stat: pgrp and tpgid.
+ */
+function shellWaitsForInput(pid: number): boolean | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+  } catch {
+    return null;
+  }
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const pgrp = Number(fields[2]);
+  const tpgid = Number(fields[5]);
+  if (!Number.isInteger(pgrp) || !Number.isInteger(tpgid) || tpgid <= 0) return null;
+  return pgrp === tpgid;
 }
 
 /** Run a tmux command and return stdout */
@@ -287,55 +346,74 @@ export function create(): Runtime {
     },
 
     /**
-     * Session relaunch (2026-10-22): the TTY and the foreground command of
-     * the pane that sendMessage and runInPane type into (the exact target
-     * `=name:`: the active pane of the session's current window). Null only
-     * for tmux's own "not found" answer. Any other failure, or an answer
-     * that is not a TTY and a command, rejects.
+     * Session relaunch (2026-10-22): every pane of the session, in every
+     * window (`list-panes -s`), with its pane ID, its TTY, its foreground
+     * command, and whether its own shell waits for input (`shellIdle`, from
+     * the shell's /proc stat). Null only for tmux's own "not found" answer.
+     * Any other failure, or an answer that is not a list of panes, rejects.
      */
-    async getPaneState(handle: RuntimeHandle): Promise<RuntimePaneState | null> {
-      const pane = exactPaneTarget(handle.id);
+    async listPanes(handle: RuntimeHandle): Promise<RuntimePaneState[] | null> {
+      const target = exactSessionTarget(handle.id);
       let answer: string;
       try {
-        answer = await tmux(
-          "display-message",
-          "-p",
-          "-t",
-          pane,
-          "#{pane_tty} #{pane_current_command}",
-        );
+        answer = await tmux("list-panes", "-s", "-t", target, "-F", PANE_LIST_FORMAT);
       } catch (err: unknown) {
         if (isTmuxTargetNotFound(err)) return null;
-        throw tmuxProbeError(`display-message -t ${pane}`, err);
+        throw tmuxProbeError(`list-panes -s -t ${target}`, err);
       }
-      const space = answer.indexOf(" ");
-      const tty = space > 0 ? answer.slice(0, space) : "";
-      const foregroundCommand = space > 0 ? answer.slice(space + 1).trim() : "";
-      if (!tty.startsWith("/dev/") || !foregroundCommand || answer.includes("\n")) {
+      const panes = answer.split("\n").map(parsePaneLine);
+      if (answer === "" || panes.some((pane) => pane === null)) {
         throw new TmuxProbeError(
-          `tmux display-message -t ${pane} answered ${JSON.stringify(answer.slice(0, 80))}, not a pane TTY and a command`,
+          `tmux list-panes -s -t ${target} answered ${JSON.stringify(answer.slice(0, 120))}, not a list of panes`,
           "ERR_RUNTIME_PROBE",
           { cause: undefined },
         );
       }
-      return { tty, foregroundCommand };
+      return panes.map((pane) => {
+        const { pid, ...state } = pane as ParsedPane;
+        return { ...state, shellIdle: shellWaitsForInput(pid) };
+      });
     },
 
     /**
      * Session relaunch (2026-10-22): type `command` and Enter into the shell
-     * of the existing pane, with the steps of `create` for a long launch
-     * command: clear the partial input, type the text literally, wait 300 ms,
-     * then Enter.
+     * of pane `paneId`. Every tmux call targets that pane ID, so a change of
+     * the active window or pane cannot redirect the text. First it checks
+     * that the pane still belongs to the session and that its own shell
+     * still waits for input. Then it ends any mode of the pane (copy mode)
+     * and sends C-c: the shell drops the whole input line, wherever the
+     * cursor is, and also a continuation (PS2) input, and shows a new
+     * prompt. Then it types the text literally, waits 300 ms, and sends
+     * Enter. The owner's half-typed text is dropped, never run.
      */
-    async runInPane(handle: RuntimeHandle, command: string): Promise<void> {
-      const pane = exactPaneTarget(handle.id);
+    async runInPane(handle: RuntimeHandle, paneId: string, command: string): Promise<void> {
+      if (!PANE_ID.test(paneId)) {
+        throw new Error(`Invalid tmux pane ID ${JSON.stringify(paneId)}`);
+      }
+      let answer: string;
       try {
-        await tmux("send-keys", "-t", pane, "C-u");
-        await tmux("send-keys", "-t", pane, "-l", command);
-        await sleep(300);
-        await tmux("send-keys", "-t", pane, "Enter");
+        answer = await tmux("display-message", "-p", "-t", paneId, "#{session_name} #{pane_pid}");
       } catch (err: unknown) {
-        throw new Error(`Failed to type the command into tmux pane ${pane}`, { cause: err });
+        throw new Error(`Failed to read tmux pane ${paneId}`, { cause: err });
+      }
+      const [sessionName, pid] = answer.split(" ");
+      if (sessionName !== handle.id) {
+        throw new Error(
+          `tmux pane ${paneId} belongs to ${JSON.stringify(sessionName ?? "")}, not to session ${handle.id}`,
+        );
+      }
+      if (shellWaitsForInput(Number(pid)) !== true) {
+        throw new Error(`The shell of tmux pane ${paneId} does not wait for input now`);
+      }
+      try {
+        await tmux("copy-mode", "-q", "-t", paneId);
+        await tmux("send-keys", "-t", paneId, "C-c");
+        await sleep(RUN_IN_PANE_CLEAR_MS);
+        await tmux("send-keys", "-t", paneId, "-l", command);
+        await sleep(300);
+        await tmux("send-keys", "-t", paneId, "Enter");
+      } catch (err: unknown) {
+        throw new Error(`Failed to type the command into tmux pane ${paneId}`, { cause: err });
       }
     },
   };
