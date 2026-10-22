@@ -282,77 +282,93 @@ const SESSION_START_SCRIPT_NAME = "ao-session-start.sh";
 /** The directory in the sessions directory where the hook records conversations. */
 const CONVERSATIONS_DIR_NAME = ".agent-conversations";
 
-/**
- * A recorded conversation counts for a launch when the hook wrote it at most
- * this long before the record's launch time: a restore writes `restoredAt`
- * only after its runtime started the agent.
- */
-const CONVERSATION_LAUNCH_TOLERANCE_MS = 5_000;
-
 const CONVERSATION_ID =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
- * SessionStart hook: records the conversation ID of the pane's own Claude
- * Code for `ao session relaunch --continue`. Claude Code runs it when a
- * conversation starts, is resumed, cleared or compacted (`source`), with
- * `session_id` and `transcript_path` on stdin. It writes
+ * SessionStart hook: records the conversation ID of the agent of a launch
+ * that AO made, for `ao session relaunch --continue`. Claude Code runs it
+ * when a conversation starts, is resumed, cleared or compacted (`source`),
+ * with `session_id` and `transcript_path` on stdin. It writes
  * `$AO_DATA_DIR/.agent-conversations/$AO_SESSION` (a temp file, then mv)
- * only for the pane's own agent: the nearest claude process above the hook
- * that has no claude process above it (a `claude -p` that the agent starts
- * from a Bash tool call inherits AO_SESSION and the settings, but has the
- * agent above it) and whose stdin is the terminal of the hook's tmux pane
- * (a claude in another pane or window of the session has another
- * terminal). It prints nothing to stdout (Claude Code adds the stdout of a
- * SessionStart hook to the conversation) and exits 0 in every case.
- * Exported for testing.
+ * only when all of these hold:
+ *
+ * - The claude process has the launch token of an AO launch
+ *   (`AO_LAUNCH_TOKEN`). AO gives it to the agent process alone (`env
+ *   AO_LAUNCH_TOKEN=... claude`), never to the tmux session environment, so
+ *   a claude that someone starts in another pane or window of the session
+ *   does not have it. The hook records it, and core compares it with the
+ *   token of the session's last launch (review r1 M-1, M-4).
+ * - It is the nearest claude process above the hook, and no claude process
+ *   runs above it (a `claude -p` that the agent starts from a Bash tool call
+ *   inherits the token and the settings, but has the agent above it).
+ * - Its stdin is the terminal of the hook's tmux pane (`TMUX_PANE`), and the
+ *   hook records that pane ID, which core compares with the session's pane.
+ *
+ * Every external step has a budget of 2 s (review r1 m-1), and the settings
+ * entry is `async`, so the hook never delays the start of Claude Code. It
+ * prints nothing to stdout (Claude Code adds the stdout of a SessionStart
+ * hook to the conversation) and exits 0 in every case. Exported for testing.
  */
 export const SESSION_START_SCRIPT = `#!/usr/bin/env bash
 # Session Start Hook for Agent Orchestrator (session relaunch, 2026-10-22)
-# Records the conversation ID of the pane's own Claude Code for
+# Records the conversation ID of the agent of an AO launch for
 # \`ao session relaunch --continue\`. Prints nothing; always exits 0.
 
 set -uo pipefail
 exec >/dev/null
 
-input=$(cat)
+# Every external step has a budget, so a slow tmux or an open stdin cannot
+# hold the hook.
+bounded() {
+  local seconds=$1
+  shift
+  if command -v timeout &>/dev/null; then timeout "$seconds" "$@"; else "$@"; fi
+}
 
+input=$(bounded 2 cat)
+
+uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 [[ -n "\${AO_SESSION:-}" && -n "\${AO_DATA_DIR:-}" && -d "\${AO_DATA_DIR:-}" ]] || exit 0
 [[ "$AO_SESSION" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 0
+# Only the agent process of an AO launch has its launch token.
+[[ "\${AO_LAUNCH_TOKEN:-}" =~ $uuid_re ]] || exit 0
+[[ "\${TMUX_PANE:-}" =~ ^%[0-9]+$ ]] || exit 0
 
 if command -v jq &>/dev/null; then
-  session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
-  source=$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)
-  transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+  session_id=$(printf '%s' "$input" | bounded 2 jq -r '.session_id // empty' 2>/dev/null)
+  source=$(printf '%s' "$input" | bounded 2 jq -r '.source // empty' 2>/dev/null)
+  transcript=$(printf '%s' "$input" | bounded 2 jq -r '.transcript_path // empty' 2>/dev/null)
 else
   session_id=$(printf '%s' "$input" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
   source=$(printf '%s' "$input" | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
   transcript=$(printf '%s' "$input" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 fi
-uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 [[ "$session_id" =~ $uuid_re ]] || exit 0
 [[ "$source" =~ ^[a-z_]{1,32}$ ]] || source=unknown
 [[ "$transcript" == /* && "$transcript" != *$'\\n'* ]] || transcript=""
 
 claude_re='(^|/)claude( |$)'
 is_claude() {
-  local args
-  args=$(tr '\\0' ' ' < "/proc/$1/cmdline" 2>/dev/null) || return 1
-  [[ "$args" =~ $claude_re ]]
+  local -a argv
+  mapfile -d '' -t argv < "/proc/$1/cmdline" 2>/dev/null || return 1
+  [[ "\${argv[*]}" =~ $claude_re ]]
 }
 parent_of() {
   local stat
-  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  read -r stat < "/proc/$1/stat" 2>/dev/null || return 1
   stat=\${stat##*) }
   set -- $stat
   [[ "\${2:-}" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$2"
 }
 
-# The claude process that runs this hook: the nearest claude process above it.
+# The claude process that runs this hook: the nearest claude process above
+# it (at most 64 steps up).
 agent=""
 pid=$PPID
-while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+for (( step = 0; step < 64; step++ )); do
+  [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || break
   if is_claude "$pid"; then agent=$pid; break; fi
   pid=$(parent_of "$pid") || exit 0
 done
@@ -360,22 +376,22 @@ done
 
 # Not the pane's agent when a claude process runs above it.
 pid=$(parent_of "$agent") || exit 0
-while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+for (( step = 0; step < 64; step++ )); do
+  [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || break
   is_claude "$pid" && exit 0
   pid=$(parent_of "$pid") || exit 0
 done
 
 # Not the pane's agent unless its stdin is the terminal of this tmux pane.
-[[ -n "\${TMUX_PANE:-}" ]] || exit 0
-pane_tty=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || exit 0
+pane_tty=$(bounded 2 tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || exit 0
 agent_tty=$(readlink "/proc/$agent/fd/0" 2>/dev/null) || exit 0
 [[ -n "$pane_tty" && "$agent_tty" == "$pane_tty" ]] || exit 0
 
 dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
 mkdir -p "$dir" 2>/dev/null || exit 0
 tmp="$dir/.$AO_SESSION.$$.tmp"
-if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\n' \\
-  "$session_id" "$source" "$transcript" "$agent" > "$tmp" 2>/dev/null; then
+if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\nlaunchToken=%s\\npaneId=%s\\npaneTty=%s\\n' \\
+  "$session_id" "$source" "$transcript" "$agent" "$AO_LAUNCH_TOKEN" "$TMUX_PANE" "$pane_tty" > "$tmp" 2>/dev/null; then
   mv -f "$tmp" "$dir/$AO_SESSION" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 else
   rm -f "$tmp" 2>/dev/null
@@ -918,12 +934,26 @@ function classifyTerminalOutput(terminalOutput: string): ActivityState {
 // =============================================================================
 
 /**
+ * Session relaunch: the hook definition of AO's SessionStart hook. `async`:
+ * Claude Code runs it in the background and does not wait for it (Claude
+ * Code 2.1.308 schema: "If true, hook runs in background without
+ * blocking"); `timeout` is in seconds (same schema: "Timeout in seconds for
+ * this specific command"). Review r1 m-1.
+ */
+const SESSION_START_HOOK = {
+  type: "command",
+  command: `.claude/${SESSION_START_SCRIPT_NAME}`,
+  timeout: 5,
+  async: true,
+} as const;
+
+/**
  * Session relaunch: the SessionStart entries with AO's hook in them (no
  * matcher: every source). An entry that already runs the hook script gets
- * the relative command; other entries stay as they are.
+ * the definition of this build (an older one had no `async`); other entries
+ * stay as they are.
  */
 function withSessionStartHook(existing: unknown): unknown[] {
-  const command = `.claude/${SESSION_START_SCRIPT_NAME}`;
   const entries = Array.isArray(existing) ? [...existing] : [];
   for (const entry of entries) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
@@ -933,12 +963,12 @@ function withSessionStartHook(existing: unknown): unknown[] {
       if (typeof def !== "object" || def === null || Array.isArray(def)) continue;
       const d = def as Record<string, unknown>;
       if (typeof d["command"] === "string" && d["command"].includes(SESSION_START_SCRIPT_NAME)) {
-        d["command"] = command;
+        Object.assign(d, SESSION_START_HOOK);
         return entries;
       }
     }
   }
-  entries.push({ hooks: [{ type: "command", command, timeout: 10 }] });
+  entries.push({ hooks: [{ ...SESSION_START_HOOK }] });
   return entries;
 }
 
@@ -1067,7 +1097,14 @@ function createClaudeCodeAgent(): Agent {
     getLaunchCommand(config: AgentLaunchConfig): string {
       // Note: CLAUDECODE is unset via getEnvironment() (set to ""), not here.
       // This command must be safe for both shell and execFile contexts.
-      const parts: string[] = ["claude"];
+      // Session relaunch: the launch token goes to the claude process alone
+      // (`env`, not getEnvironment, which the runtime puts into the tmux
+      // session environment that every pane of the session inherits), so
+      // the SessionStart hook can tell the agent of this launch from any
+      // other claude (review r1 M-1).
+      const parts: string[] = config.launchToken
+        ? ["env", `AO_LAUNCH_TOKEN=${shellEscape(config.launchToken)}`, "claude"]
+        : ["claude"];
 
       const permissionMode = normalizeAgentPermissionMode(config.permissions);
       if (permissionMode === "permissionless" || permissionMode === "auto-edit") {
@@ -1303,13 +1340,15 @@ function createClaudeCodeAgent(): Agent {
 
     /**
      * Session relaunch --continue: the conversation ID that the SessionStart
-     * hook recorded for this session's own agent (SESSION_START_SCRIPT).
-     * Never the newest transcript of the workspace. The ID counts only when
-     * the record is a claude-code record with a conversation UUID, the hook
-     * wrote it at or after the session's last launch (an older file can
-     * belong to an earlier session with the same ID), and the transcript of
-     * that conversation exists (Claude Code writes it with the first
-     * message; `--resume` needs it).
+     * hook recorded for the agent of the session's last launch
+     * (SESSION_START_SCRIPT). Never the newest transcript of the workspace,
+     * and never by a time window (review r1 M-4). The ID counts only when the
+     * record is a claude-code record with a conversation UUID, it holds the
+     * exact launch token of the session's last launch (a record of an
+     * earlier launch, or of an earlier session with the same ID, has another
+     * token; a claude without the token never writes one), it was recorded
+     * in the session's pane, and the transcript of that conversation exists
+     * (Claude Code writes it with the first message; `--resume` needs it).
      */
     async getOwnConversationId(
       session: Session,
@@ -1335,11 +1374,16 @@ function createClaudeCodeAgent(): Agent {
       if (record["agent"] !== "claude-code" || !CONVERSATION_ID.test(id)) {
         return { id: null, reason: `${file} holds no Claude Code conversation ID` };
       }
-      const launchedAt = context.launchedAt?.getTime();
-      if (launchedAt !== undefined && writtenAt < launchedAt - CONVERSATION_LAUNCH_TOLERANCE_MS) {
+      if (!context.launchToken || record["launchToken"] !== context.launchToken) {
         return {
           id: null,
-          reason: `${file} was written at ${new Date(writtenAt).toISOString()}, before the session's last launch at ${new Date(launchedAt).toISOString()} (it can belong to an earlier session with the same ID)`,
+          reason: `${file} was recorded by another launch than the session's last one (its launch token differs), so its conversation can belong to an earlier agent`,
+        };
+      }
+      if (record["paneId"] !== context.pane.id) {
+        return {
+          id: null,
+          reason: `${file} was recorded in tmux pane ${record["paneId"] || "(none)"}, not in the session's pane ${context.pane.id}`,
         };
       }
       const recorded = record["transcriptPath"] ?? "";
@@ -1363,7 +1407,7 @@ function createClaudeCodeAgent(): Agent {
       }
       return {
         id,
-        source: `the SessionStart hook record ${file} (source ${record["source"] || "unknown"}, written ${new Date(writtenAt).toISOString()})`,
+        source: `the SessionStart hook record ${file} (source ${record["source"] || "unknown"}, the token of the last launch, pane ${context.pane.id}, written ${new Date(writtenAt).toISOString()})`,
       };
     },
 
