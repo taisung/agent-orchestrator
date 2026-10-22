@@ -645,6 +645,13 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   lands, because both rounds change the launch code.
   The fix landed 2026-10-22 (`d1efcb94..de7c1bfc`). Owner "2a": ao-63 (the author of that fix) authors the
   relaunch round and ao-64 (its Codex reviewer) reviews it; both sessions stay open for it.
+- **The claude-code PostToolUse hook has `timeout: 5000`, which Claude Code reads as 5000 s** (found
+  2026-10-22 by ao-63, checked by ao-64 in relaunch review r1 m-1 from the schema and runner of the
+  installed Claude Code 2.1.308, not run: "Timeout in seconds", converted with `timeout * 1000`). A hung
+  metadata hook can hold a tool call for up to 83 min 20 s. Also open from the same review: claude-code
+  `getRestoreCommand` takes the newest `.jsonl` of the workspace folder (in project mode another session's
+  conversation), and a restored orchestrator loses `--append-system-prompt` (restore passes no
+  `systemPromptFile`). Small worker changes; owner choice.
 - **Session helpers moved out of `~/.cache`** (owner 2026-10-21, "1a"): `restart_lifecycle.py` and a
   generic `ao_relaunch.py` (save the live argv of a session's agent, run it again in the pane shell) go to
   `~/agent-skills/scripts/` with tests. ao-49 (Claude Code Opus 5.5; OpenCode Muse skipped because an
