@@ -138,7 +138,10 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 1. **Land F-6 and m-1** - review r1 by ao-60 is LAND-SAFE (10:24 EDT,
    `development/reviews/claude_strict_process_review_r1_astra6.md`).
-   - On the owner's word, land as for R4: `git merge-tree --write-tree main 6ea435a8` (the merge
+   - Owner "17a" (10:26 EDT): LANDED on `main` at 10:27 as `3c16e89b..a20883a0` (clean cherry-pick of
+     `b97a2500..6ea435a8`, 5 commits; tree equal to the `git merge-tree` result `d779318c`), NOT built yet.
+     Next: gates by ao-60, build, restart, live check, push.
+   - The chain, as for R4: `git merge-tree --write-tree main 6ea435a8` (the merge
      base is `b97a2500`), `git cherry-pick b97a2500..6ea435a8`, check that the tree equals the merge-tree
      result, gates of `main` by a Codex worker on a new branch, `pnpm build`, restart 3830765 and 3830929
      by exact PID, live check, push.
