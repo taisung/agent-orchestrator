@@ -482,6 +482,8 @@ Durable progress record for this fork. Dated events only; the current state live
   `main` `de7c1bfc` PASS (ao-64: 3596 passed, 1 expected fail, 29 skipped; red 0/16/6/0; incident and no-server
   smokes; `gates_main_start_no_server_astra6.md`). Built 14:34:52 to 14:34:59 EDT; lifecycle workers restarted by
   exact PID 14:35 (65891 -> 2087525, 68422 -> 2087614); first polls 14:36:12 and 14:36:14, 0 failures, health `ok`.
+  Pushed `dc7815d2..2bb51734` 14:37 EDT; CI of `2bb51734`: 4 of 4 passed (Security, Integration Tests, Onboarding
+  Integration Test, CI; the last at 14:39:52 EDT).
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
