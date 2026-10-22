@@ -407,8 +407,10 @@ Durable progress record for this fork. Dated events only; the current state live
   commits `f98aa6e7` (`73fb5b13`) and the restore reproducer (`cbfbc182`); red after R2a: R1 0, R2 16, R3
   6, R4 22 (44). 4 author rounds and 4 reviews (`development/reviews/same_id_r2a_review_r{1..4}_astra6.md`;
   r4 LAND-SAFE, 1 nonblocking m-1 folded into R4). Clean cherry-pick of `09546110..26368d76` (21 commits;
-  source equal to `26368d76`; gates green in the author's and the reviewer's full runs). NOT built and NOT
-  live yet (owner "1a": one rebuild after the Codex send fix). Follow-ups F-1 to F-4 of review r4.
+  source equal to `26368d76`; gates green in the author's and the reviewer's full runs). Built 22:37:21 EDT
+  with the Codex send fix after the combined gates passed (ao-56, `dbbaf472`: 3225 passed, 11 expected
+  fail, 29 skipped); lifecycle workers restarted by exact PID (3624110 → 1294181, 3626937 → 1294364). Not
+  pushed yet. Follow-ups F-1 to F-4 of review r4.
 - `2c5c4f88..e3be12a9` (2026-10-21, ao-54 Claude Opus 5.5; reviews by ao-56, Codex gpt-6-astra) - **`ao
   send` to a Codex pane** (owner "1a", "6a", "3a"): no key after the message to a Codex pane; one shared
   parser of the Codex 0.163.0 screen; "processing" only for the status block (status row with `esc to
@@ -420,7 +422,8 @@ Durable progress record for this fork. Dated events only; the current state live
   Limits L-1 (an unrecognized running layout such as a wrapped status row or a queued row reads idle, and
   the idle wait sends at once) and L-2 (a status-shaped history block reads running); follow-ups F-1 to
   F-7. Clean cherry-pick of `09546110..f39d63db` (15 commits; the source outside `development/` equals
-  the three-way merge of `26368d76` and `f39d63db`). NOT built and NOT live yet.
+  the three-way merge of `26368d76` and `f39d63db`). Built and live with R2a at 22:37 EDT (see above); the
+  live check of review r4 follows (owner "3a"), then the push (owner "4a").
 
 ## Decisions
 
