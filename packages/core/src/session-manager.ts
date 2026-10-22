@@ -679,6 +679,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return [...ids];
   }
 
+  /**
+   * Same-ID R4 (B-7 item 1): the archived session IDs that a new session
+   * number must not take. An archive directory that cannot be listed stops
+   * the allocation before any reservation: an archive in it may hold the
+   * next number. Only a missing directory (`ENOENT`) has no archives.
+   */
+  function listArchivedSessionIdsForAllocation(sessionsDir: string): string[] {
+    try {
+      return listArchivedSessionIdsStrict(sessionsDir);
+    } catch (err) {
+      const archiveDir = join(sessionsDir, "archive");
+      throw new Error(
+        `Cannot choose a session number: the archive directory ${archiveDir} could not be listed (${shortErrorText(err)}), and an archived session may hold the next number; nothing was created. Make ${archiveDir} readable (or remove it when it holds no archive), then try again`,
+        { cause: err },
+      );
+    }
+  }
+
   function isOrchestratorSessionRecord(
     sessionId: string,
     raw: Record<string, string> | null | undefined,
@@ -987,21 +1005,36 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return undefined;
   }
 
+  /**
+   * Whether a record other than `sessionId` names OpenCode session
+   * `openCodeId`: an active record, or the latest archive of any ID.
+   * Same-ID R4 (B-7 items 2 to 4): the reads are strict, and a read that
+   * fails answers "held" (true), never "no other record": an active entry
+   * that cannot be checked (`listMetadata` leaves it out), an active record
+   * that cannot be read, an archive directory that cannot be listed, and a
+   * latest archive that cannot be read. Only a missing file or directory
+   * (`ENOENT`) names nothing.
+   */
   function hasOtherOpenCodeRecord(
     sessionsDir: string,
     sessionId: string,
     openCodeId: string,
   ): boolean {
-    return (
-      listMetadata(sessionsDir).some(
-        (id) =>
-          id !== sessionId &&
-          readMetadataRaw(sessionsDir, id)?.["opencodeSessionId"] === openCodeId,
-      ) ||
-      listArchivedSessionIds(sessionsDir).some(
-        (id) => readArchivedMetadataRaw(sessionsDir, id)?.["opencodeSessionId"] === openCodeId,
-      )
-    );
+    try {
+      for (const id of listRecordIds(sessionsDir)) {
+        if (id === sessionId) continue;
+        if (readRecordStrict(sessionsDir, id)?.["opencodeSessionId"] === openCodeId) return true;
+      }
+      for (const id of listArchivedSessionIdsStrict(sessionsDir)) {
+        // The ID has an archive file, so a null here is a read error (which
+        // readArchivedMetadataRaw answers as null) or a removal since.
+        const archived = readArchivedMetadataRaw(sessionsDir, id);
+        if (!archived || archived["opencodeSessionId"] === openCodeId) return true;
+      }
+      return false;
+    } catch {
+      return true;
+    }
   }
 
   async function openCodeHolderReason(
@@ -1228,7 +1261,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const usedNumbers = new Set<number>();
     for (const sessionName of [
       ...listMetadata(sessionsDir),
-      ...listArchivedSessionIds(sessionsDir),
+      ...listArchivedSessionIdsForAllocation(sessionsDir),
     ]) {
       const num = getSessionNumber(sessionName, project.sessionPrefix);
       if (num !== undefined) usedNumbers.add(num);
@@ -1283,7 +1316,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const orchestratorPattern = new RegExp(`^${escapeRegex(orchestratorPrefix)}-(\\d+)$`);
     for (const sessionName of [
       ...listMetadata(sessionsDir),
-      ...listArchivedSessionIds(sessionsDir),
+      ...listArchivedSessionIdsForAllocation(sessionsDir),
     ]) {
       const match = sessionName.match(orchestratorPattern);
       if (match) {

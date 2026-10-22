@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import {
   TERMINAL_STATUSES as TERMINAL_STATUSES_SET,
   type OrchestratorConfig,
@@ -75,18 +75,25 @@ export async function validateSession(
     }
   }
 
+  // Same-ID R4 (B-7 items 5 and 6): only a path that does not exist
+  // (`ENOENT`) and a workspace check that answers false are "no workspace".
+  // A path that cannot be checked (`EACCES`, `ELOOP`, I/O) or a workspace
+  // check that rejects is unknown, so the session gets no action.
   let workspaceExists = false;
   if (workspacePath) {
+    let pathMissing = false;
     try {
-      workspaceExists = existsSync(workspacePath);
-    } catch {
-      workspaceExists = false;
+      lstatSync(workspacePath);
+      workspaceExists = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") pathMissing = true;
+      else probeError ??= `workspace path check could not run: ${describe(err)}`;
     }
-    if (!workspaceExists && workspace?.exists) {
+    if (pathMissing && workspace?.exists) {
       try {
         workspaceExists = await workspace.exists(workspacePath);
-      } catch {
-        workspaceExists = false;
+      } catch (err) {
+        probeError ??= `workspace check could not run: ${describe(err)}`;
       }
     }
   }

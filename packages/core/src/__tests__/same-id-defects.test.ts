@@ -79,10 +79,10 @@ function defect(name: string, fn: () => Promise<void>): void {
   (RED ? it : it.fails)(name, fn);
 }
 
-/** A test that needs a mode-000 directory; root reads it anyway. */
-function defectUnlessRoot(name: string, fn: () => Promise<void>): void {
+/** A test that needs a mode-000 directory; root reads it anyway. Same-ID R4 made it a plain test. */
+function itUnlessRoot(name: string, fn: () => Promise<void>): void {
   if (process.getuid?.() === 0) it.skip(name, fn);
-  else defect(name, fn);
+  else it(name, fn);
 }
 
 /** Wait until `promise` settles, at most `ms` (a serialized competitor may wait for us). */
@@ -269,7 +269,7 @@ describe("[same-id R4] D-D: older reads that answer 'nothing' when they cannot c
     expect(existsSync(archive)).toBe(false);
   }
 
-  defect("spawn does not take a session number while the archive directory cannot be checked", async () => {
+  it("spawn does not take a session number while the archive directory cannot be checked", async () => {
     // The archive may hold app-1 (round-9 audit: the session numbers read
     // `listArchivedSessionIds`, whose `existsSync` answers "no archives").
     archiveCannotBeChecked();
@@ -281,7 +281,7 @@ describe("[same-id R4] D-D: older reads that answer 'nothing' when they cannot c
     ).toBeNull();
   });
 
-  defect("cleanup keeps an OpenCode session that an archive may name while the archive directory cannot be checked", async () => {
+  it("cleanup keeps an OpenCode session that an archive may name while the archive directory cannot be checked", async () => {
     // app-1 (OpenCode, dead runtime) runs on ses_shared; the archive of
     // another ID that issue reuse gave ses_shared to is behind the archive
     // directory, which cannot be checked.
@@ -305,7 +305,7 @@ describe("[same-id R4] D-D: older reads that answer 'nothing' when they cannot c
     expect(api.remove).not.toHaveBeenCalled();
   });
 
-  defectUnlessRoot(
+  itUnlessRoot(
     "recovery: a workspace that cannot be checked does not give a live session the cleanup action",
     async () => {
       const parent = join(ctx.tmpDir, "locked");

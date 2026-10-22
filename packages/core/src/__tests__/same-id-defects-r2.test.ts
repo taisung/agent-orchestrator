@@ -112,15 +112,13 @@ import {
   type TestEnvironment,
 } from "./test-utils.js";
 
-const RED = process.env["SAME_ID_DEFECTS"] === "red";
-function defect(name: string, fn: () => Promise<void>): void {
-  (RED ? it : it.fails)(name, fn);
-}
+// Same-ID R2a and R4 made every defect of this file a plain test, so no
+// `defect` marking is left.
 
 /** A test that needs a mode-000 file; root reads it anyway. */
-function defectUnlessRoot(name: string, fn: () => Promise<void>): void {
+function itUnlessRoot(name: string, fn: () => Promise<void>): void {
   if (process.getuid?.() === 0) it.skip(name, fn);
-  else defect(name, fn);
+  else it(name, fn);
 }
 
 /** The rejection of a tmux probe that could not answer (a hidden or rebound socket, review B-5). */
@@ -582,7 +580,7 @@ describe("[same-id R4] B-7 item 1: hasOtherOpenCodeRecord reads the content of t
     vi.mocked(ctx.mockRuntime.isAlive).mockResolvedValue(false);
   }
 
-  defectUnlessRoot(
+  itUnlessRoot(
     "cleanup keeps an OpenCode session that the unreadable latest archive of another ID may name",
     async () => {
       deadOpenCodeSession();
@@ -650,7 +648,7 @@ describe("[same-id R4] B-7 item 2: the recovery validator keeps a workspace chec
     );
   }
 
-  defect(
+  it(
     "a workspace.exists that rejects (git could not start) gives a live session no action",
     async () => {
       const assessment = await assess(async () => {
@@ -717,7 +715,7 @@ describe("[same-id R4] B-7 item 3: the core Herdr helper answers 'no process' wh
   ];
 
   for (const [label, answer] of failures) {
-    defect(`isHerdrProcessRunning rejects when ${label}`, async () => {
+    it(`isHerdrProcessRunning rejects when ${label}`, async () => {
       herdrAnswers(answer);
       // Measured in code (core/src/herdr.ts:43-76): every failure answers []
       // and so "no agent process"; all four agents call it for Herdr panes.

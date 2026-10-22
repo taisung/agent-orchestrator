@@ -80,9 +80,9 @@ describe("getHerdrPaneProcesses", () => {
     expect(proc.cmdline).toBe("codex -m gpt");
   });
 
-  it("returns empty when herdr is not installed", async () => {
+  it("rejects when herdr is not installed", async () => {
     mockExecFile.mockRejectedValueOnce(new Error("ENOENT"));
-    expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow();
   });
 
   // herdr reports failures in the body with exit code 0, so an error body must
@@ -95,9 +95,9 @@ describe("getHerdrPaneProcesses", () => {
     expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
   });
 
-  it("returns empty on unparseable output", async () => {
+  it("rejects on unparseable output", async () => {
     mockExecFile.mockResolvedValueOnce({ stdout: "not json", stderr: "" });
-    expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow();
   });
 
   it("returns empty for an empty pane id without shelling out", async () => {
@@ -105,9 +105,9 @@ describe("getHerdrPaneProcesses", () => {
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
-  it("skips malformed entries", async () => {
+  it("rejects a reply with malformed entries", async () => {
     mockExecFile.mockResolvedValueOnce(paneProcesses([null, {}, CLAUDE]));
-    expect(await getHerdrPaneProcesses("w8:p1")).toHaveLength(1);
+    await expect(getHerdrPaneProcesses("w8:p1")).rejects.toThrow();
   });
 });
 

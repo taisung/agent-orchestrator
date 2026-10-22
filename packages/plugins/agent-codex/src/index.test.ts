@@ -2357,10 +2357,10 @@ describe("isProcessRunning — herdr runtime", () => {
     expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
   });
 
-  it("is false when herdr is unavailable", async () => {
+  it("rejects when herdr is unavailable", async () => {
     mockExecFileAsync.mockRejectedValueOnce(new Error("ENOENT"));
 
     const agent = create();
-    expect(await agent.isProcessRunning(herdrHandle)).toBe(false);
+    await expect(agent.isProcessRunning(herdrHandle)).rejects.toThrow();
   });
 });
