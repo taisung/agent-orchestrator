@@ -994,7 +994,9 @@ describe("Review r1 M-2: a signal to the caller's child reaches the agent itself
     let childPid = 0;
     let killChild: (signal: NodeJS.Signals) => void = () => {};
     const runInCallerTerminal = (launch: { script: string; cwd: string }): SessionRelaunchChild => {
-      // As the CLI runs it: `bash <script>` as the caller's child.
+      // As the CLI runs it: `bash <script>` as the caller's child. The
+      // script removes itself when it runs; afterEach removes it otherwise.
+      scripts.push(launch.script);
       const child = spawn("bash", [launch.script], { cwd: launch.cwd, stdio: "ignore" });
       childPid = child.pid ?? -1;
       ownPids.push(childPid);

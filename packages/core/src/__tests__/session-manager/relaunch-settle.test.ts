@@ -195,18 +195,22 @@ describe("Review r1 M-3: the launch keys never stay with a long-lived ao", () =>
     });
     const onWarning = vi.fn();
 
-    await expect(sm.relaunch!("app-1", { onWarning })).rejects.toThrow(
-      /could not start its agent \(send-keys failed\)/,
-    );
+    try {
+      await expect(sm.relaunch!("app-1", { onWarning })).rejects.toThrow(
+        /could not start its agent \(send-keys failed\)/,
+      );
 
-    expect(onWarning).toHaveBeenCalledWith(
-      expect.stringMatching(/the launch script .*ao-launch-.*\.sh could not be removed/),
-    );
-    const after = recordOf("app-1")!;
-    expect(after["launchPid"]).toBeUndefined();
-    expect(after["restoredAt"]).toBeUndefined();
-    expect(after["launchToken"]).toBe(before["launchToken"]);
-    const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2];
-    rmSync(/^bash '([^']+)'$/.exec(command)![1], { recursive: true, force: true });
+      expect(onWarning).toHaveBeenCalledWith(
+        expect.stringMatching(/the launch script .*ao-launch-.*\.sh could not be removed/),
+      );
+      const after = recordOf("app-1")!;
+      expect(after["launchPid"]).toBeUndefined();
+      expect(after["restoredAt"]).toBeUndefined();
+      expect(after["launchToken"]).toBe(before["launchToken"]);
+    } finally {
+      const command = vi.mocked(plugins.runtime.runInPane!).mock.calls[0]?.[2] ?? "";
+      const script = /^bash '([^']+)'$/.exec(command)?.[1];
+      if (script) rmSync(script, { recursive: true, force: true });
+    }
   });
 });
