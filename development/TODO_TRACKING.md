@@ -1313,6 +1313,9 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   of R4 review r2 (claude-code `findClaudeProcess`, owner "2a": a round after this landing).
   2026-10-22: ao-54 fixed both on `feat/claude-strict-process` (`b97a2500..6ea435a8`, 5 commits; owner
   "go 1a" allowed 4 `index.test.ts` oracle changes); not on `main`.
+  Review r1 by ao-60 LAND-SAFE (2026-10-22 10:24 EDT, `claude_strict_process_review_r1_astra6.md`). New
+  follow-up F-9 (older code, `agent-claude-code/src/index.ts:508`): the 5-second `ps` cache keeps a
+  well-formed negative snapshot for up to 5 s after a process starts or a TTY is reused.
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;

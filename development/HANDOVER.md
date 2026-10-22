@@ -22,8 +22,9 @@ Two rounds landed on 2026-10-22, and both are built, live in both lifecycle work
 
 The same-ID arc has R1, R2a and R4 on `main`. Its remaining rounds are RW, R2b-1, R2b-2 (in design), then
 R3a, R3b, RH and RO (later, owner "5b"). Design r8 of RW and R2b-2 is DONE and is in re-check by ao-62.
-The claude-code follow-ups F-6 and m-1 are DONE on a branch (ao-54, `6ea435a8`) and are in review r1 by
-ao-60. Both reviews run at the handover; their watchers report to `ao-orchestrator`.
+The claude-code follow-ups F-6 and m-1 are DONE on a branch (ao-54, `6ea435a8`), and review r1 by ao-60
+found them LAND-SAFE at 10:24 EDT (0 B, 0 M, 0 m); the landing waits for the owner's word. The design
+re-check runs at the handover; its watcher reports to `ao-orchestrator`.
 
 ## Live Sessions and Worktrees
 
@@ -36,7 +37,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
 | ao-52 | Claude Code Opus 5.5, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` at `48c26129`. Design r8 DONE 09:57 EDT: design `development/reviews/same_id_design_r8_opus.md` (on `main`), tests `fe5d6575..48c26129` (4 test commits, not on `main`), report `reports/ao-52_same_id_design_r8.report.md`; router row closed `in-review` | idle; waits for the r8 re-check. Watcher 2833081 |
 | ao-54 | Claude Code Opus 5.5, branch `feat/claude-strict-process` at `6ea435a8`, base `b97a2500`. F-6 and m-1 DONE 09:53 EDT (5 commits, 5 files +590 -71; owner "go 1a" allowed 4 `index.test.ts` oracle changes); report `reports/ao-54_claude_strict_process.report.md`; router row closed `in-review` | idle; waits for review r1. Watcher 3760585 |
-| ao-60 | Codex `gpt-6-astra` xhigh, branch `review/claude-strict-process` at `6ea435a8`. REVIEW r1 of F-6 and m-1, dispatched 10:01 EDT (`brief-review-claude-strict-process-astra.md`; review file `development/reviews/claude_strict_process_review_r1_astra6.md`); context 67% at dispatch; rollout `~/.codex/sessions/2026/10/21/rollout-2026-10-21T23-44-26-01a161b5-cb34-7da3-af23-97acdd286c51.jsonl` | running; router row open. Watcher 2246299 |
+| ao-60 | Codex `gpt-6-astra` xhigh, branch `review/claude-strict-process` at `6ea435a8`. REVIEW r1 of F-6 and m-1 DONE 10:24 EDT: LAND-SAFE for `b97a2500..6ea435a8` (0 B, 0 M, 0 m); merge with `main` `511c697e` (merge tree `5b039aca`) builds and passes 3541 passed, 1 expected fail, 29 skipped; red 0/16/6/0; new follow-up F-9; review `development/reviews/claude_strict_process_review_r1_astra6.md` (on `main`); router row closed `in-review`; rollout `~/.codex/sessions/2026/10/21/rollout-2026-10-21T23-44-26-01a161b5-cb34-7da3-af23-97acdd286c51.jsonl` | idle; can run the gates of `main` after the F-6 landing. Watcher 2246299 |
 | ao-62 | Codex `gpt-6-astra` xhigh, branch `review/same-id-design-r8` at `48c26129`. RE-CHECK r8 of RW and R2b-2, dispatched 10:01 EDT (`brief-review-same-id-design-r8-astra.md`; review file `development/reviews/same_id_design_review_r8_astra6.md`); rollout `~/.codex/sessions/2026/10/22/rollout-2026-10-22T08-31-13-01a16398-1496-7b53-8d52-9433cae946a1.jsonl` | running; router row open. Watcher 2610857 |
 
 **Closed by this handover**: ao-55 (author of R2a and R4; R4 is landed). See "Close record" below.
@@ -56,8 +57,7 @@ does not run: an `opencode api` call starts one with the caller's environment.
 --fallback ao-orchestrator -i 60 -s 20 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop
 with TERM only, then check that the process ended.
 
-**Router log** (`development/artifacts/model_router_log/log.csv`): open rows ao-60 (F-6 review r1) and
-ao-62 (design re-check r8). Close a row with `router_log.py close ... --landed in-review` and token counts:
+**Router log** (`development/artifacts/model_router_log/log.csv`): open row ao-62 (design re-check r8). Close a row with `router_log.py close ... --landed in-review` and token counts:
 Codex from the last `total_token_usage` of the rollout, Claude from `trial_cost.py opus-5-5=<jsonl>` (input
 = input + cache read + cache creation); subtract the sums of the earlier rows of that session. Eight rows
 of 2026-10-15 still have `landed=pending`.
@@ -101,8 +101,8 @@ owner decisions OD-2 to OD-29 are in TODO D-8.
 **R4 follow-ups F-1 to F-8**: open - listed in Known Issues, the same-ID entry ("Later round launches of
 one ID share a name and a path"). F-6 is in review; F-1 and F-2 belong to R2b and R3; F-3, F-4, F-5, F-7
 and F-8 are small worker changes; owner choice.
-**claude-code F-6 and m-1**: in review r1 (ao-60) - `b97a2500..6ea435a8`. Lands only after LAND-SAFE and
-the owner's word.
+**claude-code F-6 and m-1**: review r1 LAND-SAFE (ao-60, 10:24 EDT) - `b97a2500..6ea435a8`; the landing
+waits for the owner's word. Follow-up F-9 (Known Issues, claude-code entry).
 **Codex send limits**: L-1 (a wrapped status row) and L-2 (any two-space `└ ` row counts as a status row),
 `development/reviews/codex_send_idle_review_r4_astra6.md`; its follow-ups F-1 to F-7 are in that file.
 **Killed-status r8 m-1**: open - `readGenerationFloor` (`packages/core/src/metadata.ts`) answers 0 on a read
@@ -136,17 +136,16 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 ## Next Priorities
 
-1. **F-6 and m-1 review r1 (ao-60)** - read `development/reviews/claude_strict_process_review_r1_astra6.md`
-   when the watcher reports `done|`.
-   - LAND-SAFE: ask the owner, then land as for R4: `git merge-tree --write-tree main 6ea435a8` (the merge
+1. **Land F-6 and m-1** - review r1 by ao-60 is LAND-SAFE (10:24 EDT,
+   `development/reviews/claude_strict_process_review_r1_astra6.md`).
+   - On the owner's word, land as for R4: `git merge-tree --write-tree main 6ea435a8` (the merge
      base is `b97a2500`), `git cherry-pick b97a2500..6ea435a8`, check that the tree equals the merge-tree
      result, gates of `main` by a Codex worker on a new branch, `pnpm build`, restart 3830765 and 3830929
      by exact PID, live check, push.
-   - NOT-LAND-SAFE: round 2 by ao-54 from the findings, re-check by ao-60 (or a new Codex reviewer if
-     ao-60 is above 85% context).
    - Context: F-6 decides whether the lifecycle writes `killed` for a live Claude Code session, the
      orchestrator pane included. ao-54 found that a clean `git merge-tree` with R4 still failed 3 tests on
-     the merged tree (Known Issues traps); review item 5 runs the suites on the merge with `main`.
+     the merged tree (Known Issues traps); the review ran the full suite on the merge with `main`
+     `511c697e` (merge tree `5b039aca`): 3541 passed, 1 expected fail, 29 skipped.
    - Expected outcome: a malformed `ps`, tmux or Herdr answer keeps a live Claude Code session `working`
      after two polls; `ao status` shows every live Claude Code session `working` after the restart.
 2. **Design re-check r8 (ao-62)** - read `development/reviews/same_id_design_review_r8_astra6.md`.
