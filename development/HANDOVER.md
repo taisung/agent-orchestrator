@@ -300,7 +300,9 @@ add the missing-`TMUX_TMPDIR` fallback.
    of Claude Code blocks a foreground `sleep 150` (the agent moved it to the background); `python3 -c
    "import time; time.sleep(150)"` ran in the foreground. ao-61 killed and archived
    (`ao-61_2026-10-22T12-00-04-370Z`); its branch `feat/live-send-check-claude-...` stays (no own commits,
-   at `48f500af`). Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-22/`. Push next.
+   at `48f500af`). Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-22/`. PUSHED `48f500af..7051f71d` at
+   08:01:22 (fast-forward, 17 commits); CI, Integration Tests, Onboarding Integration Test and Security passed
+   (08:03:56).
 5. **Killed-status r8 m-1** - a small worker change (generation-floor read or doc text).
 6. **I-5 follow-ups, project guide, test isolation, `0005` phases** - as before; owner choice.
 
