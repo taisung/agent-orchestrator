@@ -53,6 +53,7 @@ const {
   mockSessionManager,
   mockEnsureLifecycleWorker,
   mockStopLifecycleWorker,
+  mockStartDetachedStop,
   mockRuntime,
   oraLog,
 } = vi.hoisted(() => ({
@@ -71,6 +72,7 @@ const {
   },
   mockEnsureLifecycleWorker: vi.fn(),
   mockStopLifecycleWorker: vi.fn(),
+  mockStartDetachedStop: vi.fn(),
   mockRuntime: { name: "tmux", isAlive: vi.fn() },
   oraLog: [] as Array<[string, string | undefined]>,
 }));
@@ -140,6 +142,7 @@ vi.mock("../../src/lib/create-session-manager.js", () => ({
 vi.mock("../../src/lib/lifecycle-service.js", () => ({
   ensureLifecycleWorker: (...args: unknown[]) => mockEnsureLifecycleWorker(...args),
   stopLifecycleWorker: (...args: unknown[]) => mockStopLifecycleWorker(...args),
+  startDetachedStop: (...args: unknown[]) => mockStartDetachedStop(...args),
 }));
 
 vi.mock("../../src/lib/preflight.js", () => ({
@@ -213,10 +216,19 @@ let tmpDir: string;
 let program: Command;
 let cwdSpy: ReturnType<typeof vi.spyOn>;
 
+// Defect B: `ao stop` reads these to find that it runs inside the session that
+// it stops. A test run inside tmux or an AO pane must not see the outer values.
+const CALLER_SESSION_ENV = ["AO_SESSION", "AO_SESSION_NAME", "TMUX", "TMUX_PANE"] as const;
+const savedCallerEnv: Partial<Record<(typeof CALLER_SESSION_ENV)[number], string>> = {};
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "ao-start-test-"));
   spawnCalls.length = 0;
   oraLog.length = 0;
+  for (const key of CALLER_SESSION_ENV) {
+    savedCallerEnv[key] = process.env[key];
+    Reflect.deleteProperty(process.env, key);
+  }
 
   program = new Command();
   program.exitOverride();
@@ -256,6 +268,7 @@ beforeEach(() => {
   });
   mockStopLifecycleWorker.mockReset();
   mockStopLifecycleWorker.mockResolvedValue(true);
+  mockStartDetachedStop.mockReset();
   mockRuntime.isAlive.mockReset();
   mockProcessCwd.mockReset();
   // Install-prompt defaults: skip the runtime install and decline optional
@@ -271,6 +284,11 @@ afterEach(() => {
   if (cwdSpy) cwdSpy.mockRestore();
   rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  for (const key of CALLER_SESSION_ENV) {
+    const saved = savedCallerEnv[key];
+    if (saved === undefined) Reflect.deleteProperty(process.env, key);
+    else process.env[key] = saved;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +1180,221 @@ describe("start command — orchestrator liveness (defect A)", () => {
       "succeed",
       "Using existing orchestrator session: app-orchestrator",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect B (2026-10-22): `ao stop` in the orchestrator's own pane
+// ---------------------------------------------------------------------------
+
+describe("stop command — inside the orchestrator's own session (defect B)", () => {
+  const handle = { id: "hash-app-orchestrator", runtimeName: "tmux", data: {} };
+  let logFile: string;
+  let stdoutWrite: ReturnType<typeof vi.spyOn>;
+
+  function written(): string {
+    return stdoutWrite.mock.calls.map((c) => String(c[0])).join("");
+  }
+
+  function logged(): string {
+    return vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+  }
+
+  function errors(): string {
+    return vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+  }
+
+  /** The detached stop, as `startDetachedStop` returns it; `output` is its log. */
+  function detachedStop(output: string, done: Promise<number | null>): void {
+    writeFileSync(logFile, output);
+    mockStartDetachedStop.mockReturnValue({ pid: 4321, logFile, done });
+  }
+
+  beforeEach(() => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({
+      id: "app-orchestrator",
+      status: "working",
+      runtimeHandle: handle,
+    });
+    mockSessionManager.kill.mockResolvedValue(undefined);
+    logFile = join(tmpDir, "orchestrator-stop.log");
+    stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  it("hands the kill, the archive and the lifecycle stop to a detached process when AO_SESSION names the session", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    detachedStop("✓ Orchestrator stopped\n", Promise.resolve(0));
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockStartDetachedStop).toHaveBeenCalledWith(
+      expect.objectContaining({ configPath: expect.any(String) }),
+      "my-app",
+      ["stop", "my-app", "--detached-stop-process"],
+    );
+    // This process is hung up by the kill, so it neither kills nor stops the
+    // lifecycle worker itself: the detached process does both, in order.
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+    expect(logged()).toContain(
+      `ao stop runs inside orchestrator session app-orchestrator, so its kill ends this pane and this command. A detached process (PID 4321) stops the session, archives its record and then stops the lifecycle worker. Its output: ${logFile}`,
+    );
+    expect(written()).toContain("✓ Orchestrator stopped");
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+
+  it("passes --purge-session on to the detached process", async () => {
+    process.env["AO_SESSION_NAME"] = "app-orchestrator";
+    detachedStop("", Promise.resolve(0));
+
+    await program.parseAsync(["node", "test", "stop", "--purge-session"]);
+
+    expect(mockStartDetachedStop).toHaveBeenCalledWith(expect.anything(), "my-app", [
+      "stop",
+      "my-app",
+      "--purge-session",
+      "--detached-stop-process",
+    ]);
+  });
+
+  it("finds the session through tmux when the pane has no AO_SESSION", async () => {
+    process.env["TMUX"] = "/tmp/tmux-1000/default,123,0";
+    process.env["TMUX_PANE"] = "%7";
+    mockExecSilent.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "tmux" && args.join(" ") === "display-message -p -t %7 #{session_name}") {
+        return "hash-app-orchestrator";
+      }
+      return null;
+    });
+    detachedStop("", Promise.resolve(0));
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockStartDetachedStop).toHaveBeenCalledTimes(1);
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+  });
+
+  it("counts a tmux check that cannot answer as inside", async () => {
+    process.env["TMUX"] = "/tmp/tmux-1000/default,123,0";
+    process.env["TMUX_PANE"] = "%7";
+    detachedStop("", Promise.resolve(0));
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockStartDetachedStop).toHaveBeenCalledTimes(1);
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+  });
+
+  it("a refused kill in the detached process: prints its output, keeps the lifecycle worker, and exits 1", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    detachedStop(
+      "Failed to stop orchestrator session app-orchestrator: runtime stop unconfirmed (unknown): the destroy failed\nThe lifecycle worker was not stopped.\n",
+      Promise.resolve(1),
+    );
+
+    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+
+    expect(written()).toContain(
+      "Failed to stop orchestrator session app-orchestrator: runtime stop unconfirmed (unknown): the destroy failed",
+    );
+    expect(written()).toContain("The lifecycle worker was not stopped.");
+    expect(errors()).toContain("The detached stop ended with exit code 1; its output is above.");
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+    expect(process.exit).toHaveBeenCalledTimes(1);
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("a detached process that does not start changes nothing and names the next action", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    detachedStop("", Promise.reject(new Error("spawn ao ENOENT")));
+
+    await expect(program.parseAsync(["node", "test", "stop"])).rejects.toThrow("process.exit(1)");
+
+    expect(errors()).toContain(
+      "The detached stop did not start (spawn ao ENOENT); nothing was stopped. Run `ao stop my-app` from a shell outside session app-orchestrator.",
+    );
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+  });
+
+  it("the detached process itself kills first and then stops the lifecycle worker", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+
+    await program.parseAsync(["node", "test", "stop", "my-app", "--detached-stop-process"]);
+
+    expect(mockStartDetachedStop).not.toHaveBeenCalled();
+    expect(mockSessionManager.kill).toHaveBeenCalledWith("app-orchestrator", {
+      purgeOpenCode: false,
+    });
+    expect(mockStopLifecycleWorker).toHaveBeenCalledTimes(1);
+    expect(mockSessionManager.kill.mock.invocationCallOrder[0]).toBeLessThan(
+      mockStopLifecycleWorker.mock.invocationCallOrder[0],
+    );
+    expect(logged()).toContain("Orchestrator stopped");
+  });
+
+  it("the detached process keeps the lifecycle worker after a refused kill (same-ID R2a)", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    mockSessionManager.kill.mockRejectedValue(
+      new RuntimeStopUnconfirmedError({
+        sessionId: "app-orchestrator",
+        handle,
+        stop: {
+          outcome: "unknown",
+          detail: "the destroy of tmux session hash-app-orchestrator failed",
+        },
+        kept: "record and worktree kept",
+        retry: "ao session kill app-orchestrator",
+      }),
+    );
+
+    await expect(
+      program.parseAsync(["node", "test", "stop", "my-app", "--detached-stop-process"]),
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errors()).toContain("The lifecycle worker was not stopped.");
+    expect(mockStopLifecycleWorker).not.toHaveBeenCalled();
+  });
+
+  it("a stop from outside the session keeps today's in-process order", async () => {
+    process.env["AO_SESSION"] = "app-3";
+    process.env["TMUX"] = "/tmp/tmux-1000/default,123,0";
+    process.env["TMUX_PANE"] = "%2";
+    mockExecSilent.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "tmux" && args[0] === "display-message") return "hash-app-3";
+      return null;
+    });
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockStartDetachedStop).not.toHaveBeenCalled();
+    expect(mockSessionManager.kill).toHaveBeenCalledWith("app-orchestrator", {
+      purgeOpenCode: false,
+    });
+    expect(mockSessionManager.kill.mock.invocationCallOrder[0]).toBeLessThan(
+      mockStopLifecycleWorker.mock.invocationCallOrder[0],
+    );
+    expect(logged()).toContain("Orchestrator stopped");
+  });
+
+  it("a missing record needs no detached process, also inside a pane of that name", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    mockSessionManager.get.mockResolvedValue(null);
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockStartDetachedStop).not.toHaveBeenCalled();
+    expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    expect(mockStopLifecycleWorker).toHaveBeenCalledTimes(1);
   });
 });
 

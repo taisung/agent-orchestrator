@@ -8,11 +8,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getProjectBaseDir, getStateRoot, type OrchestratorConfig } from "@aoagents/ao-core";
 
 const LIFECYCLE_PID_FILE = "lifecycle-worker.pid";
 const LIFECYCLE_LOG_FILE = "lifecycle-worker.log";
+const DETACHED_STOP_LOG_FILE = "orchestrator-stop.log";
 const DEFAULT_START_TIMEOUT_MS = 5_000;
 const STOP_TIMEOUT_MS = 5_000;
 
@@ -123,28 +124,32 @@ export function getLifecycleWorkerStatus(
   return { running: false, pid: null, pidFile, logFile };
 }
 
-function resolveLifecycleWorkerLaunch(projectId: string): { command: string; args: string[] } {
+/** The command that runs this ao CLI again with `aoArgs`. */
+function resolveAoLaunch(aoArgs: string[]): { command: string; args: string[] } {
   const entry = process.argv[1];
-  const workerArgs = ["lifecycle-worker", projectId];
 
   if (entry && /\.(?:c|m)?js$/i.test(entry)) {
     return {
       command: process.execPath,
-      args: [entry, ...workerArgs],
+      args: [entry, ...aoArgs],
     };
   }
 
   if (entry && /\.ts$/i.test(entry)) {
     return {
       command: "npx",
-      args: ["tsx", entry, ...workerArgs],
+      args: ["tsx", entry, ...aoArgs],
     };
   }
 
   return {
     command: "ao",
-    args: workerArgs,
+    args: aoArgs,
   };
+}
+
+function resolveLifecycleWorkerLaunch(projectId: string): { command: string; args: string[] } {
+  return resolveAoLaunch(["lifecycle-worker", projectId]);
 }
 
 async function waitForLifecycleWorker(
@@ -216,6 +221,58 @@ export async function ensureLifecycleWorker(
   }
 
   return { ...status, started: true };
+}
+
+/** A detached `ao stop`: its PID, its log file, and its end. */
+export interface DetachedStop {
+  pid: number | null;
+  logFile: string;
+  /** The exit code (null after a signal); rejects when the process did not start. */
+  done: Promise<number | null>;
+}
+
+/**
+ * Run `ao <aoArgs>` (an `ao stop`) in a detached process: its own session
+ * with no controlling terminal, stdin closed, and its output in the
+ * project's `orchestrator-stop.log` (written new each time). A hangup of the
+ * caller's terminal does not reach it. `ao stop` uses it when it runs inside
+ * the session that it stops (defect B, 2026-10-22). The child gets the
+ * config path and the state root of this process, so it reads the same
+ * files, and the rest of this environment (TMUX too), so its runtime calls
+ * reach the same server.
+ */
+export function startDetachedStop(
+  config: OrchestratorConfig,
+  projectId: string,
+  aoArgs: string[],
+): DetachedStop {
+  const baseDir = getProjectBase(config, projectId);
+  const logFile = join(baseDir, DETACHED_STOP_LOG_FILE);
+  mkdirSync(baseDir, { recursive: true });
+
+  const outputFd = openSync(logFile, "w");
+  let child: ReturnType<typeof spawn>;
+  try {
+    const launch = resolveAoLaunch(aoArgs);
+    child = spawn(launch.command, launch.args, {
+      cwd: dirname(config.configPath),
+      detached: true,
+      stdio: ["ignore", outputFd, outputFd],
+      env: {
+        ...process.env,
+        AO_CONFIG_PATH: config.configPath,
+        AO_STATE_ROOT: getStateRoot(),
+      },
+    });
+  } finally {
+    closeSync(outputFd);
+  }
+
+  const done = new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code: number | null) => resolve(code));
+  });
+  return { pid: child.pid ?? null, logFile, done };
 }
 
 export async function stopLifecycleWorker(

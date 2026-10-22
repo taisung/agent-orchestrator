@@ -38,12 +38,17 @@ import {
   type ParsedRepoUrl,
   type PluginRegistry,
   type Runtime,
+  type RuntimeHandle,
   type Session,
 } from "@aoagents/ao-core";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { exec, execSilent, git } from "../lib/shell.js";
 import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
-import { ensureLifecycleWorker, stopLifecycleWorker } from "../lib/lifecycle-service.js";
+import {
+  ensureLifecycleWorker,
+  startDetachedStop,
+  stopLifecycleWorker,
+} from "../lib/lifecycle-service.js";
 import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
 import {
@@ -1226,12 +1231,105 @@ function isLocalPath(arg: string): boolean {
   return arg.startsWith("/") || arg.startsWith("~") || arg.startsWith("./") || arg.startsWith("..");
 }
 
+interface StopOptions {
+  purgeSession?: boolean;
+  /** Set only on the detached `ao stop` (defect B). */
+  detachedStopProcess?: boolean;
+}
+
+/** The hidden flag of the `ao stop` that runs in the detached process (defect B). */
+const DETACHED_STOP_FLAG = "--detached-stop-process";
+
+/**
+ * Defect B (2026-10-22): true when this process may run inside the session
+ * that `ao stop` kills. tmux hangs up every pane of a killed session, and the
+ * hangup ends an `ao stop` that runs in one of them after the kill and before
+ * the archive and the lifecycle stop. AO gives the panes of a session
+ * AO_SESSION (and AO_SESSION_NAME); for a pane without them, tmux names the
+ * session of TMUX_PANE (the runtime's tmux calls reach the same server, as
+ * they inherit TMUX). A tmux check that cannot answer counts as inside: the
+ * detached stop gives the same end state when this process runs outside.
+ */
+async function mayRunInsideSession(
+  sessionId: string,
+  handle: RuntimeHandle | null,
+): Promise<boolean> {
+  if (process.env["AO_SESSION"] === sessionId || process.env["AO_SESSION_NAME"] === sessionId) {
+    return true;
+  }
+  const pane = process.env["TMUX_PANE"];
+  if (!process.env["TMUX"] || !pane || handle?.runtimeName !== "tmux") return false;
+  const name = await execSilent("tmux", ["display-message", "-p", "-t", pane, "#{session_name}"]);
+  return name === null || name.trim() === handle.id;
+}
+
+/** The detached stop ended with an error; its output was printed. */
+class DetachedStopFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DetachedStopFailedError";
+  }
+}
+
+/**
+ * Defect B: the stop of the session that this process runs in. The kill, the
+ * archive and the lifecycle stop run in a detached process, in the order of
+ * a stop from outside (the lifecycle worker stops only after a confirmed
+ * kill, same-ID R2a). This process waits for it: when the kill works, the
+ * hangup ends this process and the detached one finishes; when the session
+ * is kept (a refusal or an error), this process prints the detached output
+ * and fails.
+ */
+async function stopFromDetachedProcess(
+  config: OrchestratorConfig,
+  projectId: string,
+  sessionId: string,
+  purgeSession: boolean,
+): Promise<void> {
+  const stop = startDetachedStop(config, projectId, [
+    "stop",
+    projectId,
+    ...(purgeSession ? ["--purge-session"] : []),
+    DETACHED_STOP_FLAG,
+  ]);
+  console.log(
+    chalk.yellow(
+      `ao stop runs inside orchestrator session ${sessionId}, so its kill ends this pane and this command. ` +
+        `A detached process${stop.pid ? ` (PID ${stop.pid})` : ""} stops the session, archives its record ` +
+        `and then stops the lifecycle worker. Its output: ${stop.logFile}`,
+    ),
+  );
+
+  let code: number | null;
+  try {
+    code = await stop.done;
+  } catch (err) {
+    throw new DetachedStopFailedError(
+      `The detached stop did not start (${errorMessage(err)}); nothing was stopped. ` +
+        `Run \`ao stop ${projectId}\` from a shell outside session ${sessionId}.`,
+    );
+  }
+  let output: string;
+  try {
+    output = readFileSync(stop.logFile, "utf-8");
+  } catch {
+    output = `(could not read ${stop.logFile})\n`;
+  }
+  process.stdout.write(output);
+  if (code !== 0) {
+    throw new DetachedStopFailedError(
+      `The detached stop ended with ${code === null ? "a signal" : `exit code ${code}`}; its output is above.`,
+    );
+  }
+}
+
 export function registerStop(program: Command): void {
   program
     .command("stop [project]")
     .description("Stop the orchestrator agent and lifecycle worker")
     .option("--purge-session", "Delete mapped OpenCode session when stopping")
-    .action(async (projectArg?: string, opts: { purgeSession?: boolean } = {}) => {
+    .addOption(new Option(DETACHED_STOP_FLAG).hideHelp())
+    .action(async (projectArg?: string, opts: StopOptions = {}) => {
       let retry = "ao stop";
       try {
         const config = loadConfig();
@@ -1244,6 +1342,15 @@ export function registerStop(program: Command): void {
         // Kill orchestrator session via SessionManager
         const sm = await getSessionManager(config);
         const existing = await sm.get(sessionId);
+
+        if (
+          existing &&
+          opts.detachedStopProcess !== true &&
+          (await mayRunInsideSession(sessionId, existing.runtimeHandle))
+        ) {
+          await stopFromDetachedProcess(config, _projectId, sessionId, opts.purgeSession === true);
+          return;
+        }
 
         if (existing) {
           const spinner = ora("Stopping orchestrator session").start();
@@ -1269,6 +1376,10 @@ export function registerStop(program: Command): void {
         console.log(chalk.bold.green("\n✓ Orchestrator stopped\n"));
         console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
       } catch (err) {
+        if (err instanceof DetachedStopFailedError) {
+          console.error(chalk.red(`\n${err.message}`));
+          process.exit(1);
+        }
         if (isRuntimeStopUnconfirmedError(err)) {
           // Same-ID R2a (review r1, F-3): the refusal names the outcome, its
           // detail and the next action, as `ao session kill` does. The
