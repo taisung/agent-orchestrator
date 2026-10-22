@@ -484,6 +484,17 @@ Durable progress record for this fork. Dated events only; the current state live
   exact PID 14:35 (65891 -> 2087525, 68422 -> 2087614); first polls 14:36:12 and 14:36:14, 0 failures, health `ok`.
   Pushed `dc7815d2..2bb51734` 14:37 EDT; CI of `2bb51734`: 4 of 4 passed (Security, Integration Tests, Onboarding
   Integration Test, CI; the last at 14:39:52 EDT).
+- `606869a0..fa6fd1ad` (2026-10-22, ao-63 and ao-66 Claude Opus 5.5; reviews by ao-64, Codex gpt-6-astra) -
+  **the 30 s progress note of `ao stop`** (owner's request in ao-63's pane; owner "1": fix first with a new
+  worker). When the detached stop still runs after 30 s, the caller writes one note with the PID and the two log
+  paths, and the wait goes on with no deadline. Each output stream takes one write at a time, so the note takes
+  the next write on its own stream at once (a slow stdout does not hold it back), and it goes to stdout when its
+  own stderr write finds an output error. No note after the stop ended. Commits: ao-63 `e08df7a3`, `3e366a01`;
+  ao-66 `9a3b8611`, `13d3a129`. Review r4 LAND-WITH-CHANGES (0 B 0 M 2 m, gates PASS 3599), r5 LAND-SAFE
+  (0 B 0 M 0 m; gates PASS on `13d3a129`: 3604 passed, 1 expected fail, 29 skipped; red 0/16/6/0; gitleaks
+  clean) (`start_no_server_review_r4_astra6.md`, `..._r5_astra6.md`). Clean cherry-pick 16:50 EDT; tree equal
+  to `13d3a129` outside `development/`; gitleaks on the 4 landed commits: no leaks (ao-66's first commit had
+  skipped the hook). Not built, not live, not pushed yet (each on the owner's word).
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -597,11 +608,12 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
     (`start.ts` about 1436-1441) passes all 82 targeted tests. The live path works.
   LANDED 2026-10-22 as `d1efcb94..de7c1bfc`, built and live 14:35 EDT (What Landed). The three items from the old
   code and the two follow-ups above stay open.
-  Not landed: on the owner's request in its pane, ao-63 added `e08df7a3` and `3e366a01` (2026-10-22 14:21) on
-  `e6695161`: when a detached stop still runs after 30 s, the caller writes one note with the PID and the log
-  paths, and the wait goes on (no deadline: the caller cannot know the result). Tested by ao-63 (3599 passed,
-  red 0/16/6/0), not reviewed. ao-63's other suggestions (report R3-14): copy the two streams at the same time
-  (a slow stderr reader holds back stdout), and move `stop-relay.test.ts` to the integration tests if it flakes.
+  The 30 s progress note (ao-63 `e08df7a3`, `3e366a01`, with ao-66's fix of review r4) LANDED 2026-10-22 as
+  `606869a0..fa6fd1ad` (What Landed); not built yet. Open from review r5 (accepted, not blocking): a slow
+  stderr holds the note until it drains or fails (the note never moves to stdout for slowness), and a reader
+  that never reads holds the caller with no deadline, as before. ao-63's other suggestions (report R3-14):
+  copy the two streams at the same time (a slow stderr reader holds back stdout), and move
+  `stop-relay.test.ts` to the integration tests if it flakes.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then

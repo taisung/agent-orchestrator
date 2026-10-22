@@ -19,9 +19,12 @@
   wrong); gates PASS on `3e366a01` (3599 passed, 1 expected fail, 29 skipped; red 0/16/6/0). On `main` as
   `2bc6bf50`. Owner "1": fix first with a new worker. ao-66 (Claude Code Opus 5.5, spawned 16:19) fixes m-1,
   m-2 and the comment on `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it`, moved to
-  `3e366a01` before the brief (copy `brief-aofork-progress-note-fix.md`). Next: ao-64 re-checks (r5), then
-  land the note and the fix together (`e08df7a3`, `3e366a01` and ao-66's commits), build, restart, push,
-  each on the owner's word.
+  `3e366a01` before the brief (copy `brief-aofork-progress-note-fix.md`). ao-66 done 16:42 at `13d3a129`
+  (`9a3b8611`, `13d3a129`; 3604 passed). Review r5 by ao-64 (branch `review/progress-note-r5` at `13d3a129`,
+  brief `.agent_task_r5.md`): LAND-SAFE, 0 B 0 M 0 m, gates PASS (3604 passed, 1 expected fail, 29 skipped;
+  red 0/16/6/0; gitleaks clean). LANDED 16:50 by clean cherry-pick as `606869a0..fa6fd1ad` (tree equal to
+  `13d3a129` outside `development/`; gitleaks on the 4 commits: no leaks). NOT built, NOT live, NOT pushed:
+  the rebuild, the restart of 2087525 and 2087614 by exact PID, and the push wait for the owner's word.
 - 16:13 ao-63 design checkpoint read and accepted with note 1
   (`~/.cache/agent-skills-haiku55-arc/note-ao-63-relaunch-1.md`): the SessionStart hook records only the
   pane's own agent; a sound record on every failure after the claim; the CLI `ao send` pastes into a live
