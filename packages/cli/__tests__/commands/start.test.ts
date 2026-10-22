@@ -1498,6 +1498,58 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
     expect(process.listenerCount("SIGINT")).toBe(listenersBefore);
   });
 
+  /** A stderr write mock that holds back the callback of the Ctrl-C note. */
+  function holdCtrlCNote(): { release(): void } {
+    let held: ((err?: Error | null) => void) | undefined;
+    stderrWrite.mockImplementation((...args: unknown[]) => {
+      const callback = args.find((arg) => typeof arg === "function") as
+        | ((err?: Error | null) => void)
+        | undefined;
+      if (String(args[0]).includes("the stop goes on")) held = callback;
+      else callback?.(null);
+      return true;
+    });
+    return { release: () => held?.(null) };
+  }
+
+  it("Ctrl-C on a slow stderr: exit 130 only after the note is written (review r2 M-1)", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    const finish = runningDetachedStop();
+    const note = holdCtrlCNote();
+    const listenersBefore = process.listenerCount("SIGINT");
+
+    const run = program.parseAsync(["node", "test", "stop"]);
+    await vi.waitFor(() => expect(process.listenerCount("SIGINT")).toBe(listenersBefore + 1));
+    process.emit("SIGINT");
+
+    expect(writtenToStderr()).toContain("ao stop: the stop goes on in the detached process");
+    expect(process.exit).not.toHaveBeenCalled();
+    expect(() => note.release()).toThrow("process.exit(130)");
+    finish(0);
+    await run;
+  });
+
+  it("Ctrl-C when the reader does not take the note: exit 130 after 2 s", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    const finish = runningDetachedStop();
+    holdCtrlCNote();
+    const listenersBefore = process.listenerCount("SIGINT");
+
+    const run = program.parseAsync(["node", "test", "stop"]);
+    await vi.waitFor(() => expect(process.listenerCount("SIGINT")).toBe(listenersBefore + 1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      process.emit("SIGINT");
+      vi.advanceTimersByTime(1_999);
+      expect(process.exit).not.toHaveBeenCalled();
+      expect(() => vi.advanceTimersByTime(1)).toThrow("process.exit(130)");
+    } finally {
+      vi.useRealTimers();
+    }
+    finish(0);
+    await run;
+  });
+
   it("a detached process that does not start changes nothing and names the next action", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop({}, () => Promise.reject(new Error("spawn ao ENOENT")));

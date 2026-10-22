@@ -1243,6 +1243,9 @@ const DETACHED_STOP_FLAG = "--detached-stop-process";
 /** How often the caller looks for new output of the detached stop. */
 const DETACHED_STOP_RELAY_MS = 100;
 
+/** After Ctrl-C, how long the caller waits for its note to be written. */
+const DETACHED_STOP_NOTE_MS = 2_000;
+
 /** Writes `data` to `out`; resolves when `out` has taken it, rejects on an output error. */
 function writeOut(out: NodeJS.WriteStream, data: string | Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1356,9 +1359,9 @@ async function relayDetachedStop(stop: DetachedStop, relays: LogRelay[]): Promis
  * process's own output (EPIPE when the reader closed, for example) ends the
  * copy to that stream only: it is reported on the other stream, the logs keep
  * the output, and the exit code stays the detached one. Ctrl-C ends this
- * process at once (exit 130): the stop goes on, this process names the
- * detached PID and the logs, and output that a slow reader has not taken yet
- * is dropped (the logs keep it).
+ * process (exit 130) as soon as its note is written: the stop goes on, the
+ * note names the detached PID and the logs, and output that a slow reader has
+ * not taken yet is dropped (the logs keep it).
  */
 async function stopInDetachedProcess(
   config: OrchestratorConfig,
@@ -1372,12 +1375,20 @@ async function stopInDetachedProcess(
     DETACHED_STOP_FLAG,
   ]);
   const logs = `${stop.stdoutLog} and ${stop.stderrLog}`;
+  // Ctrl-C: exit 130 when the note is written (it waits behind at most one
+  // relayed chunk), or after DETACHED_STOP_NOTE_MS when the reader does not
+  // take it. A second Ctrl-C ends this process at once (the handler is gone).
   const onInterrupt = (): void => {
+    const exit = (): void => {
+      clearTimeout(timer);
+      process.exit(130);
+    };
+    const timer = setTimeout(exit, DETACHED_STOP_NOTE_MS);
     process.stderr.write(
       `\nao stop: the stop goes on in the detached process${stop.pid ? ` (PID ${stop.pid})` : ""}; ` +
         `its output: ${logs}\n`,
+      exit,
     );
-    process.exit(130);
   };
   // An output error reaches the relay through the write callback. Without a
   // listener, the "error" event of the stream would end this process.
