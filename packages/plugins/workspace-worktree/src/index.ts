@@ -306,8 +306,12 @@ export function create(config?: Record<string, unknown>): Workspace {
         ) {
           return false;
         }
+        // The CLI shows only the message: name git's reason (its first line).
+        const reason =
+          (typeof failure.stderr === "string" && failure.stderr.trim().split("\n")[0]) ||
+          (err instanceof Error ? err.message : String(err));
         throw new Error(
-          `workspace check of ${workspacePath} could not run: git rev-parse --is-inside-work-tree failed`,
+          `workspace check of ${workspacePath} could not run: git rev-parse --is-inside-work-tree failed (${reason})`,
           { cause: err },
         );
       }

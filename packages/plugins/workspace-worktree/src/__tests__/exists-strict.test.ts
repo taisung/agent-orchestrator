@@ -186,7 +186,9 @@ describe("same-id R4 round 2 (review r1, M-1): only git's whole discovery diagno
           `\tgit config --global --add safe.directory '${path}'\n`,
       );
     };
-    await expect(create().exists!(path)).rejects.toThrow(/could not run/);
+    await expect(create().exists!(path)).rejects.toThrow(
+      `could not run: git rev-parse --is-inside-work-tree failed (fatal: detected dubious ownership in repository at '${path}')`,
+    );
   });
 
   it("rejects git's exit 128 when the diagnostic comes with another line", async () => {
@@ -257,6 +259,7 @@ describe("same-id R4 round 2 (review r1, M-1): the real git binary", () => {
     process.env["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1";
     const err = await create().exists!(path).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("(fatal: detected dubious ownership in repository at");
     expect(String(((err as Error).cause as { stderr?: unknown }).stderr)).toContain(
       "detected dubious ownership",
     );
