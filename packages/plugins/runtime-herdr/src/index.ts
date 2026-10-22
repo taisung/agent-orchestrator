@@ -94,8 +94,9 @@ function assertValidSessionId(id: string): void {
 /**
  * herdr answers `{"id":...,"result":{...}}` on success and `{"error":{"code","message"}}`
  * on failure, both with exit code 0 — so the error has to be read out of the body.
+ * With `requireResult` (same-ID R4 round 4, M-1), only a `result` object answers.
  */
-function parseHerdrResult(stdout: string): Record<string, unknown> {
+function parseHerdrResult(stdout: string, requireResult = false): Record<string, unknown> {
   const trimmed = stdout.trim();
   if (!trimmed) return {};
 
@@ -131,6 +132,14 @@ function parseHerdrResult(stdout: string): Record<string, unknown> {
   const result = obj.result;
   if (typeof result === "object" && result !== null && !Array.isArray(result)) {
     return result as Record<string, unknown>;
+  }
+  // Same-ID R4 round 4 (review r3, M-1): for a read that decides a negative,
+  // a body without a `result` object (none, null, a scalar or a list) is
+  // malformed, also with a top-level `pane`. It throws without a `herdrCode`.
+  if (requireResult) {
+    throw new Error(
+      `herdr answered without a result object (result: ${JSON.stringify(result) ?? "absent"})`,
+    );
   }
   return obj;
 }
@@ -206,6 +215,12 @@ export function create(config?: Record<string, unknown>): Runtime {
     return parseHerdrResult(stdout);
   }
 
+  /** `herdr` for a read that decides a negative: only a `result` object answers. */
+  async function herdrResult(...args: string[]): Promise<Record<string, unknown>> {
+    const { stdout } = await execFileAsync(bin, args, { timeout: commandTimeoutMs });
+    return parseHerdrResult(stdout, true);
+  }
+
   /** Read a pane, returning raw terminal text (read commands answer in text, not JSON). */
   async function readPane(paneId: string, source: string, lines: number): Promise<string> {
     const { stdout } = await execFileAsync(
@@ -225,11 +240,13 @@ export function create(config?: Record<string, unknown>): Runtime {
    * Round 3 (M-3): also a contradictory envelope (see parseHerdrResult) and
    * a `terminal_id` that is not text, which shows neither the same nor a
    * replaced terminal.
+   * Round 4 (review r3, M-1): the pane counts only inside a `result` object;
+   * a top-level `pane` is no answer of herdr.
    */
   async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
     let result: Record<string, unknown>;
     try {
-      result = await herdr("pane", "get", paneId);
+      result = await herdrResult("pane", "get", paneId);
     } catch (err) {
       if (isPaneNotFound(err)) return null;
       const detail = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();

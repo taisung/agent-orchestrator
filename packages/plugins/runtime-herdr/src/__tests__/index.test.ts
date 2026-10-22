@@ -578,6 +578,43 @@ describe("isAlive(): a contradictory or malformed pane answer is unknown", () =>
   });
 });
 
+// Same-ID R4 round 4 (review r3, M-1): herdr answers a pane only inside a
+// `result` object. On c02c0c02 the parser fell back to the top level of a
+// body without one, so a top-level pane with a replaced terminal read as dead.
+describe("isAlive(): a pane outside a result object is unknown", () => {
+  const PANE = { pane_id: "w7:p1", terminal_id: "term_b" };
+
+  for (const [label, body] of [
+    ["a top-level pane without a result (review r3)", { id: "cli:test", pane: PANE }],
+    [
+      "a top-level pane with a null result (review r3)",
+      { id: "cli:test", result: null, pane: PANE },
+    ],
+    [
+      "a top-level pane with a scalar result (review r3)",
+      { id: "cli:test", result: 12, pane: PANE },
+    ],
+    ["a top-level pane with a list result", { id: "cli:test", result: [], pane: PANE }],
+  ] as const) {
+    it(`rejects ${label}`, async () => {
+      mockExecFile.mockResolvedValueOnce({ stdout: JSON.stringify(body), stderr: "" });
+      await expect(create().isAlive(HANDLE)).rejects.toThrow(
+        /could not answer: herdr answered without a result object/,
+      );
+    });
+  }
+
+  it("control: the same replaced terminal inside a result object answers false", async () => {
+    mockExecFile.mockResolvedValueOnce(ok({ pane: PANE }));
+    expect(await create().isAlive(HANDLE)).toBe(false);
+  });
+
+  it("control: a lone pane_not_found error without a result answers false", async () => {
+    mockExecFile.mockResolvedValueOnce(herdrError("pane_not_found", "Pane not found"));
+    expect(await create().isAlive(HANDLE)).toBe(false);
+  });
+});
+
 describe("getMetrics() / getAttachInfo()", () => {
   it("reports uptime from creation time", async () => {
     const handle = { ...HANDLE, data: { ...HANDLE.data, createdAt: Date.now() - 5_000 } };
