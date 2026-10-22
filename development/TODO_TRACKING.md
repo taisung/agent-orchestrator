@@ -517,7 +517,9 @@ R3a, R3b, RH and RO come later. After re-check r5 (answer "1b 2a", 2026-10-21 af
 barrier (before the RW upgrade the owner stops every AO session and every resident `ao` process; the
 barrier checks that none remains and keeps admission closed otherwise); OD-25 (a): a standing hash check
 detects a wrapper rewrite by an old build and closes admission until a new fence and check, with the
-no-old-build operating rule (detection and response, not prevention). Design r6 covers RW and R2b-2. After re-check r6 (answer "4a 5b 6b", 2026-10-22, read 07:34 EDT): OD-26 (a): RW changes the core r4 `:262` oracle to a refusal while the old writer lives and an admission after it ends; OD-27 (b): a process with an unreadable identity (environment or exe EACCES) blocks admission unless the owner allows that exact PID and start time; OD-28 (b): R2b-2 fences pending creation names on a running server, and the no-server case is a named residual until R3a. Design r7 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
+no-old-build operating rule (detection and response, not prevention). Design r6 covers RW and R2b-2. After re-check r6 (answer "4a 5b 6b", 2026-10-22, read 07:34 EDT): OD-26 (a): RW changes the core r4 `:262` oracle to a refusal while the old writer lives and an admission after it ends; OD-27 (b): a process with an unreadable identity (environment or exe EACCES) blocks admission unless the owner allows that exact PID and start time; OD-28 (b): R2b-2 fences pending creation names on a running server, and the no-server case is a named residual until R3a. Design r7 covers RW and R2b-2. After review r7 (answer "11a", 2026-10-22): OD-29 (a): the RW round scopes
+the allows of the three core r5 race tests with a `processScope` that only the tests use; production P1, P2 and P4
+stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
 `same_id_design_review_r{1..4}_astra6.md`.
 
 ## Known Issues
