@@ -5,6 +5,20 @@ Durable progress record for this fork. Dated events only; the current state live
 
 ## Milestones and Progress
 
+- 2026-10-21 — the owner set native Windows as an AO goal. Findings and a proposed porting sequence
+  are recorded in [0011](0011_native_windows_feasibility_and_porting_plan.md). Herdr provides a
+  plausible runtime, but AO still needs shell/environment, lock, process-identity, and lifecycle
+  work. Analysis only; no Windows implementation or native Windows validation has started.
+- 2026-10-21 — `gpt-6.1-sol` reviewed the native Windows plan:
+  [review r1](reviews/0011_native_windows_review_r1_sol61.md). Ready for W0 measurements; no critical
+  findings, two major gaps (worktree inventory path handling; activity and same-conversation restore
+  acceptance), and one minor gap (metacharacter argument tests). Addressed in plan r2 below.
+- 2026-10-21 — incorporated review r1 into [0011](0011_native_windows_feasibility_and_porting_plan.md)
+  revision r2: explicit worktree enumeration/containment tests, native agent-data and all-six-state
+  checks, same-conversation restore controls, argument round-trips, isolated W1 execution, elevation
+  refusals, and separate native/mocked evidence. Qualified the quoted-path assertion against Git's
+  source and retained the mandatory activity-state contract. Section 9 records every disposition;
+  implementation and Windows validation remain outstanding, and r2 has not been re-reviewed.
 - 2026-08-11 — Phase -1 usage inventory recorded (`0006`). Retained-distribution trim executed as one
   commit `397b7dd1` (`0007`), ahead of Phases 0-4, on the operator's redirect.
 - 2026-09-16 — two review rounds on `397b7dd1` fixed and merged into
