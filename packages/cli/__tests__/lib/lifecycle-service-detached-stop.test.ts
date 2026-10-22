@@ -3,17 +3,20 @@
  * orchestrator record in a process that the hangup of the caller's pane does
  * not reach: its own session (detached), no terminal on stdio, the same
  * config, state root and runtime environment (TMUX, PATH), and a stdout log
- * and a stderr log of its own (review r1 m-1, m-2).
+ * and a stderr log of its own (review r1 m-1, m-2). The prune of old logs
+ * removes only regular files with a generated name (review r2 m-1).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
   writeSync,
@@ -181,33 +184,70 @@ describe("startDetachedStop", () => {
     expect(readFileSync(b.stdoutLog, "utf-8")).toBe("");
   });
 
-  it("removes logs of detached stops older than 7 days, and nothing else", () => {
-    mkdirSync(baseDir, { recursive: true });
+  describe("the prune of old stop logs (review r2 m-1)", () => {
     const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
     const oneDayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
-    const oldLog = join(
-      baseDir,
-      "orchestrator-stop-2026-10-01T00-00-00-000Z-1-aaaaaaaa.stderr.log",
-    );
-    const recentLog = join(
-      baseDir,
-      "orchestrator-stop-2026-10-21T00-00-00-000Z-1-bbbbbbbb.stdout.log",
-    );
-    const otherOldFile = join(baseDir, "lifecycle-worker.log");
-    for (const [path, time] of [
-      [oldLog, eightDaysAgo],
-      [recentLog, oneDayAgo],
-      [otherOldFile, eightDaysAgo],
-    ] as const) {
+
+    /** Writes `path` with the mtime `time` (seconds). */
+    function fixture(path: string, time: number): string {
       writeFileSync(path, "x");
       utimesSync(path, time, time);
+      return path;
     }
 
-    startDetachedStop(config, "app", ["stop", "app"]);
+    beforeEach(() => {
+      mkdirSync(baseDir, { recursive: true });
+    });
 
-    expect(existsSync(oldLog)).toBe(false);
-    expect(existsSync(recentLog)).toBe(true);
-    expect(existsSync(otherOldFile)).toBe(true);
+    it("removes an old log with a generated name, and keeps a recent one", () => {
+      const oldLog = fixture(
+        join(baseDir, "orchestrator-stop-2026-10-01T00-00-00-000Z-1-aaaaaaaa.stderr.log"),
+        eightDaysAgo,
+      );
+      const recentLog = fixture(
+        join(baseDir, "orchestrator-stop-2026-10-21T00-00-00-000Z-1-bbbbbbbb.stdout.log"),
+        oneDayAgo,
+      );
+
+      startDetachedStop(config, "app", ["stop", "app"]);
+
+      expect(existsSync(oldLog)).toBe(false);
+      expect(existsSync(recentLog)).toBe(true);
+    });
+
+    it("keeps an old file whose name the generator does not make", () => {
+      const notes = fixture(join(baseDir, "orchestrator-stop-notes.log"), eightDaysAgo);
+      const linked = fixture(join(baseDir, "orchestrator-stop-linked.stderr.log"), eightDaysAgo);
+
+      startDetachedStop(config, "app", ["stop", "app"]);
+
+      expect(existsSync(notes)).toBe(true);
+      expect(existsSync(linked)).toBe(true);
+    });
+
+    it("keeps a symlink with a generated name to an old file, and its target", () => {
+      const target = fixture(join(tmpDir, "other-project-stop.log"), eightDaysAgo);
+      const link = join(
+        baseDir,
+        "orchestrator-stop-2026-10-01T00-00-00-000Z-1-cccccccc.stderr.log",
+      );
+      symlinkSync(target, link);
+
+      startDetachedStop(config, "app", ["stop", "app"]);
+
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(target, "utf-8")).toBe("x");
+    });
+
+    it("keeps the round 1 log and other old files of the project", () => {
+      const roundOneLog = fixture(join(baseDir, "orchestrator-stop.log"), eightDaysAgo);
+      const workerLog = fixture(join(baseDir, "lifecycle-worker.log"), eightDaysAgo);
+
+      startDetachedStop(config, "app", ["stop", "app"]);
+
+      expect(existsSync(roundOneLog)).toBe(true);
+      expect(existsSync(workerLog)).toBe(true);
+    });
   });
 
   it("resolves with the exit code of the detached process", async () => {

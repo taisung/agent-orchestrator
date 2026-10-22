@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -18,7 +18,9 @@ const LIFECYCLE_PID_FILE = "lifecycle-worker.pid";
 const LIFECYCLE_LOG_FILE = "lifecycle-worker.log";
 /** The logs of one detached stop: `orchestrator-stop-<time>-<caller PID>-<random>.{stdout,stderr}.log`. */
 const DETACHED_STOP_LOG_PREFIX = "orchestrator-stop-";
-const DETACHED_STOP_LOG_PATTERN = /^orchestrator-stop-.+\.log$/;
+/** Only the names that startDetachedStop makes (review r2 m-1). */
+const DETACHED_STOP_LOG_PATTERN =
+  /^orchestrator-stop-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+-[0-9a-f]{8}\.(?:stdout|stderr)\.log$/;
 /** Logs of detached stops older than this are removed when the next one starts. */
 const DETACHED_STOP_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_START_TIMEOUT_MS = 5_000;
@@ -241,7 +243,11 @@ export interface DetachedStop {
   done: Promise<number | null>;
 }
 
-/** Remove the logs of detached stops that are older than the max age. Best effort. */
+/**
+ * Remove the logs of detached stops that are older than the max age: only
+ * regular files (lstat, so a symlink is never removed or followed) with a
+ * name that startDetachedStop makes. Best effort.
+ */
 function pruneDetachedStopLogs(baseDir: string): void {
   let names: string[];
   try {
@@ -254,7 +260,8 @@ function pruneDetachedStopLogs(baseDir: string): void {
     if (!DETACHED_STOP_LOG_PATTERN.test(name)) continue;
     const path = join(baseDir, name);
     try {
-      if (statSync(path).mtimeMs < oldest) unlinkSync(path);
+      const stat = lstatSync(path);
+      if (stat.isFile() && stat.mtimeMs < oldest) unlinkSync(path);
     } catch {
       // Another stop removed it, or it cannot be read: leave it.
     }
@@ -266,7 +273,7 @@ function pruneDetachedStopLogs(baseDir: string): void {
  * with no controlling terminal, stdin closed, and its stdout and stderr in
  * logs of its own (`orchestrator-stop-<time>-<caller PID>-<random>.stdout.log`
  * and `.stderr.log` in the project base directory, created exclusively, so
- * two stops never share one; logs older than 7 days are removed first). A
+ * two stops never share one; such logs older than 7 days are removed first). A
  * hangup of the caller's terminal does not reach it. `ao stop` runs the stop of every existing orchestrator record
  * this way (defect B, 2026-10-22). The child gets the config path and the
  * state root of this process, so it reads the same files, and the rest of
