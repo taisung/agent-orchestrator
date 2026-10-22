@@ -597,6 +597,11 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
     (`start.ts` about 1436-1441) passes all 82 targeted tests. The live path works.
   LANDED 2026-10-22 as `d1efcb94..de7c1bfc`, built and live 14:35 EDT (What Landed). The three items from the old
   code and the two follow-ups above stay open.
+  Not landed: on the owner's request in its pane, ao-63 added `e08df7a3` and `3e366a01` (2026-10-22 14:21) on
+  `e6695161`: when a detached stop still runs after 30 s, the caller writes one note with the PID and the log
+  paths, and the wait goes on (no deadline: the caller cannot know the result). Tested by ao-63 (3599 passed,
+  red 0/16/6/0), not reviewed. ao-63's other suggestions (report R3-14): copy the two streams at the same time
+  (a slow stderr reader holds back stdout), and move `stop-relay.test.ts` to the integration tests if it flakes.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then
@@ -626,6 +631,8 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   (ao-49, below).
   Owner 2026-10-22: a separate worker round after the fix of the `ao start` / `ao stop` defects (ao-63)
   lands, because both rounds change the launch code.
+  The fix landed 2026-10-22 (`d1efcb94..de7c1bfc`). Owner "2a": ao-63 (the author of that fix) authors the
+  relaunch round and ao-64 (its Codex reviewer) reviews it; both sessions stay open for it.
 - **Session helpers moved out of `~/.cache`** (owner 2026-10-21, "1a"): `restart_lifecycle.py` and a
   generic `ao_relaunch.py` (save the live argv of a session's agent, run it again in the pane shell) go to
   `~/agent-skills/scripts/` with tests. ao-49 (Claude Code Opus 5.5; OpenCode Muse skipped because an
