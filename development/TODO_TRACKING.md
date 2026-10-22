@@ -572,6 +572,14 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   - The real `ao stop` error of 11:00 is not known. ao-64 ruled out a plugin import failure (caught at
     `plugin-registry.ts:435-441`); config, project, record read, record change, launch guard and an
     unconfirmed runtime stop remain.
+  Rounds 2 and 3 (ao-63) answered reviews r1 and r2; re-check r3 (ao-64, 14:23 EDT) is LAND-SAFE, 0 B 0 M 0 m,
+  on `dc7815d2..e6695161` (14 commits). Two small follow-ups, not blocking:
+  - An `ao stop` from outside in a terminal now shows the child's lines without colors, and the spinner's
+    start line `- Stopping orchestrator session` stays as a line (the child has no terminal). Piped output
+    is byte-identical. ao-64: cosmetic. A child `FORCE_COLOR` from the parent's color level brings the
+    colors back (ANSI codes then go into the logs); the owner decides.
+  - Test gap (review r3): removing the fallback that reports a stderr output error on stdout
+    (`start.ts` about 1436-1441) passes all 82 targeted tests. The live path works.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then
