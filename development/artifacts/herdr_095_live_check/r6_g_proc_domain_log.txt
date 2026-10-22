@@ -1,0 +1,11 @@
+g_pane: {"pane": "w5:p1", "shell": 693528}
+g_shell_environ_herdr_keys: {"HERDR_BIN_PATH": "<home>/.local/bin/herdr", "HERDR_ENV": "1", "HERDR_PANE_ID": "w5:p1", "HERDR_SESSION": "aohd3-2", "HERDR_SOCKET_PATH": "/tmp/aohd3/xdg/config/herdr/sessions/aohd3-2/herdr.sock", "HERDR_TAB_ID": "w5:t1", "HERDR_WORKSPACE_ID": "w5"}
+g_shell_status: ["PPid:\t681160", "Uid:\t44402\t44402\t44402\t44402", "NSpid:\t693528"]
+g_shell_ns: {"pid": "pid:[4026531836]", "user": "user:[4026531837]"}
+g_self: {"pid": 693281, "proc_self": "693281", "status": ["PPid:\t690581", "Uid:\t44402\t44402\t44402\t44402", "NSpid:\t693281"], "ns_pid": "pid:[4026531836]", "ns_user": "user:[4026531837]", "uid": 44402}
+g_proc_mountinfo: ["26 30 0:24 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw"]
+g_node_statfs_proc: {"type":40864,"typeHex":"0x9fa0","ns":"pid:[4026531836]","self":"693531","pid":693531,"uid":44402,"node":"v25.7.0"}
+g_server_ns: {"server_pid": 681160, "pid_ns": "pid:[4026531836]"}
+g_exec_continuity: {"before": {"stat": {"state": "S", "ticks": "20294795"}, "comm": "sh"}, "after_stat": {"state": "S", "ticks": "20294795"}, "after_comm": "sh", "process_info_after": "{\"id\":\"aohd3\",\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"w5:p1\",\"shell_pid\":693528,\"foreground_process_group_id\":693528,\"foreground_processes\":[{\"pid\":693528,\"name\":\"sh\",\"argv\":[\"sh\"],\"cmdline\":\"sh\",\"cwd\":\"/tmp/aohd3/tmp/wsg\"}]}}}\n", "environ_after": {"HERDR_PANE_ID": "w5:p1", "HERDR_TAB_ID": "w5:t1", "HERDR_WORKSPACE_ID": "w5", "HERDR_BIN_PATH": "<home>/.local/bin/herdr", "HERDR_SOCKET_PATH": "/tmp/aohd3/xdg/config/herdr/sessions/aohd3-2/herdr.sock", "HERDR_ENV": "1", "HERDR_SESSION": "aohd3-2"}}
+g_exit_before: {"pane": "w6:p1", "workspace": "w6", "shell": 693544, "stat": {"state": "S", "ticks": "20294905"}}
+g_exit_after: {"shell_stat": {"error": "FileNotFoundError errno=2"}, "pane_get": "{\"id\":\"aohd3\",\"error\":{\"code\":\"pane_not_found\",\"message\":\"pane w6:p1 not found\"}}\n", "workspace_get": "{\"id\":\"aohd3\",\"error\":{\"code\":\"workspace_not_found\",\"message\":\"workspace w6 not found\"}}\n"}

@@ -1,0 +1,6 @@
+server: {"strace_pid": 817016, "herdr_pid": 817019}
+i2_before_close: {"pane": "w1:p1", "shell": 817060, "shell_stat": {"state": "S", "ppid": "817019", "pgrp": "817060", "session": "817060", "ticks": "20372882"}, "children": {"ign": {"pid": 817065, "stat": {"state": "S", "ppid": "817060", "pgrp": "817065", "session": "817060", "ticks": "20372885"}}}, "logs": {"ign": ["start pid=817065 sid=817060 pgrp=817065"], "sid": []}}
+i2_pane_close: {"id":"aohd3","result":{"type":"ok"}}
+i2_after_close: {"shell_stat": {"error": "FileNotFoundError errno=2"}, "children": {"ign": {"error": "FileNotFoundError errno=2"}}, "logs": {"ign": ["start pid=817065 sid=817060 pgrp=817065", "signal SIGHUP", "signal SIGTERM"], "sid": []}}
+i2_survivors: []
+i2_server_stop: {"exit": 0, "server_now": {"error": "FileNotFoundError errno=2"}}

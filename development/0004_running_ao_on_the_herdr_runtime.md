@@ -8,8 +8,8 @@ instructions.
 (0003 §9). 9 workers is the concurrency at which 0001's delivery failures surfaced in production.
 **Re-checked on herdr 0.9.5 (protocol 22; 0.8.0 was protocol 19)** on 2026-10-22, on isolated scratch servers
 with a stand-in claude: [the live check](reviews/herdr_live_check_095_opus.md) (step 1) and the measurements of
-[RH design r5](reviews/rh_design_r5_opus.md) section 7, fixtures in
-`artifacts/herdr_095_live_check/`. The configuration, the command surface, the per-project switch and the
+[RH design r5](reviews/rh_design_r5_opus.md) section 7 and [RH design r6](reviews/rh_design_r6_opus.md)
+section 9, fixtures in `artifacts/herdr_095_live_check/` (`r5_*`, `r6_*`). The configuration, the command surface, the per-project switch and the
 send-and-verify path hold on 0.9.5. What changed is marked **0.9.5** below; the older facts are kept and
 marked **0.8.0**. The largest change: a failed CLI call now exits 1 with its error on stderr (§5a), which AO's
 reads do not see yet (§5a, "What AO reads today").
@@ -30,19 +30,22 @@ herdr status server      # expect: status: running
 
 Launching `herdr` (or `herdr server` for headless) starts one. The server is **shared** with whatever the
 operator is doing in it by hand; the plugin creates only its own workspaces and never stops the server.
-Since same-ID R2a, AO **closes no Herdr workspace**: `ao session kill`, cleanup and restore get the stop
-answer `unknown` and keep the record and the worktree, and the operator closes the workspace by hand after a
-check (the "Next" line of the refusal). The optional round RH (a design, not built:
-[RH design r5](reviews/rh_design_r5_opus.md)) would add a bound close.
+Since same-ID R2a, **the stop of a Herdr session closes nothing**: `ao session kill`, cleanup and restore get
+the stop answer `unknown` and keep the record and the worktree, and the operator closes the workspace by hand
+after a check (the "Next" line of the refusal). Two older close paths of the plugin still exist (read from the
+code): when the agent launch fails during a create, the plugin closes the workspace that it just created, by
+its ID and without a check; and the plugin's `destroy` closes the recorded workspace (no core caller uses it,
+because core calls `stop`). The "Herdr 0.9.5 fit" round and the optional round RH (designs, not built:
+[RH design r6](reviews/rh_design_r6_opus.md)) would remove both and add a bound close.
 
 **0.9.5: which server AO reaches.** AO runs plain `herdr`, so the caller's environment picks the server. The
 CLI's order (measured, RH design r5 §2.1): `--session <name>` (AO never passes it), then `HERDR_SOCKET_PATH`,
 then `HERDR_SESSION` (`$XDG_CONFIG_HOME/herdr/sessions/<name>/herdr.sock`), then
-`$XDG_CONFIG_HOME/herdr/herdr.sock`, then `$HOME/.config/herdr/herdr.sock`. Every herdr pane has
-`HERDR_SOCKET_PATH` and `HERDR_SESSION` in its environment, so an `ao` command that runs inside a herdr pane
-talks to that pane's server, and an `ao` command in a plain terminal talks to the default socket. Run every
-`ao` command of a Herdr project with the same herdr environment. AO records no socket per session yet (the
-"Herdr 0.9.5 fit" round of RH design r5 §4.7 would pin it).
+`$XDG_CONFIG_HOME/herdr/herdr.sock`, then `$HOME/.config/herdr/herdr.sock`. Every pane shell that was
+measured (r5, r6) had `HERDR_SOCKET_PATH` and `HERDR_SESSION` in its environment, so an `ao` command that runs
+inside a herdr pane talks to that pane's server, and an `ao` command in a plain terminal talks to the default
+socket. Run every `ao` command of a Herdr project with the same herdr environment. AO records no socket per
+session yet (the "Herdr 0.9.5 fit" round of RH design r6 would pin it).
 
 **0.9.5: `herdr status server`.** With a server: `status: running`, then `version`, `endpoint_compatible`,
 `private_protocol: 22`, `private_protocol_compatible` and `socket` lines. With no server: exit 0 and
@@ -215,8 +218,9 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
 
 - With no server (no socket file, or a stale one), the CLI itself writes the code `server_not_running`
   ("no herdr server is running at <socket>; ..."), exit 1.
-- Every CLI call first sends a `ping` on its own connection. A server with another protocol gives the CLI's
-  own `protocol_mismatch`, exit 1.
+- Each measured pane operation of the CLI first sent a `ping` on its own connection and then the request on a
+  second one. A call whose `ping` fails sends no request, and `status server --json` is itself a `ping`. A
+  server with another protocol gives the CLI's own `protocol_mismatch`, exit 1.
 - `EACCES` on the socket, a partial or non-JSON answer, and a closed connection give Rust debug text on
   stderr (`Error: Os { code: 13, ... }`, `Error: Custom { ... }`), not JSON.
 - The CLI has no timeout of its own: a server that never answers keeps the CLI waiting. AO's per-call limit
@@ -236,17 +240,19 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
   lifecycle calls `pane process-info --pane <session name>`. herdr answers `pane_not_found` for any malformed
   ID.
 
-The fix is the "Herdr 0.9.5 fit" round of RH design r5 (§4 to §6, not built).
+The fix is the "Herdr 0.9.5 fit" round of RH design r6 (not built).
 
 **`pane read --source recent-unwrapped`.** **0.8.0:** empty for a pane with no detected agent, so `getOutput`
-fell back to `visible`. **0.9.5:** it returns the shell text of such a pane; the fallback now runs only on an
-error. The result is the same.
+fell back to `visible`. **0.9.5:** it returned the shell text of such a pane in the measured case, so the
+fallback runs less often. `getOutput` still falls back to `visible` on an error or on an empty or
+whitespace-only answer (read from the code).
 
 **IDs.**
 
 - Workspace and pane counters use bijective base 32 with the symbols `123456789ABCDEFGHJKMNPQRSTVWXYZ0` (no
-  `I`, `L`, `O`, `U`; `0` is the digit 32): `w1` to `w9`, `wA` to `wZ`, `w0`, `w11`, and so on; panes
-  `<workspace>:p1`, `:p2`, ... per workspace. IDs are case-sensitive. The 0.8.0 IDs had the same form.
+  `I`, `L`, `O`, `U`; `0` is the digit 32): `w1` to `w9`, `wA` to `wZ`, `w0`, `w11`; panes `<workspace>:p1`,
+  `:p2`, ... `:pZ`, `:p0`, `:p11` per workspace. Measured through `w11` (step 1) and `p13` (r6); longer IDs are
+  an extrapolation of the same rule. IDs are case-sensitive. The 0.8.0 IDs had the same form.
 - A terminal ID is `term_` + 13 hex digits of the creation time in microseconds + the terminal counter of
   the server run in hex.
 - **Within one server run herdr reuses no workspace or pane ID.**
@@ -255,9 +261,10 @@ error. The result is the same.
   closed workspaces above it come back: a new AO session got the pane ID of a closed one (step 1 §5.3, §5.4).
   AO stayed right because every caller checks the terminal ID first.
 - **After a live handoff** (the API `server.live_handoff`, measured; `herdr update --handoff` names the same
-  handoff in its usage text, not run): a new server process serves the same socket and keeps every pane ID
-  and every pane's shell process, but **every terminal ID changes** (RH design r5 §2.3). AO compares terminal IDs, so after a handoff it reads every running session
-  as gone. Read from the code, with the path that step 1 measured after a restart (§3.3, §3.4, §3.7): `ao
+  handoff in its usage text, not run): a new server process serves the same socket path with a new listening
+  socket. In the two measured handoffs (one shell-only pane each, r5 and r6) the pane kept its ID and its
+  shell process, but **its terminal ID changed**. AO compares terminal IDs, so after a handoff it would read
+  every running session as gone. Read from the code, with the path that step 1 measured after a restart (§3.3, §3.4, §3.7): `ao
   status` shows `exited`, the lifecycle writes `killed` after its bound, and `ao send` refuses. Nothing is
   closed. AO was not run through a handoff. Do not run a live handoff while AO Herdr sessions run.
 
@@ -332,12 +339,22 @@ once.
 - **0.9.5: the group close.** `workspace close` of a primary workspace that has a linked worktree workspace
   (made with `herdr worktree create`) fails with `workspace_group_close_required` (exit 1) and closes nothing;
   `--group` (`close_group: true` in the API) closes the whole group. An AO workspace is not linked and closes
-  without `--group`, unless someone runs `herdr worktree create --workspace <AO workspace>`. No close removed a
-  git worktree or a branch (step 1 §6.1). AO must never pass `--group`: it would close the operator's linked
+  without `--group`, unless someone runs `herdr worktree create --workspace <AO workspace>`. herdr refuses that
+  for a worker workspace, whose directory is a linked git worktree (`linked_worktree_source`, r6). It accepts
+  it for a workspace in the main checkout (r6), and an orchestrator in `orchestratorWorkspaceMode: project`
+  runs there (read from the code). No close removed a git worktree or a branch (step 1 §6.1, r6). AO must never pass `--group`: it would close the operator's linked
   workspaces.
-- **0.9.5: closing the only pane.** A `pane close` of the only pane of a workspace closes the pane and the
-  workspace at once, with `ui.confirm_close` on or off; the API never asks (step 1 §6.3). `confirm_close` is a
-  TUI setting.
+- **0.9.5: closing the only pane.** A `pane close` of the only pane of a plain workspace closes the pane and
+  the workspace at once, with `ui.confirm_close` on or off; the API never asks (step 1 §6.3). `confirm_close`
+  is a TUI setting. **Exception:** for the only pane of a primary workspace that has a linked worktree
+  workspace, `pane.close` answers `confirmation_required` ("closing this pane would close a worktree group")
+  and closes nothing (r6, `r6_e_nm1_log`). herdr refuses `worktree create` from a workspace whose directory is
+  a linked git worktree (`linked_worktree_source`), so an AO worker workspace cannot become such a primary.
+- **0.9.5: a shell that exits.** When the shell of the only pane exits, herdr removes the pane and the
+  workspace (r6, `r6_g_proc_domain_log`).
+- **0.9.5: what a pane close ends.** `pane close` sends `SIGHUP`, then `SIGTERM`, then `SIGKILL` (about 0.27 s
+  apart) to the processes of the pane shell's session, also to a background job that ignores `HUP` and
+  `TERM`. A process that left the session (`setsid`) gets no signal and keeps running (r6, `r6_i_*`).
 - **0.9.5: errors on stderr** (§5a): AO's liveness and process reads do not see `pane_not_found` or
   `server_not_running` yet.
 - **0.9.5: a live handoff** changes every terminal ID, and AO then reads every running session as gone (§5a).

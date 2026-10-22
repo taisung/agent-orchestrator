@@ -1,0 +1,8 @@
+read_after_stop_connected: {"server": 660001, "peer_cred": 660001, "fd_link": "socket:[28962599]", "proc_net_unix": ["0000000000000000: 00000003 00000000 00000000 0001 03 28962599"]}
+read_after_stop_after_stop: {"stop_exit": 0, "server_now": {"error": "FileNotFoundError errno=2"}, "fd_link": "socket:[28962599]", "proc_net_unix": ["0000000000000000: 00000002 00000000 00000000 0001 03 28962599"]}
+read_after_stop_result: {"read": "EOF"}
+server_fread_started: {"strace_pid": 669208, "herdr_pid": 669211, "lc": {"file": [66309, 121256363], "is_socket": true, "own": true, "listen": ["28956959"], "connected_entries": 0}}
+write_after_stop_connected: {"server": 669211, "peer_cred": 669211, "fd_link": "socket:[28962609]", "proc_net_unix": ["0000000000000000: 00000003 00000000 00000000 0001 03 28962609"]}
+write_after_stop_after_stop: {"stop_exit": 0, "server_now": {"error": "FileNotFoundError errno=2"}, "fd_link": "socket:[28962609]", "proc_net_unix": ["0000000000000000: 00000002 00000000 00000000 0001 03 28962609"]}
+write_after_stop_result: {"write": "BrokenPipeError errno=32", "read": "EOF"}
+server_fwrit_started: {"strace_pid": 669301, "herdr_pid": 669304, "lc": {"file": [66309, 121256363], "is_socket": true, "own": true, "listen": ["28962630"], "connected_entries": 0}}

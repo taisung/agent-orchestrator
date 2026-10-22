@@ -1,0 +1,1 @@
+h_exec_bash: {"pane": "w7:p1", "shell": 696859, "before": {"comm": "sh", "state": "S", "ticks": "20297104"}, "after": {"comm": "bash", "state": "S", "ticks": "20297104"}, "process_info_shell_pid_after": 696859, "foreground_after": [[696859, "bash"]]}

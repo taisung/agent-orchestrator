@@ -1,0 +1,6 @@
+server: {"strace_pid": 811557, "herdr_pid": 811572}
+i_before_close: {"pane": "w1:p1", "shell": 812747, "shell_stat": {"state": "S", "ppid": "811572", "pgrp": "812747", "session": "812747", "ticks": "20369957"}, "session_members": [[812747, "S", "812747"], [812841, "S", "812841"], [812843, "S", "812843"]]}
+i_pane_close: {"id":"aohd3","result":{"type":"ok"}}
+i_after_close: {"shell_stat": {"error": "FileNotFoundError errno=2"}, "members_now": {"812747": {"error": "FileNotFoundError errno=2"}, "812841": {"error": "FileNotFoundError errno=2"}, "812843": {"error": "FileNotFoundError errno=2"}}, "session_scan_now": []}
+i_survivors: []
+i_server_stop: {"exit": 0, "server_now": {"error": "FileNotFoundError errno=2"}}
