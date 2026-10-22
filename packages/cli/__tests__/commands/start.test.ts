@@ -1550,6 +1550,87 @@ describe("stop command — the stop runs in a detached process (defect B)", () =
     await run;
   });
 
+  /** The progress note of a detached stop that still runs after 30 s. */
+  const STILL_RUNS = (): string =>
+    "ao stop: the stop still runs in the detached process (PID 4321) after 30 s; " +
+    `Ctrl-C leaves it running; its output: ${stdoutLog} and ${stderrLog}\n`;
+
+  it("a stop that still runs after 30 s: one note names the PID and the logs, and the wait goes on", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finish = runningDetachedStop();
+      const run = program.parseAsync(["node", "test", "stop"]);
+      writeFileSync(stderrLog, "- Stopping orchestrator session\n");
+
+      await vi.advanceTimersByTimeAsync(29_900);
+      expect(writtenToStderr()).toBe("- Stopping orchestrator session\n");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(writtenToStderr()).toBe("- Stopping orchestrator session\n" + STILL_RUNS());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(writtenToStderr().match(/still runs/g)).toHaveLength(1);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      appendFileSync(stderrLog, "✔ Orchestrator session stopped\n");
+      finish(0);
+      await run;
+      expect(writtenToStderr()).toBe(
+        "- Stopping orchestrator session\n" + STILL_RUNS() + "✔ Orchestrator session stopped\n",
+      );
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a stop that ends before 30 s: no note, and no timer is left to hold this process", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finish = runningDetachedStop();
+      const run = program.parseAsync(["node", "test", "stop"]);
+      await vi.advanceTimersByTimeAsync(29_000);
+      finish(0);
+      await run;
+
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(writtenToStderr()).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the progress note goes to stdout when stderr has an output error", async () => {
+    process.env["AO_SESSION"] = "app-orchestrator";
+    stderrWrite.mockImplementation((...args: unknown[]) => {
+      const callback = args.find((arg) => typeof arg === "function") as
+        | ((err?: Error | null) => void)
+        | undefined;
+      callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      return false;
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finish = runningDetachedStop();
+      const run = program.parseAsync(["node", "test", "stop"]);
+      writeFileSync(stderrLog, "- Stopping orchestrator session\n");
+
+      await vi.advanceTimersByTimeAsync(30_100);
+      expect(written()).toBe(STILL_RUNS());
+      expect(stderrWrite).toHaveBeenCalledTimes(1);
+
+      finish(0);
+      await run;
+      expect(written()).toBe(
+        STILL_RUNS() +
+          `ao stop: could not write the stderr of the detached stop (write EPIPE); all of it is in ${stderrLog}\n`,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a detached process that does not start changes nothing and names the next action", async () => {
     process.env["AO_SESSION"] = "app-orchestrator";
     detachedStop({}, () => Promise.reject(new Error("spawn ao ENOENT")));

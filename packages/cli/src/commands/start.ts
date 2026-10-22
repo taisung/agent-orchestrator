@@ -1246,6 +1246,9 @@ const DETACHED_STOP_RELAY_MS = 100;
 /** After Ctrl-C, how long the caller waits for its note to be written. */
 const DETACHED_STOP_NOTE_MS = 2_000;
 
+/** When the detached stop still runs after this, the caller writes one progress note. */
+const DETACHED_STOP_PROGRESS_MS = 30_000;
+
 /** Writes `data` to `out`; resolves when `out` has taken it, rejects on an output error. */
 function writeOut(out: NodeJS.WriteStream, data: string | Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1315,10 +1318,15 @@ function settledOrAfter(promise: Promise<unknown>, ms: number): Promise<void> {
  * and all the rest after it ends (review r2 M-1: a slow reader gets every
  * byte, and no output is still queued when this returns). The stderr relay
  * comes first, as the stop writes its stderr lines (the spinner, a refusal)
- * before its stdout lines. Resolves with its exit code (null after a
- * signal); rejects when it did not start.
+ * before its stdout lines. When the stop still runs after
+ * DETACHED_STOP_PROGRESS_MS, `onStillRunning` runs once. Resolves with its
+ * exit code (null after a signal); rejects when it did not start.
  */
-async function relayDetachedStop(stop: DetachedStop, relays: LogRelay[]): Promise<number | null> {
+async function relayDetachedStop(
+  stop: DetachedStop,
+  relays: LogRelay[],
+  onStillRunning: () => Promise<void>,
+): Promise<number | null> {
   let ended = false;
   const end = stop.done.then(
     () => {
@@ -1328,15 +1336,25 @@ async function relayDetachedStop(stop: DetachedStop, relays: LogRelay[]): Promis
       ended = true;
     },
   );
+  let progressDue = false;
+  const progressTimer = setTimeout(() => {
+    progressDue = true;
+  }, DETACHED_STOP_PROGRESS_MS);
   try {
     for (;;) {
       // A copy that starts after the end reads each log to its last byte.
       const last = ended;
       for (const relay of relays) await relay.copy();
       if (last) break;
+      // Between two passes, so the note does not split a relayed line.
+      if (progressDue && !ended) {
+        progressDue = false;
+        await onStillRunning();
+      }
       await settledOrAfter(end, DETACHED_STOP_RELAY_MS);
     }
   } finally {
+    clearTimeout(progressTimer);
     relays.forEach((relay) => relay.close());
   }
   return await stop.done;
@@ -1361,7 +1379,10 @@ async function relayDetachedStop(stop: DetachedStop, relays: LogRelay[]): Promis
  * the output, and the exit code stays the detached one. Ctrl-C ends this
  * process (exit 130) as soon as its note is written: the stop goes on, the
  * note names the detached PID and the logs, and output that a slow reader has
- * not taken yet is dropped (the logs keep it).
+ * not taken yet is dropped (the logs keep it). The wait has no deadline, as
+ * the result of the stop is not known before it ends: when the stop still
+ * runs after DETACHED_STOP_PROGRESS_MS, this process writes one note that
+ * names the detached PID and the logs, and that Ctrl-C leaves the stop running.
  */
 async function stopInDetachedProcess(
   config: OrchestratorConfig,
@@ -1400,10 +1421,24 @@ async function stopInDetachedProcess(
   try {
     const stderrRelay = logRelay(stop.stderrLog, process.stderr);
     const stdoutRelay = logRelay(stop.stdoutLog, process.stdout);
+    const stillRunning = async (): Promise<void> => {
+      const out =
+        stderrRelay.outputError === null
+          ? process.stderr
+          : stdoutRelay.outputError === null
+            ? process.stdout
+            : null;
+      if (!out) return;
+      await writeOut(
+        out,
+        `ao stop: the stop still runs in the detached process${stop.pid ? ` (PID ${stop.pid})` : ""} ` +
+          `after ${DETACHED_STOP_PROGRESS_MS / 1_000} s; Ctrl-C leaves it running; its output: ${logs}\n`,
+      ).catch(() => {}); // The relay finds a broken stream on its next write.
+    };
     let code: number;
     let message = "";
     try {
-      const result = await relayDetachedStop(stop, [stderrRelay, stdoutRelay]);
+      const result = await relayDetachedStop(stop, [stderrRelay, stdoutRelay], stillRunning);
       code = result ?? 1;
       if (result === null) {
         message = `The detached stop was ended by a signal; its output: ${logs}`;
