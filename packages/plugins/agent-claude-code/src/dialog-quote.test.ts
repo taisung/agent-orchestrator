@@ -32,6 +32,14 @@ describe("detectActivity: a quoted numbered list is no dialog (m-1)", () => {
     expect(agent.detectActivity(quote)).toBe("active");
   });
 
+  it("reads a quote whose message starts above the top of the screen as the rows without the list", () => {
+    // The `●` row of the message is above the captured rows: only the missing
+    // rule row tells the quote from a dialog.
+    const text = "  The reply goes on, and its first row is above the screen:\n";
+    expect(agent.detectActivity(text)).toBe("active");
+    expect(agent.detectActivity(`${text}  ❯ 1. Red\n    2. Blue\n`)).toBe("active");
+  });
+
   it.each([
     ["a message quotes a list", ["● Here is an example:"], ["  ❯ 1. Red", "    2. Blue"]],
     [
