@@ -3,10 +3,17 @@
  * real 2.1.304 to 2.1.307 screens of `agent-claude-code/src/__fixtures__/`.
  * The idle wait and the verify loop of `send.ts` are the loop of every agent
  * except Codex; only the plugin's `detectActivity` reads the screens. tmux is
- * mocked; every key that the command sends is kept in `keys` in order.
+ * mocked; every key that the command sends is kept in `keys` in order. The
+ * last describe sends to Gemini and OpenCode panes with their real plugins.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import claudeCodePlugin from "@aoagents/ao-plugin-agent-claude-code";
+import geminiPlugin from "@aoagents/ao-plugin-agent-gemini";
+import opencodePlugin from "@aoagents/ao-plugin-agent-opencode";
+import {
+  REAL_DIALOG_FORM1_80_S20,
+  REAL_DIALOG_PERMISSION_80_S20,
+} from "../../../plugins/agent-opencode/src/__fixtures__/panes-2.0.31.js";
 import IDLE_BYPASS_307 from "../../../plugins/agent-claude-code/src/__fixtures__/claude-2.1.307-idle-bypass.txt?raw";
 import IDLE_PASTE_HINT_307 from "../../../plugins/agent-claude-code/src/__fixtures__/claude-2.1.307-idle-paste-hint.txt?raw";
 import RUNNING_01_306 from "../../../plugins/agent-claude-code/src/__fixtures__/claude-2.1.306-running-01.txt?raw";
@@ -67,6 +74,8 @@ const PROCESSING = "Message sent and processing";
 const NOT_CONFIRMED = "Message sent — could not confirm it was received";
 const REFUSED =
   "Timeout waiting for claude-1: session is waiting for interactive input; not sending.";
+const WAITS_FOR_ANSWER =
+  "Message sent — the pane waits for an answer: check claude-1 (tmux pane =claude-1:)";
 
 let program: Command;
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -79,9 +88,9 @@ let screens: string[];
 let lines: Array<[string, number, number]>;
 let start: number;
 
-function claudeSession(): Record<string, unknown> {
+function claudeSession(id = "claude-1", agent = "claude-code"): Record<string, unknown> {
   return {
-    id: "claude-1",
+    id,
     projectId: "my-app",
     status: "working",
     activity: "idle",
@@ -89,11 +98,11 @@ function claudeSession(): Record<string, unknown> {
     issueId: null,
     pr: null,
     workspacePath: null,
-    runtimeHandle: { id: "claude-1", runtimeName: "tmux", data: {} },
+    runtimeHandle: { id, runtimeName: "tmux", data: {} },
     agentInfo: null,
     createdAt: new Date(),
     lastActivityAt: new Date(),
-    metadata: { agent: "claude-code" },
+    metadata: { agent },
   };
 }
 
@@ -249,5 +258,119 @@ describe("ao send to a Claude Code 2.1.304 to 2.1.307 pane (real screens)", () =
     expect(linesWithKeys()).toEqual([[NOT_CONFIRMED, 5]]);
     expect(keys).toEqual([...SEND, ENTER, ENTER]);
     expect(logSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the verify loop: a pane that waits for an answer gets a line of its own and no key", () => {
+  it.each([
+    ["claude-2.1.304-dialog-t1-01_before.txt", DIALOG_T1_304],
+    ["claude-2.1.304-dialog-t5-00_dialog_open.txt", DIALOG_T5_OPEN_304],
+    ["claude-2.1.304-dialog-t5-paste3-03_verify1.txt", DIALOG_T5_PASTE3_304],
+  ])(
+    "prints the line for the dialog %s after a --no-wait send, with no retry Enter",
+    async (_name, dialog) => {
+      screens = [dialog];
+
+      await send("--no-wait", "claude-1", MESSAGE);
+
+      expect(linesWithKeys()).toEqual([[WAITS_FOR_ANSWER, 3]]);
+      expect(keys).toEqual(SEND);
+    },
+  );
+
+  it("prints the line when a dialog shows at the first check of a regular send", async () => {
+    // Idle at the idle wait, then the dialog that the message opened.
+    screens = [IDLE_BYPASS_307, DIALOG_T1_304];
+
+    await send("--timeout", "30", "claude-1", MESSAGE);
+
+    expect(linesWithKeys()).toEqual([[WAITS_FOR_ANSWER, 3]]);
+    expect(keys).toEqual(SEND);
+  });
+
+  it("idle, then a dialog: the idle check keeps its retry Enter, the dialog check sends no key", async () => {
+    // --no-wait: check 1 reads the idle screen (the retry Enter of 48f500af
+    // for a screen that is not active), checks 2 and 3 would read the dialog.
+    screens = [IDLE_BYPASS_307, DIALOG_T1_304];
+
+    await send("--no-wait", "claude-1", MESSAGE);
+
+    expect(linesWithKeys()).toEqual([[WAITS_FOR_ANSWER, 4]]);
+    expect(keys).toEqual([...SEND, ENTER]);
+  });
+
+  it("prints the line for a dialog at the last check, after two retry Enters to an idle screen", async () => {
+    screens = [IDLE_BYPASS_307, IDLE_BYPASS_307, DIALOG_T5_PASTE3_304];
+
+    await send("--no-wait", "claude-1", MESSAGE);
+
+    expect(linesWithKeys()).toEqual([[WAITS_FOR_ANSWER, 5]]);
+    expect(keys).toEqual([...SEND, ENTER, ENTER]);
+  });
+
+  it.each([
+    ["REAL_DIALOG_PERMISSION_80_S20", REAL_DIALOG_PERMISSION_80_S20],
+    ["REAL_DIALOG_FORM1_80_S20", REAL_DIALOG_FORM1_80_S20],
+  ])(
+    "sends no retry Enter to an OpenCode pane that reads waiting_input (real 2.0.31 capture %s)",
+    async (_name, dialog) => {
+      const agent = opencodePlugin.create();
+      expect(agent.detectActivity(dialog)).toBe("waiting_input");
+      mockAgentRef.current = agent;
+      mockSessionManager.get.mockResolvedValue(claudeSession("oc-1", "opencode"));
+      screens = [dialog];
+
+      await send("--no-wait", "oc-1", "hello");
+
+      expect(linesWithKeys()).toEqual([
+        ["Message sent — the pane waits for an answer: check oc-1 (tmux pane =oc-1:)", 3],
+      ]);
+      expect(keys).toEqual([
+        ["send-keys", "-t", "=oc-1:", "C-u"],
+        ["send-keys", "-t", "=oc-1:", "-l", "hello"],
+        ["send-keys", "-t", "=oc-1:", "Enter"],
+      ]);
+    },
+  );
+
+  it("sends no retry Enter to a Gemini pane that reads waiting_input (derived approval prompt)", async () => {
+    // No real Gemini capture is in the repo: the screen is the one of the
+    // Gemini plugin test for an approval prompt.
+    const prompt = "Do you approve this?\n(y)es (n)o";
+    const agent = geminiPlugin.create();
+    expect(agent.detectActivity(prompt)).toBe("waiting_input");
+    mockAgentRef.current = agent;
+    mockSessionManager.get.mockResolvedValue(claudeSession("gem-1", "gemini"));
+    screens = [prompt];
+
+    await send("--no-wait", "gem-1", "hello");
+
+    expect(linesWithKeys()).toEqual([
+      ["Message sent — the pane waits for an answer: check gem-1 (tmux pane =gem-1:)", 3],
+    ]);
+    expect(keys).toEqual([
+      ["send-keys", "-t", "=gem-1:", "C-u"],
+      ["send-keys", "-t", "=gem-1:", "-l", "hello"],
+      ["send-keys", "-t", "=gem-1:", "Enter"],
+    ]);
+  });
+
+  it("keeps the queued line, the processing line and the retry rules for screens that do not wait", async () => {
+    const queued = IDLE_BYPASS_307.replace(
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent",
+      "  Press up to edit queued messages",
+    );
+    expect(queued).not.toBe(IDLE_BYPASS_307);
+    screens = [queued];
+    await send("--no-wait", "claude-1", MESSAGE);
+    expect(linesWithKeys()).toEqual([["Message queued (session finishing previous task)", 3]]);
+    expect(keys).toEqual(SEND);
+
+    keys = [];
+    lines = [];
+    screens = [IDLE_BYPASS_307, RUNNING_DIFFPANEL_306];
+    await send("--no-wait", "claude-1", MESSAGE);
+    expect(linesWithKeys()).toEqual([[PROCESSING, 4]]);
+    expect(keys).toEqual([...SEND, ENTER]);
   });
 });

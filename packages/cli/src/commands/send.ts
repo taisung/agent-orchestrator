@@ -61,10 +61,6 @@ async function resolveSessionContext(sessionName: string): Promise<{
   };
 }
 
-function isActive(agent: Agent, terminalOutput: string): boolean {
-  return agent.detectActivity(terminalOutput) === "active";
-}
-
 function hasQueuedMessage(terminalOutput: string): boolean {
   return terminalOutput.includes("Press up to edit queued messages");
 }
@@ -409,11 +405,24 @@ export function registerSend(program: Command): void {
           return;
         }
 
-        // Verify delivery with retries
+        // Verify delivery with retries. At each check the agent's
+        // detectActivity goes first: a pane that waits for an answer (a
+        // dialog, a permission prompt) gets a line of its own and no key,
+        // because an Enter there answers it. Every other screen keeps the
+        // rules below.
         for (let attempt = 1; attempt <= 3; attempt++) {
           await sleep(2000);
           const output = await captureOutput(10);
-          if (isActive(agent, output)) {
+          const state = agent.detectActivity(output);
+          if (state === "waiting_input") {
+            console.log(
+              chalk.yellow(
+                `Message sent — the pane waits for an answer: check ${session} (tmux pane ${pane})`,
+              ),
+            );
+            return;
+          }
+          if (state === "active") {
             console.log(chalk.green("Message sent and processing"));
             return;
           }
