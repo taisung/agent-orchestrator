@@ -279,11 +279,13 @@ Limits of the status-block rule, with no real capture to check them:
 
 - A status row that wraps in a narrow pane, or a queued message that Codex draws between the status
   block and the composer, puts a row of another kind into the block. The pane then reads as idle: the
-  idle wait sends at once, `recordActivity` records `idle`, and the send prints "could not confirm",
-  never "processing". The tests do not cover these layouts.
+  idle wait sends at once, `recordActivity` records `idle`, and the send never prints "processing" (it
+  prints "could not confirm", or "not submitted" when the composer holds the message). The tests do not
+  cover these layouts.
 - A transcript row in the status-row form, followed by at most two `└` rows and at most two blank rows
   directly above the composer, reads as a running turn. The parser cannot tell it from a real status
-  block. No real idle capture has this layout: a finished turn ends with a `Worked for` row.
+  block. No real capture has this layout: in the two real idle captures, a `Worked for` row ends the
+  finished turn.
 
 ---
 
