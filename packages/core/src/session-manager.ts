@@ -4425,10 +4425,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // crash). Same-ID R2a (N-2): only a confirmed stop (destroyed or absent)
     // lets the restore go on. Review r1 (M-1): the stop runs before the
     // workspace is recreated, and a refusal removes the archive copy-back of
-    // this restore again while no other operation changed it (review r2,
-    // M-1), so the refused restore leaves the record, the archive and the
-    // workspace as they were. A copy-back that another operation wrote to or
-    // replaced during the stop stays, and the refusal says so.
+    // this restore again while it still holds the values that
+    // releaseCopyBack compares (review r2 and r3, M-1), so a refused restore
+    // with no other operation on the ID leaves the record, the archive and
+    // the workspace as they were. A copy-back where one of those values
+    // changed during the stop, or that another operation replaced, stays,
+    // and the refusal says so.
     if (session.runtimeHandle) {
       const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
       if (!isRuntimeStopConfirmed(stopped)) {
