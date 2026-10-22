@@ -14,6 +14,19 @@
   because `e6695161` has the code of `main`). Branch `review/progress-note-r4` at `3e366a01`, brief
   `.agent_task_r4.md` (copy `brief-review-progress-note-r4-astra.md`), review file
   `development/reviews/start_no_server_review_r4_astra6.md` (uncommitted in its tree).
+  Result 16:11: LAND-WITH-CHANGES, 0 B 0 M 2 m (m-1: the note's own EPIPE loses the stdout fallback; m-2:
+  a held stdout holds back the note on a free stderr; and the "does not split a relayed line" comment is
+  wrong); gates PASS on `3e366a01` (3599 passed, 1 expected fail, 29 skipped; red 0/16/6/0). On `main` as
+  `2bc6bf50`. Owner "1": fix first with a new worker. ao-66 (Claude Code Opus 5.5, spawned 16:19) fixes m-1,
+  m-2 and the comment on `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it`, moved to
+  `3e366a01` before the brief (copy `brief-aofork-progress-note-fix.md`). Next: ao-64 re-checks (r5), then
+  land the note and the fix together (`e08df7a3`, `3e366a01` and ao-66's commits), build, restart, push,
+  each on the owner's word.
+- 16:13 ao-63 design checkpoint read and accepted with note 1
+  (`~/.cache/agent-skills-haiku55-arc/note-ao-63-relaunch-1.md`): the SessionStart hook records only the
+  pane's own agent; a sound record on every failure after the claim; the CLI `ao send` pastes into a live
+  pane (`send.ts:349-360`), so in the `/exit` gap a watcher line runs as a shell command; the in-pane case
+  keeps a resident `ao` process.
 - Next Priorities 2: ao-63 authors `ao session relaunch` on the new branch `feat/session-relaunch` at
   `3e366a01`, brief `.agent_task_relaunch.md` (copy `brief-aofork-session-relaunch.md`). It writes a design
   checkpoint (`running|none|relaunch design ...`) and goes on without a wait; read it when the watcher
@@ -67,6 +80,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | ao-63 | Claude Code Opus 5.5, working since 16:01 on the relaunch round, context 18%. Branch `feat/session-relaunch` at `3e366a01` (made 16:00; the old branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` stays at `3e366a01`): `dc7815d2..e6695161` landed, `e08df7a3` and `3e366a01` not landed | author of the relaunch round; report `.agent_report.md` (copies `reports/ao-63_start_no_server.report.md`, and `reports/ao-63_progress_note.report.md` with the addendum, 16:00) |
 | ao-64 | Codex gpt-6-astra xhigh, `fast` mode (the owner turned it on), working since 16:01 on review r4 and gates, context 15%. Branch `review/progress-note-r4` at `3e366a01` (made 16:00; `validate/main-start-no-server` stays at `de7c1bfc`). Its untracked copy of the gates file (equal to `main`) went to `backup/ao-64-reviews/` | reviewer of the progress note, then of the relaunch round |
 | ao-65 | Claude Code Opus 5.5, spawned 15:59, working since 16:01 on the Herdr 0.9.5 live check. Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` at `d5b6a180` | Herdr step 1; no code, no commit |
+| ao-66 | Claude Code Opus 5.5, spawned 16:19, working since 16:20 on the progress note fix. Branch `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it`, moved from `d5b6a180` (no commits) to `3e366a01` with `reset --keep` | author of the note fix; ao-64 re-checks it |
 
 **Lifecycle workers (now)**: 2087525 (this config) and 2087614 (agent-skills), restarted 2026-10-22 14:35 EDT
 by exact PID on the build of `213fd5e9` (source `de7c1bfc`). First polls 14:36:12 and 14:36:14: 0 failures,
@@ -77,13 +91,15 @@ orchestrators run `ao start`. The global OpenCode service does not run.
 
 **Watchers**: one runs since 2026-10-22 16:00:02: PID 2750995, state `~/.cache/fleet_watch/aofork-2026-10-22b`,
 watching ao-63, ao-64 and ao-65, notify and fallback `ao-orchestrator`, `-i 60 -s 20`, preseeded. The three
-briefs are sentinel-only (no `ao send` from the workers). Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
+briefs are sentinel-only (no `ao send` from the workers). A second one since 16:20:23: PID 3006099, state
+`~/.cache/fleet_watch/aofork-2026-10-22c`, watching ao-66 only, same options. Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
 -o ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20
 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop with TERM only, then check that the
 process ended.
 
-**Router log** (`development/artifacts/model_router_log/log.csv`): 3 open rows since 16:05: ao-64 (reviewer,
-review r4 and gates), ao-63 (author, relaunch round), ao-65 (investigator, Herdr live check). The ao-63 rows (rounds 1 to 3)
+**Router log** (`development/artifacts/model_router_log/log.csv`): open rows: ao-63 (author, relaunch
+round, 16:05), ao-65 (investigator, Herdr live check, 16:05), ao-66 (author, note fix, 16:21). The ao-64 r4 row
+is closed (`in-review`, 1601962 in, 23727 out). The ao-63 rows (rounds 1 to 3)
 and the ao-64 review rows read `landed=in-review`; the ao-64 gates row reads `yes`. Close a row with
 `router_log.py close ... --landed in-review` and token counts: Codex from the last `total_token_usage` of
 the rollout (ao-64: `~/.codex/sessions/2026/10/22/rollout-2026-10-22T12-06-42-01a1645d-*.jsonl`), Claude from
