@@ -2,26 +2,28 @@
 
 **Session**: `ao-orchestrator` (Claude Code, Opus 5.5), primary checkout, `main`. Transcript
 `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl`.
-**Period**: from the handover close of 2026-10-21 11:40 EDT (`567f75be`) to the handover of 2026-10-22
-10:06 EDT (`116cf549`) and its close steps.
+**Period**: from the handover close of 2026-10-21 11:40 EDT (`567f75be`) to the final handover of 2026-10-22
+after the F-6 landing (pushed 10:45 EDT) and its close steps.
 **State at the end**: [HANDOVER.md](HANDOVER.md). Durable records: [TODO_TRACKING.md](TODO_TRACKING.md)
 (What Landed, D-8, Known Issues).
 
 ## 1. Result
 
-- Five code rounds landed on `main`, each after a cross-family review with the verdict LAND-SAFE, and each
+- Six code rounds landed on `main`, each after a cross-family review with the verdict LAND-SAFE, and each
   is built, live in both lifecycle workers and pushed: same-ID R1, same-ID R2a, the Codex send fix, the
-  claude-code `detectActivity` round and same-ID R4.
-- `main` grew by 169 commits (`567f75be..116cf549`): 69 worker commits (tests, fixes, docs; 2 of them
-  `docs(development)` commits inside the R2a range) by clean cherry-pick, and 100 orchestrator commits
-  (`docs(development): ...`: reviews, designs, records, the router log).
-- The full test run grew from 2938 passed (gates of R1) to 3464 passed, 1 expected fail, 29 skipped (gates
-  of `main` after R4). The same-ID red defects fell to R1 0, R2 16, R3 6, R4 0 (from 17, 8, 6, 11 in
+  claude-code `detectActivity` round, same-ID R4, and the claude-code F-6 and m-1 round.
+- Up to the first handover, `main` grew by 169 commits (`567f75be..116cf549`): 69 worker commits (tests,
+  fixes, docs; 2 of them `docs(development)` commits inside the R2a range) by clean cherry-pick, and 100
+  orchestrator commits (`docs(development): ...`: reviews, designs, records, the router log). The F-6
+  landing added 5 worker commits after it.
+- The full test run grew from 2938 passed (gates of R1) to 3541 passed, 1 expected fail, 29 skipped (gates
+  of `main` after F-6). The same-ID red defects fell to R1 0, R2 16, R3 6, R4 0 (from 17, 8, 6, 11 in
   ao-48's first set; ao-52 added more R2 and R4 reproducers on the way).
-- The same-ID design went through revisions r2 to r8 and reviews r1 to r7. All owner decisions OD-1 to
-  OD-29 are recorded (TODO D-8). Design r8 of RW and R2b-2 is in re-check at the end.
-- Two reviews run at the end and report through watchers: F-6 and m-1 of the claude-code plugin (ao-60)
-  and design r8 (ao-62).
+- The same-ID design went through revisions r2 to r8 and reviews r1 to r8. All owner decisions OD-1 to
+  OD-29 are recorded (TODO D-8). Re-check r8 found RW and R2b-2 SOUND-WITH-CHANGES (3 M); design r9 waits
+  for the owner's word.
+- The owner updated `herdr` from 0.8.0 to 0.9.5 and set Herdr (a live check, then the RH round) as the
+  focus of the next session (answer "18a").
 
 ## 2. What landed
 
@@ -34,6 +36,7 @@ Details, file lists and every measured number are in [TODO_TRACKING.md "What Lan
 | `ao send` to a Codex pane | `2c5c4f88..e3be12a9` (15 commits) | ao-54 (Opus 5.5) | ao-56 (Codex gpt-6-astra) | 4 / 4 | "processing" only for a real running status block; no key after the message; long messages as a bracketed paste (`paste-buffer -p`, for every agent) |
 | claude-code `detectActivity` | `63932b9a..9938d5d1` (4 commits) | ao-54 | ao-56 | 1 (with Amendment 1) / 1 | reads the input box, not words; a dialog is `waiting_input`; the verify loop sends no Enter into a dialog; a regular send to an idle pane sends at once |
 | same-ID R4, strict reads | `32c687b2..56a385fb` (21 commits) | ao-55 | ao-57 (r1), ao-60 (r2 to r4) | 4 / 4 | 11 reads answer "gone" only for an exact, well-formed absence form (table "Absence forms of the R4 reads" in `docs/DEVELOPMENT.md`); every other answer rejects as unknown |
+| claude-code F-6 and m-1 | `3c16e89b..a20883a0` (5 commits) | ao-54 | ao-60 | 1 (one block, owner "go 1a") / 1 | `findClaudeProcess` uses R4's absence forms, so a malformed `ps`, tmux or Herdr answer no longer makes a live Claude Code session `killed`; a quoted numbered list is no dialog |
 
 Also landed, in `~/agent-skills`: the session helpers of ao-49 as `f121d03` (fast-forward, pushed on the
 owner's word).
@@ -51,6 +54,7 @@ check, and the push. Every step after the review waited for the owner's word.
 | 2026-10-21 22:37:15 to :21 | R2a and the Codex send fix (combined gates `dbbaf472`: 3225 passed, 11 expected fail) | 3624110 → 1294181, 3626937 → 1294364 | 22:41 to 22:59 on disposable ao-58 (Codex 0.163.0, gpt-6-luna) and ao-59 (Claude Code 2.1.307, Haiku 5.5): Codex PASS; Claude Code found the old footer pattern (fixed by the next round) |
 | 2026-10-22 07:46:03 to :10 | claude-code round (gates `ce93ba67`: 3269 passed) | 1294181 → 2002324, 1294364 → 2002831 | 07:47 to 07:56 on disposable ao-61 (Claude Code 2.1.308, Sonnet 5.5): PASS |
 | 2026-10-22 10:00:04 to :11 | R4 (gates `193d2c9e`: 3464 passed) | 2002324 → 3830765, 2002831 → 3830929 | 10:02: 5 polls each, 0 failures, health `ok`, no live session `killed` or `exited` |
+| 2026-10-22 10:43:19 to :26 | F-6 and m-1 (gates `33a2c74c`: 3541 passed) | 3830765 → 65891, 3830929 → 68422 | 4 polls each, 0 failures, health `ok`; the Claude Code sessions read `working` or `stuck` |
 
 `WRAPPER_VERSION` stayed 0.2.6, and `~/.ao/bin` did not change at any build.
 
@@ -65,6 +69,8 @@ check, and the push. Every step after the review waited for the owner's word.
 | 2026-10-22 09:02:02 | `407ee00d..b97a2500` | docs: design r7, reviews, answers "10a" to "14a" | 4 of 4 passed |
 | 2026-10-22 10:03:02 | `b97a2500..511c697e` | R4 (21 commits) and 9 docs commits | 4 of 4 passed (last at 10:09:12) |
 | 2026-10-22 10:06:58 | `511c697e..116cf549` | the handover | 4 of 4 passed (last at 10:17:42) |
+| 2026-10-22 10:18:10 | `116cf549..8ae3efba` | this summary and the first close record | - |
+| 2026-10-22 10:45:23 | `8ae3efba..dee08849` | F-6 and m-1 (5 commits) and 4 docs commits | see HANDOVER close record |
 
 All pushes were fast-forward. No force-push, no PR.
 
@@ -94,8 +100,7 @@ core r5 race tests scope their allows with a test-only `processScope` (OD-29 (a)
 
 ## 6. Sessions
 
-Token counts are the sums of the router log rows (`development/artifacts/model_router_log/log.csv`). The
-rows of ao-60 and ao-62 are still open, so their counts are partial.
+Token counts are the sums of the router log rows (`development/artifacts/model_router_log/log.csv`).
 
 | Session | Agent and model | Work in this session | Input / output tokens | Disposition at the end |
 | --- | --- | --- | --- | --- |
@@ -104,13 +109,13 @@ rows of ao-60 and ao-62 are still open, so their counts are partial.
 | ao-51 | Codex, gpt-6-astra | design reviewer r1 to r6 | 26.2M / 211K | killed 2026-10-22 08:19 (context 90%) |
 | ao-52 | Claude Code, Opus 5.5 | design r2 to r8 | 319.1M / 2.18M | live, waits for the r8 re-check |
 | ao-53 | Codex, gpt-6-astra | R1 reviewer (2 reviews) | 7.3M / 60K | killed 13:48 |
-| ao-54 | Claude Code, Opus 5.5 | Codex send fix (4 rounds), claude-code `detectActivity`, F-6 and m-1 | 166.9M / 948K | live, waits for review r1 |
+| ao-54 | Claude Code, Opus 5.5 | Codex send fix (4 rounds), claude-code `detectActivity`, F-6 and m-1 | 166.9M / 948K | killed by the handover 10:45 |
 | ao-55 | Claude Code, Opus 5.5 | R2a (4 rounds), R4 (4 rounds) | 294.9M / 1.21M | killed by the handover 10:07 |
 | ao-56 | Codex, gpt-6-astra | Codex send and claude-code reviewer, gate runs | 23.0M / 193K | killed 08:19 |
 | ao-57 | Codex, gpt-6-astra | R2a reviewer r1 to r4, R4 review r1 | 18.7M / 137K | killed 08:19 (context 90%) |
 | ao-58, ao-59, ao-61 | Codex gpt-6-luna; Claude Code Haiku 5.5; Claude Code Sonnet 5.5 | disposable live-check sessions | not logged | killed after each check |
-| ao-60 | Codex, gpt-6-astra | R4 reviewer r2 to r4, gates of `main` after R4, F-6 review r1 | 13.0M / 106K (partial) | live, review running |
-| ao-62 | Codex, gpt-6-astra | design reviewer r7, re-check r8 | 4.6M / 33K (partial) | live, review running |
+| ao-60 | Codex, gpt-6-astra | R4 reviewer r2 to r4, gates of `main` after R4 and after F-6, F-6 review r1 | 18.4M / 149K | live, idle |
+| ao-62 | Codex, gpt-6-astra | design reviewer r7, re-check r8 | 10.2M / 65K | live, idle |
 
 Every author was Claude Code on Opus 5.5 and every reviewer was Codex on gpt-6-astra (cross-family). Every
 brief forbade push and PR, protected the lifecycle PIDs, and required `env -i` with a fake `HOME`, private
@@ -145,16 +150,16 @@ tmux servers (`env -u TMUX tmux -L <unique>`) and an empty `find -newer <marker>
 
 The full list is in [HANDOVER.md "Open and Blocked Items"](HANDOVER.md). The items of this session:
 
-- F-6 and m-1 of the claude-code plugin (`b97a2500..6ea435a8`): review r1 by ao-60 running.
-- Same-ID design r8 of RW and R2b-2: re-check by ao-62 running; then the owner decides the
-  implementation order of RW, R2b-2 and R2b-1.
-- R4 follow-ups F-1 to F-8 (TODO Known Issues, same-ID entry); F-8 makes codex, gemini and opencode
-  reject a handle with no positive PID, as Claude Code does after F-6.
+- Herdr (the focus of the next session): a live check of AO on 0.9.5, then the RH round. Until RH, `ao`
+  cannot stop a Herdr session (its `stop` answers `unknown`).
+- Same-ID design r9 for re-check r8 M-1 to M-3, on the owner's word.
+- R4 follow-ups F-1 to F-9 (TODO Known Issues); F-8 makes codex, gemini and opencode reject a handle with
+  no positive PID, as Claude Code does after F-6; F-9 is the 5-second `ps` cache of claude-code.
 - Codex send limits L-1 and L-2 and its follow-ups F-1 to F-7
   (`development/reviews/codex_send_idle_review_r4_astra6.md`); claude-code limits L-1 to L-3
   (`development/reviews/claude_detect_activity_review_r1_astra6.md`).
-- The router log rows of the landed rounds of R2a, the Codex send fix, the claude-code round and R4 still
-  read `landed=in-review` (the R1 rows of ao-50 and ao-53 read `5e8fc14b`).
+- The router log rows of the landed rounds of R2a, the Codex send fix, both claude-code rounds and R4
+  still read `landed=in-review` (the R1 rows of ao-50 and ao-53 read `5e8fc14b`).
 
 ## 9. References
 

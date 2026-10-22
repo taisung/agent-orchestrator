@@ -456,6 +456,18 @@ Durable progress record for this fork. Dated events only; the current state live
   Built 10:00:04 to 10:00:11 EDT; lifecycle workers restarted by exact PID (2002324 → 3830765, 2002831 →
   3830929). Live check PASS (10:02 EDT): 5 polls each, 0 failures, health ok; no live session `killed` or
   `exited`. Follow-ups F-1 to F-7 of the R4 reviews; F-8 (a handle with no PID rejects for Claude Code only).
+- `3c16e89b..a20883a0` (2026-10-22, ao-54 Claude Opus 5.5; review by ao-60, Codex gpt-6-astra) - **claude-code
+  strict process check (F-6) and the quoted-list dialog (m-1)** (owner "12a", "go 1a", "17a"):
+  `findClaudeProcess` answers "no process" only for the R4 absence forms (tmux exit 1 with the whole
+  `can't find session: <name>` or `no current target`, a well-formed TTY and `ps` list, `ESRCH` for a stored PID)
+  and rejects every malformed or ambiguous answer, a handle with no PID too; a quoted numbered list with no
+  live input box is no dialog. 4 oracle changes in `index.test.ts` (owner "go 1a"). Review r1 LAND-SAFE (0 B,
+  0 M, 0 m; `claude_strict_process_review_r1_astra6.md`). Clean cherry-pick of `b97a2500..6ea435a8` (5 commits;
+  tree equal to the `git merge-tree` result `d779318c`). Gates of `main` `33a2c74c` PASS (ao-60: 3541 passed, 1
+  expected fail, 29 skipped; red 0/16/6/0; `gates_main_claude_strict_astra6.md`). Built 10:43:19 to 10:43:26
+  EDT; lifecycle workers restarted by exact PID (3830765 → 65891, 3830929 → 68422). Live check PASS: 4 polls
+  each, 0 failures, health ok; the Claude Code sessions read `working` or `stuck`, none `killed` or `exited`.
+  Pushed `8ae3efba..dee08849` at 10:45:23. Follow-ups F-8 and F-9 (Known Issues).
 
 ## Decisions
 
@@ -554,6 +566,9 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   `? for shortcuts`) as idle; read composer text with no `Working` line as unsubmitted; consider
   `paste-buffer -p`; tests from captured 0.163.0 panes. Until then: capture every Codex send, and send one
   bare `Enter` only on your own text.
+  2026-10-22 10:28 EDT (after the fix): a `⚠ weekly limit: 24% left · /status` row between the status row and
+  the composer of ao-60 made the verify loop print `could not confirm it was received` for a message that
+  Codex took at once (limit L-1 of review r4: an unrecognized running layout). Capture after a Codex send.
 - **Feature: `ao session relaunch <id> [--continue]`** (owner 2026-10-21, "2 yes"). Restart the agent
   process in its existing pane with the launch command that `ao` builds at that time, for example to use
   a newer Claude Code version; with `--continue`, a Claude Code session keeps its conversation. Today a
@@ -1316,6 +1331,7 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   Review r1 by ao-60 LAND-SAFE (2026-10-22 10:24 EDT, `claude_strict_process_review_r1_astra6.md`). New
   follow-up F-9 (older code, `agent-claude-code/src/index.ts:508`): the 5-second `ps` cache keeps a
   well-formed negative snapshot for up to 5 s after a process starts or a TTY is reused.
+  LANDED 2026-10-22 as `3c16e89b..a20883a0`, built and live 10:43 EDT (What Landed).
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;

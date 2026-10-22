@@ -1,110 +1,111 @@
 # Handover
 
 **Last Updated**: 2026-10-22
-**Latest Code Commit**: 56a385fb (docs: make rows 3, 4, 9 and 11 of the absence table exact) - the last commit of same-ID R4; built and live since 2026-10-22 10:00 EDT
+**Latest Code Commit**: a20883a0 (test(agents): check the Herdr PID tests against the core they run on) - the last commit of the claude-code F-6 and m-1 round; built and live since 2026-10-22 10:43 EDT
 **Session Summary**: [0012_summary_session_2026_10_21_to_22.md](0012_summary_session_2026_10_21_to_22.md)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
 ## Current Status
 
-Two rounds landed on 2026-10-22, and both are built, live in both lifecycle workers and pushed:
+Three rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
+Landed):
 
-- the claude-code `detectActivity` round, `63932b9a..9938d5d1` (built 07:46 EDT; live check PASS on Claude
-  Code 2.1.308). A regular `ao send` to an idle Claude Code pane now sends at once.
-- same-ID R4, the strict reads, `32c687b2..56a385fb` (21 commits, review r4 LAND-SAFE by ao-60; gates of
-  `main` `193d2c9e` PASS: 3464 passed, 1 expected fail, 29 skipped, red 0/16/6/0). Built 10:00:04 to
-  10:00:11 EDT; lifecycle workers restarted by exact PID (2002324 → **3830765**, 2002831 → **3830929**). Live
-  check PASS 10:02 EDT: 5 polls each, 0 failures, health `ok`, no live session `killed` or `exited`.
+- the claude-code `detectActivity` round, `63932b9a..9938d5d1` (built 07:46 EDT). A regular `ao send` to an
+  idle Claude Code pane sends at once.
+- same-ID R4, the strict reads, `32c687b2..56a385fb` (built 10:00 EDT).
+- the claude-code F-6 and m-1 round, `3c16e89b..a20883a0` (owner "17a"; gates PASS: 3541 passed, 1 expected
+  fail, 29 skipped). Built 10:43:19 to 10:43:26 EDT; lifecycle workers restarted by exact PID (3830765 →
+  **65891**, 3830929 → **68422**). Live check PASS: 4 polls each, 0 failures, health `ok`; the Claude Code
+  sessions read `working` or `stuck`, none `killed` or `exited`. Pushed `8ae3efba..dee08849` at 10:45:23.
 
-`origin/main` = `main` after the last docs push (close record below). CI passed 4 of 4 for the R4 push
-(`511c697e`) and for the handover push (`116cf549`).
+**The owner's focus for the next session is Herdr** (answer "18a"): a live check of AO on Herdr 0.9.5,
+then the RH round (Next Priorities 1). The owner updated `herdr` from 0.8.0 to **0.9.5** at 10:31:34 EDT.
 
-The same-ID arc has R1, R2a and R4 on `main`. Its remaining rounds are RW, R2b-1, R2b-2 (in design), then
-R3a, R3b, RH and RO (later, owner "5b"). Design r8 of RW and R2b-2 is DONE and is in re-check by ao-62.
-The claude-code follow-ups F-6 and m-1 are DONE on a branch (ao-54, `6ea435a8`), and review r1 by ao-60
-found them LAND-SAFE at 10:24 EDT (0 B, 0 M, 0 m); the landing waits for the owner's word. The design
-re-check runs at the handover; its watcher reports to `ao-orchestrator`.
+The same-ID arc has R1, R2a and R4 on `main`. Design r8 of RW and R2b-2 got re-check r8 by ao-62:
+SOUND-WITH-CHANGES for both (0 B, 3 M, 0 m). Design r9 waits for the owner's word (Next Priorities 2).
+No worker runs at the handover.
 
 ## Live Sessions and Worktrees
 
 All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees under
 `/home/taisung/.worktrees/agent-orchestrator/`. Briefs and reports: `~/.cache/agent-skills-haiku55-arc/`.
+Context and Codex weekly limit read at 10:46 EDT.
 
 | Session | State | Disposition |
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`. Transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | a new session continues here |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-52 | Claude Code Opus 5.5, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` at `48c26129`. Design r8 DONE 09:57 EDT: design `development/reviews/same_id_design_r8_opus.md` (on `main`), tests `fe5d6575..48c26129` (4 test commits, not on `main`), report `reports/ao-52_same_id_design_r8.report.md`; router row closed `in-review` | idle; the r8 re-check is done (SOUND-WITH-CHANGES, 3 M): the next step is design r9 on the owner's word. Watcher 2833081 |
-| ao-54 | Claude Code Opus 5.5, branch `feat/claude-strict-process` at `6ea435a8`, base `b97a2500`. F-6 and m-1 DONE 09:53 EDT (5 commits, 5 files +590 -71; owner "go 1a" allowed 4 `index.test.ts` oracle changes); report `reports/ao-54_claude_strict_process.report.md`; router row closed `in-review` | idle; waits for review r1. Watcher 3760585 |
-| ao-60 | Codex `gpt-6-astra` xhigh, branch `review/claude-strict-process` at `6ea435a8`. REVIEW r1 of F-6 and m-1 DONE 10:24 EDT: LAND-SAFE for `b97a2500..6ea435a8` (0 B, 0 M, 0 m); merge with `main` `511c697e` (merge tree `5b039aca`) builds and passes 3541 passed, 1 expected fail, 29 skipped; red 0/16/6/0; new follow-up F-9; review `development/reviews/claude_strict_process_review_r1_astra6.md` (on `main`); router row closed `in-review`; rollout `~/.codex/sessions/2026/10/21/rollout-2026-10-21T23-44-26-01a161b5-cb34-7da3-af23-97acdd286c51.jsonl` | idle; can run the gates of `main` after the F-6 landing. Watcher 2246299 |
-| ao-62 | Codex `gpt-6-astra` xhigh, branch `review/same-id-design-r8` at `48c26129`. RE-CHECK r8 DONE 10:28 EDT: RW SOUND-WITH-CHANGES, R2b-2 SOUND-WITH-CHANGES (0 B, 3 M, 0 m): r7 M-1, M-2, M-3 partly closed, m-1 closed; new M-1 (RW) recovery removes the active record without the directory `fsync` of the archive and of the moved inbox; M-2 (R2b-2) the replacement creation order drops r7's existing-session fence before the launch and copy-back record writes; M-3 (both) the core caller tests reject the required `launchToken`, and all 29 core r8 tests pass with every inbox `fsync` removed; review `development/reviews/same_id_design_review_r8_astra6.md` (on `main`); router row closed `in-review`; context 83% | idle. Watcher 2610857 |
+| ao-52 | Claude Code Opus 5.5, branch `feat/same-id-design-r2-read-agent-task-md-in-your-worktree-and-ex` at `48c26129`. Design r8 DONE 09:57 EDT (design on `main`; tests `fe5d6575..48c26129`, not on `main`; report `reports/ao-52_same_id_design_r8.report.md`). Context 36% | idle; the author of design r9 and of the RH design revision. Watcher 2833081 |
+| ao-60 | Codex `gpt-6-astra` xhigh, branch `validate/main-claude-strict` at `33a2c74c`. F-6 review r1 LAND-SAFE (10:24) and gates of `main` PASS (10:43, `development/reviews/gates_main_claude_strict_astra6.md`); router rows closed. Context 56%, weekly limit 22% left. Rollout `~/.codex/sessions/2026/10/21/rollout-2026-10-21T23-44-26-01a161b5-cb34-7da3-af23-97acdd286c51.jsonl` | idle; knows R4's Herdr rows 8 and 9: a good reviewer for RH. Watcher 2246299 |
+| ao-62 | Codex `gpt-6-astra` xhigh, branch `review/same-id-design-r8` at `48c26129`. Re-check r8 DONE 10:28 (`development/reviews/same_id_design_review_r8_astra6.md`); router row closed. Context 83%, weekly limit 22% left. Rollout `~/.codex/sessions/2026/10/22/rollout-2026-10-22T08-31-13-01a16398-1496-7b53-8d52-9433cae946a1.jsonl` | idle; the reviewer of design r9. Watcher 2610857 |
 
-**Closed by this handover**: ao-55 (author of R2a and R4; R4 is landed). See "Close record" below.
+**Closed by this handover**: ao-55 (R4 landed) and ao-54 (F-6 landed). See "Close record" below.
 
-**Lifecycle workers (now)**: 3830765 (this config) and 3830929 (agent-skills), restarted 2026-10-22 10:00
-EDT by exact PID on the build of `36c4b18b` (source `56a385fb`). Pid files:
+**Lifecycle workers (now)**: 65891 (this config) and 68422 (agent-skills), restarted 2026-10-22 10:43 EDT
+by exact PID on the build of `dee08849` (source `a20883a0`). Pid files:
 `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. The workers of Nexus, VSF and the
 Nexus config of this fork do not run until their orchestrators run `ao start`. The global OpenCode service
 does not run: an `opencode api` call starts one with the caller's environment.
 
 **Watchers** (each watches one session, `-o ao-orchestrator --fallback ao-orchestrator -i 60 -s 20`):
-2833081 ao-52 (`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`), 3760585 ao-54
-(`~/.cache/fleet_watch/ao-codexsend-2026-10-21`), 2246299 ao-60 (`~/.cache/fleet_watch/ao-r4r2-rev-2026-10-21`),
-2610857 ao-62 (`~/.cache/fleet_watch/ao-62`). Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash
-/home/taisung/agent-skills/scripts/fleet_watch.sh -o ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator
---fallback ao-orchestrator -i 60 -s 20 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop
-with TERM only, then check that the process ended.
+2833081 ao-52 (`~/.cache/fleet_watch/ao-sameid-d2-2026-10-21`), 2246299 ao-60
+(`~/.cache/fleet_watch/ao-r4r2-rev-2026-10-21`), 2610857 ao-62 (`~/.cache/fleet_watch/ao-62`). Start form:
+`FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh -o
+ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20
+--preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop with TERM only, then check that the
+process ended.
 
-**Router log** (`development/artifacts/model_router_log/log.csv`): open row ao-60 (gates of `main` after the F-6 landing). Close a row with `router_log.py close ... --landed in-review` and token counts:
-Codex from the last `total_token_usage` of the rollout, Claude from `trial_cost.py opus-5-5=<jsonl>` (input
-= input + cache read + cache creation); subtract the sums of the earlier rows of that session. Eight rows
-of 2026-10-15 still have `landed=pending`.
+**Router log** (`development/artifacts/model_router_log/log.csv`): no open row. Close a row with
+`router_log.py close ... --landed in-review` and token counts: Codex from the last `total_token_usage` of
+the rollout, Claude from `trial_cost.py opus-5-5=<jsonl>` (input = input + cache read + cache creation);
+subtract the sums of the earlier rows of that session. The rows of the rounds landed on 2026-10-21 and
+2026-10-22 (except R1) still read `landed=in-review`; eight rows of 2026-10-15 read `landed=pending`.
 
-**CI**: 4 of 4 workflows passed for `511c697e` (last at 10:09:12 EDT) and for `116cf549` (last at 10:17:42 EDT).
+**Codex**: the global `~/.codex/config.toml` default is gpt-6-astra; pin `--model` on every spawn
+(gpt-6.1-sol stops on lock and race texts, Known Issues traps). The weekly limit of the Codex account was
+22% left at 10:46 EDT: plan the reviews of the next session with that.
 
 **Local branches**: `main`; `i3-r2-pre-rebase` (keep: two commits that `main` has only in rewritten
-form); `review/same-id-design-r7` (kept, see the close record); the four branches of the live sessions
-(above). The close record lists what this handover deleted.
-
-**Codex model**: the global `~/.codex/config.toml` default is gpt-6-astra. Pin `--model` on every spawn;
-gpt-6.1-sol stops on lock and race texts (`cyber_policy`, Known Issues traps).
+form); `review/same-id-design-r7` (kept, see the close record); the branches of the live sessions (above).
 
 ### Close record
 
-- **Push**: `b97a2500..511c697e` at 10:03:00 (R4 and 9 docs commits) and `511c697e..116cf549` at 10:06:57
-  (the handover commit), both fast-forward, owner answer "16c"; CI 4 of 4 passed for each. The summary
-  doc (`1118b876`, owner request) and this close record go out in one more fast-forward docs push.
-- **Watcher retirement** (ao-lifecycle, Session Cleanup): watcher 3845635 (ao-55, state
-  `~/.cache/fleet_watch/ao-sameid-r2a-2026-10-21`) stopped by TERM at 10:07:03; its log ends with
-  `EXIT signal SIGTERM`, its `watch.pid` is removed, and the `grep -Flzx` check of its state found no
-  process. Its escalation "the fleet is unwatched" covers only ao-55; the four other watchers run.
-- **Session cleanup**: `ao session cleanup -p agent-orchestrator` found no sessions to clean up. ao-55 was
-  killed at 10:07:20 with `ao session kill`: record archived as `ao-55_2026-10-22T14-07-20-702Z`, tmux
-  session and worktree removed. Before the kill: only `.agent_report.md` and `.agent_task.md` were
-  untracked, its last report is saved as `reports/ao-55_same_id_r4_round4.report.md`, no client was attached.
+- **Pushes** (all fast-forward, owner answers "16c" and "17a"): `b97a2500..511c697e` at 10:03:00 (R4 and 9
+  docs commits), `511c697e..116cf549` at 10:06:57 (the first handover), `116cf549..8ae3efba` at 10:18:10
+  (the summary doc `1118b876` and the first close record), `8ae3efba..dee08849` at 10:45:23 (F-6 and 4 docs
+  commits). CI passed 4 of 4 for `511c697e` and `116cf549`; for `dee08849` see the CI line added after it.
+- **Watcher retirement** (ao-lifecycle, Session Cleanup), each by TERM, each log ends with `EXIT signal
+  SIGTERM`, each `watch.pid` removed, and the `grep -Flzx` check of each state found no process:
+  3845635 (ao-55) at 10:07:03 and 3760585 (ao-54) at 10:45:47. Their escalations "the fleet is unwatched"
+  covered only that session.
+- **Sessions**: `ao session cleanup -p agent-orchestrator` found no sessions to clean up. `ao session kill`
+  archived ao-55 at 10:07:20 (`ao-55_2026-10-22T14-07-20-702Z`) and ao-54 at 10:45:57
+  (`ao-54_2026-10-22T14-45-57-812Z`), and removed their tmux sessions and worktrees. Before each kill: only
+  `.agent_report.md` and `.agent_task.md` were untracked, the last report was saved under `reports/`, and no
+  client was attached.
 - **Branches** (log `~/.cache/agent-skills-haiku55-arc/branch-cleanup-2026-10-22-handover.log`): no branch
   had a merge commit. Deleted with `-d` (ancestors of `main`): `validate/main-r4` 193d2c9e,
   `feat/sdr7-review-read-agent-task-md-in-your-worktree-and-execute` 407ee00d. Deleted with `-D` (no `+`
   line in `git cherry main`): `feat/same-id-r4` e3860672 (21 `-`), `review/same-id-r4-r2` 8e9efe95 (12 `-`),
   `review/same-id-r4-r3` c02c0c02 (18 `-`), `review/same-id-r4-r4` e3860672 (21 `-`),
-  `feat/claude-detect-activity` 53cfd6a8 (4 `-`). KEPT: `review/same-id-design-r7` fe5d6575 with 13 `+`
-  commits (design test commits of ao-52, not on `main`); its tip is an ancestor of ao-52's branch, so it
-  can go with that branch.
+  `feat/claude-detect-activity` 53cfd6a8 (4 `-`), `feat/claude-strict-process` 6ea435a8 (5 `-`),
+  `review/claude-strict-process` 6ea435a8 (5 `-`). KEPT: `review/same-id-design-r7` fe5d6575 with 13 `+`
+  commits (design test commits of ao-52, not on `main`); its tip is an ancestor of ao-52's branch.
 
 ## Open and Blocked Items
 
-**Same-ID arc**: in progress - design r8 of RW and R2b-2 in re-check (ao-62). R2b-1 needs RW, R2a and the
-Codex send fix first (R2a and the fix are on `main`). R3a, R3b, RH and RO come later (owner "5b"). All
-owner decisions OD-2 to OD-29 are in TODO D-8.
-**R4 follow-ups F-1 to F-8**: open - listed in Known Issues, the same-ID entry ("Later round launches of
-one ID share a name and a path"). F-6 is in review; F-1 and F-2 belong to R2b and R3; F-3, F-4, F-5, F-7
-and F-8 are small worker changes; owner choice.
-**claude-code F-6 and m-1**: review r1 LAND-SAFE (ao-60, 10:24 EDT) - `b97a2500..6ea435a8`; the landing
-waits for the owner's word. Follow-up F-9 (Known Issues, claude-code entry).
-**Codex send limits**: L-1 (a wrapped status row) and L-2 (any two-space `└ ` row counts as a status row),
-`development/reviews/codex_send_idle_review_r4_astra6.md`; its follow-ups F-1 to F-7 are in that file.
+**Herdr**: the next focus (owner "18a") - see Next Priorities 1. Until RH lands, a Herdr session cannot be
+stopped by `ao`: its `stop` answers `unknown`, so kill, cleanup and restore refuse (R2a, OD-19 (a)).
+**Same-ID arc**: in progress - re-check r8 found RW and R2b-2 SOUND-WITH-CHANGES (3 M); design r9 waits for
+the owner's word. R2b-1 needs RW first. R3a, R3b, RH and RO come later (owner "5b"); the owner now moves RH
+forward. All owner decisions OD-2 to OD-29 are in TODO D-8.
+**R4 follow-ups F-1 to F-9**: open - Known Issues, the same-ID entry and the claude-code entry. F-1 and F-2
+belong to R2b and R3; F-3, F-4, F-5, F-7, F-8 and F-9 are small worker changes; owner choice.
+**Codex send limits**: L-1 and L-2, `development/reviews/codex_send_idle_review_r4_astra6.md`, with its
+follow-ups F-1 to F-7. L-1 occurred at 10:28 EDT: the weekly-limit row gave a false "could not confirm"
+(Known Issues, Codex send entry).
 **Killed-status r8 m-1**: open - `readGenerationFloor` (`packages/core/src/metadata.ts`) answers 0 on a read
 error, so a generation can repeat; `docs/DEVELOPMENT.md` says "never repeats". A small worker change.
 **I-5 follow-ups**: open - m-4 (warning text), the duplicated child runner of the lock and ledger tests,
@@ -136,70 +137,86 @@ add the missing-`TMUX_TMPDIR` fallback.
 
 ## Next Priorities
 
-1. **Land F-6 and m-1** - review r1 by ao-60 is LAND-SAFE (10:24 EDT,
-   `development/reviews/claude_strict_process_review_r1_astra6.md`).
-   - Owner "17a" (10:26 EDT): LANDED on `main` at 10:27 as `3c16e89b..a20883a0` (clean cherry-pick of
-     `b97a2500..6ea435a8`, 5 commits; tree equal to the `git merge-tree` result `d779318c`), NOT built yet.
-     Next: gates by ao-60, build, restart, live check, push.
-   - The chain, as for R4: `git merge-tree --write-tree main 6ea435a8` (the merge
-     base is `b97a2500`), `git cherry-pick b97a2500..6ea435a8`, check that the tree equals the merge-tree
-     result, gates of `main` by a Codex worker on a new branch, `pnpm build`, restart 3830765 and 3830929
-     by exact PID, live check, push.
-   - Context: F-6 decides whether the lifecycle writes `killed` for a live Claude Code session, the
-     orchestrator pane included. ao-54 found that a clean `git merge-tree` with R4 still failed 3 tests on
-     the merged tree (Known Issues traps); the review ran the full suite on the merge with `main`
-     `511c697e` (merge tree `5b039aca`): 3541 passed, 1 expected fail, 29 skipped.
-   - Expected outcome: a malformed `ps`, tmux or Herdr answer keeps a live Claude Code session `working`
-     after two polls; `ao status` shows every live Claude Code session `working` after the restart.
-2. **Design re-check r8 (ao-62)** - read `development/reviews/same_id_design_review_r8_astra6.md`.
-   - Both SOUND: the owner decides the order of the implementation rounds RW, R2b-2 and R2b-1.
-   - SOUND-WITH-CHANGES or NOT-SOUND: design r9 by ao-52 (template
-     `brief-aofork-same-id-design-r8.md`; commit the design to `main` before the reviewer pointer),
-     re-check by ao-62.
-   - Context: r8 answers r7 M-1 (atomic archive publication), M-2 (creation fence for every spawn caller
-     and restore, guarded bootstrap), M-3 (discriminating tests), m-1 (audit by a durable
-     `tmuxLaunchToken`).
-3. **F-8, then the small R4 follow-ups** - F-8 makes codex, gemini and opencode reject a handle with no
-   positive PID, as Claude Code does after F-6; one worker after F-6 lands. F-3, F-4, F-5 and F-7 on the
-   owner's choice.
+1. **Herdr: a live check of AO on Herdr 0.9.5, then the RH round** (owner "18a").
+   - State: `~/.local/bin/herdr` is 0.9.5 (the owner ran `herdr update`; binary replaced 10:31:34 EDT). No
+     0.8.0 copy exists; a rollback takes the asset `herdr-linux-x86_64` of release v0.8.0 (`gh release
+     download v0.8.0 -R ogulcancelik/herdr -p herdr-linux-x86_64`). No herdr server runs. No AO session uses
+     Herdr. `~/.config/herdr/` holds the owner's real config and logs.
+   - AO's Herdr code on `main`: `runtime-herdr` `create`, `sendMessage` (send and check delivery, doc 0004
+     §5), `getOutput`, `isAlive` (R4: false only for the `pane_not_found` code of the error envelope or the
+     requested pane with another terminal), `getAttachInfo`; `stop` answers `unknown` and closes nothing;
+     `destroy` closes the workspace with no check. The core helper `getHerdrPaneProcesses` is strict (R4
+     row 8); claude-code on a Herdr pane rejects a malformed answer (F-6).
+   - Everything was measured on 0.8.0 (protocol 19) only: R4's Herdr rows 8 and 9, the RH design (section 7 of
+     `development/reviews/same_id_design_r4_opus.md`), the campaigns of doc 0004 (2026-08). No worker brief
+     has allowed a real herdr process so far; ao-52's prototypes used an isolated 0.8.0 server, and its first
+     run made an update-check network connection at start (design r4 rule slip).
+   - Release notes since 0.8.0 on AO's paths: v0.9.0 `workspace close` of a primary workspace with open
+     worktree workspaces needs `--group`; v0.9.2 an agent's first task counts as `done` (the settle step of
+     `sendMessage` waits for `idle`, `done` or `blocked`); v0.9.4 closing the only pane of a workspace asks
+     first (`ui.confirm_close`; the effect on the API is not stated).
+   - Step 1, live check (owner's word; one worker, scratch only): a private herdr session (`--session
+     <unique>`) with a scratch `HOME` and config, never the owner's `~/.config/herdr`; decide in the brief
+     whether the update-check connection is allowed. Measure the version and the protocol (`ping`), then AO
+     on a scratch config with `runtime: herdr`: spawn, `ao status` activity (doc 0004 §4.2: the last-activity
+     column is blank), `ao send` (send-and-check timing on 0.9.5), `isAlive`, the R4 answer forms (`pane get`
+     envelope, `pane_not_found`), the kill refusal, and the three release-note paths. A stand-in agent
+     process covers the runtime paths; a real agent turn needs the owner's word. Save the real answers as
+     fixtures, and list what doc 0004 must change.
+   - Step 2, RH design revision (ao-52, from design r4 section 7): fix review r4 M-4 (the ID check rejects
+     the IDs that herdr emits) with the IDs measured in step 1, name the qualified version and protocol of
+     0.9.5, and state what RH needs from RW, R2b and R3. Re-check by ao-60.
+   - Step 3, the RH implementation, review, landing, rebuild and live check, each on the owner's word.
+   - Expected outcome: a measured table of AO's Herdr paths on 0.9.5, then an RH design that the reviewer
+     finds SOUND, then `ao session kill` that stops a Herdr session safely.
+2. **Same-ID design r9** - re-check r8 (`development/reviews/same_id_design_review_r8_astra6.md`): M-1 (RW)
+   recovery must make the directory durable (`fsync` of the archive directory and of the moved inbox) before
+   it removes the active record; M-2 (R2b-2) keep r7's existing-session fence in the replacement creation
+   order; M-3 (both) the core caller tests must accept the required `launchToken` and check the durability
+   order. On the owner's word: design r9 by ao-52 (template `brief-aofork-same-id-design-r8.md`; commit the
+   design to `main` before the reviewer pointer), re-check by ao-62. It can run beside Herdr step 1 (other
+   files), but ao-52 is also the planned RH author: run them one after the other in ao-52.
+3. **F-8, F-9 and the small R4 follow-ups** - F-8: codex, gemini and opencode reject a handle with no
+   positive PID, as Claude Code does now. F-9: the 5-second `ps` cache of claude-code keeps a "no process"
+   answer for up to 5 s after a process starts. Owner choice.
 4. **Killed-status r8 m-1, I-5 follow-ups, project guide, test isolation, `0005` phases** - owner choice.
 
 ## First Actions
 
 1. `cd /home/taisung/local/agent-orchestrator && git status -sb && git log --oneline -3` - expect `main` =
-   `origin/main` at the handover commit. ` D test-ao-config2.yaml` is an old working-tree deletion; leave it
-   and never commit it.
+   `origin/main` at the commit of this handover. ` D test-ao-config2.yaml` is an old working-tree deletion;
+   leave it and never commit it.
 2. `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao session ls -p
-   agent-orchestrator` - expect ao-52, ao-54, ao-60, ao-62 and the orchestrator records. `ps -o pid=,args= -p
-   3830765,3830929,2833081,3760585,2246299,2610857` - expect the two lifecycle workers and the four watchers.
-3. `head -1 /home/taisung/.worktrees/agent-orchestrator/ao-{52,54,60,62}/.agent_report.md` - a `running|`
-   line means the round still runs. On `done|` from ao-60 or ao-62: copy the review to `main`, close the
-   router row, commit, then ask the owner (Next Priorities 1 and 2).
+   agent-orchestrator` - expect ao-52, ao-60, ao-62 and the orchestrator records. `ps -o pid=,args= -p
+   65891,68422,2833081,2246299,2610857` - expect the two lifecycle workers and the three watchers.
+   `herdr --version` - expect 0.9.5.
+3. Ask the owner for the Herdr step 1 and design r9 decisions (Next Priorities 1 and 2), in plain text with
+   numbered options.
 
 ## Key Files
 
-- `development/reviews/claude_strict_process_review_r1_astra6.md` and
-  `development/reviews/same_id_design_review_r8_astra6.md` - the two reviews that run (in the reviewers'
-  worktrees until copied).
-- `development/reviews/same_id_design_r8_opus.md` (section 0 is the response table) and
-  `same_id_design_review_r7_astra6.md`.
-- `docs/DEVELOPMENT.md` "Absence forms of the R4 reads" - the 11-row table that F-6 applies to Claude Code.
-- `packages/plugins/agent-claude-code/src/index.ts` - `findClaudeProcess`, `isProcessRunning`,
-  `showsChoiceDialog` (F-6 and m-1).
-- `~/.cache/agent-skills-haiku55-arc/` - briefs (`brief-review-claude-strict-process-astra.md`,
-  `brief-review-same-id-design-r8-astra.md`, `brief-aofork-same-id-design-r8.md`,
-  `brief-validate-main-r4-astra.md` as templates), `reports/`, `backup/`, and `restart_lifecycle.py`
-  (`<pid>` dry run, `<pid> --do`).
+- `development/0004_running_ao_on_the_herdr_runtime.md` - configuration, the send-and-check rule (§5),
+  rollout (§7) and known gaps (§8); written on 0.8.0 in 2026-08, before R2a and R4.
+- `packages/plugins/runtime-herdr/src/index.ts` - `create`, `destroy`, `stop` (the R2a refusal),
+  `sendMessage`, `isAlive`, `parseHerdrResult`.
+- `docs/DEVELOPMENT.md` "Absence forms of the R4 reads" - rows 8 and 9 are the Herdr forms.
+- `development/reviews/same_id_design_r4_opus.md` section 7 (RH) and
+  `development/reviews/same_id_design_review_r4_astra6.md` M-4.
+- `development/reviews/same_id_design_r8_opus.md` and `same_id_design_review_r8_astra6.md` - design r9.
+- `~/.cache/agent-skills-haiku55-arc/` - briefs (`brief-aofork-same-id-design-r8.md`,
+  `brief-review-same-id-design-r8-astra.md`, `brief-validate-main-f6-astra.md` as templates), `reports/`,
+  `backup/`, and `restart_lifecycle.py` (`<pid>` dry run, `<pid> --do`).
 
 ## Durable References
 
-- [What Landed](TODO_TRACKING.md#what-landed): same-ID R4 (`32c687b2..56a385fb`), the claude-code
-  `detectActivity` round (`63932b9a..9938d5d1`), R2a, the Codex send fix, R1, the killed-status fix.
+- [What Landed](TODO_TRACKING.md#what-landed): the F-6 and m-1 round (`3c16e89b..a20883a0`), same-ID R4,
+  the claude-code `detectActivity` round, the Codex send fix, R2a, R1.
 - [Decisions](TODO_TRACKING.md#decisions): D-3 (no worker builds in the primary checkout), D-6 (what
-  blocks landing in a review of a race fix), D-7, D-8 (same-ID OD-2 to OD-29).
-- [Known Issues](TODO_TRACKING.md#known-issues): the same-ID entry with F-1 to F-8, "Traps found in the
-  killed-status and same-ID rounds" (now with the merge-tree trap), the claude-code `detectActivity` entry
-  (F-6 and m-1), the Codex send entry, "Traps found in the I-5 rounds".
+  blocks landing in a review of a race fix), D-8 (same-ID OD-2 to OD-29; OD-19 (a) is the Herdr stop
+  refusal, OD-24 the moved-socket limit of RH).
+- [Known Issues](TODO_TRACKING.md#known-issues): the same-ID entry with F-1 to F-8, the claude-code entry
+  with F-9, "Traps found in the killed-status and same-ID rounds" (the `git merge-tree` trap), the Codex send
+  entry (the weekly-limit row).
 
 ## Next Session Start Prompt
 
@@ -207,29 +224,31 @@ You are the orchestrator of the personal `ao` fork at `/home/taisung/local/agent
 profile `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md` once. The global `ao` of this host
 runs from this checkout's `dist`, so every fleet runs what you land after a rebuild. Only you rebuild, only
 on the owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker` only after a restart by
-exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py` (now 3830765 and 3830929).
+exact PID with `~/.cache/agent-skills-haiku55-arc/restart_lifecycle.py` (now 65891 and 68422).
 
-Same-ID R4 and the claude-code `detectActivity` round are landed, live and pushed. Two Codex reviews run
-and report through watchers: ao-60 reviews F-6 and m-1 of ao-54 (`b97a2500..6ea435a8`), and ao-62
-re-checks design r8 of RW and R2b-2 by ao-52. Do First Actions 1 to 3, then act on each `done|` line as
-Next Priorities 1 and 2 say. Ask the owner in plain text with numbered options (a watcher can paste into
-this pane, so never open an AskUserQuestion dialog).
+The owner wants this session to focus on Herdr. Same-ID R4 and both claude-code rounds are landed, live and
+pushed; no worker runs. `herdr` is 0.9.5 now, but AO's Herdr code was measured only on 0.8.0, and until the
+RH round lands `ao` cannot stop a Herdr session. Do First Actions 1 to 3, then propose Herdr step 1 (a
+scratch-only live check on 0.9.5) as Next Priorities 1 describes, and ask about design r9. Ask the owner in
+plain text with numbered options (a watcher can paste into this pane, so never open an AskUserQuestion
+dialog).
 
 Operating rules until R2b and R3 land: run `ao` only from a shell on the default tmux server (never inside
 a private server pane, never with another `TMUX` or `TMUX_TMPDIR`); do one operation on a session ID at a
-time. A regular `ao send` to an idle Claude Code pane works since 07:46 EDT. For Codex use `--no-wait`,
-then capture the pane; send one bare Enter only on your own text. A raw `tmux -t` of your own needs
-`=name` or `=name:`. Before a paste into a worker pane, check that the owner is not attached and active
-there (`tmux list-clients`; activity within the last 10 minutes means hold).
+time. A regular `ao send` to an idle Claude Code pane works. For Codex use `--no-wait`, then capture the
+pane; send one bare Enter only on your own text; "could not confirm" can be false (the weekly-limit row). A
+raw `tmux -t` of your own needs `=name` or `=name:`. Before a paste into a worker pane, check that the owner
+is not attached and active there (`tmux list-clients`; activity within the last 10 minutes means hold).
 
 Landmines. Spawn with a pointer title that says to wait for `.agent_task.md`; every brief forbids push
 and PR in section 0, protects the lifecycle PIDs, and requires `env -i` with a fake `HOME` for every `ao`,
 `node` and test call, `env -u TMUX tmux -L <unique>` for every tmux call, and an empty `find
-~/.agent-orchestrator -maxdepth 3 -newer <marker> ...` at the end; check it yourself. Pin `--model` on every
-spawn. Commit a design or review to `main` before you send its reviewer the pointer. Before a branch switch
-in a worker tree, compare with `cmp` the untracked files that the target branch tracks and move them to
-`~/.cache/agent-skills-haiku55-arc/backup/`. Use `set -o pipefail` and check HEAD before `ao send`. A clean
-`git merge-tree` is no proof that two rounds pass together: run the suites on the merged tree. The gitleaks
-hook reads JSON `"key"` and `"token"` fields as secrets; never bypass it. Kill only exact PIDs; never
-`pkill` or `killall`. Commit messages are `docs(development): ...` with no `Co-Authored-By` trailer and no
-emoji. Ask the owner before any push.
+~/.agent-orchestrator -maxdepth 3 -newer <marker> ...` at the end; check it yourself. A Herdr brief also
+needs a private herdr session and a scratch herdr config, never the owner's `~/.config/herdr` or a herdr
+server that the owner uses. Pin `--model` on every spawn. Commit a design or review to `main` before you
+send its reviewer the pointer. Before a branch switch in a worker tree, compare with `cmp` the untracked
+files that the target branch tracks and move them to `~/.cache/agent-skills-haiku55-arc/backup/`. Use `set
+-o pipefail` and check HEAD before `ao send`. A clean `git merge-tree` is no proof that two rounds pass
+together: run the suites on the merged tree. The gitleaks hook reads JSON `"key"` and `"token"` fields as
+secrets; never bypass it. Kill only exact PIDs; never `pkill` or `killall`. Commit messages are
+`docs(development): ...` with no `Co-Authored-By` trailer and no emoji. Ask the owner before any push.
