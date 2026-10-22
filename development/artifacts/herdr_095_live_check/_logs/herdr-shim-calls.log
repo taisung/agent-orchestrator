@@ -1,0 +1,1783 @@
+16:05:39.750550946 pid=2833378 ppid=2833376 session=aohd-1 args: status server
+16:05:56.867368815 pid=2836542 ppid=2836534 session=aohd-1 args: pane get w1:p1
+16:05:56.910160541 pid=2836676 ppid=2836655 session=aohd-1 args: pane process-info --pane w1:p1
+16:05:56.954855860 pid=2836831 ppid=2836820 session=aohd-1 args: pane read w1:p1 --source recent-unwrapped --lines 50
+16:05:56.997909382 pid=2836976 ppid=2836955 session=aohd-1 args: pane read w1:p1 --source visible --lines 50
+16:05:57.041642381 pid=2837116 ppid=2837099 session=aohd-1 args: agent prompt w1:p1 aohd\ matrix\ prompt\ noserver_never
+16:05:57.084439853 pid=2837180 ppid=2837178 session=aohd-1 args: pane send-text w1:p1 aohd\ matrix\ text\ noserver_never
+16:05:57.128232898 pid=2837202 ppid=2837200 session=aohd-1 args: pane send-keys w1:p1 Enter
+16:05:57.171900223 pid=2837220 ppid=2837218 session=aohd-1 args: pane run w1:p1 bash /tmp/aohd/scripts/noop.sh
+16:05:57.215594742 pid=2837237 ppid=2837235 session=aohd-1 args: status server
+16:05:57.380113746 pid=2837260 ppid=2837258 session=aohd-1 args: status server --json
+16:05:57.454845858 pid=2837278 ppid=2837276 session=aohd-1 args: workspace close w1
+16:05:57.496958132 pid=2837295 ppid=2837293 session=aohd-1 args: pane close w1:p1
+16:05:57.541960903 pid=2837312 ppid=2837310 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label nsx --env AOHD_X=1 --no-focus
+16:06:52.253869725 pid=2845487 ppid=2845485 session=aohd-1 args: status server
+16:06:52.411790846 pid=2845506 ppid=2845504 session=aohd-1 args: status server --json
+16:06:52.509704094 pid=2845525 ppid=2845523 session=aohd-1 args: api snapshot
+16:06:52.609646394 pid=2845545 ppid=2845543 session=aohd-1 args: workspace list
+16:07:29.369761933 pid=2851660 ppid=2851658 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-m1 --env AOHD_X=1 --no-focus
+16:07:41.352639956 pid=2852888 ppid=2852878 session=aohd-1 args: pane run w1:p1 bash /tmp/aohd/tmp/ao-herdr-launch-m1.sh
+16:07:41.408424777 pid=2853030 ppid=2853028 session=aohd-1 args: pane get w1:p1
+16:07:41.697623070 pid=2853959 ppid=2853957 session=aohd-1 args: pane get w1:p1
+16:07:41.985233359 pid=2854792 ppid=2854791 session=aohd-1 args: pane get w1:p1
+16:07:42.280911979 pid=2854804 ppid=2854803 session=aohd-1 args: pane get w1:p1
+16:07:42.573648461 pid=2854828 ppid=2854827 session=aohd-1 args: pane get w1:p1
+16:07:42.861184979 pid=2854872 ppid=2854871 session=aohd-1 args: pane get w1:p1
+16:07:43.163218520 pid=2854900 ppid=2854899 session=aohd-1 args: pane get w1:p1
+16:07:43.452137486 pid=2855070 ppid=2855069 session=aohd-1 args: pane get w1:p1
+16:07:49.222856537 pid=2855891 ppid=2855889 session=aohd-1 args: agent explain w1:p1 --json
+16:07:49.324783483 pid=2855911 ppid=2855909 session=aohd-1 args: agent explain w1:p1 -v
+16:08:05.629589662 pid=2858906 ppid=2858904 session=aohd-1 args: pane get w1:p1
+16:08:05.722985825 pid=2858926 ppid=2858924 session=aohd-1 args: agent get w1:p1
+16:08:18.128223351 pid=2859847 ppid=2859840 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-m2 --env AOHD_X=2 --no-focus
+16:08:23.830407521 pid=2862424 ppid=2862421 session=aohd-1 args: pane get w2:p1
+16:08:24.025232000 pid=2862756 ppid=2862755 session=aohd-1 args: pane get w2:p1
+16:08:24.126566281 pid=2862806 ppid=2862364 session=aohd-1 args: pane run w2:p1 bash /tmp/aohd/tmp/ao-herdr-launch-m2.sh
+16:08:24.206986879 pid=2862834 ppid=2862833 session=aohd-1 args: pane get w2:p1
+16:08:24.382027690 pid=2862853 ppid=2862852 session=aohd-1 args: pane get w2:p1
+16:08:24.557094887 pid=2862898 ppid=2862897 session=aohd-1 args: pane get w2:p1
+16:08:24.740293121 pid=2862913 ppid=2862912 session=aohd-1 args: pane get w2:p1
+16:08:24.912712572 pid=2862928 ppid=2862927 session=aohd-1 args: pane get w2:p1
+16:08:25.092281242 pid=2862943 ppid=2862942 session=aohd-1 args: pane get w2:p1
+16:08:25.266610234 pid=2862958 ppid=2862957 session=aohd-1 args: pane get w2:p1
+16:08:25.450463743 pid=2862973 ppid=2862972 session=aohd-1 args: pane get w2:p1
+16:08:25.631929084 pid=2862988 ppid=2862987 session=aohd-1 args: pane get w2:p1
+16:08:25.808732287 pid=2863003 ppid=2863002 session=aohd-1 args: pane get w2:p1
+16:08:25.980320596 pid=2863020 ppid=2863019 session=aohd-1 args: pane get w2:p1
+16:08:26.164135472 pid=2863066 ppid=2863065 session=aohd-1 args: pane get w2:p1
+16:08:26.346718561 pid=2863081 ppid=2863080 session=aohd-1 args: pane get w2:p1
+16:08:26.531728736 pid=2863096 ppid=2863095 session=aohd-1 args: pane get w2:p1
+16:08:26.721403909 pid=2863111 ppid=2863110 session=aohd-1 args: pane get w2:p1
+16:08:26.896540146 pid=2863126 ppid=2863125 session=aohd-1 args: pane get w2:p1
+16:08:27.083242124 pid=2863141 ppid=2863140 session=aohd-1 args: pane get w2:p1
+16:08:27.267171420 pid=2863156 ppid=2863155 session=aohd-1 args: pane get w2:p1
+16:08:27.450708949 pid=2863171 ppid=2863170 session=aohd-1 args: pane get w2:p1
+16:08:27.632656768 pid=2863186 ppid=2863185 session=aohd-1 args: pane get w2:p1
+16:08:27.814802413 pid=2863202 ppid=2863201 session=aohd-1 args: pane get w2:p1
+16:08:27.987283821 pid=2863218 ppid=2863217 session=aohd-1 args: pane get w2:p1
+16:08:28.171699962 pid=2863233 ppid=2863232 session=aohd-1 args: pane get w2:p1
+16:08:28.350580793 pid=2863248 ppid=2863247 session=aohd-1 args: pane get w2:p1
+16:08:28.526351681 pid=2863270 ppid=2863269 session=aohd-1 args: pane get w2:p1
+16:08:28.704078706 pid=2863286 ppid=2863285 session=aohd-1 args: pane get w2:p1
+16:08:28.879981378 pid=2863301 ppid=2863300 session=aohd-1 args: pane get w2:p1
+16:08:29.063788997 pid=2863316 ppid=2863315 session=aohd-1 args: pane get w2:p1
+16:08:29.240088279 pid=2863339 ppid=2863338 session=aohd-1 args: pane get w2:p1
+16:08:29.427734531 pid=2863354 ppid=2863353 session=aohd-1 args: pane get w2:p1
+16:08:29.610117778 pid=2863369 ppid=2863368 session=aohd-1 args: pane get w2:p1
+16:08:29.781922142 pid=2863384 ppid=2863383 session=aohd-1 args: pane get w2:p1
+16:08:29.954905116 pid=2863399 ppid=2863398 session=aohd-1 args: pane get w2:p1
+16:08:30.127743837 pid=2863414 ppid=2863413 session=aohd-1 args: pane get w2:p1
+16:08:30.311634528 pid=2863429 ppid=2863428 session=aohd-1 args: pane get w2:p1
+16:08:30.495616560 pid=2863444 ppid=2863443 session=aohd-1 args: pane get w2:p1
+16:08:30.674964107 pid=2863459 ppid=2863458 session=aohd-1 args: pane get w2:p1
+16:08:30.858625291 pid=2863474 ppid=2863473 session=aohd-1 args: pane get w2:p1
+16:08:31.034915344 pid=2863492 ppid=2863491 session=aohd-1 args: pane get w2:p1
+16:08:31.213624451 pid=2863507 ppid=2863506 session=aohd-1 args: pane get w2:p1
+16:08:31.395625474 pid=2863522 ppid=2863521 session=aohd-1 args: pane get w2:p1
+16:08:31.563255738 pid=2863537 ppid=2863536 session=aohd-1 args: pane get w2:p1
+16:08:31.744624348 pid=2863552 ppid=2863551 session=aohd-1 args: pane get w2:p1
+16:08:38.209675727 pid=2863840 ppid=2863839 session=aohd-1 args: pane get w2:p1
+16:08:38.391691621 pid=2863856 ppid=2863855 session=aohd-1 args: pane get w2:p1
+16:08:38.504370668 pid=2863869 ppid=2863834 session=aohd-1 args: agent prompt w2:p1 first\ task\ m2
+16:08:38.564395866 pid=2863881 ppid=2863880 session=aohd-1 args: pane get w2:p1
+16:08:38.744190206 pid=2863896 ppid=2863895 session=aohd-1 args: pane get w2:p1
+16:08:38.926892015 pid=2863914 ppid=2863913 session=aohd-1 args: pane get w2:p1
+16:08:39.109448519 pid=2863929 ppid=2863928 session=aohd-1 args: pane get w2:p1
+16:08:39.292522304 pid=2863945 ppid=2863944 session=aohd-1 args: pane get w2:p1
+16:08:39.474812161 pid=2863960 ppid=2863959 session=aohd-1 args: pane get w2:p1
+16:08:39.649140397 pid=2863975 ppid=2863974 session=aohd-1 args: pane get w2:p1
+16:08:39.828489962 pid=2863990 ppid=2863989 session=aohd-1 args: pane get w2:p1
+16:08:39.997996425 pid=2864005 ppid=2864004 session=aohd-1 args: pane get w2:p1
+16:08:40.178647770 pid=2864020 ppid=2864019 session=aohd-1 args: pane get w2:p1
+16:08:40.360867406 pid=2864035 ppid=2864034 session=aohd-1 args: pane get w2:p1
+16:08:40.533170355 pid=2864079 ppid=2864078 session=aohd-1 args: pane get w2:p1
+16:08:40.712527568 pid=2864094 ppid=2864093 session=aohd-1 args: pane get w2:p1
+16:08:40.892875417 pid=2864111 ppid=2864110 session=aohd-1 args: pane get w2:p1
+16:08:41.074997237 pid=2864127 ppid=2864126 session=aohd-1 args: pane get w2:p1
+16:08:41.254188097 pid=2864142 ppid=2864141 session=aohd-1 args: pane get w2:p1
+16:08:41.428657313 pid=2864157 ppid=2864156 session=aohd-1 args: pane get w2:p1
+16:08:41.602249977 pid=2864172 ppid=2864171 session=aohd-1 args: pane get w2:p1
+16:08:41.787046951 pid=2864187 ppid=2864186 session=aohd-1 args: pane get w2:p1
+16:08:41.968315582 pid=2864214 ppid=2864213 session=aohd-1 args: pane get w2:p1
+16:08:42.140839319 pid=2864229 ppid=2864228 session=aohd-1 args: pane get w2:p1
+16:08:42.324937288 pid=2864244 ppid=2864243 session=aohd-1 args: pane get w2:p1
+16:08:42.521361044 pid=2864259 ppid=2864258 session=aohd-1 args: pane get w2:p1
+16:08:42.697552820 pid=2864274 ppid=2864273 session=aohd-1 args: pane get w2:p1
+16:08:42.879809621 pid=2864289 ppid=2864288 session=aohd-1 args: pane get w2:p1
+16:08:43.063612761 pid=2864304 ppid=2864303 session=aohd-1 args: pane get w2:p1
+16:08:43.250459159 pid=2864319 ppid=2864318 session=aohd-1 args: pane get w2:p1
+16:08:43.426792785 pid=2864334 ppid=2864333 session=aohd-1 args: pane get w2:p1
+16:08:43.600463690 pid=2864349 ppid=2864348 session=aohd-1 args: pane get w2:p1
+16:08:43.773661312 pid=2864364 ppid=2864363 session=aohd-1 args: pane get w2:p1
+16:08:43.958081304 pid=2864379 ppid=2864378 session=aohd-1 args: pane get w2:p1
+16:08:44.136244753 pid=2864394 ppid=2864393 session=aohd-1 args: pane get w2:p1
+16:08:44.308198155 pid=2864761 ppid=2864758 session=aohd-1 args: pane get w2:p1
+16:08:44.482289367 pid=2865410 ppid=2865407 session=aohd-1 args: pane get w2:p1
+16:08:44.653024447 pid=2866069 ppid=2866065 session=aohd-1 args: pane get w2:p1
+16:08:44.824958410 pid=2866713 ppid=2866711 session=aohd-1 args: pane get w2:p1
+16:08:44.998433640 pid=2866941 ppid=2866940 session=aohd-1 args: pane get w2:p1
+16:08:45.182728196 pid=2866956 ppid=2866955 session=aohd-1 args: pane get w2:p1
+16:08:45.365343866 pid=2866972 ppid=2866971 session=aohd-1 args: pane get w2:p1
+16:08:45.537691588 pid=2866987 ppid=2866986 session=aohd-1 args: pane get w2:p1
+16:08:45.724290496 pid=2867003 ppid=2867002 session=aohd-1 args: pane get w2:p1
+16:08:45.900183684 pid=2867020 ppid=2867019 session=aohd-1 args: pane get w2:p1
+16:08:46.082867725 pid=2867035 ppid=2867034 session=aohd-1 args: pane get w2:p1
+16:08:46.258722779 pid=2867050 ppid=2867049 session=aohd-1 args: pane get w2:p1
+16:08:46.435308802 pid=2867065 ppid=2867064 session=aohd-1 args: pane get w2:p1
+16:08:46.615273170 pid=2867080 ppid=2867079 session=aohd-1 args: pane get w2:p1
+16:08:46.803186389 pid=2867095 ppid=2867094 session=aohd-1 args: pane get w2:p1
+16:08:46.988930934 pid=2867110 ppid=2867109 session=aohd-1 args: pane get w2:p1
+16:08:47.174252515 pid=2867125 ppid=2867124 session=aohd-1 args: pane get w2:p1
+16:08:47.347968137 pid=2867140 ppid=2867139 session=aohd-1 args: pane get w2:p1
+16:08:47.530378600 pid=2867155 ppid=2867154 session=aohd-1 args: pane get w2:p1
+16:08:47.718321379 pid=2867170 ppid=2867169 session=aohd-1 args: pane get w2:p1
+16:08:47.898200093 pid=2867185 ppid=2867184 session=aohd-1 args: pane get w2:p1
+16:08:48.074890843 pid=2867200 ppid=2867199 session=aohd-1 args: pane get w2:p1
+16:09:06.594612838 pid=2870254 ppid=2870252 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-m3 --no-focus
+16:09:06.737635118 pid=2870278 ppid=2868434 session=aohd-1 args: pane run w3:p1 bash /tmp/aohd/tmp/ao-herdr-launch-m3.sh
+16:09:06.782385092 pid=2870293 ppid=2870291 session=aohd-1 args: pane get w3:p1
+16:09:06.959939563 pid=2870316 ppid=2870315 session=aohd-1 args: pane get w3:p1
+16:09:07.142551998 pid=2870332 ppid=2870331 session=aohd-1 args: pane get w3:p1
+16:09:07.314642581 pid=2870347 ppid=2870346 session=aohd-1 args: pane get w3:p1
+16:09:07.491432143 pid=2870363 ppid=2870362 session=aohd-1 args: pane get w3:p1
+16:09:07.673753685 pid=2870378 ppid=2870377 session=aohd-1 args: pane get w3:p1
+16:09:07.856186870 pid=2870393 ppid=2870392 session=aohd-1 args: pane get w3:p1
+16:09:08.046135464 pid=2870408 ppid=2870407 session=aohd-1 args: pane get w3:p1
+16:09:08.221746101 pid=2870423 ppid=2870422 session=aohd-1 args: pane get w3:p1
+16:09:08.394959959 pid=2870438 ppid=2870437 session=aohd-1 args: pane get w3:p1
+16:09:08.583011752 pid=2870453 ppid=2870452 session=aohd-1 args: pane get w3:p1
+16:09:08.760603328 pid=2870468 ppid=2870467 session=aohd-1 args: pane get w3:p1
+16:09:08.936527380 pid=2870512 ppid=2870511 session=aohd-1 args: pane get w3:p1
+16:09:09.116746085 pid=2870527 ppid=2870526 session=aohd-1 args: pane get w3:p1
+16:09:09.297662693 pid=2870542 ppid=2870541 session=aohd-1 args: pane get w3:p1
+16:09:09.477789493 pid=2870557 ppid=2870556 session=aohd-1 args: pane get w3:p1
+16:09:09.650651392 pid=2870572 ppid=2870571 session=aohd-1 args: pane get w3:p1
+16:09:09.834785866 pid=2870587 ppid=2870586 session=aohd-1 args: pane get w3:p1
+16:09:10.014099808 pid=2870602 ppid=2870601 session=aohd-1 args: pane get w3:p1
+16:09:10.197306237 pid=2870617 ppid=2870616 session=aohd-1 args: pane get w3:p1
+16:09:10.372055994 pid=2870632 ppid=2870631 session=aohd-1 args: pane get w3:p1
+16:09:10.557278122 pid=2870647 ppid=2870646 session=aohd-1 args: pane get w3:p1
+16:09:10.737918728 pid=2870663 ppid=2870662 session=aohd-1 args: pane get w3:p1
+16:09:10.916752408 pid=2870678 ppid=2870677 session=aohd-1 args: pane get w3:p1
+16:09:11.093730865 pid=2870695 ppid=2870694 session=aohd-1 args: pane get w3:p1
+16:09:11.279271284 pid=2870710 ppid=2870709 session=aohd-1 args: pane get w3:p1
+16:09:11.459242267 pid=2870725 ppid=2870724 session=aohd-1 args: pane get w3:p1
+16:09:11.640184399 pid=2870741 ppid=2870740 session=aohd-1 args: pane get w3:p1
+16:09:11.826137778 pid=2870756 ppid=2870755 session=aohd-1 args: pane get w3:p1
+16:09:12.013358301 pid=2870778 ppid=2870777 session=aohd-1 args: pane get w3:p1
+16:09:12.184291115 pid=2870793 ppid=2870792 session=aohd-1 args: pane get w3:p1
+16:09:12.365158124 pid=2870808 ppid=2870807 session=aohd-1 args: pane get w3:p1
+16:09:12.542475448 pid=2870823 ppid=2870822 session=aohd-1 args: pane get w3:p1
+16:09:12.721804691 pid=2870838 ppid=2870837 session=aohd-1 args: pane get w3:p1
+16:09:12.920235336 pid=2870859 ppid=2870858 session=aohd-1 args: pane get w3:p1
+16:09:13.094554645 pid=2870875 ppid=2870874 session=aohd-1 args: pane get w3:p1
+16:09:13.215292343 pid=2870888 ppid=2870853 session=aohd-1 args: agent prompt w3:p1 first\ task\ m3
+16:09:13.284135894 pid=2870900 ppid=2870899 session=aohd-1 args: pane get w3:p1
+16:09:13.459864375 pid=2870915 ppid=2870914 session=aohd-1 args: pane get w3:p1
+16:09:13.639643063 pid=2870932 ppid=2870931 session=aohd-1 args: pane get w3:p1
+16:09:13.818168452 pid=2870948 ppid=2870947 session=aohd-1 args: pane get w3:p1
+16:09:13.997613112 pid=2870996 ppid=2870995 session=aohd-1 args: pane get w3:p1
+16:09:14.176190257 pid=2871070 ppid=2871069 session=aohd-1 args: pane get w3:p1
+16:09:14.356882085 pid=2871169 ppid=2871167 session=aohd-1 args: pane get w3:p1
+16:09:14.535237394 pid=2871240 ppid=2871239 session=aohd-1 args: pane get w3:p1
+16:09:14.714256575 pid=2871255 ppid=2871254 session=aohd-1 args: pane get w3:p1
+16:09:14.887339771 pid=2871433 ppid=2871432 session=aohd-1 args: pane get w3:p1
+16:09:15.060596420 pid=2871529 ppid=2871528 session=aohd-1 args: pane get w3:p1
+16:09:15.238216873 pid=2871557 ppid=2871556 session=aohd-1 args: pane get w3:p1
+16:09:15.431601234 pid=2871572 ppid=2871571 session=aohd-1 args: pane get w3:p1
+16:09:15.604928046 pid=2871616 ppid=2871615 session=aohd-1 args: pane get w3:p1
+16:09:15.780356594 pid=2871631 ppid=2871630 session=aohd-1 args: pane get w3:p1
+16:09:15.964343042 pid=2871648 ppid=2871647 session=aohd-1 args: pane get w3:p1
+16:09:16.155441841 pid=2871663 ppid=2871662 session=aohd-1 args: pane get w3:p1
+16:09:16.337472476 pid=2871678 ppid=2871677 session=aohd-1 args: pane get w3:p1
+16:09:16.516676042 pid=2871693 ppid=2871692 session=aohd-1 args: pane get w3:p1
+16:09:16.704240879 pid=2871720 ppid=2871719 session=aohd-1 args: pane get w3:p1
+16:09:16.891759856 pid=2871735 ppid=2871734 session=aohd-1 args: pane get w3:p1
+16:09:17.084642066 pid=2871751 ppid=2871750 session=aohd-1 args: pane get w3:p1
+16:09:17.255350684 pid=2871766 ppid=2871765 session=aohd-1 args: pane get w3:p1
+16:09:17.438036843 pid=2871781 ppid=2871780 session=aohd-1 args: pane get w3:p1
+16:09:17.613114163 pid=2871796 ppid=2871795 session=aohd-1 args: pane get w3:p1
+16:09:17.803100291 pid=2871811 ppid=2871810 session=aohd-1 args: pane get w3:p1
+16:09:17.977542411 pid=2871826 ppid=2871825 session=aohd-1 args: pane get w3:p1
+16:09:18.149675249 pid=2871841 ppid=2871840 session=aohd-1 args: pane get w3:p1
+16:09:18.330048833 pid=2871858 ppid=2871857 session=aohd-1 args: pane get w3:p1
+16:09:18.502429290 pid=2871873 ppid=2871872 session=aohd-1 args: pane get w3:p1
+16:09:18.683063348 pid=2871917 ppid=2871916 session=aohd-1 args: pane get w3:p1
+16:09:18.859172239 pid=2871950 ppid=2871949 session=aohd-1 args: pane get w3:p1
+16:09:19.042100338 pid=2871998 ppid=2871997 session=aohd-1 args: pane get w3:p1
+16:09:19.234606690 pid=2872014 ppid=2872013 session=aohd-1 args: pane get w3:p1
+16:09:19.425099197 pid=2872041 ppid=2872040 session=aohd-1 args: pane get w3:p1
+16:09:19.604697396 pid=2872056 ppid=2872055 session=aohd-1 args: pane get w3:p1
+16:09:19.785212445 pid=2872102 ppid=2872101 session=aohd-1 args: pane get w3:p1
+16:09:19.958653417 pid=2872117 ppid=2872116 session=aohd-1 args: pane get w3:p1
+16:09:20.135138108 pid=2872132 ppid=2872131 session=aohd-1 args: pane get w3:p1
+16:09:20.306973509 pid=2872233 ppid=2872231 session=aohd-1 args: pane get w3:p1
+16:09:20.488656824 pid=2872340 ppid=2872339 session=aohd-1 args: pane get w3:p1
+16:09:20.661060324 pid=2872370 ppid=2872369 session=aohd-1 args: pane get w3:p1
+16:09:20.841460483 pid=2872385 ppid=2872384 session=aohd-1 args: pane get w3:p1
+16:09:21.013960982 pid=2872431 ppid=2872430 session=aohd-1 args: pane get w3:p1
+16:09:21.193544827 pid=2872446 ppid=2872445 session=aohd-1 args: pane get w3:p1
+16:09:21.375205787 pid=2872461 ppid=2872460 session=aohd-1 args: pane get w3:p1
+16:09:21.556195078 pid=2872476 ppid=2872475 session=aohd-1 args: pane get w3:p1
+16:09:21.735780794 pid=2872537 ppid=2872536 session=aohd-1 args: pane get w3:p1
+16:09:21.918266779 pid=2872552 ppid=2872551 session=aohd-1 args: pane get w3:p1
+16:09:22.092029982 pid=2872567 ppid=2872566 session=aohd-1 args: pane get w3:p1
+16:09:22.268179243 pid=2872582 ppid=2872581 session=aohd-1 args: pane get w3:p1
+16:09:22.455160303 pid=2872597 ppid=2872596 session=aohd-1 args: pane get w3:p1
+16:09:22.643046625 pid=2872612 ppid=2872611 session=aohd-1 args: pane get w3:p1
+16:09:22.815552254 pid=2872629 ppid=2872628 session=aohd-1 args: pane get w3:p1
+16:09:22.987374963 pid=2872646 ppid=2872645 session=aohd-1 args: pane get w3:p1
+16:09:23.171697067 pid=2872661 ppid=2872660 session=aohd-1 args: pane get w3:p1
+16:09:23.354665417 pid=2872676 ppid=2872675 session=aohd-1 args: pane get w3:p1
+16:09:23.539536171 pid=2872691 ppid=2872690 session=aohd-1 args: pane get w3:p1
+16:09:23.717123663 pid=2872706 ppid=2872705 session=aohd-1 args: pane get w3:p1
+16:09:23.892411297 pid=2872721 ppid=2872720 session=aohd-1 args: pane get w3:p1
+16:09:24.071811339 pid=2872736 ppid=2872735 session=aohd-1 args: pane get w3:p1
+16:09:24.253290402 pid=2872751 ppid=2872750 session=aohd-1 args: pane get w3:p1
+16:09:24.429706995 pid=2872766 ppid=2872765 session=aohd-1 args: pane get w3:p1
+16:09:24.616431237 pid=2872781 ppid=2872780 session=aohd-1 args: pane get w3:p1
+16:09:24.795549497 pid=2872796 ppid=2872795 session=aohd-1 args: pane get w3:p1
+16:09:24.975395734 pid=2872811 ppid=2872810 session=aohd-1 args: pane get w3:p1
+16:09:25.146800285 pid=2872826 ppid=2872825 session=aohd-1 args: pane get w3:p1
+16:09:25.329696760 pid=2872854 ppid=2872852 session=aohd-1 args: pane get w3:p1
+16:09:25.512045794 pid=2872885 ppid=2872884 session=aohd-1 args: pane get w3:p1
+16:09:25.694142893 pid=2872900 ppid=2872899 session=aohd-1 args: pane get w3:p1
+16:09:25.880796198 pid=2872915 ppid=2872914 session=aohd-1 args: pane get w3:p1
+16:09:26.051302406 pid=2872932 ppid=2872931 session=aohd-1 args: pane get w3:p1
+16:09:26.225685031 pid=2872996 ppid=2872994 session=aohd-1 args: pane get w3:p1
+16:09:26.398328285 pid=2873454 ppid=2873452 session=aohd-1 args: pane get w3:p1
+16:09:26.576510683 pid=2874009 ppid=2874006 session=aohd-1 args: pane get w3:p1
+16:09:26.741451841 pid=2874454 ppid=2874450 session=aohd-1 args: pane get w3:p1
+16:09:26.915526632 pid=2874970 ppid=2874968 session=aohd-1 args: pane get w3:p1
+16:09:39.219562821 pid=2876210 ppid=2876209 session=aohd-1 args: pane get w3:p1
+16:09:39.402182680 pid=2876226 ppid=2876225 session=aohd-1 args: pane get w3:p1
+16:09:39.514174123 pid=2876239 ppid=2876204 session=aohd-1 args: agent prompt w3:p1 second\ task\ m3
+16:09:39.577197233 pid=2876251 ppid=2876250 session=aohd-1 args: pane get w3:p1
+16:09:39.757885006 pid=2876266 ppid=2876265 session=aohd-1 args: pane get w3:p1
+16:09:39.940240052 pid=2876284 ppid=2876283 session=aohd-1 args: pane get w3:p1
+16:09:40.110227641 pid=2876299 ppid=2876298 session=aohd-1 args: pane get w3:p1
+16:09:40.286540303 pid=2876314 ppid=2876313 session=aohd-1 args: pane get w3:p1
+16:09:40.461991388 pid=2876330 ppid=2876329 session=aohd-1 args: pane get w3:p1
+16:09:40.643577447 pid=2876345 ppid=2876344 session=aohd-1 args: pane get w3:p1
+16:09:40.827223351 pid=2876360 ppid=2876359 session=aohd-1 args: pane get w3:p1
+16:09:40.999263658 pid=2876377 ppid=2876376 session=aohd-1 args: pane get w3:p1
+16:09:41.176368752 pid=2876392 ppid=2876391 session=aohd-1 args: pane get w3:p1
+16:09:41.348616483 pid=2876407 ppid=2876406 session=aohd-1 args: pane get w3:p1
+16:09:41.531355257 pid=2876437 ppid=2876436 session=aohd-1 args: pane get w3:p1
+16:09:41.711739658 pid=2876466 ppid=2876465 session=aohd-1 args: pane get w3:p1
+16:09:41.893868757 pid=2876481 ppid=2876480 session=aohd-1 args: pane get w3:p1
+16:09:42.067113764 pid=2876503 ppid=2876502 session=aohd-1 args: pane get w3:p1
+16:09:42.248704209 pid=2876518 ppid=2876517 session=aohd-1 args: pane get w3:p1
+16:09:42.430285989 pid=2876533 ppid=2876532 session=aohd-1 args: pane get w3:p1
+16:09:42.611589577 pid=2876548 ppid=2876547 session=aohd-1 args: pane get w3:p1
+16:09:42.781879093 pid=2876563 ppid=2876562 session=aohd-1 args: pane get w3:p1
+16:09:42.967042366 pid=2876583 ppid=2876582 session=aohd-1 args: pane get w3:p1
+16:09:43.141903454 pid=2876598 ppid=2876597 session=aohd-1 args: pane get w3:p1
+16:09:43.321875106 pid=2876613 ppid=2876612 session=aohd-1 args: pane get w3:p1
+16:09:43.508659526 pid=2876629 ppid=2876628 session=aohd-1 args: pane get w3:p1
+16:09:43.688756302 pid=2876644 ppid=2876643 session=aohd-1 args: pane get w3:p1
+16:09:43.866229822 pid=2876659 ppid=2876658 session=aohd-1 args: pane get w3:p1
+16:09:44.040618914 pid=2876674 ppid=2876673 session=aohd-1 args: pane get w3:p1
+16:09:44.226395260 pid=2876689 ppid=2876688 session=aohd-1 args: pane get w3:p1
+16:09:44.406184369 pid=2876708 ppid=2876707 session=aohd-1 args: pane get w3:p1
+16:09:44.591765030 pid=2876754 ppid=2876753 session=aohd-1 args: pane get w3:p1
+16:09:44.775921485 pid=2876827 ppid=2876826 session=aohd-1 args: pane get w3:p1
+16:09:44.955526770 pid=2876842 ppid=2876841 session=aohd-1 args: pane get w3:p1
+16:09:45.128163862 pid=2876857 ppid=2876856 session=aohd-1 args: pane get w3:p1
+16:09:45.298145840 pid=2876872 ppid=2876871 session=aohd-1 args: pane get w3:p1
+16:09:45.482426689 pid=2876887 ppid=2876886 session=aohd-1 args: pane get w3:p1
+16:09:45.666771685 pid=2876902 ppid=2876901 session=aohd-1 args: pane get w3:p1
+16:09:45.843512135 pid=2876921 ppid=2876920 session=aohd-1 args: pane get w3:p1
+16:09:46.030659182 pid=2876941 ppid=2876940 session=aohd-1 args: pane get w3:p1
+16:09:46.210079358 pid=2876956 ppid=2876955 session=aohd-1 args: pane get w3:p1
+16:09:46.370814755 pid=2877000 ppid=2876999 session=aohd-1 args: pane get w3:p1
+16:09:46.548201251 pid=2877015 ppid=2877014 session=aohd-1 args: pane get w3:p1
+16:09:46.729760920 pid=2877030 ppid=2877029 session=aohd-1 args: pane get w3:p1
+16:09:46.911341480 pid=2877052 ppid=2877051 session=aohd-1 args: pane get w3:p1
+16:09:47.092827787 pid=2877072 ppid=2877071 session=aohd-1 args: pane get w3:p1
+16:09:47.284952160 pid=2877372 ppid=2875992 session=aohd-1 args: agent get w3:p1
+16:09:59.551765683 pid=2880362 ppid=2880360 session=aohd-1 args: pane get w3:p1
+16:09:59.653860038 pid=2880382 ppid=2880380 session=aohd-1 args: pane process-info --pane w3:p1
+16:09:59.759194490 pid=2880402 ppid=2880400 session=aohd-1 args: pane read w3:p1 --source recent-unwrapped --lines 50
+16:09:59.934721313 pid=2880422 ppid=2880420 session=aohd-1 args: pane read w3:p1 --source visible --lines 50
+16:10:00.111105412 pid=2880443 ppid=2880441 session=aohd-1 args: agent prompt w3:p1 aohd\ matrix\ prompt\ live
+16:10:00.507585594 pid=2880466 ppid=2880464 session=aohd-1 args: pane send-text w3:p1 aohd\ matrix\ text\ live
+16:10:00.561603740 pid=2880485 ppid=2880483 session=aohd-1 args: pane send-keys w3:p1 Enter
+16:10:00.615742688 pid=2880504 ppid=2880502 session=aohd-1 args: pane run w3:p1 bash /tmp/aohd/scripts/noop.sh
+16:10:00.671840652 pid=2880523 ppid=2880521 session=aohd-1 args: status server
+16:10:00.823438577 pid=2880542 ppid=2880540 session=aohd-1 args: status server --json
+16:10:21.647925452 pid=2884450 ppid=2884448 session=aohd-1 args: pane split w3:p1 --direction right --no-focus
+16:10:21.760381634 pid=2884475 ppid=2884473 session=aohd-1 args: pane close w3:p2
+16:10:21.961530162 pid=2884498 ppid=2884496 session=aohd-1 args: pane get w3:p2
+16:10:22.015114339 pid=2884517 ppid=2884515 session=aohd-1 args: pane process-info --pane w3:p2
+16:10:22.069269727 pid=2884536 ppid=2884534 session=aohd-1 args: pane read w3:p2 --source recent-unwrapped --lines 50
+16:10:22.127586162 pid=2884555 ppid=2884553 session=aohd-1 args: pane read w3:p2 --source visible --lines 50
+16:10:22.190021611 pid=2884574 ppid=2884572 session=aohd-1 args: agent prompt w3:p2 aohd\ matrix\ prompt\ closedpane
+16:10:22.247066726 pid=2884593 ppid=2884591 session=aohd-1 args: pane send-text w3:p2 aohd\ matrix\ text\ closedpane
+16:10:22.303039009 pid=2884612 ppid=2884610 session=aohd-1 args: pane send-keys w3:p2 Enter
+16:10:22.356791319 pid=2884631 ppid=2884629 session=aohd-1 args: pane run w3:p2 bash /tmp/aohd/scripts/noop.sh
+16:10:22.413329947 pid=2884650 ppid=2884648 session=aohd-1 args: status server
+16:10:22.584251113 pid=2884670 ppid=2884668 session=aohd-1 args: status server --json
+16:10:22.684688192 pid=2884689 ppid=2884687 session=aohd-1 args: pane close w3:p2
+16:10:34.261667436 pid=2887435 ppid=2887433 session=aohd-1 args: workspace close w2
+16:10:34.494133860 pid=2887459 ppid=2887457 session=aohd-1 args: pane get w2:p1
+16:10:34.547593335 pid=2887478 ppid=2887476 session=aohd-1 args: pane process-info --pane w2:p1
+16:10:34.601652778 pid=2887497 ppid=2887495 session=aohd-1 args: pane read w2:p1 --source recent-unwrapped --lines 50
+16:10:34.659533684 pid=2887516 ppid=2887514 session=aohd-1 args: pane read w2:p1 --source visible --lines 50
+16:10:34.717729889 pid=2887535 ppid=2887533 session=aohd-1 args: agent prompt w2:p1 aohd\ matrix\ prompt\ closedws
+16:10:34.773630302 pid=2887554 ppid=2887552 session=aohd-1 args: pane send-text w2:p1 aohd\ matrix\ text\ closedws
+16:10:34.829274694 pid=2887573 ppid=2887571 session=aohd-1 args: pane send-keys w2:p1 Enter
+16:10:34.883168742 pid=2887592 ppid=2887590 session=aohd-1 args: pane run w2:p1 bash /tmp/aohd/scripts/noop.sh
+16:10:34.939270484 pid=2887611 ppid=2887609 session=aohd-1 args: status server
+16:10:35.105803108 pid=2887630 ppid=2887628 session=aohd-1 args: status server --json
+16:10:35.195220680 pid=2887649 ppid=2887647 session=aohd-1 args: workspace close w2
+16:10:35.250535803 pid=2887668 ppid=2887666 session=aohd-1 args: pane close w2:p1
+16:10:43.462570671 pid=2888293 ppid=2888291 session=aohd-1 args: pane close w1:p1
+16:10:43.658533601 pid=2888318 ppid=2888316 session=aohd-1 args: workspace list
+16:10:43.757498133 pid=2888339 ppid=2888337 session=aohd-1 args: pane get w1:p1
+16:10:50.419104516 pid=2889729 ppid=2889718 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-r1 --no-focus
+16:11:01.849941864 pid=2892151 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g5 --no-focus
+16:11:01.894576374 pid=2892164 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g6 --no-focus
+16:11:01.935325899 pid=2892177 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g7 --no-focus
+16:11:01.976994699 pid=2892190 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g8 --no-focus
+16:11:02.020743743 pid=2892203 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g9 --no-focus
+16:11:02.063708462 pid=2892216 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g10 --no-focus
+16:11:02.107608276 pid=2892229 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g11 --no-focus
+16:11:02.154653058 pid=2892242 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g12 --no-focus
+16:11:02.198261134 pid=2892255 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g13 --no-focus
+16:11:02.242864502 pid=2892268 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g14 --no-focus
+16:11:02.289462790 pid=2892281 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g15 --no-focus
+16:11:02.332232198 pid=2892294 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g16 --no-focus
+16:11:02.373494711 pid=2892307 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g17 --no-focus
+16:11:02.429014785 pid=2892321 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g18 --no-focus
+16:11:02.469165547 pid=2892334 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g19 --no-focus
+16:11:02.508584493 pid=2892346 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g20 --no-focus
+16:11:02.553413665 pid=2892359 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g21 --no-focus
+16:11:02.597268060 pid=2892372 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g22 --no-focus
+16:11:02.646287193 pid=2892386 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g23 --no-focus
+16:11:02.690070457 pid=2892398 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g24 --no-focus
+16:11:02.729744910 pid=2892411 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g25 --no-focus
+16:11:02.768997346 pid=2892424 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g26 --no-focus
+16:11:02.816759892 pid=2892437 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g27 --no-focus
+16:11:02.858713562 pid=2892450 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g28 --no-focus
+16:11:02.900079535 pid=2892463 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g29 --no-focus
+16:11:02.945080104 pid=2892476 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g30 --no-focus
+16:11:02.989458081 pid=2892489 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g31 --no-focus
+16:11:03.033502097 pid=2892502 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g32 --no-focus
+16:11:03.077277729 pid=2892515 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g33 --no-focus
+16:11:03.126743804 pid=2892528 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g34 --no-focus
+16:11:03.171106132 pid=2892541 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g35 --no-focus
+16:11:03.223403584 pid=2892555 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g36 --no-focus
+16:11:03.267437857 pid=2892568 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g37 --no-focus
+16:11:03.312548145 pid=2892580 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g38 --no-focus
+16:11:03.374893952 pid=2892593 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g39 --no-focus
+16:11:03.422648384 pid=2892606 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g40 --no-focus
+16:11:03.468561468 pid=2892619 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g41 --no-focus
+16:11:03.510845137 pid=2892632 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g42 --no-focus
+16:11:03.555228294 pid=2892645 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g43 --no-focus
+16:11:03.600860382 pid=2892658 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g44 --no-focus
+16:11:03.653572552 pid=2892671 ppid=2891928 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-g45 --no-focus
+16:11:31.704246077 pid=2896304 ppid=2896091 session=aohd-1 args: pane split w4:p1 --direction right --no-focus
+16:11:31.801656539 pid=2896319 ppid=2896091 session=aohd-1 args: pane split w4:p2 --direction down --no-focus
+16:11:31.880719866 pid=2896334 ppid=2896091 session=aohd-1 args: pane split w4:p3 --direction right --no-focus
+16:11:31.961788226 pid=2896349 ppid=2896091 session=aohd-1 args: pane split w4:p4 --direction down --no-focus
+16:11:32.052881081 pid=2896364 ppid=2896091 session=aohd-1 args: pane split w4:p5 --direction right --no-focus
+16:11:32.141610665 pid=2896379 ppid=2896091 session=aohd-1 args: pane split w4:p6 --direction down --no-focus
+16:11:32.236727971 pid=2896488 ppid=2896091 session=aohd-1 args: pane split w4:p7 --direction right --no-focus
+16:11:32.325227519 pid=2896807 ppid=2896091 session=aohd-1 args: pane split w4:p8 --direction down --no-focus
+16:11:32.416103989 pid=2897134 ppid=2896091 session=aohd-1 args: pane split w4:p9 --direction right --no-focus
+16:11:32.512846727 pid=2897478 ppid=2896091 session=aohd-1 args: pane split w4:pA --direction down --no-focus
+16:11:32.606309819 pid=2897807 ppid=2896091 session=aohd-1 args: pane split w4:pB --direction right --no-focus
+16:11:32.712037335 pid=2898184 ppid=2896091 session=aohd-1 args: pane split w4:pC --direction down --no-focus
+16:11:32.810369213 pid=2898535 ppid=2896091 session=aohd-1 args: pane split w4:pD --direction right --no-focus
+16:11:38.387875340 pid=2899164 ppid=2898949 session=aohd-1 args: pane close w4:pE
+16:11:38.594529738 pid=2899175 ppid=2899173 session=aohd-1 args: pane split w4:pD --direction down --no-focus
+16:11:38.704433758 pid=2899198 ppid=2899196 session=aohd-1 args: pane split w3:p1 --direction down --no-focus
+16:12:31.268627092 pid=2907765 ppid=2907763 session=aohd-1 args: api snapshot
+16:12:31.396779812 pid=2907785 ppid=2907783 session=aohd-1 args: server stop
+16:12:47.131290530 pid=2912571 ppid=2912567 session=aohd-1 args: pane get w3:p1
+16:12:47.171556783 pid=2912595 ppid=2912588 session=aohd-1 args: pane process-info --pane w3:p1
+16:12:47.205907553 pid=2912670 ppid=2912668 session=aohd-1 args: pane read w3:p1 --source recent-unwrapped --lines 50
+16:12:47.244876434 pid=2912693 ppid=2912688 session=aohd-1 args: pane read w3:p1 --source visible --lines 50
+16:12:47.278992527 pid=2912866 ppid=2912843 session=aohd-1 args: agent prompt w3:p1 aohd\ matrix\ prompt\ noserver_stopped
+16:12:47.305213079 pid=2913039 ppid=2913019 session=aohd-1 args: pane send-text w3:p1 aohd\ matrix\ text\ noserver_stopped
+16:12:47.323678911 pid=2913103 ppid=2913101 session=aohd-1 args: pane send-keys w3:p1 Enter
+16:12:47.351457936 pid=2913120 ppid=2913118 session=aohd-1 args: pane run w3:p1 bash /tmp/aohd/scripts/noop.sh
+16:12:47.393844332 pid=2913137 ppid=2913135 session=aohd-1 args: status server
+16:12:47.551401779 pid=2913155 ppid=2913153 session=aohd-1 args: status server --json
+16:12:47.643631729 pid=2913175 ppid=2913173 session=aohd-1 args: workspace close w3
+16:12:47.687671987 pid=2913201 ppid=2913199 session=aohd-1 args: pane close w3:p1
+16:12:47.726690457 pid=2913218 ppid=2913216 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label nsy --no-focus
+16:12:47.771885912 pid=2913235 ppid=2913233 session=aohd-1 args: server stop
+16:13:03.164179780 pid=2917811 ppid=2917809 session=aohd-1 args: api snapshot
+16:13:11.997210124 pid=2918994 ppid=2918989 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-after1 --no-focus
+16:13:12.142567257 pid=2919048 ppid=2919046 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-after2 --no-focus
+16:13:12.270079674 pid=2919072 ppid=2919070 session=aohd-1 args: pane split w3:p1 --direction down --no-focus
+16:13:12.497174490 pid=2919099 ppid=2919097 session=aohd-1 args: pane get w3:p1
+16:13:12.607839121 pid=2919150 ppid=2919148 session=aohd-1 args: pane process-info --pane w3:p1
+16:13:22.734426509 pid=2923126 ppid=2923124 session=aohd-1 args: pane get w3:p1
+16:13:22.848038485 pid=2923146 ppid=2923144 session=aohd-1 args: pane process-info --pane w3:p1
+16:13:22.956323321 pid=2923166 ppid=2923164 session=aohd-1 args: pane read w3:p1 --source recent-unwrapped --lines 50
+16:13:23.139159203 pid=2923186 ppid=2923184 session=aohd-1 args: pane read w3:p1 --source visible --lines 50
+16:13:23.311592885 pid=2923228 ppid=2923226 session=aohd-1 args: agent prompt w3:p1 aohd\ matrix\ prompt\ otherterm
+16:13:23.373861139 pid=2923247 ppid=2923245 session=aohd-1 args: pane send-text w3:p1 aohd\ matrix\ text\ otherterm
+16:13:23.437806018 pid=2923266 ppid=2923264 session=aohd-1 args: pane send-keys w3:p1 Enter
+16:13:23.497756506 pid=2923290 ppid=2923288 session=aohd-1 args: pane run w3:p1 bash /tmp/aohd/scripts/noop.sh
+16:13:23.561851984 pid=2923309 ppid=2923307 session=aohd-1 args: status server
+16:13:23.742799832 pid=2923334 ppid=2923332 session=aohd-1 args: status server --json
+16:14:18.437745681 pid=2932000 ppid=2931997 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo2 --label g-primary --no-focus
+16:14:18.559916456 pid=2932024 ppid=2932022 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo2-wt-ao --label g-aolike --no-focus
+16:14:24.722736919 pid=2935246 ppid=2935244 session=aohd-1 args: worktree create --workspace w1G --branch native1 --path /tmp/aohd/repo2-wt-native1 --label g-native1 --no-focus
+16:14:24.971669878 pid=2935282 ppid=2935280 session=aohd-1 args: workspace get w1G
+16:14:25.068160814 pid=2935302 ppid=2935300 session=aohd-1 args: workspace get w1H
+16:14:31.242176720 pid=2935625 ppid=2935623 session=aohd-1 args: workspace close w1G
+16:14:31.308392406 pid=2935648 ppid=2935646 session=aohd-1 args: workspace list
+16:14:41.611784041 pid=2937161 ppid=2937142 session=aohd-1 args: workspace close w1J
+16:14:41.946367853 pid=2938265 ppid=2938246 session=aohd-1 args: worktree create --workspace w1G --branch native2 --path /tmp/aohd/repo2-wt-native2 --label g-native2 --no-focus
+16:14:42.231668806 pid=2938433 ppid=2938431 session=aohd-1 args: workspace close w1G --group
+16:14:42.704772551 pid=2938457 ppid=2938455 session=aohd-1 args: workspace list
+16:14:50.801860176 pid=2938862 ppid=2938860 session=aohd-1 args: workspace close wZ --group
+16:14:51.112893534 pid=2938894 ppid=2938892 session=aohd-1 args: workspace close w1H
+16:15:54.785729514 pid=2949574 ppid=2949573 session=aohd-1 args: pane get w1L:p1
+16:15:54.971759845 pid=2949590 ppid=2949589 session=aohd-1 args: pane get w1L:p1
+16:15:55.155466020 pid=2949605 ppid=2949604 session=aohd-1 args: pane get w1L:p1
+16:15:55.331500890 pid=2949628 ppid=2949627 session=aohd-1 args: pane get w1L:p1
+16:15:55.479792523 pid=2949642 ppid=2949620 session=aohd-1 args: status server
+16:15:55.513776226 pid=2949661 ppid=2949660 session=aohd-1 args: pane get w1L:p1
+16:15:55.643166591 pid=2949691 ppid=2949620 session=aohd-1 args: workspace create --cwd /tmp/aohd/home/.worktrees/aohd/aohd-1 --label 4bb69d3e8656-aohd-1 --env CLAUDECODE= --env AO_SESSION_ID=aohd-1 --env GH_PATH= --env AO_SESSION=aohd-1 --env AO_DATA_DIR=/tmp/aohd/home/.agent-orchestrator/4bb69d3e8656-repo/sessions --env AO_SESSION_NAME=aohd-1 --env AO_TMUX_NAME=4bb69d3e8656-aohd-1 --env AO_CALLER_TYPE=agent --env AO_PROJECT_ID=aohd --env AO_CONFIG_PATH=/tmp/aohd/ao/agent-orchestrator.yaml --env AO_STATE_ROOT=/tmp/aohd/home/.agent-orchestrator --no-focus
+16:15:55.690145402 pid=2949702 ppid=2949701 session=aohd-1 args: pane get w1L:p1
+16:15:55.712064804 pid=2949714 ppid=2949620 session=aohd-1 args: pane run w1M:p1 bash /tmp/aohd/tmp/ao-herdr-launch-f78b5792-2ad0-4e53-aa19-4890667e29cd.sh
+16:15:55.739564705 pid=2949727 ppid=2949663 session=aohd-1 args: pane process-info --pane aohd-1
+16:15:55.858293055 pid=2949752 ppid=2949751 session=aohd-1 args: pane get w1L:p1
+16:15:56.043730201 pid=2949767 ppid=2949766 session=aohd-1 args: pane get w1L:p1
+16:15:56.227580728 pid=2949783 ppid=2949782 session=aohd-1 args: pane get w1L:p1
+16:15:56.411577682 pid=2949798 ppid=2949797 session=aohd-1 args: pane get w1L:p1
+16:15:56.596988910 pid=2949813 ppid=2949812 session=aohd-1 args: pane get w1L:p1
+16:15:56.775680272 pid=2949828 ppid=2949827 session=aohd-1 args: pane get w1L:p1
+16:15:56.961883150 pid=2949844 ppid=2949843 session=aohd-1 args: pane get w1L:p1
+16:15:57.147665935 pid=2949888 ppid=2949887 session=aohd-1 args: pane get w1L:p1
+16:15:57.322845026 pid=2949921 ppid=2949920 session=aohd-1 args: pane get w1L:p1
+16:15:57.507396427 pid=2949938 ppid=2949937 session=aohd-1 args: pane get w1L:p1
+16:15:57.688383440 pid=2949995 ppid=2949994 session=aohd-1 args: pane get w1L:p1
+16:15:57.876885853 pid=2950010 ppid=2950009 session=aohd-1 args: pane get w1L:p1
+16:15:58.065847325 pid=2950025 ppid=2950024 session=aohd-1 args: pane get w1L:p1
+16:15:58.238899019 pid=2950041 ppid=2950040 session=aohd-1 args: pane get w1L:p1
+16:15:58.422298472 pid=2950056 ppid=2950055 session=aohd-1 args: pane get w1L:p1
+16:15:58.609683692 pid=2950071 ppid=2950070 session=aohd-1 args: pane get w1L:p1
+16:15:58.760652412 pid=2950084 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:15:58.782436520 pid=2950094 ppid=2950093 session=aohd-1 args: pane get w1L:p1
+16:15:58.962908480 pid=2950110 ppid=2950109 session=aohd-1 args: pane get w1L:p1
+16:15:59.133220047 pid=2950125 ppid=2950124 session=aohd-1 args: pane get w1L:p1
+16:15:59.293904946 pid=2950138 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:15:59.306126591 pid=2950144 ppid=2950143 session=aohd-1 args: pane get w1L:p1
+16:15:59.489260459 pid=2950166 ppid=2950165 session=aohd-1 args: pane get w1L:p1
+16:15:59.669116739 pid=2950208 ppid=2950207 session=aohd-1 args: pane get w1L:p1
+16:15:59.828045873 pid=2950221 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:15:59.851253701 pid=2950231 ppid=2950230 session=aohd-1 args: pane get w1L:p1
+16:15:59.861204279 pid=2950236 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:15:59.891374089 pid=2950253 ppid=2949620 session=aohd-1 args: agent prompt w1M:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:16:00.028701509 pid=2950266 ppid=2950265 session=aohd-1 args: pane get w1L:p1
+16:16:00.196435091 pid=2950281 ppid=2950280 session=aohd-1 args: pane get w1L:p1
+16:16:00.279676672 pid=2950294 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:16:00.383440715 pid=2950305 ppid=2950304 session=aohd-1 args: pane get w1L:p1
+16:16:00.573951416 pid=2950320 ppid=2950319 session=aohd-1 args: pane get w1L:p1
+16:16:00.712472997 pid=2950341 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:16:00.751517580 pid=2950353 ppid=2950352 session=aohd-1 args: pane get w1L:p1
+16:16:00.932731487 pid=2950368 ppid=2950367 session=aohd-1 args: pane get w1L:p1
+16:16:01.114765920 pid=2950383 ppid=2950382 session=aohd-1 args: pane get w1L:p1
+16:16:01.146110247 pid=2950395 ppid=2949620 session=aohd-1 args: pane get w1M:p1
+16:16:01.298424669 pid=2950409 ppid=2950408 session=aohd-1 args: pane get w1L:p1
+16:16:01.481937862 pid=2950449 ppid=2950448 session=aohd-1 args: pane get w1L:p1
+16:16:01.664901202 pid=2950464 ppid=2950463 session=aohd-1 args: pane get w1L:p1
+16:16:01.843953703 pid=2950485 ppid=2950484 session=aohd-1 args: pane get w1L:p1
+16:16:02.010522831 pid=2950535 ppid=2950534 session=aohd-1 args: pane get w1L:p1
+16:16:02.195941998 pid=2950550 ppid=2950549 session=aohd-1 args: pane get w1L:p1
+16:16:02.369679329 pid=2950565 ppid=2950564 session=aohd-1 args: pane get w1L:p1
+16:16:02.547240511 pid=2950580 ppid=2950579 session=aohd-1 args: pane get w1L:p1
+16:16:02.729455890 pid=2950595 ppid=2950594 session=aohd-1 args: pane get w1L:p1
+16:16:02.919783778 pid=2950610 ppid=2950609 session=aohd-1 args: pane get w1L:p1
+16:16:03.108397467 pid=2950625 ppid=2950624 session=aohd-1 args: pane get w1L:p1
+16:16:03.291540173 pid=2950640 ppid=2950639 session=aohd-1 args: pane get w1L:p1
+16:16:03.475798817 pid=2950655 ppid=2950654 session=aohd-1 args: pane get w1L:p1
+16:16:03.663492997 pid=2950675 ppid=2950674 session=aohd-1 args: pane get w1L:p1
+16:16:03.848805476 pid=2950690 ppid=2950689 session=aohd-1 args: pane get w1L:p1
+16:16:04.031882818 pid=2950705 ppid=2950704 session=aohd-1 args: pane get w1L:p1
+16:16:04.212399759 pid=2950720 ppid=2950719 session=aohd-1 args: pane get w1L:p1
+16:16:04.395661871 pid=2950735 ppid=2950734 session=aohd-1 args: pane get w1L:p1
+16:16:04.586091348 pid=2950750 ppid=2950749 session=aohd-1 args: pane get w1L:p1
+16:16:04.766576029 pid=2950765 ppid=2950764 session=aohd-1 args: pane get w1L:p1
+16:16:04.945070550 pid=2950780 ppid=2950779 session=aohd-1 args: pane get w1L:p1
+16:16:05.129991924 pid=2950795 ppid=2950794 session=aohd-1 args: pane get w1L:p1
+16:16:05.307955317 pid=2951068 ppid=2951065 session=aohd-1 args: pane get w1L:p1
+16:16:05.481504536 pid=2951683 ppid=2951681 session=aohd-1 args: pane get w1L:p1
+16:16:05.653897976 pid=2952174 ppid=2952172 session=aohd-1 args: pane get w1L:p1
+16:16:05.814729802 pid=2952586 ppid=2952583 session=aohd-1 args: pane get w1L:p1
+16:16:05.991989506 pid=2953220 ppid=2953217 session=aohd-1 args: pane get w1L:p1
+16:16:06.169718431 pid=2953433 ppid=2953432 session=aohd-1 args: pane get w1L:p1
+16:16:06.342105772 pid=2953520 ppid=2953519 session=aohd-1 args: pane get w1L:p1
+16:16:06.521161869 pid=2953572 ppid=2953571 session=aohd-1 args: pane get w1L:p1
+16:16:06.707242621 pid=2953587 ppid=2953586 session=aohd-1 args: pane get w1L:p1
+16:16:06.890553474 pid=2953631 ppid=2953630 session=aohd-1 args: pane get w1L:p1
+16:16:07.077206854 pid=2953653 ppid=2953652 session=aohd-1 args: pane get w1L:p1
+16:16:07.259710748 pid=2953668 ppid=2953667 session=aohd-1 args: pane get w1L:p1
+16:16:07.436704210 pid=2953683 ppid=2953682 session=aohd-1 args: pane get w1L:p1
+16:16:07.617061684 pid=2953698 ppid=2953697 session=aohd-1 args: pane get w1L:p1
+16:16:07.799675290 pid=2953713 ppid=2953712 session=aohd-1 args: pane get w1L:p1
+16:16:07.975406639 pid=2953728 ppid=2953727 session=aohd-1 args: pane get w1L:p1
+16:16:08.163142827 pid=2953744 ppid=2953743 session=aohd-1 args: pane get w1L:p1
+16:16:08.337081467 pid=2953759 ppid=2953758 session=aohd-1 args: pane get w1L:p1
+16:16:08.515042593 pid=2953774 ppid=2953773 session=aohd-1 args: pane get w1L:p1
+16:16:08.696438585 pid=2953789 ppid=2953788 session=aohd-1 args: pane get w1L:p1
+16:16:08.878411689 pid=2953835 ppid=2953834 session=aohd-1 args: pane get w1L:p1
+16:16:09.051357216 pid=2953872 ppid=2953871 session=aohd-1 args: pane get w1L:p1
+16:16:09.238538229 pid=2953887 ppid=2953886 session=aohd-1 args: pane get w1L:p1
+16:16:09.423692842 pid=2953902 ppid=2953901 session=aohd-1 args: pane get w1L:p1
+16:16:09.597256773 pid=2953917 ppid=2953916 session=aohd-1 args: pane get w1L:p1
+16:16:09.776547512 pid=2953932 ppid=2953931 session=aohd-1 args: pane get w1L:p1
+16:16:09.962580050 pid=2953947 ppid=2953946 session=aohd-1 args: pane get w1L:p1
+16:16:10.130337275 pid=2953997 ppid=2953996 session=aohd-1 args: pane get w1L:p1
+16:16:10.301090907 pid=2954012 ppid=2954011 session=aohd-1 args: pane get w1L:p1
+16:16:10.479016701 pid=2954027 ppid=2954026 session=aohd-1 args: pane get w1L:p1
+16:16:10.656554110 pid=2954042 ppid=2954041 session=aohd-1 args: pane get w1L:p1
+16:16:10.846701832 pid=2954057 ppid=2954056 session=aohd-1 args: pane get w1L:p1
+16:16:11.018172215 pid=2954072 ppid=2954071 session=aohd-1 args: pane get w1L:p1
+16:16:11.200157713 pid=2954087 ppid=2954086 session=aohd-1 args: pane get w1L:p1
+16:16:11.385611384 pid=2954102 ppid=2954101 session=aohd-1 args: pane get w1L:p1
+16:16:11.567172812 pid=2954117 ppid=2954116 session=aohd-1 args: pane get w1L:p1
+16:16:11.739284827 pid=2954132 ppid=2954131 session=aohd-1 args: pane get w1L:p1
+16:16:11.912530284 pid=2954147 ppid=2954146 session=aohd-1 args: pane get w1L:p1
+16:16:12.093315306 pid=2954169 ppid=2954168 session=aohd-1 args: pane get w1L:p1
+16:16:12.272702866 pid=2954184 ppid=2954183 session=aohd-1 args: pane get w1L:p1
+16:16:12.447406208 pid=2954199 ppid=2954198 session=aohd-1 args: pane get w1L:p1
+16:16:12.628630666 pid=2954214 ppid=2954213 session=aohd-1 args: pane get w1L:p1
+16:16:12.811201706 pid=2954229 ppid=2954228 session=aohd-1 args: pane get w1L:p1
+16:16:12.982454937 pid=2954244 ppid=2954243 session=aohd-1 args: pane get w1L:p1
+16:16:13.171307437 pid=2954259 ppid=2954258 session=aohd-1 args: pane get w1L:p1
+16:16:13.356459050 pid=2954274 ppid=2954273 session=aohd-1 args: pane get w1L:p1
+16:16:13.542182635 pid=2954289 ppid=2954288 session=aohd-1 args: pane get w1L:p1
+16:16:13.725947737 pid=2954304 ppid=2954303 session=aohd-1 args: pane get w1L:p1
+16:16:13.908815992 pid=2954319 ppid=2954318 session=aohd-1 args: pane get w1L:p1
+16:16:14.091794536 pid=2954334 ppid=2954333 session=aohd-1 args: pane get w1L:p1
+16:16:14.266139368 pid=2954349 ppid=2954348 session=aohd-1 args: pane get w1L:p1
+16:16:14.452810561 pid=2954364 ppid=2954363 session=aohd-1 args: pane get w1L:p1
+16:16:14.628708779 pid=2954383 ppid=2954382 session=aohd-1 args: pane get w1L:p1
+16:16:14.810539556 pid=2954428 ppid=2954427 session=aohd-1 args: pane get w1L:p1
+16:16:14.976825065 pid=2954443 ppid=2954442 session=aohd-1 args: pane get w1L:p1
+16:16:15.151455005 pid=2954516 ppid=2954515 session=aohd-1 args: pane get w1L:p1
+16:16:15.328621194 pid=2954537 ppid=2954536 session=aohd-1 args: pane get w1L:p1
+16:16:15.511981951 pid=2954552 ppid=2954551 session=aohd-1 args: pane get w1L:p1
+16:16:15.690055241 pid=2954567 ppid=2954566 session=aohd-1 args: pane get w1L:p1
+16:16:15.872043917 pid=2954582 ppid=2954581 session=aohd-1 args: pane get w1L:p1
+16:16:16.053446337 pid=2954597 ppid=2954596 session=aohd-1 args: pane get w1L:p1
+16:16:16.236695697 pid=2954612 ppid=2954611 session=aohd-1 args: pane get w1L:p1
+16:16:16.408570684 pid=2954627 ppid=2954626 session=aohd-1 args: pane get w1L:p1
+16:16:16.580168624 pid=2954642 ppid=2954641 session=aohd-1 args: pane get w1L:p1
+16:16:16.758284726 pid=2954657 ppid=2954656 session=aohd-1 args: pane get w1L:p1
+16:16:16.945102775 pid=2954673 ppid=2954672 session=aohd-1 args: pane get w1L:p1
+16:16:17.125958887 pid=2954688 ppid=2954687 session=aohd-1 args: pane get w1L:p1
+16:16:17.316893363 pid=2954703 ppid=2954702 session=aohd-1 args: pane get w1L:p1
+16:16:17.498245983 pid=2954718 ppid=2954717 session=aohd-1 args: pane get w1L:p1
+16:16:17.681101639 pid=2954733 ppid=2954732 session=aohd-1 args: pane get w1L:p1
+16:16:17.864537898 pid=2954748 ppid=2954747 session=aohd-1 args: pane get w1L:p1
+16:16:18.038503443 pid=2954763 ppid=2954762 session=aohd-1 args: pane get w1L:p1
+16:16:18.217015363 pid=2954782 ppid=2954781 session=aohd-1 args: pane get w1L:p1
+16:16:18.392676805 pid=2954826 ppid=2954825 session=aohd-1 args: pane get w1L:p1
+16:16:18.576553409 pid=2954843 ppid=2954842 session=aohd-1 args: pane get w1L:p1
+16:16:18.764729405 pid=2954858 ppid=2954857 session=aohd-1 args: pane get w1L:p1
+16:16:18.946480463 pid=2954873 ppid=2954872 session=aohd-1 args: pane get w1L:p1
+16:16:19.131986464 pid=2954888 ppid=2954887 session=aohd-1 args: pane get w1L:p1
+16:16:19.317418782 pid=2954910 ppid=2954909 session=aohd-1 args: pane get w1L:p1
+16:16:19.493815846 pid=2954926 ppid=2954925 session=aohd-1 args: pane get w1L:p1
+16:16:19.678921219 pid=2954941 ppid=2954940 session=aohd-1 args: pane get w1L:p1
+16:16:19.855479575 pid=2954956 ppid=2954955 session=aohd-1 args: pane get w1L:p1
+16:16:20.033897608 pid=2954971 ppid=2954970 session=aohd-1 args: pane get w1L:p1
+16:16:20.208054905 pid=2954986 ppid=2954985 session=aohd-1 args: pane get w1L:p1
+16:16:20.395243569 pid=2955001 ppid=2955000 session=aohd-1 args: pane get w1L:p1
+16:16:20.570205092 pid=2955016 ppid=2955015 session=aohd-1 args: pane get w1L:p1
+16:16:20.745562993 pid=2955031 ppid=2955030 session=aohd-1 args: pane get w1L:p1
+16:16:20.929869049 pid=2955050 ppid=2955049 session=aohd-1 args: pane get w1L:p1
+16:16:21.110060223 pid=2955094 ppid=2955093 session=aohd-1 args: pane get w1L:p1
+16:16:21.289418920 pid=2955109 ppid=2955108 session=aohd-1 args: pane get w1L:p1
+16:16:21.457609678 pid=2955146 ppid=2955145 session=aohd-1 args: pane get w1L:p1
+16:16:21.632143624 pid=2955164 ppid=2955163 session=aohd-1 args: pane get w1L:p1
+16:16:21.805092458 pid=2955186 ppid=2955185 session=aohd-1 args: pane get w1L:p1
+16:16:21.982237251 pid=2955202 ppid=2955201 session=aohd-1 args: pane get w1L:p1
+16:16:22.157181058 pid=2955217 ppid=2955216 session=aohd-1 args: pane get w1L:p1
+16:16:22.331638108 pid=2955233 ppid=2955232 session=aohd-1 args: pane get w1L:p1
+16:16:22.512704434 pid=2955254 ppid=2955253 session=aohd-1 args: pane get w1L:p1
+16:16:22.686664624 pid=2955275 ppid=2955274 session=aohd-1 args: pane get w1L:p1
+16:16:22.861074919 pid=2955321 ppid=2955320 session=aohd-1 args: pane get w1L:p1
+16:16:23.034643407 pid=2955336 ppid=2955335 session=aohd-1 args: pane get w1L:p1
+16:16:23.214932585 pid=2955351 ppid=2955350 session=aohd-1 args: pane get w1L:p1
+16:16:23.390824132 pid=2955463 ppid=2955462 session=aohd-1 args: pane get w1L:p1
+16:16:23.564454425 pid=2955558 ppid=2955557 session=aohd-1 args: pane get w1L:p1
+16:16:23.740009914 pid=2955588 ppid=2955587 session=aohd-1 args: pane get w1L:p1
+16:16:23.912704746 pid=2955603 ppid=2955602 session=aohd-1 args: pane get w1L:p1
+16:16:24.090200590 pid=2955647 ppid=2955646 session=aohd-1 args: pane get w1L:p1
+16:16:24.259188436 pid=2955668 ppid=2955667 session=aohd-1 args: pane get w1L:p1
+16:16:24.432609341 pid=2955761 ppid=2955760 session=aohd-1 args: pane get w1L:p1
+16:16:24.611472540 pid=2955814 ppid=2955813 session=aohd-1 args: pane get w1L:p1
+16:16:24.784204205 pid=2955905 ppid=2955903 session=aohd-1 args: pane get w1L:p1
+16:16:24.957948437 pid=2955978 ppid=2955977 session=aohd-1 args: pane get w1L:p1
+16:16:25.129134298 pid=2956010 ppid=2956009 session=aohd-1 args: pane get w1L:p1
+16:16:25.310695308 pid=2956054 ppid=2956053 session=aohd-1 args: pane get w1L:p1
+16:16:25.483830307 pid=2956069 ppid=2956068 session=aohd-1 args: pane get w1L:p1
+16:16:25.669195439 pid=2956096 ppid=2956095 session=aohd-1 args: pane get w1L:p1
+16:16:25.745023808 pid=2956119 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:16:25.775417774 pid=2956130 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:16:25.815148265 pid=2956143 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:16:25.838406624 pid=2956154 ppid=2956152 session=aohd-1 args: pane get w1L:p1
+16:16:25.848070094 pid=2956158 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:16:26.014314557 pid=2956217 ppid=2956216 session=aohd-1 args: pane get w1L:p1
+16:16:26.199377356 pid=2956307 ppid=2956304 session=aohd-1 args: pane get w1L:p1
+16:16:26.375373579 pid=2956845 ppid=2956844 session=aohd-1 args: pane get w1L:p1
+16:16:26.550278042 pid=2957476 ppid=2957471 session=aohd-1 args: pane get w1L:p1
+16:16:26.707539886 pid=2958111 ppid=2958108 session=aohd-1 args: pane get w1L:p1
+16:16:26.883637925 pid=2958767 ppid=2958764 session=aohd-1 args: pane get w1L:p1
+16:16:27.059607163 pid=2959091 ppid=2959090 session=aohd-1 args: pane get w1L:p1
+16:16:27.241618394 pid=2959135 ppid=2959134 session=aohd-1 args: pane get w1L:p1
+16:16:27.417552573 pid=2959179 ppid=2959178 session=aohd-1 args: pane get w1L:p1
+16:16:27.598453540 pid=2959194 ppid=2959193 session=aohd-1 args: pane get w1L:p1
+16:16:27.782357097 pid=2959209 ppid=2959208 session=aohd-1 args: pane get w1L:p1
+16:16:27.959529285 pid=2959224 ppid=2959223 session=aohd-1 args: pane get w1L:p1
+16:16:28.144584773 pid=2959239 ppid=2959238 session=aohd-1 args: pane get w1L:p1
+16:16:28.325565922 pid=2959254 ppid=2959253 session=aohd-1 args: pane get w1L:p1
+16:16:28.506990040 pid=2959269 ppid=2959268 session=aohd-1 args: pane get w1L:p1
+16:16:28.692285425 pid=2959284 ppid=2959283 session=aohd-1 args: pane get w1L:p1
+16:16:28.884033190 pid=2959329 ppid=2959328 session=aohd-1 args: pane get w1L:p1
+16:16:29.073315775 pid=2959344 ppid=2959343 session=aohd-1 args: pane get w1L:p1
+16:16:29.247464184 pid=2959359 ppid=2959358 session=aohd-1 args: pane get w1L:p1
+16:16:29.424648627 pid=2959374 ppid=2959373 session=aohd-1 args: pane get w1L:p1
+16:16:29.607397865 pid=2959389 ppid=2959388 session=aohd-1 args: pane get w1L:p1
+16:16:29.786989919 pid=2959416 ppid=2959415 session=aohd-1 args: pane get w1L:p1
+16:16:29.970479255 pid=2959431 ppid=2959430 session=aohd-1 args: pane get w1L:p1
+16:16:30.152176690 pid=2959479 ppid=2959478 session=aohd-1 args: pane get w1L:p1
+16:16:30.335960666 pid=2959504 ppid=2959503 session=aohd-1 args: pane get w1L:p1
+16:16:30.510493183 pid=2959548 ppid=2959547 session=aohd-1 args: pane get w1L:p1
+16:16:30.682230013 pid=2959640 ppid=2959639 session=aohd-1 args: pane get w1L:p1
+16:16:30.854253265 pid=2959749 ppid=2959748 session=aohd-1 args: pane get w1L:p1
+16:16:31.043498003 pid=2959796 ppid=2959795 session=aohd-1 args: pane get w1L:p1
+16:16:31.225221349 pid=2959926 ppid=2959925 session=aohd-1 args: pane get w1L:p1
+16:16:31.413418125 pid=2960030 ppid=2960029 session=aohd-1 args: pane get w1L:p1
+16:16:31.602838416 pid=2960045 ppid=2960044 session=aohd-1 args: pane get w1L:p1
+16:16:31.786532064 pid=2960089 ppid=2960088 session=aohd-1 args: pane get w1L:p1
+16:16:31.971901183 pid=2960104 ppid=2960103 session=aohd-1 args: pane get w1L:p1
+16:16:32.150065488 pid=2960119 ppid=2960118 session=aohd-1 args: pane get w1L:p1
+16:16:32.330381135 pid=2960134 ppid=2960133 session=aohd-1 args: pane get w1L:p1
+16:16:32.508599592 pid=2960149 ppid=2960148 session=aohd-1 args: pane get w1L:p1
+16:16:32.693825228 pid=2960164 ppid=2960163 session=aohd-1 args: pane get w1L:p1
+16:16:32.867901928 pid=2960180 ppid=2960179 session=aohd-1 args: pane get w1L:p1
+16:16:33.052713590 pid=2960195 ppid=2960194 session=aohd-1 args: pane get w1L:p1
+16:16:33.228341163 pid=2960210 ppid=2960209 session=aohd-1 args: pane get w1L:p1
+16:16:33.405694194 pid=2960225 ppid=2960224 session=aohd-1 args: pane get w1L:p1
+16:16:33.581443667 pid=2960243 ppid=2960242 session=aohd-1 args: pane get w1L:p1
+16:16:33.766382033 pid=2960258 ppid=2960257 session=aohd-1 args: pane get w1L:p1
+16:16:33.940742488 pid=2960273 ppid=2960272 session=aohd-1 args: pane get w1L:p1
+16:16:34.119823397 pid=2960288 ppid=2960287 session=aohd-1 args: pane get w1L:p1
+16:16:34.311428734 pid=2960303 ppid=2960302 session=aohd-1 args: pane get w1L:p1
+16:16:34.483403558 pid=2960347 ppid=2960346 session=aohd-1 args: pane get w1L:p1
+16:16:34.660104055 pid=2960368 ppid=2960367 session=aohd-1 args: pane get w1L:p1
+16:16:34.839249583 pid=2960389 ppid=2960388 session=aohd-1 args: pane get w1L:p1
+16:16:35.016149040 pid=2960435 ppid=2960434 session=aohd-1 args: pane get w1L:p1
+16:16:35.196683714 pid=2960450 ppid=2960449 session=aohd-1 args: pane get w1L:p1
+16:16:35.374545698 pid=2960476 ppid=2960474 session=aohd-1 args: pane get w1L:p1
+16:16:35.549302663 pid=2960602 ppid=2960601 session=aohd-1 args: pane get w1L:p1
+16:16:35.732967954 pid=2960694 ppid=2960693 session=aohd-1 args: pane get w1L:p1
+16:16:35.914301674 pid=2960709 ppid=2960708 session=aohd-1 args: pane get w1L:p1
+16:16:36.087576377 pid=2960767 ppid=2960766 session=aohd-1 args: pane get w1L:p1
+16:16:36.267675478 pid=2960799 ppid=2960798 session=aohd-1 args: pane get w1L:p1
+16:16:36.443796535 pid=2960816 ppid=2960814 session=aohd-1 args: pane get w1L:p1
+16:16:36.633395378 pid=2960968 ppid=2960967 session=aohd-1 args: pane get w1L:p1
+16:16:36.818192099 pid=2961053 ppid=2961052 session=aohd-1 args: pane get w1L:p1
+16:16:36.997542991 pid=2961068 ppid=2961067 session=aohd-1 args: pane get w1L:p1
+16:16:37.177393283 pid=2961083 ppid=2961082 session=aohd-1 args: pane get w1L:p1
+16:16:37.357820703 pid=2961127 ppid=2961126 session=aohd-1 args: pane get w1L:p1
+16:16:37.534871899 pid=2961142 ppid=2961141 session=aohd-1 args: pane get w1L:p1
+16:16:37.720177647 pid=2961157 ppid=2961156 session=aohd-1 args: pane get w1L:p1
+16:16:37.906579552 pid=2961172 ppid=2961171 session=aohd-1 args: pane get w1L:p1
+16:16:38.093730713 pid=2961187 ppid=2961186 session=aohd-1 args: pane get w1L:p1
+16:16:38.282239407 pid=2961202 ppid=2961201 session=aohd-1 args: pane get w1L:p1
+16:16:38.455576780 pid=2961217 ppid=2961216 session=aohd-1 args: pane get w1L:p1
+16:16:38.638692528 pid=2961232 ppid=2961231 session=aohd-1 args: pane get w1L:p1
+16:16:38.820668402 pid=2961247 ppid=2961246 session=aohd-1 args: pane get w1L:p1
+16:16:39.000656191 pid=2961262 ppid=2961261 session=aohd-1 args: pane get w1L:p1
+16:16:39.178890064 pid=2961277 ppid=2961276 session=aohd-1 args: pane get w1L:p1
+16:16:39.368993300 pid=2961292 ppid=2961291 session=aohd-1 args: pane get w1L:p1
+16:16:39.554496455 pid=2961307 ppid=2961306 session=aohd-1 args: pane get w1L:p1
+16:16:39.739504069 pid=2961322 ppid=2961321 session=aohd-1 args: pane get w1L:p1
+16:16:39.913670352 pid=2961337 ppid=2961336 session=aohd-1 args: pane get w1L:p1
+16:16:40.087285436 pid=2961352 ppid=2961351 session=aohd-1 args: pane get w1L:p1
+16:16:40.264121518 pid=2961367 ppid=2961366 session=aohd-1 args: pane get w1L:p1
+16:16:40.446252204 pid=2961382 ppid=2961381 session=aohd-1 args: pane get w1L:p1
+16:16:40.629883625 pid=2961397 ppid=2961396 session=aohd-1 args: pane get w1L:p1
+16:16:40.803223211 pid=2961412 ppid=2961411 session=aohd-1 args: pane get w1L:p1
+16:16:40.977918643 pid=2961427 ppid=2961426 session=aohd-1 args: pane get w1L:p1
+16:16:41.154389907 pid=2961472 ppid=2961471 session=aohd-1 args: pane get w1L:p1
+16:16:41.329825972 pid=2961487 ppid=2961486 session=aohd-1 args: pane get w1L:p1
+16:16:41.503432045 pid=2961502 ppid=2961501 session=aohd-1 args: pane get w1L:p1
+16:16:41.684220274 pid=2961517 ppid=2961516 session=aohd-1 args: pane get w1L:p1
+16:16:41.870817706 pid=2961547 ppid=2961546 session=aohd-1 args: pane get w1L:p1
+16:16:42.041135359 pid=2961562 ppid=2961561 session=aohd-1 args: pane get w1L:p1
+16:16:42.222300344 pid=2961577 ppid=2961576 session=aohd-1 args: pane get w1L:p1
+16:16:42.398477318 pid=2961592 ppid=2961591 session=aohd-1 args: pane get w1L:p1
+16:16:42.576650604 pid=2961614 ppid=2961613 session=aohd-1 args: pane get w1L:p1
+16:16:42.752819159 pid=2961634 ppid=2961633 session=aohd-1 args: pane get w1L:p1
+16:16:42.927482174 pid=2961678 ppid=2961677 session=aohd-1 args: pane get w1L:p1
+16:16:43.112251029 pid=2961695 ppid=2961694 session=aohd-1 args: pane get w1L:p1
+16:16:43.293815637 pid=2961715 ppid=2961714 session=aohd-1 args: pane get w1L:p1
+16:16:43.465152597 pid=2961834 ppid=2961833 session=aohd-1 args: pane get w1L:p1
+16:16:43.644623158 pid=2961917 ppid=2961916 session=aohd-1 args: pane get w1L:p1
+16:16:43.789393127 pid=2961931 ppid=2961909 session=aohd-1 args: pane get w1M:p1
+16:16:43.820815822 pid=2961942 ppid=2961909 session=aohd-1 args: pane process-info --pane w1M:p1
+16:16:43.821340721 pid=2961943 ppid=2961941 session=aohd-1 args: pane get w1L:p1
+16:16:44.001881200 pid=2961975 ppid=2961974 session=aohd-1 args: pane get w1L:p1
+16:16:44.047911116 pid=2961997 ppid=2961995 session=aohd-1 args: pane get w1M:p1
+16:16:44.184094312 pid=2962019 ppid=2962018 session=aohd-1 args: pane get w1L:p1
+16:16:44.361466194 pid=2962050 ppid=2962049 session=aohd-1 args: pane get w1L:p1
+16:16:44.541767118 pid=2962065 ppid=2962064 session=aohd-1 args: pane get w1L:p1
+16:16:44.717652370 pid=2962122 ppid=2962121 session=aohd-1 args: pane get w1L:p1
+16:16:44.890966508 pid=2962168 ppid=2962167 session=aohd-1 args: pane get w1L:p1
+16:16:45.066231781 pid=2962233 ppid=2962232 session=aohd-1 args: pane get w1L:p1
+16:16:45.254886782 pid=2962248 ppid=2962247 session=aohd-1 args: pane get w1L:p1
+16:16:45.438235017 pid=2962263 ppid=2962262 session=aohd-1 args: pane get w1L:p1
+16:16:45.611302329 pid=2962278 ppid=2962277 session=aohd-1 args: pane get w1L:p1
+16:16:45.798394834 pid=2962293 ppid=2962292 session=aohd-1 args: pane get w1L:p1
+16:16:45.973307854 pid=2962308 ppid=2962307 session=aohd-1 args: pane get w1L:p1
+16:16:46.150718798 pid=2962323 ppid=2962322 session=aohd-1 args: pane get w1L:p1
+16:16:46.335217500 pid=2962338 ppid=2962337 session=aohd-1 args: pane get w1L:p1
+16:16:46.517434228 pid=2962353 ppid=2962352 session=aohd-1 args: pane get w1L:p1
+16:16:46.700061129 pid=2962368 ppid=2962367 session=aohd-1 args: pane get w1L:p1
+16:16:46.884196538 pid=2962383 ppid=2962382 session=aohd-1 args: pane get w1L:p1
+16:16:47.065192147 pid=2962398 ppid=2962397 session=aohd-1 args: pane get w1L:p1
+16:16:47.246811364 pid=2962573 ppid=2962571 session=aohd-1 args: pane get w1L:p1
+16:16:47.419995680 pid=2963178 ppid=2963175 session=aohd-1 args: pane get w1L:p1
+16:16:47.594786224 pid=2963798 ppid=2963795 session=aohd-1 args: pane get w1L:p1
+16:16:47.773239036 pid=2964431 ppid=2964428 session=aohd-1 args: pane get w1L:p1
+16:16:47.947741855 pid=2964856 ppid=2964855 session=aohd-1 args: pane get w1L:p1
+16:16:48.121727799 pid=2964878 ppid=2964877 session=aohd-1 args: pane get w1L:p1
+16:16:48.294184605 pid=2964908 ppid=2964907 session=aohd-1 args: pane get w1L:p1
+16:16:48.490171316 pid=2964937 ppid=2964936 session=aohd-1 args: pane get w1L:p1
+16:16:48.679142417 pid=2964954 ppid=2964953 session=aohd-1 args: pane get w1L:p1
+16:16:48.859926497 pid=2964981 ppid=2964980 session=aohd-1 args: pane get w1L:p1
+16:16:49.035501947 pid=2964996 ppid=2964995 session=aohd-1 args: pane get w1L:p1
+16:16:49.207919135 pid=2965040 ppid=2965039 session=aohd-1 args: pane get w1L:p1
+16:16:49.391220915 pid=2965057 ppid=2965056 session=aohd-1 args: pane get w1L:p1
+16:16:49.562253244 pid=2965072 ppid=2965071 session=aohd-1 args: pane get w1L:p1
+16:16:49.740658637 pid=2965144 ppid=2965143 session=aohd-1 args: pane get w1L:p1
+16:16:49.925598653 pid=2965264 ppid=2965263 session=aohd-1 args: pane get w1L:p1
+16:16:50.102067912 pid=2965304 ppid=2965303 session=aohd-1 args: pane get w1L:p1
+16:16:50.281526902 pid=2965319 ppid=2965318 session=aohd-1 args: pane get w1L:p1
+16:16:50.449348276 pid=2965363 ppid=2965362 session=aohd-1 args: pane get w1L:p1
+16:16:50.629337893 pid=2965378 ppid=2965377 session=aohd-1 args: pane get w1L:p1
+16:16:50.809999098 pid=2965393 ppid=2965392 session=aohd-1 args: pane get w1L:p1
+16:16:50.993344483 pid=2965415 ppid=2965414 session=aohd-1 args: pane get w1L:p1
+16:16:51.173135854 pid=2965430 ppid=2965429 session=aohd-1 args: pane get w1L:p1
+16:16:51.352323146 pid=2965445 ppid=2965444 session=aohd-1 args: pane get w1L:p1
+16:16:51.532830313 pid=2965460 ppid=2965459 session=aohd-1 args: pane get w1L:p1
+16:16:51.719068272 pid=2965475 ppid=2965474 session=aohd-1 args: pane get w1L:p1
+16:16:51.903678077 pid=2965490 ppid=2965489 session=aohd-1 args: pane get w1L:p1
+16:16:52.077266551 pid=2965506 ppid=2965505 session=aohd-1 args: pane get w1L:p1
+16:16:52.256874703 pid=2965523 ppid=2965522 session=aohd-1 args: pane get w1L:p1
+16:16:52.438621448 pid=2965566 ppid=2965565 session=aohd-1 args: pane get w1L:p1
+16:16:52.612390205 pid=2965581 ppid=2965580 session=aohd-1 args: pane get w1L:p1
+16:16:52.784580801 pid=2965596 ppid=2965595 session=aohd-1 args: pane get w1L:p1
+16:16:52.957380290 pid=2965611 ppid=2965610 session=aohd-1 args: pane get w1L:p1
+16:16:53.134984943 pid=2965638 ppid=2965637 session=aohd-1 args: pane get w1L:p1
+16:16:53.295066061 pid=2965653 ppid=2965652 session=aohd-1 args: pane get w1L:p1
+16:16:53.482834777 pid=2965699 ppid=2965698 session=aohd-1 args: pane get w1L:p1
+16:16:53.657813605 pid=2965714 ppid=2965713 session=aohd-1 args: pane get w1L:p1
+16:16:53.833134581 pid=2965736 ppid=2965735 session=aohd-1 args: pane get w1L:p1
+16:16:54.017630144 pid=2965840 ppid=2965838 session=aohd-1 args: pane get w1L:p1
+16:16:54.201145175 pid=2965936 ppid=2965935 session=aohd-1 args: pane get w1L:p1
+16:16:54.380690990 pid=2965951 ppid=2965950 session=aohd-1 args: pane get w1L:p1
+16:16:54.568566814 pid=2965966 ppid=2965965 session=aohd-1 args: pane get w1L:p1
+16:16:54.753211152 pid=2965981 ppid=2965980 session=aohd-1 args: pane get w1L:p1
+16:16:54.937566191 pid=2965996 ppid=2965995 session=aohd-1 args: pane get w1L:p1
+16:16:55.119456415 pid=2966040 ppid=2966039 session=aohd-1 args: pane get w1L:p1
+16:16:55.296064237 pid=2966079 ppid=2966078 session=aohd-1 args: pane get w1L:p1
+16:16:55.469882367 pid=2966121 ppid=2966120 session=aohd-1 args: pane get w1L:p1
+16:16:55.647234712 pid=2966136 ppid=2966135 session=aohd-1 args: pane get w1L:p1
+16:16:55.745431508 pid=2966149 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:16:55.778100150 pid=2966158 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:16:55.815303002 pid=2966167 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:16:55.820436152 pid=2966172 ppid=2966170 session=aohd-1 args: pane get w1L:p1
+16:16:55.849582010 pid=2966187 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:16:56.003301017 pid=2966203 ppid=2966202 session=aohd-1 args: pane get w1L:p1
+16:16:56.178649974 pid=2966218 ppid=2966217 session=aohd-1 args: pane get w1L:p1
+16:16:56.357646656 pid=2966239 ppid=2966238 session=aohd-1 args: pane get w1L:p1
+16:16:56.545799410 pid=2966277 ppid=2966276 session=aohd-1 args: pane get w1L:p1
+16:16:56.726133805 pid=2966292 ppid=2966291 session=aohd-1 args: pane get w1L:p1
+16:16:56.907954149 pid=2966307 ppid=2966306 session=aohd-1 args: pane get w1L:p1
+16:16:57.090476941 pid=2966322 ppid=2966321 session=aohd-1 args: pane get w1L:p1
+16:16:57.272103123 pid=2966337 ppid=2966336 session=aohd-1 args: pane get w1L:p1
+16:16:57.456558191 pid=2966352 ppid=2966351 session=aohd-1 args: pane get w1L:p1
+16:16:57.639692527 pid=2966367 ppid=2966366 session=aohd-1 args: pane get w1L:p1
+16:16:57.814855230 pid=2966382 ppid=2966381 session=aohd-1 args: pane get w1L:p1
+16:16:57.998955038 pid=2966397 ppid=2966396 session=aohd-1 args: pane get w1L:p1
+16:16:58.180023102 pid=2966413 ppid=2966412 session=aohd-1 args: pane get w1L:p1
+16:16:58.361190052 pid=2966435 ppid=2966434 session=aohd-1 args: pane get w1L:p1
+16:16:58.550514668 pid=2966450 ppid=2966449 session=aohd-1 args: pane get w1L:p1
+16:16:58.736617339 pid=2966465 ppid=2966464 session=aohd-1 args: pane get w1L:p1
+16:16:58.921362683 pid=2966480 ppid=2966479 session=aohd-1 args: pane get w1L:p1
+16:16:59.103857329 pid=2966495 ppid=2966494 session=aohd-1 args: pane get w1L:p1
+16:16:59.283937995 pid=2966510 ppid=2966509 session=aohd-1 args: pane get w1L:p1
+16:16:59.455169216 pid=2966525 ppid=2966524 session=aohd-1 args: pane get w1L:p1
+16:16:59.638946028 pid=2966540 ppid=2966539 session=aohd-1 args: pane get w1L:p1
+16:16:59.810269245 pid=2966555 ppid=2966554 session=aohd-1 args: pane get w1L:p1
+16:16:59.994831180 pid=2966570 ppid=2966569 session=aohd-1 args: pane get w1L:p1
+16:17:00.183689131 pid=2966585 ppid=2966584 session=aohd-1 args: pane get w1L:p1
+16:17:00.369044554 pid=2966600 ppid=2966599 session=aohd-1 args: pane get w1L:p1
+16:17:00.554634861 pid=2966615 ppid=2966614 session=aohd-1 args: pane get w1L:p1
+16:17:00.737984187 pid=2966630 ppid=2966629 session=aohd-1 args: pane get w1L:p1
+16:17:00.922074801 pid=2966645 ppid=2966644 session=aohd-1 args: pane get w1L:p1
+16:17:01.105597685 pid=2966660 ppid=2966659 session=aohd-1 args: pane get w1L:p1
+16:17:01.287892032 pid=2966675 ppid=2966674 session=aohd-1 args: pane get w1L:p1
+16:17:01.456449427 pid=2966690 ppid=2966689 session=aohd-1 args: pane get w1L:p1
+16:17:01.642635295 pid=2966705 ppid=2966704 session=aohd-1 args: pane get w1L:p1
+16:17:01.819673352 pid=2966720 ppid=2966719 session=aohd-1 args: pane get w1L:p1
+16:17:01.987842250 pid=2966744 ppid=2966743 session=aohd-1 args: pane get w1L:p1
+16:17:02.168320031 pid=2966759 ppid=2966758 session=aohd-1 args: pane get w1L:p1
+16:17:02.345022650 pid=2966792 ppid=2966791 session=aohd-1 args: pane get w1L:p1
+16:17:02.522320847 pid=2966807 ppid=2966806 session=aohd-1 args: pane get w1L:p1
+16:17:02.701678138 pid=2966822 ppid=2966821 session=aohd-1 args: pane get w1L:p1
+16:17:02.884413417 pid=2966837 ppid=2966836 session=aohd-1 args: pane get w1L:p1
+16:17:03.066781083 pid=2966852 ppid=2966851 session=aohd-1 args: pane get w1L:p1
+16:17:03.251304674 pid=2966867 ppid=2966866 session=aohd-1 args: pane get w1L:p1
+16:17:03.436968782 pid=2966882 ppid=2966881 session=aohd-1 args: pane get w1L:p1
+16:17:03.623249892 pid=2966897 ppid=2966896 session=aohd-1 args: pane get w1L:p1
+16:17:03.802118701 pid=2966912 ppid=2966911 session=aohd-1 args: pane get w1L:p1
+16:17:03.984085419 pid=2966927 ppid=2966926 session=aohd-1 args: pane get w1L:p1
+16:17:04.165614348 pid=2966942 ppid=2966941 session=aohd-1 args: pane get w1L:p1
+16:17:04.342649948 pid=2966957 ppid=2966956 session=aohd-1 args: pane get w1L:p1
+16:17:04.510268476 pid=2966972 ppid=2966971 session=aohd-1 args: pane get w1L:p1
+16:17:04.682876827 pid=2966987 ppid=2966986 session=aohd-1 args: pane get w1L:p1
+16:17:04.860618447 pid=2967002 ppid=2967001 session=aohd-1 args: pane get w1L:p1
+16:17:05.044893470 pid=2967017 ppid=2967016 session=aohd-1 args: pane get w1L:p1
+16:17:05.226266964 pid=2967032 ppid=2967031 session=aohd-1 args: pane get w1L:p1
+16:17:05.408189231 pid=2967047 ppid=2967046 session=aohd-1 args: pane get w1L:p1
+16:17:05.590840108 pid=2967062 ppid=2967061 session=aohd-1 args: pane get w1L:p1
+16:17:05.766375635 pid=2967077 ppid=2967076 session=aohd-1 args: pane get w1L:p1
+16:17:05.948158749 pid=2967092 ppid=2967091 session=aohd-1 args: pane get w1L:p1
+16:17:06.132352057 pid=2967107 ppid=2967106 session=aohd-1 args: pane get w1L:p1
+16:17:06.315408237 pid=2967122 ppid=2967121 session=aohd-1 args: pane get w1L:p1
+16:17:06.484771684 pid=2967137 ppid=2967136 session=aohd-1 args: pane get w1L:p1
+16:17:06.660989390 pid=2967152 ppid=2967151 session=aohd-1 args: pane get w1L:p1
+16:17:06.842737333 pid=2967168 ppid=2967167 session=aohd-1 args: pane get w1L:p1
+16:17:07.026859813 pid=2967183 ppid=2967182 session=aohd-1 args: pane get w1L:p1
+16:17:07.209705237 pid=2967198 ppid=2967197 session=aohd-1 args: pane get w1L:p1
+16:17:07.392288877 pid=2967213 ppid=2967212 session=aohd-1 args: pane get w1L:p1
+16:17:07.561172745 pid=2967228 ppid=2967227 session=aohd-1 args: pane get w1L:p1
+16:17:07.748793615 pid=2967243 ppid=2967242 session=aohd-1 args: pane get w1L:p1
+16:17:07.936080274 pid=2967258 ppid=2967257 session=aohd-1 args: pane get w1L:p1
+16:17:08.120538975 pid=2967273 ppid=2967272 session=aohd-1 args: pane get w1L:p1
+16:17:08.301458804 pid=2967527 ppid=2967524 session=aohd-1 args: pane get w1L:p1
+16:17:08.485523588 pid=2968120 ppid=2968118 session=aohd-1 args: pane get w1L:p1
+16:17:08.657538415 pid=2968640 ppid=2968637 session=aohd-1 args: pane get w1L:p1
+16:17:08.831917076 pid=2969183 ppid=2969181 session=aohd-1 args: pane get w1L:p1
+16:17:09.013149761 pid=2969760 ppid=2969757 session=aohd-1 args: pane get w1L:p1
+16:17:09.195387147 pid=2969779 ppid=2969778 session=aohd-1 args: pane get w1L:p1
+16:17:09.369607252 pid=2969801 ppid=2969800 session=aohd-1 args: pane get w1L:p1
+16:17:09.546429789 pid=2969823 ppid=2969822 session=aohd-1 args: pane get w1L:p1
+16:17:09.731884797 pid=2969838 ppid=2969837 session=aohd-1 args: pane get w1L:p1
+16:17:12.258519136 pid=2970104 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:12.292627569 pid=2970113 ppid=2970097 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:12.334361357 pid=2970126 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:12.366017937 pid=2970135 ppid=2970097 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:12.404793373 pid=2970144 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:12.407230905 pid=2970145 ppid=2970097 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:12.443564614 pid=2970162 ppid=2970097 session=aohd-1 args: pane read w1M:p1 --source recent-unwrapped --lines 20
+16:17:12.477925848 pid=2970171 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:12.509278695 pid=2970180 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:12.540224720 pid=2970189 ppid=2970097 session=aohd-1 args: agent prompt w1M:p1 aohd\ scratch\ send\ 1
+16:17:12.881589896 pid=2970211 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:13.316529921 pid=2970259 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:13.749807896 pid=2970425 ppid=2970097 session=aohd-1 args: pane get w1M:p1
+16:17:14.283902635 pid=2970501 ppid=2970097 session=aohd-1 args: pane read w1M:p1 --source recent-unwrapped --lines 20
+16:17:25.746478072 pid=2971171 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:17:25.778215839 pid=2971187 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:25.816353577 pid=2971211 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:17:25.847513554 pid=2971220 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:36.235413333 pid=2974160 ppid=2974153 session=aohd-1 args: status server
+16:17:36.370716307 pid=2974180 ppid=2974153 session=aohd-1 args: workspace create --cwd /tmp/aohd/home/.worktrees/aohd/aohd-2 --label 4bb69d3e8656-aohd-2 --env CLAUDECODE= --env AO_SESSION_ID=aohd-2 --env GH_PATH= --env AO_SESSION=aohd-2 --env AO_DATA_DIR=/tmp/aohd/home/.agent-orchestrator/4bb69d3e8656-repo/sessions --env AO_SESSION_NAME=aohd-2 --env AO_TMUX_NAME=4bb69d3e8656-aohd-2 --env AO_CALLER_TYPE=agent --env AO_PROJECT_ID=aohd --env AO_CONFIG_PATH=/tmp/aohd/ao/agent-orchestrator.yaml --env AO_STATE_ROOT=/tmp/aohd/home/.agent-orchestrator --no-focus
+16:17:36.452692205 pid=2974192 ppid=2974153 session=aohd-1 args: pane run w1N:p1 bash /tmp/aohd/tmp/ao-herdr-launch-50217364-7ee3-4d9e-8ae1-779641b6c498.sh
+16:17:39.493942092 pid=2974252 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:40.027012409 pid=2974262 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:40.559679668 pid=2974300 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:40.592519514 pid=2974309 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:40.624492247 pid=2974318 ppid=2974153 session=aohd-1 args: agent prompt w1N:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:17:41.018423684 pid=2974357 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:41.447704070 pid=2974391 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:41.881244562 pid=2974401 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:42.314809496 pid=2974410 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:42.745485687 pid=2974420 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:43.178583933 pid=2974429 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:43.612864910 pid=2974439 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:44.046665659 pid=2974448 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:44.481254881 pid=2974471 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:44.913642489 pid=2974553 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:45.346574076 pid=2974768 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:45.780658234 pid=2974813 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:46.213299717 pid=2974824 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:46.646308155 pid=2974834 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:47.079703781 pid=2974843 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:47.513359163 pid=2974852 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:47.946706506 pid=2974890 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:48.380473078 pid=2974901 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:48.814059614 pid=2974912 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:49.248055630 pid=2974921 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:49.681247924 pid=2974930 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:50.113436336 pid=2974939 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:50.546515256 pid=2975850 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:50.982433420 pid=2977267 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:51.416511441 pid=2977352 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:51.849761328 pid=2977361 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:52.282952312 pid=2977371 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:52.716766156 pid=2977409 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:53.149895547 pid=2977418 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:53.182279319 pid=2977427 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:53.213765369 pid=2977436 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:53.245552705 pid=2977445 ppid=2974153 session=aohd-1 args: agent prompt w1N:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:17:53.640757939 pid=2977496 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:54.073621023 pid=2977554 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:54.508106016 pid=2977711 ppid=2974153 session=aohd-1 args: pane get w1N:p1
+16:17:55.753218419 pid=2977788 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:17:55.757109355 pid=2977790 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:17:55.787412068 pid=2977806 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:55.790392318 pid=2977807 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:17:55.830842713 pid=2977830 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:17:55.834053375 pid=2977833 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:17:55.862186459 pid=2977863 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:17:55.865157766 pid=2977866 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:18:14.772112812 pid=2980686 ppid=2980666 session=aohd-1 args: pane get w1M:p1
+16:18:14.806659744 pid=2980700 ppid=2980666 session=aohd-1 args: pane process-info --pane w1M:p1
+16:18:14.845810167 pid=2980721 ppid=2980666 session=aohd-1 args: pane get w1M:p1
+16:18:14.877239387 pid=2980737 ppid=2980666 session=aohd-1 args: agent attach w1M:p1
+16:18:25.756076279 pid=2981223 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:18:25.758657472 pid=2981225 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:18:25.791693807 pid=2981257 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:18:25.794982516 pid=2981259 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:18:25.836989545 pid=2981281 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:18:25.838828414 pid=2981282 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:18:25.869745752 pid=2981301 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:18:25.875599651 pid=2981304 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:18:51.822834894 pid=2984828 ppid=2984821 session=aohd-1 args: status server
+16:18:51.985167451 pid=2984848 ppid=2984821 session=aohd-1 args: workspace create --cwd /tmp/aohd/home/.worktrees/aohd/aohd-3 --label 4bb69d3e8656-aohd-3 --env CLAUDECODE= --env AO_SESSION_ID=aohd-3 --env GH_PATH= --env AO_SESSION=aohd-3 --env AO_DATA_DIR=/tmp/aohd/home/.agent-orchestrator/4bb69d3e8656-repo/sessions --env AO_SESSION_NAME=aohd-3 --env AO_TMUX_NAME=4bb69d3e8656-aohd-3 --env AO_CALLER_TYPE=agent --env AO_PROJECT_ID=aohd --env AO_CONFIG_PATH=/tmp/aohd/ao/agent-orchestrator.yaml --env AO_STATE_ROOT=/tmp/aohd/home/.agent-orchestrator --no-focus
+16:18:52.064937085 pid=2984860 ppid=2984821 session=aohd-1 args: pane run w1P:p1 bash /tmp/aohd/tmp/ao-herdr-launch-fa455734-665d-4435-8421-7a134d2389f3.sh
+16:18:55.106568200 pid=2987302 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:55.640873916 pid=2987311 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:55.756884945 pid=2987320 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:18:55.760128078 pid=2987321 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:18:55.762898432 pid=2987324 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:18:55.792529414 pid=2987347 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:18:55.795705594 pid=2987349 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:18:55.798590656 pid=2987351 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:18:55.837872850 pid=2987374 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:18:55.840603599 pid=2987375 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:18:55.843089263 pid=2987377 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:18:55.870503753 pid=2987401 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:18:55.873356456 pid=2987402 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:18:55.876615559 pid=2987405 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:18:56.174631500 pid=2987431 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:56.206275002 pid=2987440 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:56.237571918 pid=2987449 ppid=2984821 session=aohd-1 args: agent prompt w1P:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:18:56.630936414 pid=2987459 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:57.063207407 pid=2987546 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:18:57.498525799 pid=2987572 ppid=2984821 session=aohd-1 args: pane get w1P:p1
+16:19:06.867424239 pid=2988115 ppid=2988113 session=aohd-1 args: agent prompt w1P:p1 AOHD_BLOCK
+16:19:07.288819063 pid=2988147 ppid=2988146 session=aohd-1 args: pane get w1P:p1
+16:19:07.467104522 pid=2988233 ppid=2988232 session=aohd-1 args: pane get w1P:p1
+16:19:07.653161361 pid=2988357 ppid=2988356 session=aohd-1 args: pane get w1P:p1
+16:19:07.839481501 pid=2988373 ppid=2988372 session=aohd-1 args: pane get w1P:p1
+16:19:08.026255608 pid=2988389 ppid=2988388 session=aohd-1 args: pane get w1P:p1
+16:19:08.197236561 pid=2988405 ppid=2988404 session=aohd-1 args: pane get w1P:p1
+16:19:08.380905069 pid=2988420 ppid=2988419 session=aohd-1 args: pane get w1P:p1
+16:19:08.567407190 pid=2988435 ppid=2988434 session=aohd-1 args: pane get w1P:p1
+16:19:08.749078108 pid=2988450 ppid=2988449 session=aohd-1 args: pane get w1P:p1
+16:19:08.925085319 pid=2988465 ppid=2988464 session=aohd-1 args: pane get w1P:p1
+16:19:09.105986725 pid=2988480 ppid=2988479 session=aohd-1 args: pane get w1P:p1
+16:19:09.292618398 pid=2988495 ppid=2988494 session=aohd-1 args: pane get w1P:p1
+16:19:09.471852650 pid=2988511 ppid=2988510 session=aohd-1 args: pane get w1P:p1
+16:19:09.650116422 pid=2988531 ppid=2988530 session=aohd-1 args: pane get w1P:p1
+16:19:09.834128938 pid=2988562 ppid=2988561 session=aohd-1 args: pane get w1P:p1
+16:19:10.009996249 pid=2988661 ppid=2988660 session=aohd-1 args: pane get w1P:p1
+16:19:10.191451040 pid=2988676 ppid=2988675 session=aohd-1 args: pane get w1P:p1
+16:19:10.383635501 pid=2988691 ppid=2988690 session=aohd-1 args: pane get w1P:p1
+16:19:10.578883059 pid=2988706 ppid=2988705 session=aohd-1 args: pane get w1P:p1
+16:19:10.778334236 pid=2988721 ppid=2988720 session=aohd-1 args: pane get w1P:p1
+16:19:10.968096005 pid=2988736 ppid=2988735 session=aohd-1 args: pane get w1P:p1
+16:19:11.166702477 pid=2988751 ppid=2988750 session=aohd-1 args: pane get w1P:p1
+16:19:11.352442195 pid=2988766 ppid=2988765 session=aohd-1 args: pane get w1P:p1
+16:19:11.554567607 pid=2988781 ppid=2988780 session=aohd-1 args: pane get w1P:p1
+16:19:11.750777871 pid=2988796 ppid=2988795 session=aohd-1 args: pane get w1P:p1
+16:19:11.947649916 pid=2988811 ppid=2988810 session=aohd-1 args: pane get w1P:p1
+16:19:12.133974589 pid=2988826 ppid=2988825 session=aohd-1 args: pane get w1P:p1
+16:19:12.323491920 pid=2988841 ppid=2988840 session=aohd-1 args: pane get w1P:p1
+16:19:12.518199937 pid=2988856 ppid=2988855 session=aohd-1 args: pane get w1P:p1
+16:19:12.722116845 pid=2988871 ppid=2988870 session=aohd-1 args: pane get w1P:p1
+16:19:12.925185275 pid=2988886 ppid=2988885 session=aohd-1 args: pane get w1P:p1
+16:19:13.118097346 pid=2988901 ppid=2988900 session=aohd-1 args: pane get w1P:p1
+16:19:13.311924061 pid=2988918 ppid=2988916 session=aohd-1 args: pane get w1P:p1
+16:19:13.417442490 pid=2988938 ppid=2988936 session=aohd-1 args: agent explain w1P:p1 --json
+16:19:20.077111949 pid=2992081 ppid=2992079 session=aohd-1 args: agent prompt w1P:p1 aohd\ prompt\ while\ blocked
+16:19:20.414925441 pid=2992112 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.453248706 pid=2992121 ppid=2992105 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:20.497265399 pid=2992134 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.533892617 pid=2992143 ppid=2992105 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:20.581649026 pid=2992152 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.584890032 pid=2992153 ppid=2992105 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:20.630850469 pid=2992170 ppid=2992105 session=aohd-1 args: pane read w1P:p1 --source recent-unwrapped --lines 20
+16:19:20.667679535 pid=2992179 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.700187369 pid=2992188 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.738137281 pid=2992197 ppid=2992105 session=aohd-1 args: agent prompt w1P:p1 aohd\ scratch\ send\ while\ blocked
+16:19:20.781807524 pid=2992206 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.820471853 pid=2992222 ppid=2992105 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:20.870611890 pid=2992231 ppid=2992105 session=aohd-1 args: pane get w1P:p1
+16:19:20.910785783 pid=2992240 ppid=2992105 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:25.762834906 pid=2992438 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:19:25.763841816 pid=2992439 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:19:25.766910064 pid=2992441 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:19:25.799774486 pid=2992467 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:19:25.802617744 pid=2992468 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:25.805392882 pid=2992471 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:19:25.849941096 pid=2992494 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:19:25.853243065 pid=2992495 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:19:25.855523580 pid=2992497 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:19:25.885571175 pid=2992521 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:19:25.888493889 pid=2992522 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:19:25.891334307 pid=2992525 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:48.395769721 pid=2997330 ppid=2997323 session=aohd-1 args: pane get w1M:p1
+16:19:48.403077622 pid=2997333 ppid=2997323 session=aohd-1 args: pane get w1N:p1
+16:19:48.405813077 pid=2997335 ppid=2997323 session=aohd-1 args: pane get w1P:p1
+16:19:48.428210975 pid=2997357 ppid=2997323 session=aohd-1 args: pane process-info --pane w1M:p1
+16:19:48.434641701 pid=2997360 ppid=2997323 session=aohd-1 args: pane process-info --pane w1N:p1
+16:19:48.438551694 pid=2997362 ppid=2997323 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:48.658943430 pid=2997407 ppid=2997109 session=aohd-1 args: pane send-text w1P:p1 1
+16:19:48.692690672 pid=2997416 ppid=2997109 session=aohd-1 args: pane send-keys w1P:p1 Enter
+16:19:49.740739361 pid=2997518 ppid=2997517 session=aohd-1 args: pane get w1P:p1
+16:19:49.920030184 pid=2997647 ppid=2997646 session=aohd-1 args: pane get w1P:p1
+16:19:50.096354709 pid=2997689 ppid=2997688 session=aohd-1 args: pane get w1P:p1
+16:19:50.273156078 pid=2997704 ppid=2997703 session=aohd-1 args: pane get w1P:p1
+16:19:50.453288619 pid=2997725 ppid=2997724 session=aohd-1 args: pane get w1P:p1
+16:19:50.630463579 pid=2997763 ppid=2997762 session=aohd-1 args: pane get w1P:p1
+16:19:50.811568950 pid=2997778 ppid=2997777 session=aohd-1 args: pane get w1P:p1
+16:19:50.993676859 pid=2997800 ppid=2997799 session=aohd-1 args: pane get w1P:p1
+16:19:51.174022796 pid=2997815 ppid=2997814 session=aohd-1 args: pane get w1P:p1
+16:19:51.353671654 pid=2997830 ppid=2997829 session=aohd-1 args: pane get w1P:p1
+16:19:51.535412166 pid=2997845 ppid=2997844 session=aohd-1 args: pane get w1P:p1
+16:19:51.713295013 pid=2997860 ppid=2997859 session=aohd-1 args: pane get w1P:p1
+16:19:51.900575475 pid=2997875 ppid=2997874 session=aohd-1 args: pane get w1P:p1
+16:19:52.071993276 pid=2997890 ppid=2997889 session=aohd-1 args: pane get w1P:p1
+16:19:52.254409914 pid=2997905 ppid=2997904 session=aohd-1 args: pane get w1P:p1
+16:19:52.427759433 pid=2997956 ppid=2997955 session=aohd-1 args: pane get w1P:p1
+16:19:52.617517339 pid=2997971 ppid=2997970 session=aohd-1 args: pane get w1P:p1
+16:19:52.809865793 pid=2997986 ppid=2997985 session=aohd-1 args: pane get w1P:p1
+16:19:53.003242601 pid=2998001 ppid=2998000 session=aohd-1 args: pane get w1P:p1
+16:19:53.187968737 pid=2998016 ppid=2998015 session=aohd-1 args: pane get w1P:p1
+16:19:53.368347266 pid=2998031 ppid=2998030 session=aohd-1 args: pane get w1P:p1
+16:19:53.549866442 pid=2998046 ppid=2998045 session=aohd-1 args: pane get w1P:p1
+16:19:53.731136543 pid=2998061 ppid=2998060 session=aohd-1 args: pane get w1P:p1
+16:19:53.911375651 pid=2998083 ppid=2998082 session=aohd-1 args: pane get w1P:p1
+16:19:54.086435215 pid=2998098 ppid=2998097 session=aohd-1 args: pane get w1P:p1
+16:19:54.263761307 pid=2998113 ppid=2998112 session=aohd-1 args: pane get w1P:p1
+16:19:54.449753978 pid=2998128 ppid=2998127 session=aohd-1 args: pane get w1P:p1
+16:19:54.646344554 pid=2998143 ppid=2998142 session=aohd-1 args: pane get w1P:p1
+16:19:55.784503287 pid=2998174 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:19:55.787291178 pid=2998176 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:19:55.789926873 pid=2998178 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:19:55.818861927 pid=2998201 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:19:55.821767322 pid=2998202 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:19:55.824883014 pid=2998205 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:19:55.860585559 pid=2998228 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:19:55.864407488 pid=2998230 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:19:55.867154969 pid=2998232 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:19:55.887135090 pid=2998254 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:19:55.893838452 pid=2998258 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:19:55.897032162 pid=2998261 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:20:03.311982716 pid=3001033 ppid=3001031 session=aohd-1 args: pane get aohd-1
+16:20:03.368864483 pid=3001052 ppid=3001050 session=aohd-1 args: pane process-info --pane aohd-1
+16:20:03.427274861 pid=3001071 ppid=3001069 session=aohd-1 args: pane get not\ a\ pane
+16:20:03.482195116 pid=3001091 ppid=3001089 session=aohd-1 args: pane get w9Z:p9
+16:20:03.538280713 pid=3001110 ppid=3001108 session=aohd-1 args: pane get w1m:p1
+16:20:03.593196857 pid=3001129 ppid=3001127 session=aohd-1 args: workspace get w9Z
+16:20:03.649927313 pid=3001148 ppid=3001146 session=aohd-1 args: pane get ''
+16:20:25.804230762 pid=3006179 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:20:25.807137366 pid=3006180 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:20:25.809660319 pid=3006183 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:20:25.840682839 pid=3006206 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:20:25.843925574 pid=3006208 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:20:25.847206202 pid=3006210 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:20:25.888812659 pid=3006233 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:20:25.891484418 pid=3006234 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:20:25.893802962 pid=3006236 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:20:25.920957109 pid=3006260 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:20:25.922650047 pid=3006261 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:20:25.926560787 pid=3006265 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:20:39.137157541 pid=3010408 ppid=3010403 session=aohd-1 args: server reload-config
+16:20:39.212955190 pid=3010432 ppid=3010430 session=aohd-1 args: pane close wX:p1
+16:20:39.501603951 pid=3010452 ppid=3010450 session=aohd-1 args: workspace get wX
+16:20:39.551763967 pid=3010487 ppid=3007591 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-c2 --no-focus
+16:20:39.617870354 pid=3010512 ppid=3007591 session=aohd-1 args: pane run w1Q:p1 claude --aohd-manual c2
+16:20:44.654768256 pid=3011079 ppid=3007591 session=aohd-1 args: pane get w1Q:p1
+16:20:44.692264090 pid=3011091 ppid=3011089 session=aohd-1 args: pane close w1Q:p1
+16:20:45.001752482 pid=3011150 ppid=3011148 session=aohd-1 args: pane get w1Q:p1
+16:20:51.822179843 pid=3012336 ppid=3012334 session=aohd-1 args: server reload-config
+16:20:51.923330288 pid=3012356 ppid=3012354 session=aohd-1 args: pane close wY:p1
+16:20:52.218705504 pid=3012376 ppid=3012374 session=aohd-1 args: workspace get wY
+16:20:55.803594882 pid=3013175 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:20:55.806109571 pid=3013176 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:20:55.808832596 pid=3013178 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:20:55.840644341 pid=3013202 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:20:55.843355864 pid=3013203 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:20:55.845922285 pid=3013206 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:20:55.886660397 pid=3013229 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:20:55.889352054 pid=3013230 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:20:55.891819110 pid=3013232 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:20:55.919763251 pid=3013256 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:20:55.922475714 pid=3013257 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:20:55.925763296 pid=3013260 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:21:06.768461465 pid=3017317 ppid=3017315 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-top --no-focus
+16:21:06.957426989 pid=3017343 ppid=3017341 session=aohd-1 args: workspace close w1R
+16:21:07.247230090 pid=3017389 ppid=3017387 session=aohd-1 args: api snapshot
+16:21:07.609577670 pid=3017417 ppid=3017410 session=aohd-1 args: pane get w1M:p1
+16:21:07.612348448 pid=3017418 ppid=3017410 session=aohd-1 args: pane get w1N:p1
+16:21:07.613752434 pid=3017420 ppid=3017410 session=aohd-1 args: pane get w1P:p1
+16:21:07.642918714 pid=3017444 ppid=3017410 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:07.648643215 pid=3017447 ppid=3017410 session=aohd-1 args: pane process-info --pane w1P:p1
+16:21:07.650681982 pid=3017449 ppid=3017410 session=aohd-1 args: pane process-info --pane w1N:p1
+16:21:15.593826246 pid=3018278 ppid=3018276 session=aohd-1 args: server stop
+16:21:25.812736570 pid=3021598 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:21:25.815341970 pid=3021599 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:21:25.818354291 pid=3021602 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:21:25.833092627 pid=3021619 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:25.836196639 pid=3021620 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:21:25.839087543 pid=3021623 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:21:25.858832384 pid=3021640 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:21:25.861449510 pid=3021641 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:21:25.863856386 pid=3021643 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:21:25.878242516 pid=3021661 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:25.881640783 pid=3021662 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:21:25.884221200 pid=3021665 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:21:25.898489304 pid=3021682 ppid=2949663 session=aohd-1 args: pane read w1M:p1 --source recent-unwrapped --lines 10
+16:21:25.901429692 pid=3021683 ppid=2949663 session=aohd-1 args: pane read w1N:p1 --source recent-unwrapped --lines 10
+16:21:25.905821878 pid=3021687 ppid=2949663 session=aohd-1 args: pane read w1P:p1 --source recent-unwrapped --lines 10
+16:21:25.917682894 pid=3021700 ppid=2949663 session=aohd-1 args: pane read w1M:p1 --source visible --lines 10
+16:21:25.920815341 pid=3021704 ppid=2949663 session=aohd-1 args: pane read w1N:p1 --source visible --lines 10
+16:21:25.925259464 pid=3021708 ppid=2949663 session=aohd-1 args: pane read w1P:p1 --source visible --lines 10
+16:21:26.302689017 pid=3021740 ppid=3021732 session=aohd-1 args: pane get w1M:p1
+16:21:26.309831659 pid=3021743 ppid=3021732 session=aohd-1 args: pane get w1N:p1
+16:21:26.311885661 pid=3021745 ppid=3021732 session=aohd-1 args: pane get w1P:p1
+16:21:26.323971715 pid=3021758 ppid=3021732 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:26.330892969 pid=3021765 ppid=3021732 session=aohd-1 args: pane process-info --pane w1P:p1
+16:21:26.333786462 pid=3021767 ppid=3021732 session=aohd-1 args: pane process-info --pane w1N:p1
+16:21:26.770386891 pid=3021839 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:26.793920796 pid=3021853 ppid=3021807 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:26.817453806 pid=3021864 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:26.836073827 pid=3021877 ppid=3021807 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:26.856047423 pid=3021890 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:26.859633146 pid=3021892 ppid=3021807 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:26.879474756 pid=3021916 ppid=3021807 session=aohd-1 args: pane read w1M:p1 --source recent-unwrapped --lines 20
+16:21:26.898228156 pid=3021924 ppid=3021807 session=aohd-1 args: pane read w1M:p1 --source visible --lines 20
+16:21:26.917788665 pid=3021931 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:27.439275519 pid=3021938 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:27.959519100 pid=3022023 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:28.479808602 pid=3022116 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:29.000372404 pid=3022185 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:29.519467538 pid=3022240 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:30.039174357 pid=3022247 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:30.560065315 pid=3022254 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:31.081689451 pid=3022261 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:31.602954243 pid=3022275 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:32.124802732 pid=3022311 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:32.644836908 pid=3022318 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:33.166153679 pid=3022325 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:33.687284173 pid=3022361 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:34.208728831 pid=3022368 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:34.729836803 pid=3022375 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:35.250971928 pid=3022397 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:35.772197138 pid=3022418 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:36.293230530 pid=3022425 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:36.814168881 pid=3022432 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:37.334886449 pid=3022439 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:37.856225359 pid=3022447 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:38.377273229 pid=3022454 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:38.898646025 pid=3022461 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:39.419942111 pid=3022468 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:39.940955861 pid=3022519 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:40.461707075 pid=3022657 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:40.982909753 pid=3022763 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:41.502886945 pid=3023638 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:42.023044377 pid=3025184 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:42.040605132 pid=3025201 ppid=3021807 session=aohd-1 args: pane send-text w1M:p1 aohd\ send\ with\ no\ server
+16:21:42.060796522 pid=3025208 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:42.079776362 pid=3025215 ppid=3021807 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:42.100818356 pid=3025222 ppid=3021807 session=aohd-1 args: pane get w1M:p1
+16:21:42.120144907 pid=3025229 ppid=3021807 session=aohd-1 args: pane process-info --pane w1M:p1
+16:21:55.823458137 pid=3026058 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:21:55.826307532 pid=3026059 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:21:55.828916258 pid=3026061 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:21:55.862775511 pid=3026085 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:21:55.864964166 pid=3026086 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:21:55.866707329 pid=3026088 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:21:56.433100163 pid=3026301 ppid=3026299 session=aohd-1 args: api snapshot
+16:21:56.621461223 pid=3026324 ppid=3026322 session=aohd-1 args: workspace create --cwd /tmp/aohd/repo --label aohd-next --no-focus
+16:22:06.455417073 pid=3029179 ppid=3029165 session=aohd-1 args: pane get w1M:p1
+16:22:06.462393067 pid=3029182 ppid=3029165 session=aohd-1 args: pane get w1N:p1
+16:22:06.465826331 pid=3029184 ppid=3029165 session=aohd-1 args: pane get w1P:p1
+16:22:06.720913713 pid=3029229 ppid=3029227 session=aohd-1 args: pane get w1M:p1
+16:22:06.826278987 pid=3029249 ppid=3029247 session=aohd-1 args: pane process-info --pane w1M:p1
+16:22:25.842312880 pid=3031946 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:22:25.845710441 pid=3031947 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:22:25.848303934 pid=3031950 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:22:25.881872487 pid=3031973 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:22:25.884919931 pid=3031974 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:22:25.886889953 pid=3031976 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:22:27.033691335 pid=3032239 ppid=3032000 session=aohd-1 args: pane run w1Q:p1 /tmp/aohd/tmp/fakeagent --aohd-manual name-test
+16:22:33.078322065 pid=3032599 ppid=3032597 session=aohd-1 args: pane get w1Q:p1
+16:22:33.182872445 pid=3032619 ppid=3032617 session=aohd-1 args: agent explain w1Q:p1
+16:22:37.455783169 pid=3032906 ppid=3032904 session=aohd-1 args: agent explain w1Q:p1 --agent claude
+16:22:55.862617541 pid=3036313 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:22:55.865281984 pid=3036314 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:22:55.868193527 pid=3036317 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:22:55.903382672 pid=3036340 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:22:55.906016230 pid=3036341 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:22:55.908422267 pid=3036343 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:20.287247868 pid=3040085 ppid=3040083 session=aohd-1 args: workspace close w1Q
+16:23:20.592733088 pid=3040106 ppid=3040104 session=aohd-1 args: workspace close w1P
+16:23:20.881214595 pid=3040126 ppid=3040124 session=aohd-1 args: server stop
+16:23:25.880557475 pid=3040361 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:23:25.884396637 pid=3040363 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:23:25.886937819 pid=3040365 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:25.907610151 pid=3040388 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:23:25.912356660 pid=3040391 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:23:25.915103320 pid=3040393 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:23:25.943905065 pid=3040417 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:23:25.946578785 pid=3040418 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:23:25.948612901 pid=3040421 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:25.972316390 pid=3040445 ppid=2949663 session=aohd-1 args: pane process-info --pane w1M:p1
+16:23:25.975428113 pid=3040447 ppid=2949663 session=aohd-1 args: pane process-info --pane w1N:p1
+16:23:25.978132239 pid=3040450 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:23:26.001649938 pid=3040474 ppid=2949663 session=aohd-1 args: pane read w1M:p1 --source recent-unwrapped --lines 10
+16:23:26.004427138 pid=3040475 ppid=2949663 session=aohd-1 args: pane read w1N:p1 --source recent-unwrapped --lines 10
+16:23:26.008169273 pid=3040479 ppid=2949663 session=aohd-1 args: pane read w1P:p1 --source recent-unwrapped --lines 10
+16:23:26.034791068 pid=3040502 ppid=2949663 session=aohd-1 args: pane read w1M:p1 --source visible --lines 10
+16:23:26.037696916 pid=3040503 ppid=2949663 session=aohd-1 args: pane read w1N:p1 --source visible --lines 10
+16:23:26.041205209 pid=3040507 ppid=2949663 session=aohd-1 args: pane read w1P:p1 --source visible --lines 10
+16:23:40.337795574 pid=3044150 ppid=3044143 session=aohd-1 args: status server
+16:23:40.500279580 pid=3044170 ppid=3044143 session=aohd-1 args: workspace create --cwd /tmp/aohd/home/.worktrees/aohd/aohd-4 --label 4bb69d3e8656-aohd-4 --env CLAUDECODE= --env AO_SESSION_ID=aohd-4 --env GH_PATH= --env AO_SESSION=aohd-4 --env AO_DATA_DIR=/tmp/aohd/home/.agent-orchestrator/4bb69d3e8656-repo/sessions --env AO_SESSION_NAME=aohd-4 --env AO_TMUX_NAME=4bb69d3e8656-aohd-4 --env AO_CALLER_TYPE=agent --env AO_PROJECT_ID=aohd --env AO_CONFIG_PATH=/tmp/aohd/ao/agent-orchestrator.yaml --env AO_STATE_ROOT=/tmp/aohd/home/.agent-orchestrator --no-focus
+16:23:40.580964099 pid=3044181 ppid=3044143 session=aohd-1 args: pane run w1P:p1 bash /tmp/aohd/tmp/ao-herdr-launch-d46cdb91-6000-41ef-8420-418eb7316e8e.sh
+16:23:43.627443694 pid=3044236 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:44.161668109 pid=3044252 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:44.696250991 pid=3044261 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:44.728549469 pid=3044270 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:44.760048387 pid=3044279 ppid=3044143 session=aohd-1 args: agent prompt w1P:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:23:45.164970465 pid=3044332 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:45.597990426 pid=3044430 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:46.031334155 pid=3044439 ppid=3044143 session=aohd-1 args: pane get w1P:p1
+16:23:46.408161607 pid=3044472 ppid=3044465 session=aohd-1 args: pane get w1M:p1
+16:23:46.410657636 pid=3044473 ppid=3044465 session=aohd-1 args: pane get w1N:p1
+16:23:46.412438009 pid=3044475 ppid=3044465 session=aohd-1 args: pane get w1P:p1
+16:23:46.414147288 pid=3044478 ppid=3044465 session=aohd-1 args: pane get w1P:p1
+16:23:46.452925310 pid=3044508 ppid=3044465 session=aohd-1 args: pane process-info --pane w1P:p1
+16:23:46.681765494 pid=3044542 ppid=3044540 session=aohd-1 args: pane process-info --pane w1P:p1
+16:23:46.785064699 pid=3044562 ppid=3044560 session=aohd-1 args: pane get w1P:p1
+16:23:55.903512888 pid=3047183 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:23:55.906301329 pid=3047184 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:23:55.908757536 pid=3047186 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:55.911367431 pid=3047190 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:55.943401552 pid=3047219 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:23:55.976418121 pid=3047228 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:23:55.979157669 pid=3047230 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:23:55.982197157 pid=3047232 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:55.984789834 pid=3047236 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:23:56.019433508 pid=3047264 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:24:25.913981578 pid=3051773 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:24:25.916743980 pid=3051774 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:24:25.919351379 pid=3051776 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:25.921839364 pid=3051779 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:25.956489177 pid=3051809 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:24:25.994064213 pid=3051818 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:24:25.998297666 pid=3051819 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:24:25.999313112 pid=3051821 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:26.001566395 pid=3051824 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:26.036622489 pid=3051854 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:24:40.011730191 pid=3056148 ppid=3056141 session=aohd-1 args: status server
+16:24:40.172830042 pid=3056168 ppid=3056141 session=aohd-1 args: workspace create --cwd /tmp/aohd/home/.worktrees/aohd/aohd-5 --label 4bb69d3e8656-aohd-5 --env CLAUDECODE= --env AO_SESSION_ID=aohd-5 --env GH_PATH= --env AO_SESSION=aohd-5 --env AO_DATA_DIR=/tmp/aohd/home/.agent-orchestrator/4bb69d3e8656-repo/sessions --env AO_SESSION_NAME=aohd-5 --env AO_TMUX_NAME=4bb69d3e8656-aohd-5 --env AO_CALLER_TYPE=agent --env AO_PROJECT_ID=aohd --env AO_CONFIG_PATH=/tmp/aohd/ao/agent-orchestrator.yaml --env AO_STATE_ROOT=/tmp/aohd/home/.agent-orchestrator --no-focus
+16:24:40.248039476 pid=3056180 ppid=3056141 session=aohd-1 args: pane run w1Q:p1 bash /tmp/aohd/tmp/ao-herdr-launch-f2ef7d15-ed7a-4fb6-97cb-951307ec5708.sh
+16:24:43.292416636 pid=3056668 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:43.824981631 pid=3056727 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:44.353976258 pid=3056748 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:44.386517564 pid=3056758 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:44.420498865 pid=3056767 ppid=3056141 session=aohd-1 args: agent prompt w1Q:p1 $'You are an AI coding agent managed by the Agent Orchestrator (ao).\n\n## Session Lifecycle\n- You are running inside a managed session. Focus on the assigned task.\n- When you finish your work, create a PR and push it. The orchestrator will handle CI monitoring and review routing.\n- If you\'re told to take over or continue work on an existing PR, run `ao session claim-pr <pr-number-or-url>` from inside this session before making changes.\n- If CI fails, the orchestrator will send you the failures — fix them and push again.\n- If reviewers request changes, the orchestrator will forward their comments — address each one, push fixes, and reply to the comments.\n\n## Git Workflow\n- Always create a feature branch from the default branch (never commit directly to it).\n- Use conventional commit messages (feat:, fix:, chore:, etc.).\n- Push your branch and create a PR when the implementation is ready.\n- Keep PRs focused — one issue per PR.\n\n## PR Best Practices\n- Write a clear PR title and description explaining what changed and why.\n- Link the issue in the PR description so it auto-closes when merged.\n- If the repo has CI checks, make sure they pass before requesting review.\n- Respond to every review comment, even if just to acknowledge it.\n\n## Project Context\n- Project: aohd\n- Repository: aohd/scratch\n- Default branch: main\n- Tracker: github'
+16:24:44.820319743 pid=3056819 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:45.253270454 pid=3056918 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:45.686384627 pid=3056993 ppid=3056141 session=aohd-1 args: pane get w1Q:p1
+16:24:54.769941797 pid=3060192 ppid=3060191 session=aohd-1 args: pane get w1Q:p1
+16:24:54.819740972 pid=3060209 ppid=3060208 session=aohd-1 args: pane get w1Q:p1
+16:24:54.985410380 pid=3060225 ppid=3060224 session=aohd-1 args: pane get w1Q:p1
+16:24:55.163397135 pid=3060249 ppid=3060247 session=aohd-1 args: pane get w1Q:p1
+16:24:55.337784352 pid=3060264 ppid=3060263 session=aohd-1 args: pane get w1Q:p1
+16:24:55.338008702 pid=3060265 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:55.375619226 pid=3060285 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:55.417476905 pid=3060299 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:55.451198401 pid=3060308 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:55.490490977 pid=3060317 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:55.493460404 pid=3060318 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:55.511882464 pid=3060335 ppid=3060334 session=aohd-1 args: pane get w1Q:p1
+16:24:55.532020708 pid=3060345 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:55.534029731 pid=3060347 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:55.536244752 pid=3060350 ppid=3060240 session=aohd-1 args: pane read w1Q:p1 --source recent-unwrapped --lines 20
+16:24:55.697963977 pid=3060379 ppid=3060378 session=aohd-1 args: pane get w1Q:p1
+16:24:55.854719722 pid=3060396 ppid=3060395 session=aohd-1 args: pane get w1Q:p1
+16:24:55.921881310 pid=3060408 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:24:55.923466243 pid=3060409 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:24:55.926823238 pid=3060412 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:55.930192327 pid=3060415 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:55.930387481 pid=3060420 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:24:55.960629437 pid=3060455 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:55.962027423 pid=3060456 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:24:55.998824114 pid=3060488 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:24:56.001927107 pid=3060489 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:24:56.004055106 pid=3060491 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:56.006850545 pid=3060494 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:24:56.008893796 pid=3060498 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:24:56.030483277 pid=3060535 ppid=3060534 session=aohd-1 args: pane get w1Q:p1
+16:24:56.039143115 pid=3060539 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:24:56.044098583 pid=3060542 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:56.074902702 pid=3060565 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:56.076780643 pid=3060567 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:56.079981492 pid=3060570 ppid=3060240 session=aohd-1 args: pane read w1Q:p1 --source recent-unwrapped --lines 20
+16:24:56.214174817 pid=3060597 ppid=3060596 session=aohd-1 args: pane get w1Q:p1
+16:24:56.402782767 pid=3060612 ppid=3060611 session=aohd-1 args: pane get w1Q:p1
+16:24:56.588797019 pid=3060627 ppid=3060626 session=aohd-1 args: pane get w1Q:p1
+16:24:56.623158733 pid=3060639 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:56.625609574 pid=3060640 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:56.627580611 pid=3060642 ppid=3060240 session=aohd-1 args: pane read w1Q:p1 --source recent-unwrapped --lines 20
+16:24:56.666825183 pid=3060667 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:56.668767668 pid=3060668 ppid=3060240 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:24:56.701761911 pid=3060685 ppid=3060240 session=aohd-1 args: pane read w1Q:p1 --source recent-unwrapped --lines 20
+16:24:56.735577272 pid=3060694 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:56.765230946 pid=3060705 ppid=3060704 session=aohd-1 args: pane get w1Q:p1
+16:24:56.766663967 pid=3060706 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:56.799271392 pid=3060726 ppid=3060240 session=aohd-1 args: agent prompt w1Q:p1 aohd\ short\ turn
+16:24:56.941883596 pid=3060739 ppid=3060738 session=aohd-1 args: pane get w1Q:p1
+16:24:57.126011617 pid=3060783 ppid=3060782 session=aohd-1 args: pane get w1Q:p1
+16:24:57.139663252 pid=3060789 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:57.314611663 pid=3060807 ppid=3060806 session=aohd-1 args: pane get w1Q:p1
+16:24:57.482986002 pid=3060832 ppid=3060831 session=aohd-1 args: pane get w1Q:p1
+16:24:57.570485299 pid=3060845 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:57.673369051 pid=3060861 ppid=3060860 session=aohd-1 args: pane get w1Q:p1
+16:24:57.860213183 pid=3060877 ppid=3060876 session=aohd-1 args: pane get w1Q:p1
+16:24:58.004108331 pid=3060890 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:58.046878762 pid=3060901 ppid=3060900 session=aohd-1 args: pane get w1Q:p1
+16:24:58.224185978 pid=3060917 ppid=3060916 session=aohd-1 args: pane get w1Q:p1
+16:24:58.407984997 pid=3060932 ppid=3060931 session=aohd-1 args: pane get w1Q:p1
+16:24:58.437203812 pid=3060941 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:58.598546368 pid=3060985 ppid=3060984 session=aohd-1 args: pane get w1Q:p1
+16:24:58.778949422 pid=3061000 ppid=3060999 session=aohd-1 args: pane get w1Q:p1
+16:24:58.870225930 pid=3061013 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:58.956035616 pid=3061024 ppid=3061023 session=aohd-1 args: pane get w1Q:p1
+16:24:59.134709628 pid=3061039 ppid=3061038 session=aohd-1 args: pane get w1Q:p1
+16:24:59.303594117 pid=3061052 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:59.306439722 pid=3061056 ppid=3061054 session=aohd-1 args: pane get w1Q:p1
+16:24:59.486027933 pid=3061078 ppid=3061077 session=aohd-1 args: pane get w1Q:p1
+16:24:59.673969586 pid=3061093 ppid=3061092 session=aohd-1 args: pane get w1Q:p1
+16:24:59.738178274 pid=3061105 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:24:59.851879392 pid=3061117 ppid=3061116 session=aohd-1 args: pane get w1Q:p1
+16:25:00.042224268 pid=3061132 ppid=3061131 session=aohd-1 args: pane get w1Q:p1
+16:25:00.169787901 pid=3061145 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:00.227785107 pid=3061156 ppid=3061155 session=aohd-1 args: pane get w1Q:p1
+16:25:00.402848172 pid=3061171 ppid=3061170 session=aohd-1 args: pane get w1Q:p1
+16:25:00.577330644 pid=3061193 ppid=3061192 session=aohd-1 args: pane get w1Q:p1
+16:25:00.601175328 pid=3061202 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:00.764795854 pid=3061217 ppid=3061216 session=aohd-1 args: pane get w1Q:p1
+16:25:00.954553751 pid=3061232 ppid=3061231 session=aohd-1 args: pane get w1Q:p1
+16:25:01.033221808 pid=3061247 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:01.128540956 pid=3061277 ppid=3061276 session=aohd-1 args: pane get w1Q:p1
+16:25:01.309736659 pid=3061292 ppid=3061291 session=aohd-1 args: pane get w1Q:p1
+16:25:01.465936076 pid=3061336 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:01.486938731 pid=3061346 ppid=3061345 session=aohd-1 args: pane get w1Q:p1
+16:25:01.661360814 pid=3061362 ppid=3061361 session=aohd-1 args: pane get w1Q:p1
+16:25:01.842834563 pid=3061399 ppid=3061398 session=aohd-1 args: pane get w1Q:p1
+16:25:01.898808435 pid=3061458 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:02.033779552 pid=3061578 ppid=3061577 session=aohd-1 args: pane get w1Q:p1
+16:25:02.210125468 pid=3061649 ppid=3061648 session=aohd-1 args: pane get w1Q:p1
+16:25:02.329513769 pid=3061688 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:02.391275310 pid=3061699 ppid=3061698 session=aohd-1 args: pane get w1Q:p1
+16:25:02.571835403 pid=3061714 ppid=3061713 session=aohd-1 args: pane get w1Q:p1
+16:25:02.757910991 pid=3061729 ppid=3061728 session=aohd-1 args: pane get w1Q:p1
+16:25:02.762255752 pid=3061731 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:02.933788199 pid=3061760 ppid=3061759 session=aohd-1 args: pane get w1Q:p1
+16:25:03.113342084 pid=3061775 ppid=3061774 session=aohd-1 args: pane get w1Q:p1
+16:25:03.195405402 pid=3061788 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:03.294148422 pid=3061799 ppid=3061798 session=aohd-1 args: pane get w1Q:p1
+16:25:03.478110524 pid=3061814 ppid=3061813 session=aohd-1 args: pane get w1Q:p1
+16:25:03.627153840 pid=3061827 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:03.653908889 pid=3061838 ppid=3061837 session=aohd-1 args: pane get w1Q:p1
+16:25:03.829364151 pid=3061853 ppid=3061852 session=aohd-1 args: pane get w1Q:p1
+16:25:04.009469730 pid=3061868 ppid=3061867 session=aohd-1 args: pane get w1Q:p1
+16:25:04.059578728 pid=3061880 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:04.182812589 pid=3061892 ppid=3061891 session=aohd-1 args: pane get w1Q:p1
+16:25:04.366459251 pid=3061916 ppid=3061915 session=aohd-1 args: pane get w1Q:p1
+16:25:04.492166441 pid=3061956 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:04.546801530 pid=3061967 ppid=3061966 session=aohd-1 args: pane get w1Q:p1
+16:25:04.731228198 pid=3061982 ppid=3061981 session=aohd-1 args: pane get w1Q:p1
+16:25:04.909451789 pid=3061997 ppid=3061996 session=aohd-1 args: pane get w1Q:p1
+16:25:04.925607847 pid=3062004 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:05.080951063 pid=3062021 ppid=3062020 session=aohd-1 args: pane get w1Q:p1
+16:25:05.257519857 pid=3062051 ppid=3062050 session=aohd-1 args: pane get w1Q:p1
+16:25:05.357738049 pid=3062064 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:05.441795825 pid=3062075 ppid=3062074 session=aohd-1 args: pane get w1Q:p1
+16:25:05.620091488 pid=3062090 ppid=3062089 session=aohd-1 args: pane get w1Q:p1
+16:25:05.790685668 pid=3062103 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:05.802652860 pid=3062109 ppid=3062108 session=aohd-1 args: pane get w1Q:p1
+16:25:05.987258816 pid=3062129 ppid=3062128 session=aohd-1 args: pane get w1Q:p1
+16:25:06.160952156 pid=3062144 ppid=3062143 session=aohd-1 args: pane get w1Q:p1
+16:25:06.224208799 pid=3062157 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:06.341958651 pid=3062169 ppid=3062168 session=aohd-1 args: pane get w1Q:p1
+16:25:06.519533166 pid=3062184 ppid=3062183 session=aohd-1 args: pane get w1Q:p1
+16:25:06.656235006 pid=3062198 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:06.701089914 pid=3062209 ppid=3062208 session=aohd-1 args: pane get w1Q:p1
+16:25:06.881555245 pid=3062224 ppid=3062223 session=aohd-1 args: pane get w1Q:p1
+16:25:07.063938651 pid=3062246 ppid=3062245 session=aohd-1 args: pane get w1Q:p1
+16:25:07.091233859 pid=3062255 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:07.237111994 pid=3062270 ppid=3062269 session=aohd-1 args: pane get w1Q:p1
+16:25:07.411201959 pid=3062285 ppid=3062284 session=aohd-1 args: pane get w1Q:p1
+16:25:07.524067230 pid=3062298 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:07.595851996 pid=3062309 ppid=3062308 session=aohd-1 args: pane get w1Q:p1
+16:25:07.781156645 pid=3062324 ppid=3062323 session=aohd-1 args: pane get w1Q:p1
+16:25:07.957612992 pid=3062337 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:07.963747811 pid=3062342 ppid=3062341 session=aohd-1 args: pane get w1Q:p1
+16:25:08.138946323 pid=3062363 ppid=3062362 session=aohd-1 args: pane get w1Q:p1
+16:25:08.317356585 pid=3062378 ppid=3062377 session=aohd-1 args: pane get w1Q:p1
+16:25:08.390281542 pid=3062391 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:08.491265890 pid=3062415 ppid=3062414 session=aohd-1 args: pane get w1Q:p1
+16:25:08.670565904 pid=3062436 ppid=3062435 session=aohd-1 args: pane get w1Q:p1
+16:25:08.823734318 pid=3062450 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:08.859602026 pid=3062461 ppid=3062460 session=aohd-1 args: pane get w1Q:p1
+16:25:09.042722750 pid=3062476 ppid=3062475 session=aohd-1 args: pane get w1Q:p1
+16:25:09.228765900 pid=3062492 ppid=3062491 session=aohd-1 args: pane get w1Q:p1
+16:25:09.257063110 pid=3062501 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:09.288981172 pid=3062513 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:09.321138947 pid=3062523 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:09.352712056 pid=3062532 ppid=3060240 session=aohd-1 args: agent prompt w1Q:p1 aohd\ short\ turn
+16:25:09.409464278 pid=3062544 ppid=3062543 session=aohd-1 args: pane get w1Q:p1
+16:25:09.595681297 pid=3062589 ppid=3062588 session=aohd-1 args: pane get w1Q:p1
+16:25:09.696554998 pid=3062638 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:09.782826286 pid=3062649 ppid=3062648 session=aohd-1 args: pane get w1Q:p1
+16:25:09.971911299 pid=3062676 ppid=3062674 session=aohd-1 args: pane get w1Q:p1
+16:25:10.123324376 pid=3062700 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:10.147515223 pid=3062712 ppid=3062711 session=aohd-1 args: pane get w1Q:p1
+16:25:10.328226271 pid=3062760 ppid=3062759 session=aohd-1 args: pane get w1Q:p1
+16:25:10.508781086 pid=3062777 ppid=3062776 session=aohd-1 args: pane get w1Q:p1
+16:25:10.557699138 pid=3062789 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:10.683146356 pid=3062801 ppid=3062800 session=aohd-1 args: pane get w1Q:p1
+16:25:10.863592710 pid=3062845 ppid=3062844 session=aohd-1 args: pane get w1Q:p1
+16:25:10.990630534 pid=3062948 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:11.038414771 pid=3062981 ppid=3062979 session=aohd-1 args: pane get w1Q:p1
+16:25:11.218585590 pid=3063083 ppid=3063080 session=aohd-1 args: pane get w1Q:p1
+16:25:11.398101188 pid=3063711 ppid=3063708 session=aohd-1 args: pane get w1Q:p1
+16:25:11.424509835 pid=3063811 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:11.578852836 pid=3064393 ppid=3064390 session=aohd-1 args: pane get w1Q:p1
+16:25:11.754147253 pid=3065015 ppid=3065014 session=aohd-1 args: pane get w1Q:p1
+16:25:11.857920929 pid=3065386 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:11.928238850 pid=3065534 ppid=3065533 session=aohd-1 args: pane get w1Q:p1
+16:25:12.115439222 pid=3065549 ppid=3065548 session=aohd-1 args: pane get w1Q:p1
+16:25:12.292405755 pid=3065562 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:12.297218660 pid=3065566 ppid=3065565 session=aohd-1 args: pane get w1Q:p1
+16:25:12.478116353 pid=3065588 ppid=3065587 session=aohd-1 args: pane get w1Q:p1
+16:25:12.661138408 pid=3065603 ppid=3065602 session=aohd-1 args: pane get w1Q:p1
+16:25:12.729315784 pid=3065615 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:12.842423000 pid=3065627 ppid=3065626 session=aohd-1 args: pane get w1Q:p1
+16:25:13.022346231 pid=3065642 ppid=3065641 session=aohd-1 args: pane get w1Q:p1
+16:25:13.161255908 pid=3065655 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:13.208739907 pid=3065666 ppid=3065665 session=aohd-1 args: pane get w1Q:p1
+16:25:13.389888545 pid=3065681 ppid=3065680 session=aohd-1 args: pane get w1Q:p1
+16:25:13.574699104 pid=3065696 ppid=3065695 session=aohd-1 args: pane get w1Q:p1
+16:25:13.594061515 pid=3065704 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:13.753163454 pid=3065720 ppid=3065719 session=aohd-1 args: pane get w1Q:p1
+16:25:13.935833745 pid=3065735 ppid=3065734 session=aohd-1 args: pane get w1Q:p1
+16:25:14.024403758 pid=3065748 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:14.106178629 pid=3065759 ppid=3065758 session=aohd-1 args: pane get w1Q:p1
+16:25:14.290584234 pid=3065774 ppid=3065773 session=aohd-1 args: pane get w1Q:p1
+16:25:14.457529432 pid=3065787 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:14.474930067 pid=3065797 ppid=3065795 session=aohd-1 args: pane get w1Q:p1
+16:25:14.652646418 pid=3065813 ppid=3065812 session=aohd-1 args: pane get w1Q:p1
+16:25:14.834011612 pid=3065828 ppid=3065827 session=aohd-1 args: pane get w1Q:p1
+16:25:14.890744347 pid=3065840 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:15.008587969 pid=3065855 ppid=3065854 session=aohd-1 args: pane get w1Q:p1
+16:25:15.189762812 pid=3065903 ppid=3065902 session=aohd-1 args: pane get w1Q:p1
+16:25:15.322134830 pid=3065928 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:15.366832050 pid=3065939 ppid=3065938 session=aohd-1 args: pane get w1Q:p1
+16:25:15.538684980 pid=3066028 ppid=3066027 session=aohd-1 args: pane get w1Q:p1
+16:25:15.711341804 pid=3066078 ppid=3066077 session=aohd-1 args: pane get w1Q:p1
+16:25:15.752669842 pid=3066090 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:15.888598437 pid=3066102 ppid=3066101 session=aohd-1 args: pane get w1Q:p1
+16:25:16.069723522 pid=3066117 ppid=3066116 session=aohd-1 args: pane get w1Q:p1
+16:25:16.185343348 pid=3066187 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:16.258200356 pid=3066245 ppid=3066242 session=aohd-1 args: pane get w1Q:p1
+16:25:16.442755846 pid=3066339 ppid=3066338 session=aohd-1 args: pane get w1Q:p1
+16:25:16.618601556 pid=3066359 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:16.619669087 pid=3066361 ppid=3066360 session=aohd-1 args: pane get w1Q:p1
+16:25:16.797721435 pid=3066384 ppid=3066383 session=aohd-1 args: pane get w1Q:p1
+16:25:16.993292838 pid=3066428 ppid=3066427 session=aohd-1 args: pane get w1Q:p1
+16:25:17.054456091 pid=3066440 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:17.166998224 pid=3066452 ppid=3066451 session=aohd-1 args: pane get w1Q:p1
+16:25:17.347065322 pid=3066467 ppid=3066466 session=aohd-1 args: pane get w1Q:p1
+16:25:17.487582399 pid=3066480 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:17.527830014 pid=3066491 ppid=3066490 session=aohd-1 args: pane get w1Q:p1
+16:25:17.711313505 pid=3066506 ppid=3066505 session=aohd-1 args: pane get w1Q:p1
+16:25:17.889232306 pid=3066522 ppid=3066521 session=aohd-1 args: pane get w1Q:p1
+16:25:17.919083000 pid=3066531 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:18.068590867 pid=3066547 ppid=3066546 session=aohd-1 args: pane get w1Q:p1
+16:25:18.250286650 pid=3066562 ppid=3066561 session=aohd-1 args: pane get w1Q:p1
+16:25:18.350441604 pid=3066575 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:18.436858769 pid=3066586 ppid=3066585 session=aohd-1 args: pane get w1Q:p1
+16:25:18.621117634 pid=3066601 ppid=3066600 session=aohd-1 args: pane get w1Q:p1
+16:25:18.782587103 pid=3066614 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:18.813449948 pid=3066625 ppid=3066624 session=aohd-1 args: pane get w1Q:p1
+16:25:18.981893816 pid=3066642 ppid=3066641 session=aohd-1 args: pane get w1Q:p1
+16:25:19.167862740 pid=3066657 ppid=3066656 session=aohd-1 args: pane get w1Q:p1
+16:25:19.215536483 pid=3066669 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:19.349066014 pid=3066681 ppid=3066680 session=aohd-1 args: pane get w1Q:p1
+16:25:19.537117486 pid=3066696 ppid=3066695 session=aohd-1 args: pane get w1Q:p1
+16:25:19.648151193 pid=3066709 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:19.721246170 pid=3066720 ppid=3066719 session=aohd-1 args: pane get w1Q:p1
+16:25:19.899720273 pid=3066742 ppid=3066741 session=aohd-1 args: pane get w1Q:p1
+16:25:20.081692183 pid=3066756 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:20.083234074 pid=3066758 ppid=3066757 session=aohd-1 args: pane get w1Q:p1
+16:25:20.273852025 pid=3066781 ppid=3066780 session=aohd-1 args: pane get w1Q:p1
+16:25:20.461281875 pid=3066796 ppid=3066795 session=aohd-1 args: pane get w1Q:p1
+16:25:20.516826387 pid=3066808 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:20.646681117 pid=3066820 ppid=3066819 session=aohd-1 args: pane get w1Q:p1
+16:25:20.830277925 pid=3066835 ppid=3066834 session=aohd-1 args: pane get w1Q:p1
+16:25:20.947441726 pid=3066855 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:21.011318877 pid=3066866 ppid=3066865 session=aohd-1 args: pane get w1Q:p1
+16:25:21.200176052 pid=3066881 ppid=3066880 session=aohd-1 args: pane get w1Q:p1
+16:25:21.379235401 pid=3066896 ppid=3066895 session=aohd-1 args: pane get w1Q:p1
+16:25:21.379988477 pid=3066897 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:21.559226632 pid=3066920 ppid=3066919 session=aohd-1 args: pane get w1Q:p1
+16:25:21.741024281 pid=3066935 ppid=3066934 session=aohd-1 args: pane get w1Q:p1
+16:25:21.815638253 pid=3066947 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:21.843581647 pid=3066957 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:21.872167954 pid=3066966 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:21.903429202 pid=3066975 ppid=3060240 session=aohd-1 args: agent prompt w1Q:p1 aohd\ short\ turn
+16:25:21.922023751 pid=3066985 ppid=3066984 session=aohd-1 args: pane get w1Q:p1
+16:25:22.095208737 pid=3067002 ppid=3067001 session=aohd-1 args: pane get w1Q:p1
+16:25:22.245879881 pid=3067016 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:22.276156491 pid=3067027 ppid=3067026 session=aohd-1 args: pane get w1Q:p1
+16:25:22.463786148 pid=3067042 ppid=3067041 session=aohd-1 args: pane get w1Q:p1
+16:25:22.651216530 pid=3067067 ppid=3067066 session=aohd-1 args: pane get w1Q:p1
+16:25:22.678502020 pid=3067076 ppid=3060240 session=aohd-1 args: pane get w1Q:p1
+16:25:22.843357767 pid=3067097 ppid=3067096 session=aohd-1 args: pane get w1Q:p1
+16:25:23.023327540 pid=3067112 ppid=3067111 session=aohd-1 args: pane get w1Q:p1
+16:25:23.200092098 pid=3067128 ppid=3067127 session=aohd-1 args: pane get w1Q:p1
+16:25:23.211293949 pid=3067132 ppid=3060240 session=aohd-1 args: pane read w1Q:p1 --source recent-unwrapped --lines 20
+16:25:23.379578566 pid=3067158 ppid=3067156 session=aohd-1 args: pane get w1Q:p1
+16:25:23.562235590 pid=3067207 ppid=3067206 session=aohd-1 args: pane get w1Q:p1
+16:25:23.749359266 pid=3067222 ppid=3067221 session=aohd-1 args: pane get w1Q:p1
+16:25:23.931116216 pid=3067237 ppid=3067236 session=aohd-1 args: pane get w1Q:p1
+16:25:24.101152781 pid=3067252 ppid=3067251 session=aohd-1 args: pane get w1Q:p1
+16:25:24.285893495 pid=3067267 ppid=3067266 session=aohd-1 args: pane get w1Q:p1
+16:25:24.470405110 pid=3067282 ppid=3067281 session=aohd-1 args: pane get w1Q:p1
+16:25:24.652969894 pid=3067297 ppid=3067296 session=aohd-1 args: pane get w1Q:p1
+16:25:24.840580757 pid=3067312 ppid=3067311 session=aohd-1 args: pane get w1Q:p1
+16:25:25.017129443 pid=3067327 ppid=3067326 session=aohd-1 args: pane get w1Q:p1
+16:25:25.181472528 pid=3067342 ppid=3067341 session=aohd-1 args: pane get w1Q:p1
+16:25:25.367218614 pid=3067357 ppid=3067356 session=aohd-1 args: pane get w1Q:p1
+16:25:25.554115681 pid=3067372 ppid=3067371 session=aohd-1 args: pane get w1Q:p1
+16:25:25.732463205 pid=3067387 ppid=3067386 session=aohd-1 args: pane get w1Q:p1
+16:25:25.917640782 pid=3067402 ppid=3067401 session=aohd-1 args: pane get w1Q:p1
+16:25:25.942556726 pid=3067411 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:25:25.945056669 pid=3067412 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:25:25.947684252 pid=3067414 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:25.950461561 pid=3067421 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:25.952822184 pid=3067425 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:25:25.987226005 pid=3067459 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:25:25.990096056 pid=3067461 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:25:26.026559823 pid=3067478 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:25:26.029670292 pid=3067479 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:25:26.031952792 pid=3067481 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:26.034055736 pid=3067484 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:26.036527379 pid=3067488 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:25:26.069021518 pid=3067523 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:25:26.071782858 pid=3067524 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:25:26.091091996 pid=3067542 ppid=3067541 session=aohd-1 args: pane get w1Q:p1
+16:25:26.267843420 pid=3067561 ppid=3067560 session=aohd-1 args: pane get w1Q:p1
+16:25:26.445245153 pid=3067576 ppid=3067575 session=aohd-1 args: pane get w1Q:p1
+16:25:26.631807866 pid=3067591 ppid=3067590 session=aohd-1 args: pane get w1Q:p1
+16:25:26.814709368 pid=3067606 ppid=3067605 session=aohd-1 args: pane get w1Q:p1
+16:25:26.989864357 pid=3067621 ppid=3067620 session=aohd-1 args: pane get w1Q:p1
+16:25:27.170217815 pid=3067636 ppid=3067635 session=aohd-1 args: pane get w1Q:p1
+16:25:27.349918951 pid=3067651 ppid=3067650 session=aohd-1 args: pane get w1Q:p1
+16:25:27.532565849 pid=3067666 ppid=3067665 session=aohd-1 args: pane get w1Q:p1
+16:25:27.715705870 pid=3067681 ppid=3067680 session=aohd-1 args: pane get w1Q:p1
+16:25:27.907437793 pid=3067716 ppid=3067715 session=aohd-1 args: pane get w1Q:p1
+16:25:28.090142301 pid=3067755 ppid=3067754 session=aohd-1 args: pane get w1Q:p1
+16:25:28.276397116 pid=3067777 ppid=3067776 session=aohd-1 args: pane get w1Q:p1
+16:25:28.452733938 pid=3067821 ppid=3067820 session=aohd-1 args: pane get w1Q:p1
+16:25:28.637143059 pid=3067910 ppid=3067909 session=aohd-1 args: pane get w1Q:p1
+16:25:28.809081762 pid=3068021 ppid=3068020 session=aohd-1 args: pane get w1Q:p1
+16:25:28.983488472 pid=3068053 ppid=3068052 session=aohd-1 args: pane get w1Q:p1
+16:25:29.162931579 pid=3068068 ppid=3068067 session=aohd-1 args: pane get w1Q:p1
+16:25:29.339432689 pid=3068124 ppid=3068123 session=aohd-1 args: pane get w1Q:p1
+16:25:29.520951231 pid=3068139 ppid=3068138 session=aohd-1 args: pane get w1Q:p1
+16:25:29.707350616 pid=3068185 ppid=3068184 session=aohd-1 args: pane get w1Q:p1
+16:25:29.885432821 pid=3068200 ppid=3068199 session=aohd-1 args: pane get w1Q:p1
+16:25:30.074091560 pid=3068243 ppid=3068241 session=aohd-1 args: pane get w1Q:p1
+16:25:30.247962057 pid=3068369 ppid=3068368 session=aohd-1 args: pane get w1Q:p1
+16:25:30.432357918 pid=3068458 ppid=3068457 session=aohd-1 args: pane get w1Q:p1
+16:25:30.615591393 pid=3068507 ppid=3068505 session=aohd-1 args: pane get w1Q:p1
+16:25:30.801224186 pid=3068602 ppid=3068600 session=aohd-1 args: pane get w1Q:p1
+16:25:30.982552797 pid=3068648 ppid=3068647 session=aohd-1 args: pane get w1Q:p1
+16:25:31.155071844 pid=3068704 ppid=3068703 session=aohd-1 args: pane get w1Q:p1
+16:25:31.335496975 pid=3068750 ppid=3068749 session=aohd-1 args: pane get w1Q:p1
+16:25:31.525912081 pid=3068765 ppid=3068764 session=aohd-1 args: pane get w1Q:p1
+16:25:31.708724326 pid=3068780 ppid=3068779 session=aohd-1 args: pane get w1Q:p1
+16:25:31.893598570 pid=3068795 ppid=3068794 session=aohd-1 args: pane get w1Q:p1
+16:25:32.074374228 pid=3068810 ppid=3068809 session=aohd-1 args: pane get w1Q:p1
+16:25:32.264324282 pid=3068994 ppid=3068991 session=aohd-1 args: pane get w1Q:p1
+16:25:32.447829390 pid=3069666 ppid=3069663 session=aohd-1 args: pane get w1Q:p1
+16:25:32.635105355 pid=3070364 ppid=3070361 session=aohd-1 args: pane get w1Q:p1
+16:25:32.812292031 pid=3070973 ppid=3070970 session=aohd-1 args: pane get w1Q:p1
+16:25:32.991675475 pid=3071352 ppid=3071351 session=aohd-1 args: pane get w1Q:p1
+16:25:33.175166073 pid=3071367 ppid=3071366 session=aohd-1 args: pane get w1Q:p1
+16:25:33.355076904 pid=3071382 ppid=3071381 session=aohd-1 args: pane get w1Q:p1
+16:25:33.536683628 pid=3071397 ppid=3071396 session=aohd-1 args: pane get w1Q:p1
+16:25:33.719193776 pid=3071412 ppid=3071411 session=aohd-1 args: pane get w1Q:p1
+16:25:33.903993339 pid=3071427 ppid=3071426 session=aohd-1 args: pane get w1Q:p1
+16:25:34.088651467 pid=3071442 ppid=3071441 session=aohd-1 args: pane get w1Q:p1
+16:25:34.270320264 pid=3071457 ppid=3071456 session=aohd-1 args: pane get w1Q:p1
+16:25:34.448420624 pid=3071484 ppid=3071483 session=aohd-1 args: pane get w1Q:p1
+16:25:34.635218865 pid=3071499 ppid=3071498 session=aohd-1 args: pane get w1Q:p1
+16:25:34.817762568 pid=3071545 ppid=3071544 session=aohd-1 args: pane get w1Q:p1
+16:25:34.990448115 pid=3071560 ppid=3071559 session=aohd-1 args: pane get w1Q:p1
+16:25:35.171111773 pid=3071597 ppid=3071596 session=aohd-1 args: pane get w1Q:p1
+16:25:35.352745063 pid=3071731 ppid=3071730 session=aohd-1 args: pane get w1Q:p1
+16:25:35.540277136 pid=3071791 ppid=3071790 session=aohd-1 args: pane get w1Q:p1
+16:25:35.726231155 pid=3071806 ppid=3071805 session=aohd-1 args: pane get w1Q:p1
+16:25:35.905737124 pid=3071850 ppid=3071849 session=aohd-1 args: pane get w1Q:p1
+16:25:36.086856789 pid=3071865 ppid=3071864 session=aohd-1 args: pane get w1Q:p1
+16:25:36.271371461 pid=3071880 ppid=3071879 session=aohd-1 args: pane get w1Q:p1
+16:25:36.452646321 pid=3071895 ppid=3071894 session=aohd-1 args: pane get w1Q:p1
+16:25:36.642947502 pid=3071910 ppid=3071909 session=aohd-1 args: pane get w1Q:p1
+16:25:36.828088511 pid=3071925 ppid=3071924 session=aohd-1 args: pane get w1Q:p1
+16:25:37.012271326 pid=3071940 ppid=3071939 session=aohd-1 args: pane get w1Q:p1
+16:25:37.193875108 pid=3071962 ppid=3071961 session=aohd-1 args: pane get w1Q:p1
+16:25:37.377761263 pid=3071977 ppid=3071976 session=aohd-1 args: pane get w1Q:p1
+16:25:37.560996832 pid=3071992 ppid=3071991 session=aohd-1 args: pane get w1Q:p1
+16:25:37.744545400 pid=3072007 ppid=3072006 session=aohd-1 args: pane get w1Q:p1
+16:25:37.937715387 pid=3072022 ppid=3072021 session=aohd-1 args: pane get w1Q:p1
+16:25:38.122722344 pid=3072037 ppid=3072036 session=aohd-1 args: pane get w1Q:p1
+16:25:38.304047361 pid=3072052 ppid=3072051 session=aohd-1 args: pane get w1Q:p1
+16:25:38.481811129 pid=3072067 ppid=3072066 session=aohd-1 args: pane get w1Q:p1
+16:25:38.657185113 pid=3072082 ppid=3072081 session=aohd-1 args: pane get w1Q:p1
+16:25:38.838098583 pid=3072097 ppid=3072096 session=aohd-1 args: pane get w1Q:p1
+16:25:39.018673263 pid=3072124 ppid=3072123 session=aohd-1 args: pane get w1Q:p1
+16:25:39.202078502 pid=3072156 ppid=3072155 session=aohd-1 args: pane get w1Q:p1
+16:25:39.383353494 pid=3072171 ppid=3072170 session=aohd-1 args: pane get w1Q:p1
+16:25:39.562483112 pid=3072186 ppid=3072185 session=aohd-1 args: pane get w1Q:p1
+16:25:39.738123798 pid=3072201 ppid=3072200 session=aohd-1 args: pane get w1Q:p1
+16:25:39.911868484 pid=3072228 ppid=3072227 session=aohd-1 args: pane get w1Q:p1
+16:25:40.096996701 pid=3072243 ppid=3072242 session=aohd-1 args: pane get w1Q:p1
+16:25:40.283157316 pid=3072289 ppid=3072288 session=aohd-1 args: pane get w1Q:p1
+16:25:40.464648680 pid=3072304 ppid=3072303 session=aohd-1 args: pane get w1Q:p1
+16:25:40.645305121 pid=3072354 ppid=3072352 session=aohd-1 args: pane get w1Q:p1
+16:25:40.826867577 pid=3072482 ppid=3072481 session=aohd-1 args: pane get w1Q:p1
+16:25:41.011045172 pid=3072535 ppid=3072534 session=aohd-1 args: pane get w1Q:p1
+16:25:41.201387272 pid=3072551 ppid=3072550 session=aohd-1 args: pane get w1Q:p1
+16:25:41.389480611 pid=3072595 ppid=3072594 session=aohd-1 args: pane get w1Q:p1
+16:25:41.574374459 pid=3072610 ppid=3072609 session=aohd-1 args: pane get w1Q:p1
+16:25:41.752978578 pid=3072625 ppid=3072624 session=aohd-1 args: pane get w1Q:p1
+16:25:41.922832857 pid=3072640 ppid=3072639 session=aohd-1 args: pane get w1Q:p1
+16:25:42.111452956 pid=3072655 ppid=3072654 session=aohd-1 args: pane get w1Q:p1
+16:25:42.292700846 pid=3072670 ppid=3072669 session=aohd-1 args: pane get w1Q:p1
+16:25:42.476787768 pid=3072685 ppid=3072684 session=aohd-1 args: pane get w1Q:p1
+16:25:42.674221687 pid=3072700 ppid=3072699 session=aohd-1 args: pane get w1Q:p1
+16:25:42.847671197 pid=3072715 ppid=3072714 session=aohd-1 args: pane get w1Q:p1
+16:25:43.027598746 pid=3072730 ppid=3072729 session=aohd-1 args: pane get w1Q:p1
+16:25:43.216828485 pid=3072745 ppid=3072744 session=aohd-1 args: pane get w1Q:p1
+16:25:43.389628731 pid=3072775 ppid=3072774 session=aohd-1 args: pane get w1Q:p1
+16:25:43.570016146 pid=3072804 ppid=3072803 session=aohd-1 args: pane get w1Q:p1
+16:25:43.752428450 pid=3072819 ppid=3072818 session=aohd-1 args: pane get w1Q:p1
+16:25:43.947879134 pid=3072834 ppid=3072833 session=aohd-1 args: pane get w1Q:p1
+16:25:44.130258483 pid=3072849 ppid=3072848 session=aohd-1 args: pane get w1Q:p1
+16:25:44.300959705 pid=3072876 ppid=3072875 session=aohd-1 args: pane get w1Q:p1
+16:25:44.480178535 pid=3072892 ppid=3072890 session=aohd-1 args: pane get w1Q:p1
+16:25:44.661444320 pid=3072937 ppid=3072936 session=aohd-1 args: pane get w1Q:p1
+16:25:45.210498081 pid=3073161 ppid=3073160 session=aohd-1 args: agent get w1Q:p1
+16:25:45.250286166 pid=3073180 ppid=3072861 session=aohd-1 args: agent prompt w1Q:p1 aohd\ seq\ test\ 1
+16:25:48.098487027 pid=3073306 ppid=3073305 session=aohd-1 args: agent get w1Q:p1
+16:25:48.139276601 pid=3073317 ppid=3073316 session=aohd-1 args: agent get w1Q:p1
+16:25:48.177530236 pid=3073327 ppid=3072861 session=aohd-1 args: agent prompt w1Q:p1 aohd\ seq\ test\ 2
+16:25:51.024893334 pid=3073356 ppid=3073355 session=aohd-1 args: agent get w1Q:p1
+16:25:51.059902666 pid=3073367 ppid=3073366 session=aohd-1 args: agent get w1Q:p1
+16:25:51.117190695 pid=3073377 ppid=3072861 session=aohd-1 args: agent prompt w1Q:p1 aohd\ seq\ test\ 3
+16:25:53.964598648 pid=3075794 ppid=3075793 session=aohd-1 args: agent get w1Q:p1
+16:25:54.008137208 pid=3075806 ppid=3075804 session=aohd-1 args: agent get w1Q:p1
+16:25:55.941417559 pid=3076031 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:25:55.945280493 pid=3076032 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:25:55.946932732 pid=3076034 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:55.950791124 pid=3076038 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:55.953392883 pid=3076042 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:25:55.990359445 pid=3076076 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:25:55.993308746 pid=3076077 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:25:56.031663029 pid=3076094 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:25:56.035164681 pid=3076095 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:25:56.037705250 pid=3076097 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:56.039098951 pid=3076100 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:25:56.041829929 pid=3076104 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:25:56.074750448 pid=3076139 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:25:56.077447870 pid=3076140 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:26:08.799778463 pid=3077317 ppid=3077310 session=aohd-1 args: pane get w1P:p1
+16:26:08.834615014 pid=3077326 ppid=3077310 session=aohd-1 args: pane get w1P:p1
+16:26:08.868482755 pid=3077335 ppid=3077310 session=aohd-1 args: pane get w1P:p1
+16:26:25.962840986 pid=3080911 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:26:25.965629565 pid=3080912 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:26:25.968359703 pid=3080914 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:25.971314386 pid=3080918 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:25.973885688 pid=3080922 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:26:26.012149242 pid=3080956 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:26:26.015831839 pid=3080958 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:26:26.051073834 pid=3080974 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:26:26.053488174 pid=3080975 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:26:26.056234542 pid=3080977 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:26.058742979 pid=3080980 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:26.060701540 pid=3080984 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:26:26.097781021 pid=3081019 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:26:26.100362798 pid=3081020 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:26:55.983132993 pid=3089521 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:26:55.985964897 pid=3089522 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:26:55.988709592 pid=3089525 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:55.990904255 pid=3089527 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:55.993452614 pid=3089533 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:26:56.026019135 pid=3089575 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:26:56.031215137 pid=3089576 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:26:56.071371661 pid=3089593 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:26:56.074065220 pid=3089594 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:26:56.076922505 pid=3089596 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:56.079036811 pid=3089599 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:26:56.081068304 pid=3089603 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:26:56.119859711 pid=3089638 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:26:56.122409495 pid=3089639 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:27:24.659296292 pid=3096101 ppid=3096094 session=aohd-1 args: pane get w1M:p1
+16:27:24.666550692 pid=3096104 ppid=3096094 session=aohd-1 args: pane get w1N:p1
+16:27:24.669549428 pid=3096106 ppid=3096094 session=aohd-1 args: pane get w1P:p1
+16:27:24.673377547 pid=3096113 ppid=3096094 session=aohd-1 args: pane get w1P:p1
+16:27:24.675554219 pid=3096117 ppid=3096094 session=aohd-1 args: pane get w1Q:p1
+16:27:24.711905010 pid=3096146 ppid=3096094 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:27:24.714667904 pid=3096147 ppid=3096094 session=aohd-1 args: pane process-info --pane w1P:p1
+16:27:26.003305783 pid=3096267 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:27:26.005882568 pid=3096268 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:27:26.008277996 pid=3096270 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:27:26.010858394 pid=3096273 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:27:26.013536809 pid=3096277 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:27:26.045392718 pid=3096312 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:27:26.049623896 pid=3096314 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1
+16:27:26.083162723 pid=3096330 ppid=2949663 session=aohd-1 args: pane get w1M:p1
+16:27:26.085389013 pid=3096331 ppid=2949663 session=aohd-1 args: pane get w1N:p1
+16:27:26.087572726 pid=3096333 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:27:26.090585935 pid=3096336 ppid=2949663 session=aohd-1 args: pane get w1P:p1
+16:27:26.092504735 pid=3096340 ppid=2949663 session=aohd-1 args: pane get w1Q:p1
+16:27:26.124078519 pid=3096375 ppid=2949663 session=aohd-1 args: pane process-info --pane w1P:p1
+16:27:26.125705765 pid=3096376 ppid=2949663 session=aohd-1 args: pane process-info --pane w1Q:p1

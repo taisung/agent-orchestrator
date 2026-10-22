@@ -1,0 +1,12 @@
+1792699746.795252176 start pid=2870296 args=--aohd-manual m3 boot=0 work=3
+1792699746.803653068 ready
+1792699753.547525840 received: first task m3
+1792699756.565056399 turn-done
+1792699779.845051123 received: second task m3
+1792699782.860791237 turn-done
+1792699800.442920264 received: aohd matrix prompt live
+1792699803.460518749 turn-done
+1792699803.492090975 received: aohd matrix text live
+1792699806.510083508 turn-done
+1792699806.538978291 received: bash /tmp/aohd/scripts/noop.sh
+1792699809.556013268 turn-done

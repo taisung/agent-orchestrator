@@ -1,0 +1,130 @@
+strace summary of the aohd herdr check (generated 2026-10-22T16:28:34-04:00)
+
+== herdr client calls through the shim (strace -f -e trace=connect,socket,execve per call)
+calls: 1782
+connect targets:
+   4458 sun_path="/tmp/aohd/xdg/config/herdr/sessions/aohd-1/herdr.sock"
+socket families:
+   4458 socket(AF_UNIX
+execve:
+   1782 execve("<home>/.local/bin/herdr"
+
+== help calls (strace -e connect,socket)
+lines: 0
+
+== server run strace-server (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+      1 sun_path="/var/run/dbus/system_bus_socket"
+    122 sun_path="/var/run/nscd/socket"
+execve:
+      1 execve("<home>/.local/bin/herdr", ["<home>/.local/bin/herdr", "--session"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-m1"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-m2"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-m3"
+     61 execve("/tmp/aohd/bin/bash", ["/tmp/aohd/bin/bash"
+      3 execve("/tmp/aohd/bin/claude", ["claude", "--aohd-manual"
+     18 execve("/tmp/aohd/bin/date", ["date", "+%s.%N"
+      3 execve("/tmp/aohd/bin/rm", ["rm", "--"
+     18 execve("/tmp/aohd/bin/sed", ["sed", "s/ /\342\224\200/g"
+      6 execve("/tmp/aohd/bin/sleep", ["sleep", "3"
+
+== server run strace-server2 (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 66
+connect targets:
+      6 sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad"
+      6 sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")
+      6 sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")
+      1 sun_path="/var/run/dbus/system_bus_socket"
+    164 sun_path="/var/run/nscd/socket"
+execve:
+      1 execve("<home>/.local/bin/herdr", ["<home>/.local/bin/herdr", "--session"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/scripts/noop.sh"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-50"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-f7"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-fa"
+     69 execve("/tmp/aohd/bin/bash", ["/tmp/aohd/bin/bash"
+      3 execve("/tmp/aohd/bin/cat", ["cat", "/tmp/aohd/standin.drop"
+      1 execve("/tmp/aohd/bin/claude", ["claude", "--aohd-manual"
+      3 execve("/tmp/aohd/bin/claude", ["claude", "--dangerously-skip-permissions"
+     35 execve("/tmp/aohd/bin/date", ["date", "+%s"
+     47 execve("/tmp/aohd/bin/date", ["date", "+%s.%N"
+      4 execve("/tmp/aohd/bin/git", ["git", "-C"
+      6 execve("/tmp/aohd/bin/head", ["head", "-1"
+      6 execve("/tmp/aohd/bin/head", ["head", "-c"
+      6 execve("/tmp/aohd/bin/od", ["od", "-An"
+      3 execve("/tmp/aohd/bin/rm", ["rm", "--"
+     19 execve("/tmp/aohd/bin/sed", ["sed", "s/ /\342\224\200/g"
+      4 execve("/tmp/aohd/bin/sleep", ["sleep", "3"
+      6 execve("/tmp/aohd/bin/tr", ["tr", "-s"
+      1 execve("/usr/bin/snap", ["/usr/bin/snap", "advise-snap"
+      1 execve("/usr/lib/command-not-found", ["/usr/lib/command-not-found", "--"
+      2 execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "branch"
+      2 execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "reset"
+      2 execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "symbolic-ref"
+
+== server run strace-server3 (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+      1 sun_path="/var/run/dbus/system_bus_socket"
+    122 sun_path="/var/run/nscd/socket"
+execve:
+      1 execve("<home>/.local/bin/herdr", ["<home>/.local/bin/herdr", "--session"
+     61 execve("/tmp/aohd/bin/bash", ["/tmp/aohd/bin/bash"
+      1 execve("/tmp/aohd/bin/cat", ["cat", "/tmp/aohd/standin.drop"
+      2 execve("/tmp/aohd/bin/date", ["date", "+%s.%N"
+      2 execve("/tmp/aohd/bin/sed", ["sed", "s/ /\342\224\200/g"
+      1 execve("/tmp/aohd/tmp/fakeagent", ["/tmp/aohd/tmp/fakeagent", "--aohd-manual"
+
+== server run strace-server4 (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+      1 sun_path="/var/run/dbus/system_bus_socket"
+    122 sun_path="/var/run/nscd/socket"
+execve:
+      1 execve("<home>/.local/bin/herdr", ["<home>/.local/bin/herdr", "--session"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-d4"
+      1 execve("/tmp/aohd/bin/bash", ["bash", "/tmp/aohd/tmp/ao-herdr-launch-f2"
+     61 execve("/tmp/aohd/bin/bash", ["/tmp/aohd/bin/bash"
+      2 execve("/tmp/aohd/bin/cat", ["cat", "/tmp/aohd/standin.drop"
+      8 execve("/tmp/aohd/bin/cat", ["cat", "/tmp/aohd/standin.work"
+      2 execve("/tmp/aohd/bin/claude", ["claude", "--dangerously-skip-permissions"
+     20 execve("/tmp/aohd/bin/date", ["date", "+%s.%N"
+      8 execve("/tmp/aohd/bin/head", ["head", "-1"
+      8 execve("/tmp/aohd/bin/head", ["head", "-c"
+      8 execve("/tmp/aohd/bin/od", ["od", "-An"
+      2 execve("/tmp/aohd/bin/rm", ["rm", "--"
+     20 execve("/tmp/aohd/bin/sed", ["sed", "s/ /\342\224\200/g"
+      6 execve("/tmp/aohd/bin/sleep", ["sleep", "0.1"
+      2 execve("/tmp/aohd/bin/sleep", ["sleep", "3"
+      8 execve("/tmp/aohd/bin/tr", ["tr", "-s"
+
+== AF_INET lines of server run 2, with the process (git, run by herdr worktree create)
+-- s.2935258: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "branch", "native1", "HEAD"]
+connect(4, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(4, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(4, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+-- s.2935261: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "symbolic-ref", "HEAD", "refs/heads/native1"]
+connect(5, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(5, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(5, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+-- s.2935262: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "reset", "--hard", "--no-recurse-submodules"]
+connect(4, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(4, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(4, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+-- s.2938415: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "branch", "native2", "HEAD"]
+connect(4, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(4, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(4, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+-- s.2938416: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "symbolic-ref", "HEAD", "refs/heads/native2"]
+connect(5, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(5, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(5, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+-- s.2938417: execve("/usr/lib/git-core/git", ["/usr/lib/git-core/git", "reset", "--hard", "--no-recurse-submodules"]
+connect(4, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 0
+connect(4, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("172.17.55.5")}, 16) = 0
+connect(4, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::b577:3dfc:611e:58ad", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINVAL (Invalid argument)
+
+== pnpm install and build (strace -f -e trace=connect)
+install connect lines: 0
+build connect lines: 0

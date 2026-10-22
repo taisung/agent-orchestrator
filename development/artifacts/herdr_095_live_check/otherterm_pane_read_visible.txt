@@ -1,0 +1,2 @@
+bash: groups: command not found
+aohd$
