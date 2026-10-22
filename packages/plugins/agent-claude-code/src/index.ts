@@ -692,7 +692,9 @@ async function isClaudeProcessRunning(handle: RuntimeHandle): Promise<boolean> {
 // for a message or a tool call, `❯` for a user turn, `✻ Brewed for 4s · done`
 // after a turn) and indents its other rows, so a spinner row that a message
 // quotes is never the first column-0 row above the box. An open dialog
-// (AskUserQuestion, a permission prompt) takes the place of the box.
+// (AskUserQuestion, a permission prompt) takes the place of the box: its
+// top rule row, then its header, question and numbered choices, with no
+// transcript entry between the rule row and the cursor.
 
 /** A rule row of the input box or of a dialog. */
 const RULE_ROW = /^─{10,}$/;
@@ -738,10 +740,16 @@ function hasSpinnerRowAbove(rows: string[], boxTop: number): boolean {
   return false;
 }
 
+/** A transcript entry at column 0: `●` for a message or a tool call, `❯` and a space for a user turn. */
+const ENTRY_ROW = /^(?:●|❯ )/;
+
 /**
  * True when a dialog of numbered choices is open: the last `❯` row is its
- * cursor, the rows from the rule row above the cursor to the end hold another
- * numbered choice, and no transcript entry (`●`) comes after the cursor.
+ * cursor, a rule row (the top edge of the dialog) is above the cursor with no
+ * transcript entry between them, the rows from that rule row to the end hold
+ * another numbered choice, and no transcript entry (`●`) comes after the
+ * cursor. A numbered list that a message or a user turn quotes has no rule
+ * row above it, or its entry row lies between the rule row and the list.
  */
 function showsChoiceDialog(rows: string[]): boolean {
   let cursor = rows.length - 1;
@@ -749,9 +757,12 @@ function showsChoiceDialog(rows: string[]): boolean {
   if (cursor < 0 || !CHOICE_CURSOR_ROW.test(rows[cursor] ?? "")) return false;
   const after = rows.slice(cursor + 1);
   if (after.some((row) => row.startsWith("●"))) return false;
-  let top = cursor;
-  while (top > 0 && !RULE_ROW.test(rows[top - 1] ?? "")) top--;
-  return [...rows.slice(top, cursor), ...after].some((row) => CHOICE_ROW.test(row));
+  let top = cursor - 1;
+  while (top >= 0 && !RULE_ROW.test(rows[top] ?? "")) top--;
+  if (top < 0) return false;
+  const above = rows.slice(top + 1, cursor);
+  if (above.some((row) => ENTRY_ROW.test(row))) return false;
+  return [...above, ...after].some((row) => CHOICE_ROW.test(row));
 }
 
 /** Classify Claude Code's activity state from terminal output (pure, sync). */
