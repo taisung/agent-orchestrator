@@ -8,8 +8,10 @@
  * `destroyed` and `absent` are the healthy controls.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AO_METADATA_HELPER } from "../agent-workspace-hooks.js";
 import { createSessionManager } from "../session-manager.js";
 import {
   deleteMetadata,
@@ -517,7 +519,7 @@ describe("restore that recreates a workspace or copies an archive back (review r
         expect(message).toContain(`runtime stop unconfirmed (${OUTCOME[mode]})`);
         expect(message).toContain(
           archived
-            ? "nothing was restored: the archive copy-back of this restore was removed again, the workspace is as it was, and no new runtime was created"
+            ? "nothing was restored: the archive copy-back of this restore was removed again, this restore did not change the workspace, and no new runtime was created"
             : "nothing was restored: the record and the workspace are as they were, and no new runtime was created",
         );
         expect(message, "the message claims a worktree").not.toContain("worktree kept");
@@ -648,6 +650,10 @@ describe("review r1 reproducer, M-1: a refused restore changes nothing", () => {
   }
 });
 
+/** The refusal text of a copy-back that another operation wrote to during the stop. */
+const changedDuringStop =
+  "the archive copy-back of this restore changed during the stop (another operation on the ID wrote to it), so it was kept as the active record of app-1 with that write and was not removed; this restore did not change the workspace, and no new runtime was created; check that record with `ao session ls` before you restore again, because a restore now reads the active record and not the archive";
+
 /**
  * Review r2 (M-1): the archive copy-back is an active record during the
  * stop, and another operation can write to it without a change of its
@@ -658,9 +664,6 @@ describe("review r1 reproducer, M-1: a refused restore changes nothing", () => {
  * ac1cbf4b, so it is a control of F-4, not of this fix).
  */
 describe("review r2 reproducer, M-1: a refused restore keeps a write made during the stop", () => {
-  const changedDuringStop =
-    "the archive copy-back of this restore changed during the stop (another operation on the ID wrote to it), so it was kept as the active record of app-1 with that write and was not removed; the workspace is as it was, and no new runtime was created; check that record with `ao session ls` before you restore again, because a restore now reads the active record and not the archive";
-
   it("review: refused copy-back must preserve another operation metadata update", async () => {
     const wt = join(
       getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
@@ -809,6 +812,96 @@ describe("review r2 reproducer, M-1: a refused restore keeps a write made during
     expect(refusal.message).not.toContain("was removed again");
     expect(refusal.hint).toContain("then run `ao session restore app-1` again");
   });
+});
+
+/**
+ * Review r3 (M-1): the shipped bash metadata helper writes `pr`, `status`
+ * and `branch` with `sed` and `mv`, and keeps the generation and the launch
+ * identity. These are the reviewer's attacks shared-pr, shared-status and
+ * shared-branch (its `review-r3.test.ts`; its logs left out, its assertions
+ * kept, then the copy-back, the archive, the worktree and the message
+ * checked). The helper runs in clean bash during the stop and exits 0
+ * before the stop answers. Measured on c045f31b: the active record became
+ * null, and the refusal said that the copy-back was removed again. The
+ * Claude Code hook case is in the agent-claude-code tests.
+ */
+describe("review r3 reproducer, M-1: a refused restore keeps a completed metadata-helper write", () => {
+  const writes = [
+    ["pr", "https://github.com/review/scratch/pull/99"],
+    ["status", "pr_open"],
+    ["branch", "feat/helper"],
+  ] as const;
+
+  for (const [key, value] of writes) {
+    it(`review attack: shared-${key}`, async () => {
+      const wt = join(
+        getWorktreesDir(ctx.config.configPath, ctx.config.projects["my-app"]!.path),
+        "app-1",
+      );
+      mkdirSync(wt, { recursive: true });
+      writeMetadata(sessionsDir, "app-1", {
+        project: "my-app",
+        worktree: wt,
+        branch: "feat/original",
+        status: "killed",
+        runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+      });
+      deleteMetadata(sessionsDir, "app-1", true);
+      const archiveBefore = archiveFiles("app-1");
+      const helperPath = join(ctx.tmpDir, "shared-helper.sh");
+      writeFileSync(helperPath, AO_METADATA_HELPER);
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+      let copyBack: Record<string, string> | null = null;
+      let written: Record<string, string> | null = null;
+      ctx.mockRuntime.stop = vi.fn(async () => {
+        copyBack = readMetadataRaw(sessionsDir, "app-1");
+        // Throws unless bash exits 0.
+        execFileSync(
+          "/bin/bash",
+          [
+            "--noprofile",
+            "--norc",
+            "-c",
+            'source "$1"; update_ao_metadata "$2" "$3"',
+            "review",
+            helperPath,
+            key,
+            value,
+          ],
+          {
+            env: {
+              HOME: process.env["HOME"] ?? "",
+              PATH: "/usr/bin:/bin",
+              ...(process.env["AO_STATE_ROOT"]
+                ? { AO_STATE_ROOT: process.env["AO_STATE_ROOT"] }
+                : {}),
+              AO_DATA_DIR: sessionsDir,
+              AO_SESSION: "app-1",
+            },
+            encoding: "utf8",
+          },
+        );
+        written = readMetadataRaw(sessionsDir, "app-1");
+        return { outcome: "unknown" as const, detail: "controlled refusal" };
+      });
+
+      const err = await sm.restore("app-1").catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("runtime stop unconfirmed");
+      expect(ctx.mockRuntime.create).not.toHaveBeenCalled();
+      expect(readMetadataRaw(sessionsDir, "app-1"), "completed writer lost").toEqual(written);
+      // The helper wrote its value and kept the generation and the launch identity.
+      expect(copyBack![key]).not.toBe(value);
+      expect(written![key]).toBe(value);
+      expect(written!["generation"]).toBe(copyBack!["generation"]);
+      expect(written!["reservationId"]).toBe(copyBack!["reservationId"]);
+      expect(archiveFiles("app-1"), "the archive changed").toEqual(archiveBefore);
+      expect(existsSync(wt), "the worktree was removed").toBe(true);
+      const message = (err as Error).message;
+      expect(message).toContain(changedDuringStop);
+      expect(message).not.toContain("was removed again");
+    });
+  }
 });
 
 describe("recovery cleanupSession", () => {

@@ -1556,25 +1556,33 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
   /**
    * Review r1 (M-1): remove the archive copy-back of a refused restore again,
-   * and say what happened, for the refusal message. Only while the record is
-   * still that copy-back as it was written (its launch identity with the
-   * reservation ID, and its generation), and without an archive copy: the
-   * archive that it came from stays the latest one. Review r2 (M-1): the
-   * copy-back is an active record during the stop, so another operation can
-   * write to it (a PR claim, a status or summary update) without a change of
-   * the launch identity. Such a write raises the generation, and the record
-   * stays with it. A record that another operation put in its place stays too.
+   * and say what happened, for the refusal message. Only while the record
+   * still holds the values of that copy-back as it was written, and without
+   * an archive copy: the archive that it came from stays the latest one.
+   * Review r2 (M-1): the copy-back is an active record during the stop, so
+   * another operation can write to it (a PR claim, a status or summary
+   * update) without a change of the launch identity. The delete compares the
+   * launch identity (with the reservation ID), the generation (every Node
+   * write raises it) and, review r3 (M-1), `pr`, `status` and `branch`: the
+   * bash metadata helpers write these three keys with `sed` and `mv` and keep
+   * the generation. A record where one of them changed stays, and so does a
+   * record that another operation put in its place. Not detected: a write
+   * of another key that keeps the generation, and an unlocked write between
+   * the locked read and the unlink.
    */
   function releaseCopyBack(
     sessionsDir: string,
     sessionId: SessionId,
     copyBack: Readonly<Record<string, string>>,
   ): string {
-    const rest = "the workspace is as it was, and no new runtime was created";
+    const rest = "this restore did not change the workspace, and no new runtime was created";
     try {
       const unchanged = {
         ...launchIdentity(copyBack),
         [GENERATION_KEY]: copyBack[GENERATION_KEY] ?? "",
+        pr: copyBack["pr"] ?? "",
+        status: copyBack["status"] ?? "",
+        branch: copyBack["branch"] ?? "",
       };
       if (deleteMetadata(sessionsDir, sessionId, false, unchanged)) {
         return `nothing was restored: the archive copy-back of this restore was removed again, ${rest}`;
