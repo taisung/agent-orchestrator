@@ -111,8 +111,17 @@ function parseHerdrResult(stdout: string): Record<string, unknown> {
   const obj = parsed as Record<string, unknown>;
 
   const error = obj.error;
-  if (typeof error === "object" && error !== null) {
+  if (error !== undefined && error !== null) {
+    // Same-ID R4 round 3 (M-3): an error that is not an object, or an answer
+    // with both an error and a result, is malformed: it throws without a
+    // `herdrCode`, so no caller reads its code as evidence.
+    if (typeof error !== "object") {
+      throw new Error(`herdr answered an error that is not an object: ${JSON.stringify(error)}`);
+    }
     const e = error as Record<string, unknown>;
+    if (obj.result !== undefined && obj.result !== null) {
+      throw new Error(`herdr answered both an error (${String(e.code ?? "unknown")}) and a result`);
+    }
     throw Object.assign(
       new Error(`herdr error ${String(e.code ?? "unknown")}: ${String(e.message ?? "")}`),
       { herdrCode: e.code },
@@ -213,6 +222,9 @@ export function create(config?: Record<string, unknown>): Runtime {
    * another error envelope, a reply without a pane, a command that fails
    * (herdr cannot start, a timeout, a signal, a non-zero exit), and (round
    * 2, M-3) a reply for another pane, which says nothing about this one.
+   * Round 3 (M-3): also a contradictory envelope (see parseHerdrResult) and
+   * a `terminal_id` that is not text, which shows neither the same nor a
+   * replaced terminal.
    */
   async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
     let result: Record<string, unknown>;
@@ -227,6 +239,12 @@ export function create(config?: Record<string, unknown>): Runtime {
     if (!pane) throw new Error(`herdr pane get ${paneId} answered without a pane`);
     if (pane.pane_id !== paneId) {
       throw new Error(`herdr pane get ${paneId} answered for another pane (${pane.pane_id})`);
+    }
+    const terminalId = asRecord(result.pane)?.terminal_id;
+    if (terminalId !== undefined && terminalId !== null && typeof terminalId !== "string") {
+      throw new Error(
+        `herdr pane get ${paneId} answered a terminal_id that is not text (${JSON.stringify(terminalId)})`,
+      );
     }
     return pane;
   }

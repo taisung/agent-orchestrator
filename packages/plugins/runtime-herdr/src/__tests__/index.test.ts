@@ -516,6 +516,68 @@ describe("isAlive(): only well-formed evidence is a negative", () => {
   });
 });
 
+// Same-ID R4 round 3 (review r2, M-3): an answer with both an error and a
+// result is no evidence, and neither is a terminal_id that is not text. A
+// lone pane_not_found and a same-pane replaced terminal stay false.
+describe("isAlive(): a contradictory or malformed pane answer is unknown", () => {
+  function both(errorCode: unknown, pane: unknown) {
+    return {
+      stdout: JSON.stringify({
+        id: "cli:test",
+        error: { code: errorCode, message: "gone" },
+        result: { pane },
+      }),
+      stderr: "",
+    };
+  }
+
+  for (const [label, pane] of [
+    ["the requested pane with its terminal", { pane_id: "w7:p1", terminal_id: "term_abc" }],
+    ["the requested pane with a replaced terminal", { pane_id: "w7:p1", terminal_id: "term_b" }],
+  ] as const) {
+    it(`rejects the pane_not_found error with a result for ${label}`, async () => {
+      mockExecFile.mockResolvedValueOnce(both("pane_not_found", pane));
+      await expect(create().isAlive(HANDLE)).rejects.toThrow(
+        /could not answer: herdr answered both an error \(pane_not_found\) and a result/,
+      );
+    });
+  }
+
+  it("rejects an error that is not an object, with a result for a replaced terminal", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        id: "cli:test",
+        error: "pane_not_found",
+        result: { pane: { pane_id: "w7:p1", terminal_id: "term_b" } },
+      }),
+      stderr: "",
+    });
+    await expect(create().isAlive(HANDLE)).rejects.toThrow(/error that is not an object/);
+  });
+
+  it("rejects the requested pane with a terminal_id that is not text", async () => {
+    mockExecFile.mockResolvedValueOnce(ok({ pane: { pane_id: "w7:p1", terminal_id: 12 } }));
+    await expect(create().isAlive(HANDLE)).rejects.toThrow(/terminal_id that is not text \(12\)/);
+  });
+
+  it("control: a lone pane_not_found error with a null result answers false", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        id: "cli:test",
+        error: { code: "pane_not_found", message: "gone" },
+        result: null,
+      }),
+      stderr: "",
+    });
+    expect(await create().isAlive(HANDLE)).toBe(false);
+  });
+
+  it("control: the requested pane without a terminal_id answers true", async () => {
+    mockExecFile.mockResolvedValueOnce(ok({ pane: { pane_id: "w7:p1" } }));
+    expect(await create().isAlive(HANDLE)).toBe(true);
+  });
+});
+
 describe("getMetrics() / getAttachInfo()", () => {
   it("reports uptime from creation time", async () => {
     const handle = { ...HANDLE, data: { ...HANDLE.data, createdAt: Date.now() - 5_000 } };

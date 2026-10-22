@@ -60,6 +60,9 @@ function herdrCannotAnswer(paneId: string, detail: string, cause?: unknown): Err
  * rejects whatever its message or binary path holds. An entry with a field
  * of the wrong type (`pid` not a positive integer, `name` or `cmdline` not a
  * string, `argv` not a list of strings) rejects the whole reply.
+ * Round 3 (M-3): `pane_not_found` counts only in an answer without a
+ * result, and a list counts only when its `process_info.pane_id` (when the
+ * answer has one) is the requested pane.
  * Callers treat the rejection as unknown, never as "nothing running".
  */
 export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPaneProcess[]> {
@@ -87,8 +90,15 @@ export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPanePr
 
   // herdr reports failures in the body with exit code 0, so an `error` key here
   // means the pane lookup failed rather than succeeded with no processes.
+  // Round 3 (M-3): an answer with both an error and a result contradicts
+  // itself, so neither part is evidence.
   const envelope = parsed as Record<string, unknown>;
-  if (envelope.error) {
+  const hasResult = envelope.result !== undefined && envelope.result !== null;
+  if (envelope.error !== undefined && envelope.error !== null) {
+    if (hasResult) throw herdrCannotAnswer(paneId, "the answer has both an error and a result");
+    if (typeof envelope.error !== "object" || Array.isArray(envelope.error)) {
+      throw herdrCannotAnswer(paneId, "the answer has an error that is not an object");
+    }
     const error = envelope.error as Record<string, unknown>;
     if (error.code === PANE_NOT_FOUND_CODE) return [];
     throw herdrCannotAnswer(
@@ -105,6 +115,13 @@ export async function getHerdrPaneProcesses(paneId: string): Promise<HerdrPanePr
   const info = (result as Record<string, unknown>).process_info;
   if (typeof info !== "object" || info === null) {
     throw herdrCannotAnswer(paneId, "the answer has no process_info");
+  }
+
+  // Round 3 (M-3): the list is evidence about the requested pane only. An
+  // answer that names its pane (`pane_id`, as herdr does) must name this one.
+  const infoPaneId = (info as Record<string, unknown>).pane_id;
+  if (infoPaneId !== undefined && infoPaneId !== paneId) {
+    throw herdrCannotAnswer(paneId, `the answer is for pane ${JSON.stringify(infoPaneId)}`);
   }
 
   const raw = (info as Record<string, unknown>).foreground_processes;

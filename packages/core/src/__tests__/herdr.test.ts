@@ -227,3 +227,94 @@ describe("getHerdrPaneProcesses: only well-formed evidence is a negative", () =>
     expect(await getHerdrPaneProcesses("w8:p1")).toEqual([]);
   });
 });
+
+// Same-ID R4 round 3 (review r2, M-3): the process list counts only for the
+// requested pane, and an answer with both an error and a result is no
+// evidence. A lone pane_not_found and a same-pane empty list stay negatives.
+describe("getHerdrPaneProcesses: only an answer for the requested pane is evidence", () => {
+  function processInfoFor(paneId: unknown, processes: unknown[]) {
+    return {
+      stdout: JSON.stringify({
+        id: "cli:pane:process_info",
+        result: {
+          process_info: { foreground_processes: processes, pane_id: paneId, shell_pid: 2 },
+          type: "pane_process_info",
+        },
+      }),
+      stderr: "",
+    };
+  }
+
+  for (const [label, processes] of [
+    ["an empty list", []],
+    ["a list with a shell", [BASH]],
+  ] as const) {
+    it(`rejects the process-info of another pane with ${label}`, async () => {
+      mockExecFile.mockResolvedValueOnce(processInfoFor("w99:p8", [...processes]));
+      await expect(getHerdrPaneProcesses("w7:p1")).rejects.toThrow(
+        'herdr pane process-info --pane w7:p1 could not answer: the answer is for pane "w99:p8"',
+      );
+    });
+  }
+
+  it("isHerdrProcessRunning rejects the process-info of another pane instead of answering 'no agent'", async () => {
+    mockExecFile.mockResolvedValueOnce(processInfoFor("w99:p8", []));
+    await expect(isHerdrProcessRunning("w7:p1", /codex/)).rejects.toThrow(/could not answer/);
+  });
+
+  it("rejects a process-info pane_id that is not text", async () => {
+    mockExecFile.mockResolvedValueOnce(processInfoFor(7, []));
+    await expect(getHerdrPaneProcesses("w7:p1")).rejects.toThrow(/the answer is for pane 7/);
+  });
+
+  for (const [label, processes] of [
+    ["the requested pane with the agent", [CLAUDE]],
+    ["the requested pane with an empty list", []],
+  ] as const) {
+    it(`rejects an answer with the pane_not_found error and a result for ${label}`, async () => {
+      mockExecFile.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          error: { code: "pane_not_found", message: "gone" },
+          result: { process_info: { pane_id: "w7:p1", foreground_processes: processes } },
+        }),
+        stderr: "",
+      });
+      await expect(getHerdrPaneProcesses("w7:p1")).rejects.toThrow(
+        /could not answer: the answer has both an error and a result/,
+      );
+    });
+  }
+
+  it("rejects an error that is not an object", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ error: "pane_not_found" }),
+      stderr: "",
+    });
+    await expect(getHerdrPaneProcesses("w7:p1")).rejects.toThrow(/could not answer/);
+  });
+
+  it("control: a lone pane_not_found error with a null result answers an empty list", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ error: { code: "pane_not_found", message: "gone" }, result: null }),
+      stderr: "",
+    });
+    expect(await getHerdrPaneProcesses("w7:p1")).toEqual([]);
+  });
+
+  it("control: an empty list for the requested pane answers an empty list", async () => {
+    mockExecFile.mockResolvedValueOnce(processInfoFor("w7:p1", []));
+    expect(await getHerdrPaneProcesses("w7:p1")).toEqual([]);
+    mockExecFile.mockResolvedValueOnce(processInfoFor("w7:p1", [BASH]));
+    expect(await isHerdrProcessRunning("w7:p1", /codex/)).toBe(false);
+  });
+
+  it("control: an answer without a pane_id (the agent test fixtures) is read as the requested pane", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ result: { process_info: { foreground_processes: [BASH] } } }),
+      stderr: "",
+    });
+    expect(await getHerdrPaneProcesses("w7:p1")).toEqual([
+      { pid: 7, name: "bash", cmdline: "bash" },
+    ]);
+  });
+});
