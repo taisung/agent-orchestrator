@@ -565,6 +565,9 @@ function createCodexAgent(): Agent {
       // target" from a server without sessions). Every other failure rejects
       // with the cause (a `tmux` or `ps` that cannot run or answer, "no server
       // running", a timeout), so a caller reads unknown, never "exited".
+      // Round 2 (M-2): a call that succeeds with a malformed answer rejects
+      // too (empty or other text from tmux, a `ps` reply that is not a
+      // process list): it proves nothing about the agent.
       // Built before any call: a name that the helper refuses is not a pane
       // that the check found without the agent, so the call rejects.
       const paneTarget =
@@ -596,12 +599,16 @@ function createCodexAgent(): Agent {
           }
           throw new Error(`codex: tmux list-panes -t ${paneTarget} failed`, { cause: err });
         }
+        // One TTY path per pane; a dead pane keeps its TTY.
         const ttys = ttyOut
           .trim()
           .split("\n")
-          .map((t) => t.trim())
-          .filter(Boolean);
-        if (ttys.length === 0) return false;
+          .map((t) => t.trim());
+        if (!ttys.every((t) => /^\/dev\/\S+$/.test(t))) {
+          throw new Error(
+            `codex: tmux list-panes -t ${paneTarget} answered ${JSON.stringify(ttyOut.trim().slice(0, 80))}, not a list of pane TTYs`,
+          );
+        }
 
         let psOut: string;
         try {
@@ -611,10 +618,21 @@ function createCodexAgent(): Agent {
         } catch (err: unknown) {
           throw new Error("codex: ps -eo pid,tty,args failed", { cause: err });
         }
+        // The header, then one "PID TTY ARGS" row per process (ps lists itself).
+        const [psHeader = "", ...psRows] = psOut.trimEnd().split("\n");
+        if (
+          !/^\s*PID\s+TTY?\s+(?:ARGS|COMMAND|CMD)\s*$/.test(psHeader) ||
+          psRows.length === 0 ||
+          !psRows.every((row) => /^\s*\d+\s+\S+\s+\S/.test(row))
+        ) {
+          throw new Error(
+            `codex: ps -eo pid,tty,args answered a reply that is not a process list (first line ${JSON.stringify(psHeader.slice(0, 80))})`,
+          );
+        }
         const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-        for (const line of psOut.split("\n")) {
+        for (const line of psRows) {
           const cols = line.trimStart().split(/\s+/);
-          if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
+          if (!ttySet.has(cols[1] ?? "")) continue;
           const args = cols.slice(2).join(" ");
           if (processRe.test(args)) {
             return true;

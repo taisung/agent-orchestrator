@@ -648,6 +648,9 @@ class PaneGoneError extends Error {}
  * connection error, a timeout, a tmux that cannot start) or of `ps`, and a
  * herdr check that cannot answer, rejects with another error: the pane may
  * still run, so no caller may read it as gone (a send then restores).
+ * Round 2 (M-2): a malformed answer of a call that succeeds (empty or other
+ * text from tmux, a `ps` row that is not "PID TTY") rejects the same way,
+ * never null ("no OpenCode in the pane").
  */
 async function findPaneOpenCodeProcess(
   handle: RuntimeHandle,
@@ -678,20 +681,31 @@ async function findPaneOpenCodeProcess(
         { cause: err },
       );
     }
-    const ttys = new Set(
-      ttyOut
-        .split("\n")
-        .map((tty) => tty.trim().replace(/^\/dev\//, ""))
-        .filter(Boolean),
-    );
-    if (ttys.size === 0) return null;
+    // One TTY path per pane; a dead pane keeps its TTY.
+    const ttyPaths = ttyOut
+      .trim()
+      .split("\n")
+      .map((tty) => tty.trim());
+    if (!ttyPaths.every((tty) => /^\/dev\/\S+$/.test(tty))) {
+      throw new Error(
+        `tmux list-panes -t ${exactPaneTarget(handle.id)} answered ${JSON.stringify(ttyOut.trim().slice(0, 80))}, not a list of pane TTYs`,
+      );
+    }
+    const ttys = new Set(ttyPaths.map((tty) => tty.replace(/^\/dev\//, "")));
     const { stdout: psOut } = await execFileAsync("ps", ["-eo", "pid=,tty="], {
       timeout: 5_000,
     });
+    // One "PID TTY" row per process, without a header (ps lists itself).
+    const psRows = psOut.trimEnd().split("\n");
+    if (!psRows.every((row) => /^\s*\d+\s+\S+\s*$/.test(row))) {
+      throw new Error(
+        `ps -eo pid=,tty= answered a reply that is not a process list (first line ${JSON.stringify((psRows[0] ?? "").slice(0, 80))})`,
+      );
+    }
     const panePids: number[] = [];
-    for (const line of psOut.split("\n")) {
+    for (const line of psRows) {
       const cols = line.trim().split(/\s+/);
-      if (cols.length !== 2 || !ttys.has(cols[1] ?? "")) continue;
+      if (!ttys.has(cols[1] ?? "")) continue;
       const pid = Number(cols[0]);
       if (Number.isSafeInteger(pid)) panePids.push(pid);
     }
@@ -1290,6 +1304,9 @@ function createOpenCodeAgent(): Agent {
       // target" from a server without sessions). Every other failure rejects
       // with the cause (a `tmux` or `ps` that cannot run or answer, "no server
       // running", a timeout), so a caller reads unknown, never "exited".
+      // Round 2 (M-2): a call that succeeds with a malformed answer rejects
+      // too (empty or other text from tmux, a `ps` reply that is not a
+      // process list): it proves nothing about the agent.
       // Built before any call: a name that the helper refuses is not a pane
       // that the check found without the agent, so the call rejects.
       const paneTarget =
@@ -1321,12 +1338,16 @@ function createOpenCodeAgent(): Agent {
           }
           throw new Error(`opencode: tmux list-panes -t ${paneTarget} failed`, { cause: err });
         }
+        // One TTY path per pane; a dead pane keeps its TTY.
         const ttys = ttyOut
           .trim()
           .split("\n")
-          .map((t) => t.trim())
-          .filter(Boolean);
-        if (ttys.length === 0) return false;
+          .map((t) => t.trim());
+        if (!ttys.every((t) => /^\/dev\/\S+$/.test(t))) {
+          throw new Error(
+            `opencode: tmux list-panes -t ${paneTarget} answered ${JSON.stringify(ttyOut.trim().slice(0, 80))}, not a list of pane TTYs`,
+          );
+        }
 
         let psOut: string;
         try {
@@ -1336,10 +1357,21 @@ function createOpenCodeAgent(): Agent {
         } catch (err: unknown) {
           throw new Error("opencode: ps -eo pid,tty,args failed", { cause: err });
         }
+        // The header, then one "PID TTY ARGS" row per process (ps lists itself).
+        const [psHeader = "", ...psRows] = psOut.trimEnd().split("\n");
+        if (
+          !/^\s*PID\s+TTY?\s+(?:ARGS|COMMAND|CMD)\s*$/.test(psHeader) ||
+          psRows.length === 0 ||
+          !psRows.every((row) => /^\s*\d+\s+\S+\s+\S/.test(row))
+        ) {
+          throw new Error(
+            `opencode: ps -eo pid,tty,args answered a reply that is not a process list (first line ${JSON.stringify(psHeader.slice(0, 80))})`,
+          );
+        }
         const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-        for (const line of psOut.split("\n")) {
+        for (const line of psRows) {
           const cols = line.trimStart().split(/\s+/);
-          if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
+          if (!ttySet.has(cols[1] ?? "")) continue;
           const args = cols.slice(2).join(" ");
           if (processRe.test(args)) {
             return true;

@@ -534,6 +534,59 @@ describe("isProcessRunning", () => {
     });
   });
 
+  // Same-ID R4 round 2 (review r1, M-2): a call that succeeds with a
+  // malformed answer proves nothing about the agent, so it rejects. A valid
+  // list without the agent stays false.
+  const VALID_PS = "    PID TT       COMMAND\n  123 pts/73   /bin/bash\n";
+  function mockPaneAnswers(tty: string, ps: string) {
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return Promise.resolve({ stdout: tty, stderr: "" });
+      if (cmd === "ps") return Promise.resolve({ stdout: ps, stderr: "" });
+      return Promise.reject(new Error(`Unexpected: ${cmd}`));
+    });
+  }
+
+  it("rejects when tmux list-panes returns empty", async () => {
+    mockPaneAnswers("", VALID_PS);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
+      /not a list of pane TTYs/,
+    );
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+
+  it("rejects when tmux answers text that is not a pane TTY", async () => {
+    mockPaneAnswers("unavailable\n", VALID_PS);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
+      /not a list of pane TTYs/,
+    );
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+
+  it("rejects when ps succeeds with a reply that is not a process list", async () => {
+    mockPaneAnswers("/dev/pts/73\n", "procfs temporarily unavailable\n");
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  it("rejects when ps answers only its header", async () => {
+    mockPaneAnswers("/dev/pts/73\n", "    PID TT       COMMAND\n");
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  it("rejects when one ps row is malformed", async () => {
+    mockPaneAnswers("/dev/pts/73\n", `${VALID_PS}ps: output truncated\n`);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  it("control: a valid list on a Linux pane TTY without opencode answers false", async () => {
+    mockPaneAnswers("/dev/pts/73\n", VALID_PS);
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+  });
+
+  it("control: a valid list with opencode on the pane TTY answers true", async () => {
+    mockPaneAnswers("/dev/pts/73\n", `${VALID_PS}  124 pts/73   /usr/bin/opencode\n`);
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(true);
+  });
+
   it("rejects with the helper's error, before any tmux or ps call, for a name that is not a safe tmux name", async () => {
     // A pane with opencode on it: an answer from tmux would be true.
     mockTmuxWithProcess("opencode");
@@ -2152,6 +2205,23 @@ describe("confirmLaunch (I-3)", () => {
     expect(err!.message).toContain("could not answer: no server running on /tmp/tmux-1000/default");
   });
 
+  it("does not read a malformed pane answer as 'no OpenCode' at launch (same-ID R4 round 2, M-2)", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) =>
+      Promise.resolve({
+        stdout: cmd === "tmux" ? "/dev/pts/7\n" : "not a process list\n",
+        stderr: "",
+      }),
+    );
+    const err = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).not.toContain("is gone");
+    expect(err!.message).toContain("ps -eo pid=,tty= answered a reply that is not a process list");
+  });
+
   it("gives promptDelivered true when the session shows a user message, with the pane environment", async () => {
     paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
     mockHasOpenCodeUserMessage.mockResolvedValueOnce(false).mockResolvedValue(true);
@@ -2874,6 +2944,29 @@ describe("deliverMessage (I-5)", () => {
     expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
     expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
   });
+
+  // Same-ID R4 round 2 (review r1, M-2): a pane query that succeeds with a
+  // malformed answer is unknown too, never "no TUI": no AgentNotAttachedError
+  // after the wait (so no restore), no send.
+  for (const [label, tty, ps] of [
+    ["tmux and ps answer other text", "not a tty\n", "not a process list\n"],
+    ["tmux answers an empty TTY list", "", "   4242 pts/7\n"],
+    ["ps answers a reply that is not a process list", "/dev/pts/7\n", "not a process list\n"],
+    ["ps answers nothing", "/dev/pts/7\n", ""],
+  ] as const) {
+    it(`does not read a malformed pane answer as 'no TUI' when ${label}: no AgentNotAttachedError, no send`, async () => {
+      mockExecFileAsync.mockImplementation((cmd: string) =>
+        Promise.resolve({ stdout: cmd === "tmux" ? tty : ps, stderr: "" }),
+      );
+      const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+      const err = (outcome as { error: Error }).error;
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+      expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
+      expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+    });
+  }
 
   it("refuses a session without a runtime handle, and one without a stored ID", async () => {
     const noHandle = await failure(agent.deliverMessage!(session({ runtimeHandle: null }), TEXT));
