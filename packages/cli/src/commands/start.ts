@@ -1240,40 +1240,53 @@ interface StopOptions {
 /** The hidden flag of the `ao stop` that runs in the detached process (defect B). */
 const DETACHED_STOP_FLAG = "--detached-stop-process";
 
-/** How often the caller copies new output of the detached stop to its stdout. */
+/** How often the caller looks for new output of the detached stop. */
 const DETACHED_STOP_RELAY_MS = 100;
 
-/**
- * The detached stop failed, or it did not start. Its output (or `message`)
- * was printed; the caller exits with `exitCode`.
- */
-class DetachedStopFailedError extends Error {
-  readonly exitCode: number;
-
-  constructor(exitCode: number, message = "") {
-    super(message);
-    this.name = "DetachedStopFailedError";
-    this.exitCode = exitCode;
-  }
+/** Writes `data` to `out`; resolves when `out` has taken it, rejects on an output error. */
+function writeOut(out: NodeJS.WriteStream, data: string | Uint8Array): Promise<void> {
+  return new Promise((resolve, reject) => {
+    out.write(data, (err?: Error | null) => (err ? reject(err) : resolve()));
+  });
 }
 
-/** Copies what a log file gained since the last copy to `out`. */
-function logRelay(file: string, out: NodeJS.WriteStream): { copy(): void; close(): void } {
+/** Copies one log of the detached stop to `out`. */
+interface LogRelay {
+  /**
+   * Copies what the log gained since the last copy. Each chunk is written,
+   * and its write has ended, before the next chunk is read (backpressure).
+   */
+  copy(): Promise<void>;
+  close(): void;
+  /** The first error of `out` (EPIPE, for example); nothing more goes to `out` after it. */
+  readonly outputError: unknown;
+}
+
+function logRelay(file: string, out: NodeJS.WriteStream): LogRelay {
   let fd: number | null = null;
   let offset = 0;
+  let outputError: unknown = null;
   const chunk = Buffer.alloc(64 * 1024);
   return {
-    copy(): void {
-      try {
-        fd ??= openSync(file, "r");
-        for (;;) {
-          const read = readSync(fd, chunk, 0, chunk.length, offset);
-          if (read <= 0) return;
-          offset += read;
-          out.write(Buffer.from(chunk.subarray(0, read)));
+    get outputError(): unknown {
+      return outputError;
+    },
+    async copy(): Promise<void> {
+      while (outputError === null) {
+        let read: number;
+        try {
+          fd ??= openSync(file, "r");
+          read = readSync(fd, chunk, 0, chunk.length, offset);
+        } catch {
+          return; // The next copy tries again; the log stays for the operator.
         }
-      } catch {
-        // The next copy tries again; the log stays for the operator.
+        if (read <= 0) return;
+        offset += read;
+        try {
+          await writeOut(out, Buffer.from(chunk.subarray(0, read)));
+        } catch (err) {
+          outputError = err;
+        }
       }
     },
     close(): void {
@@ -1282,27 +1295,48 @@ function logRelay(file: string, out: NodeJS.WriteStream): { copy(): void; close(
   };
 }
 
+/** Resolves when `promise` settles or after `ms`, whichever comes first. */
+function settledOrAfter(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const settled = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    promise.then(settled, settled);
+  });
+}
+
 /**
- * Copy the stderr and stdout logs of the detached stop to this process's
- * stderr and stdout while the stop runs, and the rest after it ends; stderr
- * first, as the stop writes its stderr lines (the spinner, a refusal) before
- * its stdout lines. Resolves with its exit code (null after a signal);
- * rejects when it did not start.
+ * Copy the logs of the detached stop through `relays` while the stop runs,
+ * and all the rest after it ends (review r2 M-1: a slow reader gets every
+ * byte, and no output is still queued when this returns). The stderr relay
+ * comes first, as the stop writes its stderr lines (the spinner, a refusal)
+ * before its stdout lines. Resolves with its exit code (null after a
+ * signal); rejects when it did not start.
  */
-async function relayDetachedStop(stop: DetachedStop): Promise<number | null> {
-  const relays = [
-    logRelay(stop.stderrLog, process.stderr),
-    logRelay(stop.stdoutLog, process.stdout),
-  ];
-  const copy = (): void => relays.forEach((relay) => relay.copy());
-  const timer = setInterval(copy, DETACHED_STOP_RELAY_MS);
+async function relayDetachedStop(stop: DetachedStop, relays: LogRelay[]): Promise<number | null> {
+  let ended = false;
+  const end = stop.done.then(
+    () => {
+      ended = true;
+    },
+    () => {
+      ended = true;
+    },
+  );
   try {
-    return await stop.done;
+    for (;;) {
+      // A copy that starts after the end reads each log to its last byte.
+      const last = ended;
+      for (const relay of relays) await relay.copy();
+      if (last) break;
+      await settledOrAfter(end, DETACHED_STOP_RELAY_MS);
+    }
   } finally {
-    clearInterval(timer);
-    copy();
     relays.forEach((relay) => relay.close());
   }
+  return await stop.done;
 }
 
 /**
@@ -1314,50 +1348,101 @@ async function relayDetachedStop(stop: DetachedStop): Promise<number | null> {
  * wrongly (an empty tmux answer, no TMUX_PANE) or wait without a bound, so
  * there is none. The detached process runs the stop that ran here before:
  * kill, archive, then the lifecycle stop (only after a confirmed kill,
- * same-ID R2a). This process prints its stdout and stderr while it runs
- * and ends with its exit code. When the kill hangs up this process, the detached one goes
- * on. Ctrl-C ends only this process: the stop goes on, and this process
- * names the detached PID and the logs.
+ * same-ID R2a). When the kill hangs up this process, the detached one goes on.
+ *
+ * This process copies the detached stdout and stderr to its own while the
+ * stop runs, all of it before this returns, and returns the detached exit
+ * code (1 after a signal or when it did not start). An error of this
+ * process's own output (EPIPE when the reader closed, for example) ends the
+ * copy to that stream only: it is reported on the other stream, the logs keep
+ * the output, and the exit code stays the detached one. Ctrl-C ends this
+ * process at once (exit 130): the stop goes on, this process names the
+ * detached PID and the logs, and output that a slow reader has not taken yet
+ * is dropped (the logs keep it).
  */
 async function stopInDetachedProcess(
   config: OrchestratorConfig,
   projectId: string,
   purgeSession: boolean,
-): Promise<void> {
+): Promise<number> {
   const stop = startDetachedStop(config, projectId, [
     "stop",
     projectId,
     ...(purgeSession ? ["--purge-session"] : []),
     DETACHED_STOP_FLAG,
   ]);
+  const logs = `${stop.stdoutLog} and ${stop.stderrLog}`;
   const onInterrupt = (): void => {
     process.stderr.write(
       `\nao stop: the stop goes on in the detached process${stop.pid ? ` (PID ${stop.pid})` : ""}; ` +
-        `its output: ${stop.stdoutLog} and ${stop.stderrLog}\n`,
+        `its output: ${logs}\n`,
     );
     process.exit(130);
   };
+  // An output error reaches the relay through the write callback. Without a
+  // listener, the "error" event of the stream would end this process.
+  const onOutputError = (): void => {};
   process.once("SIGINT", onInterrupt);
+  process.stdout.on("error", onOutputError);
+  process.stderr.on("error", onOutputError);
 
-  let code: number | null;
   try {
-    code = await relayDetachedStop(stop);
-  } catch (err) {
-    throw new DetachedStopFailedError(
-      1,
-      `The detached stop did not start (${errorMessage(err)}); nothing was stopped. ` +
-        `Check that this ao can run, then run \`ao stop ${projectId}\` again.`,
-    );
+    const stderrRelay = logRelay(stop.stderrLog, process.stderr);
+    const stdoutRelay = logRelay(stop.stdoutLog, process.stdout);
+    let code: number;
+    let message = "";
+    try {
+      const result = await relayDetachedStop(stop, [stderrRelay, stdoutRelay]);
+      code = result ?? 1;
+      if (result === null) {
+        message = `The detached stop was ended by a signal; its output: ${logs}`;
+      }
+    } catch (err) {
+      code = 1;
+      message =
+        `The detached stop did not start (${errorMessage(err)}); nothing was stopped. ` +
+        `Check that this ao can run, then run \`ao stop ${projectId}\` again.`;
+    }
+    // The stop has ended, so its Ctrl-C note would be false: Ctrl-C now ends
+    // this process as usual.
+    process.removeListener("SIGINT", onInterrupt);
+
+    const lines: string[] = [];
+    for (const [relay, name, log] of [
+      [stdoutRelay, "stdout", stop.stdoutLog],
+      [stderrRelay, "stderr", stop.stderrLog],
+    ] as const) {
+      if (relay.outputError !== null) {
+        lines.push(
+          chalk.yellow(
+            `ao stop: could not write the ${name} of the detached stop ` +
+              `(${errorMessage(relay.outputError)}); all of it is in ${log}`,
+          ),
+        );
+      }
+    }
+    if (message) lines.push(chalk.red(`\n${message}`));
+    const target =
+      stderrRelay.outputError === null
+        ? process.stderr
+        : stdoutRelay.outputError === null
+          ? process.stdout
+          : null;
+    if (lines.length > 0 && target) {
+      try {
+        await writeOut(target, `${lines.join("\n")}\n`);
+      } catch {
+        // Nothing more can be printed; the exit code still tells the result.
+      }
+    }
+    return code;
   } finally {
     process.removeListener("SIGINT", onInterrupt);
+    // An "error" event comes after the write callback: let it reach the listener.
+    await new Promise((resolve) => setImmediate(resolve));
+    process.stdout.removeListener("error", onOutputError);
+    process.stderr.removeListener("error", onOutputError);
   }
-  if (code === 0) return;
-  throw new DetachedStopFailedError(
-    code ?? 1,
-    code === null
-      ? `The detached stop was ended by a signal; its output: ${stop.stdoutLog} and ${stop.stderrLog}`
-      : "",
-  );
 }
 
 export function registerStop(program: Command): void {
@@ -1387,8 +1472,11 @@ export function registerStop(program: Command): void {
         // Defect B: the kill, the archive and the lifecycle stop of an
         // existing record run in the detached process (this command with
         // DETACHED_STOP_FLAG), never in the caller.
+        // Review r2 M-1: the exit code is set, not passed to process.exit, so
+        // the process ends only after its stdout and stderr took every byte.
         if (existing && !inDetachedProcess) {
-          await stopInDetachedProcess(config, _projectId, opts.purgeSession === true);
+          const code = await stopInDetachedProcess(config, _projectId, opts.purgeSession === true);
+          if (code !== 0) process.exitCode = code;
           return;
         }
 
@@ -1416,10 +1504,6 @@ export function registerStop(program: Command): void {
         console.log(chalk.bold.green("\n✓ Orchestrator stopped\n"));
         console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
       } catch (err) {
-        if (err instanceof DetachedStopFailedError) {
-          if (err.message) console.error(chalk.red(`\n${err.message}`));
-          process.exit(err.exitCode);
-        }
         if (isRuntimeStopUnconfirmedError(err)) {
           // Same-ID R2a (review r1, F-3): the refusal names the outcome, its
           // detail and the next action, as `ao session kill` does. The
