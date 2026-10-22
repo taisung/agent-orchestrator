@@ -1249,6 +1249,14 @@ no-old-build operating rule (detection and response, not prevention). Design r6 
   still paste. Open; a worker change in `agent-claude-code/src/index.ts` (and possibly `send.ts`), after
   the killed-status round 2 lands (it changes the same plugin file). Orchestrator rule until then: no
   AskUserQuestion dialog in the orchestrator pane while a watcher or a worker can send to it.
+  Measured again 2026-10-21 22:45 to 22:51 EDT on Claude Code 2.1.307 (not fullscreen, 98x60, the live build
+  of 22:37, disposable session ao-59): an idle pane reads `waiting_input`, because the old pattern
+  `/bypass.*permissions/i` on the last 5 rows (`agent-claude-code/src/index.ts:664`, from 2026-02-14)
+  matches the footer `⏵⏵ bypass permissions on (shift+tab to cycle)`. So `ao send` WITHOUT `--no-wait` to
+  any idle Claude Code pane in bypass mode waits its timeout and then refuses with exit 1 (`session is
+  waiting for interactive input; not sending`); 3 of 3 such sends were refused. `--no-wait` delivers
+  (short, and a 4-line message over 200 characters as one message). Not caused by the landing of
+  2026-10-21. Evidence: `~/.cache/agent-skills-haiku55-arc/live-check-2026-10-21/`.
 - **`ao` with its tmux calls on another server damages live sessions** (found 2026-10-20 by ao-46 in
   scratch, analysis section 4.3). With two live sessions on server A and the tmux calls of `ao` on server
   B: `ao session cleanup` archived a live session and removed its worktree while its pane ran;
