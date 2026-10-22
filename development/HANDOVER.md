@@ -258,6 +258,11 @@ add the missing-`TMUX_TMPDIR` fallback.
      PUSHED `407ee00d..b97a2500` at 09:02:00 (7 docs commits; CI, Integration Tests, Onboarding Integration Test
      and Security passed 09:04:37). DISPATCHED: R4 round 4 (ao-55, 09:02), design r8 (ao-52, 09:03), F-6 and m-1
      (ao-54, 09:05).
+   - R4 review r4 by ao-60 DONE 09:45: LAND-SAFE for the whole of R4 (0 B, 0 M, 0 m). The owner answered "16c"
+     (land R4 in this session, then a handover). LANDED on `main` at 09:46 as `32c687b2..56a385fb` (clean
+     cherry-pick of `75f1c98b..e3860672`, 21 commits; tree equal to the `git merge-tree` result `0fdab16c`;
+     `WRAPPER_VERSION` still 0.2.6), NOT built yet. Next: gates of `main` by ao-60, rebuild, restart of 2002324
+     and 2002831, live check, push.
 3. **`ao send` to an idle Codex pane says "processing" for an unsubmitted paste** - ao-54 DONE at
    `4ec62a0a` (owner "4a", 2026-10-21; Known Issues, first entry); review r1 by ao-56 is DONE:
    NOT-LAND-SAFE (2 B, 2 M, 1 m; `development/reviews/codex_send_idle_review_r1_astra6.md`), and `-p`
