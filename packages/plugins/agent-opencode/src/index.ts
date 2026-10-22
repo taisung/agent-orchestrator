@@ -634,15 +634,20 @@ async function findOpenCodeProcess(
   return null;
 }
 
-/** The pane is gone: tmux answered that its session, window or server does not exist. */
+/** The pane is gone: the tmux server answered that its session, window or pane does not exist. */
 class PaneGoneError extends Error {}
 
 /**
  * The PID of the pane process that runs OpenCode on `sessionId`, or null.
  * The runtime gives the PIDs of the pane (herdr: its foreground processes;
  * tmux: the processes on the pane TTY), and `/proc` gives their exact
- * argument vectors (M-1). Throws `PaneGoneError` when tmux says that the
- * pane is gone; any other failure counts as "not yet".
+ * argument vectors (M-1). Same-ID R4 (B-7 item 11): throws `PaneGoneError`
+ * only when the tmux server answers that the pane does not exist ("can't
+ * find session/window/pane", or "no current target" from a server without
+ * sessions). Every other failure of `tmux` (no server at the socket, a
+ * connection error, a timeout, a tmux that cannot start) or of `ps`, and a
+ * herdr check that cannot answer, rejects with another error: the pane may
+ * still run, so no caller may read it as gone (a send then restores).
  */
 async function findPaneOpenCodeProcess(
   handle: RuntimeHandle,
@@ -665,12 +670,13 @@ async function findPaneOpenCodeProcess(
       ));
     } catch (err) {
       const stderr = String((err as { stderr?: unknown }).stderr ?? "");
-      if (
-        /can't find (?:session|window|pane)|no server running|error connecting to/i.test(stderr)
-      ) {
+      if (/^(?:can't find (?:session|window|pane): |no current target$)/m.test(stderr)) {
         throw new PaneGoneError(stderr.trim(), { cause: err });
       }
-      return null;
+      throw new Error(
+        `tmux list-panes -t ${exactPaneTarget(handle.id)} could not answer${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+        { cause: err },
+      );
     }
     const ttys = new Set(
       ttyOut
@@ -1278,65 +1284,87 @@ function createOpenCodeAgent(): Agent {
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
-      // Built outside the catch below: a name that the helper refuses is not
-      // a pane that the check found without the agent, so the call rejects
-      // (unknown) instead of answering false.
+      // Same-ID R4 (B-7 item 10): false only when the check ran and found no
+      // agent: a `ps` list without it, or the tmux server's answer that the
+      // pane does not exist ("can't find session/window/pane", or "no current
+      // target" from a server without sessions). Every other failure rejects
+      // with the cause (a `tmux` or `ps` that cannot run or answer, "no server
+      // running", a timeout), so a caller reads unknown, never "exited".
+      // Built before any call: a name that the helper refuses is not a pane
+      // that the check found without the agent, so the call rejects.
       const paneTarget =
         handle.runtimeName === "tmux" && handle.id ? exactPaneTarget(handle.id) : null;
-      try {
-        // herdr owns the PTY and reports a pane's foreground processes directly,
-        // so neither the tmux TTY scan nor the process-runtime PID applies.
-        if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-          return await isHerdrProcessRunning(handle.id, /(?:^|\/)opencode(?:\s|$)/);
-        }
+      const processRe = /(?:^|\/)opencode(?:\s|$)/;
 
-        if (paneTarget) {
-          const { stdout: ttyOut } = await execFileAsync(
+      // herdr owns the PTY and reports a pane's foreground processes directly,
+      // so neither the tmux TTY scan nor the process-runtime PID applies. The
+      // core helper rejects when herdr cannot answer.
+      if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
+        return isHerdrProcessRunning(handle.id, processRe);
+      }
+
+      if (paneTarget) {
+        let ttyOut: string;
+        try {
+          ({ stdout: ttyOut } = await execFileAsync(
             "tmux",
             ["list-panes", "-t", paneTarget, "-F", "#{pane_tty}"],
             { timeout: 30_000 },
-          );
-          const ttys = ttyOut
-            .trim()
-            .split("\n")
-            .map((t) => t.trim())
-            .filter(Boolean);
-          if (ttys.length === 0) return false;
+          ));
+        } catch (err: unknown) {
+          const stderr = (err as { stderr?: unknown }).stderr;
+          if (
+            typeof stderr === "string" &&
+            /^(?:can't find (?:session|window|pane): |no current target$)/m.test(stderr)
+          ) {
+            return false;
+          }
+          throw new Error(`opencode: tmux list-panes -t ${paneTarget} failed`, { cause: err });
+        }
+        const ttys = ttyOut
+          .trim()
+          .split("\n")
+          .map((t) => t.trim())
+          .filter(Boolean);
+        if (ttys.length === 0) return false;
 
-          const { stdout: psOut } = await execFileAsync("ps", ["-eo", "pid,tty,args"], {
+        let psOut: string;
+        try {
+          ({ stdout: psOut } = await execFileAsync("ps", ["-eo", "pid,tty,args"], {
             timeout: 30_000,
-          });
-          const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-          const processRe = /(?:^|\/)opencode(?:\s|$)/;
-          for (const line of psOut.split("\n")) {
-            const cols = line.trimStart().split(/\s+/);
-            if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
-            const args = cols.slice(2).join(" ");
-            if (processRe.test(args)) {
-              return true;
-            }
+          }));
+        } catch (err: unknown) {
+          throw new Error("opencode: ps -eo pid,tty,args failed", { cause: err });
+        }
+        const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
+        for (const line of psOut.split("\n")) {
+          const cols = line.trimStart().split(/\s+/);
+          if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
+          const args = cols.slice(2).join(" ");
+          if (processRe.test(args)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      const rawPid = handle.data["pid"];
+      const pid = typeof rawPid === "number" ? rawPid : Number(rawPid);
+      if (Number.isFinite(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (err: unknown) {
+          // EPERM: the process exists, but this user cannot signal it. Any
+          // other answer of signal 0 (ESRCH) says that the process is gone.
+          if (err instanceof Error && "code" in err && err.code === "EPERM") {
+            return true;
           }
           return false;
         }
-
-        const rawPid = handle.data["pid"];
-        const pid = typeof rawPid === "number" ? rawPid : Number(rawPid);
-        if (Number.isFinite(pid) && pid > 0) {
-          try {
-            process.kill(pid, 0);
-            return true;
-          } catch (err: unknown) {
-            if (err instanceof Error && "code" in err && err.code === "EPERM") {
-              return true;
-            }
-            return false;
-          }
-        }
-
-        return false;
-      } catch {
-        return false;
       }
+
+      return false;
     },
 
     async getSessionInfo(session: Session): Promise<AgentSessionInfo | null> {

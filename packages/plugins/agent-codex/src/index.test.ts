@@ -534,9 +534,55 @@ describe("isProcessRunning", () => {
     expect(mockExecFileAsync).not.toHaveBeenCalled();
   });
 
-  it("returns false on tmux command failure", async () => {
+  it("rejects on tmux command failure", async () => {
     mockExecFileAsync.mockRejectedValue(new Error("tmux not running"));
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow();
+  });
+
+  // Same-ID R4 (B-7 item 10): false only for the server's answer that the
+  // pane does not exist; a tmux or ps that cannot answer rejects with the cause.
+  it("returns false when tmux answers that the pane does not exist", async () => {
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "can't find window: test-session\n",
+      }),
+    );
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+
+  it("returns false when a server with no session answers 'no current target'", async () => {
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "no current target\n",
+      }),
+    );
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+  });
+
+  it("rejects when no tmux server runs at the socket", async () => {
+    const noServer = Object.assign(new Error("Command failed: tmux list-panes"), {
+      code: 1,
+      stderr: "no server running on /tmp/tmux-1000/default\n",
+    });
+    mockExecFileAsync.mockRejectedValue(noServer);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toMatchObject({
+      cause: noServer,
+    });
+  });
+
+  it("rejects with the ps failure as cause when ps cannot run", async () => {
+    const psFailure = Object.assign(new Error("Command failed: ps -eo pid,tty,args"), { code: 1 });
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys002\n", stderr: "" });
+      return Promise.reject(psFailure);
+    });
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toMatchObject({
+      message: "codex: ps -eo pid,tty,args failed",
+      cause: psFailure,
+    });
   });
 
   it("rejects with the helper's error, before any tmux or ps call, for a name that is not a safe tmux name", async () => {
@@ -979,12 +1025,10 @@ describe("getActivityState", () => {
     expect(result?.timestamp).toBeInstanceOf(Date);
   });
 
-  it("returns exited when process is not running", async () => {
+  it("rejects when the process check cannot run", async () => {
     mockExecFileAsync.mockRejectedValue(new Error("tmux not running"));
     const session = makeSession({ runtimeHandle: makeTmuxHandle() });
-    const result = await agent.getActivityState(session);
-    expect(result?.state).toBe("exited");
-    expect(result?.timestamp).toBeInstanceOf(Date);
+    await expect(agent.getActivityState(session)).rejects.toThrow();
   });
 
   it("returns null when process is running but no workspacePath", async () => {

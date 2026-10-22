@@ -483,9 +483,55 @@ describe("isProcessRunning", () => {
     expect(await agent.isProcessRunning(handle)).toBe(false);
   });
 
-  it("returns false on tmux command failure", async () => {
+  it("rejects on tmux command failure", async () => {
     mockExecFileAsync.mockRejectedValue(new Error("tmux not running"));
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow();
+  });
+
+  // Same-ID R4 (B-7 item 10): false only for the server's answer that the
+  // pane does not exist; a tmux or ps that cannot answer rejects with the cause.
+  it("returns false when tmux answers that the pane does not exist", async () => {
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "can't find window: test-session\n",
+      }),
+    );
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+
+  it("returns false when a server with no session answers 'no current target'", async () => {
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), {
+        code: 1,
+        stderr: "no current target\n",
+      }),
+    );
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+  });
+
+  it("rejects when no tmux server runs at the socket", async () => {
+    const noServer = Object.assign(new Error("Command failed: tmux list-panes"), {
+      code: 1,
+      stderr: "no server running on /tmp/tmux-1000/default\n",
+    });
+    mockExecFileAsync.mockRejectedValue(noServer);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toMatchObject({
+      cause: noServer,
+    });
+  });
+
+  it("rejects with the ps failure as cause when ps cannot run", async () => {
+    const psFailure = Object.assign(new Error("Command failed: ps -eo pid,tty,args"), { code: 1 });
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys002\n", stderr: "" });
+      return Promise.reject(psFailure);
+    });
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toMatchObject({
+      message: "opencode: ps -eo pid,tty,args failed",
+      cause: psFailure,
+    });
   });
 
   it("rejects with the helper's error, before any tmux or ps call, for a name that is not a safe tmux name", async () => {
@@ -2085,6 +2131,27 @@ describe("confirmLaunch (I-3)", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  it("does not read the pane as gone when no tmux server runs at the socket (same-ID R4, B-7 item 11)", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") {
+        return Promise.reject(
+          Object.assign(new Error("Command failed"), {
+            stderr: "no server running on /tmp/tmux-1000/default\n",
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+    const err = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).not.toContain("is gone");
+    expect(err!.message).toContain("could not answer: no server running on /tmp/tmux-1000/default");
+  });
+
   it("gives promptDelivered true when the session shows a user message, with the pane environment", async () => {
     paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
     mockHasOpenCodeUserMessage.mockResolvedValueOnce(false).mockResolvedValue(true);
@@ -2759,6 +2826,52 @@ describe("deliverMessage (I-5)", () => {
 
     expect(err).toBeInstanceOf(AgentNotAttachedError);
     expect(err.message).toContain("the pane is gone");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  // Same-ID R4 (B-7 item 11): only the server's answer that the pane does not
+  // exist is "gone" (and so a restore). A tmux that cannot answer is unknown:
+  // the send stops with the cause and asks for no restore.
+  for (const [label, stderr] of [
+    ["no server runs at the socket", "no server running on /tmp/tmux-1000/default\n"],
+    [
+      "the connection to the server fails",
+      "error connecting to /tmp/tmux-1000/default (Connection refused)\n",
+    ],
+  ] as const) {
+    it(`does not read the pane as gone when ${label}: no AgentNotAttachedError, no send`, async () => {
+      mockExecFileAsync.mockImplementation((cmd: string) =>
+        cmd === "tmux"
+          ? Promise.reject(Object.assign(new Error("exit 1"), { stderr }))
+          : Promise.reject(new Error(`unexpected ${cmd}`)),
+      );
+      const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+      expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+      expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
+      expect(err.message).toContain(stderr.trim());
+      expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+    });
+  }
+
+  it("does not read a tmux timeout as 'no TUI': no AgentNotAttachedError after the wait, no send", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) =>
+      cmd === "tmux"
+        ? Promise.reject(
+            Object.assign(new Error("Command failed: tmux list-panes"), {
+              killed: true,
+              signal: "SIGTERM",
+              stderr: "",
+            }),
+          )
+        : Promise.reject(new Error(`unexpected ${cmd}`)),
+    );
+    const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+    const err = (outcome as { error: Error }).error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+    expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
     expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
   });
 

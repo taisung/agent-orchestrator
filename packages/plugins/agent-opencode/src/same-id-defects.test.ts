@@ -164,14 +164,14 @@ describe("[same-id R2] D-B: the opencode pane read finds the tmux server only th
 });
 
 describe("[same-id R4] D-D: the opencode liveness answers false when it cannot check", () => {
-  defect("isProcessRunning rejects when ps fails", async () => {
+  it("isProcessRunning rejects when ps fails", async () => {
     servers.set(`/tmp/tmux-${UID}/default`, new Map([["kr-1", "pts/43"]]));
     processes.set("pts/43", AGENT_ARGS);
     psFails = true;
     await expect(create().isProcessRunning(tmuxHandle("kr-1"))).rejects.toThrow();
   });
 
-  defect("isProcessRunning rejects when the tmux server cannot answer", async () => {
+  it("isProcessRunning rejects when the tmux server cannot answer", async () => {
     // No server at the socket: the check cannot run (the lifecycle then
     // counts the answer as unknown, as it does for claude-code).
     await expect(create().isProcessRunning(tmuxHandle("kr-1"))).rejects.toThrow();
