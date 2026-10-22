@@ -561,6 +561,17 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   47 s after the owner started a tmux server by hand (11:02:45). Second defect: `ao stop` kills the session
   before it stops the lifecycle worker, so a stop typed in the orchestrator's own pane ends itself first.
   The same no-server path follows a host restart. Fix dispatched to ao-63 (owner "1", 11:20 EDT).
+  Review r1 (ao-64, Codex gpt-6-astra, `development/reviews/start_no_server_review_r1_astra6.md`):
+  LAND-WITH-CHANGES, 0 B, 3 M, 2 m on `dc7815d2..f095f5ce`; round 2 dispatched 12:33 EDT. Three items from the
+  old code that the round does not fix:
+  - A runtime handle stores no tmux socket. An `ao stop` (or any stop) with `TMUX` set to another server
+    reads and stops on that server, so it can archive the record and stop the lifecycle worker while the
+    orchestrator runs on its own server (measured by ao-64 on two private servers). Same on `dc7815d2`.
+  - `ao stop` targets only `<prefix>-orchestrator`. For an isolated orchestrator (`<prefix>-orchestrator-N`) it
+    prints "is not running" and stops the lifecycle worker while that orchestrator runs.
+  - The real `ao stop` error of 11:00 is not known. ao-64 ruled out a plugin import failure (caught at
+    `plugin-registry.ts:435-441`); config, project, record read, record change, launch guard and an
+    unconfirmed runtime stop remain.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then

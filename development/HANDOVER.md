@@ -44,8 +44,8 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`. Transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | a new session continues here |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
-| ao-63 | Claude Code Opus 5.5, branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it`, `dc7815d2..f095f5ce` (4 commits: `c29d6310` start probe, `f2103c5c` detached stop, `67fd166b` docs, `f095f5ce` tests). Report copy `reports/ao-63_start_no_server.report.md`; router row closed in-review | done 11:57; keep until landed |
-| ao-64 | Codex gpt-6-astra xhigh, branch `review/start-no-server` at `f095f5ce`. Spawned 12:06:37, brief `brief-review-start-no-server-astra.md` (review file `development/reviews/start_no_server_review_r1_astra6.md`, scratch `/tmp/aosnr`, servers `aosnr-*`, no `ao send`); read its brief by itself 12:07; router row open. Codex weekly limit 22% left at 12:07 | running; the orchestrator's background loop reads `.agent_report.md`. No watcher |
+| ao-63 | Claude Code Opus 5.5, branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it`. Round 1 `dc7815d2..f095f5ce` (4 commits). Round 2 brief `brief-aofork-start-no-server-r2.md` (`.agent_task_r2.md`: always-detached stop preferred for M-1/M-2, non-boolean `isAlive` is unknown for M-3, a log per stop, TMUX/PATH test; scratch `/tmp/aosns2`) sent 12:33; router row open | running round 2; the orchestrator's background loop reads `.agent_report.md` |
+| ao-64 | Codex gpt-6-astra xhigh, branch `review/start-no-server` at `f095f5ce`. Review r1 done 12:31: LAND-WITH-CHANGES 0 B 3 M 2 m (on `main` as `development/reviews/start_no_server_review_r1_astra6.md`); router row closed in-review | idle; keep for the re-check of round 2 |
 
 **Closed by this handover**: ao-55 (R4 landed), ao-54 (F-6 landed), and ao-52, ao-60, ao-62 (idle, owner
 "clean up inactive agents, worktrees, and branches"). See "Close record" below.
