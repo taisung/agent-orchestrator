@@ -54,8 +54,9 @@
 - Codex model (owner, 18:50): "use gpt-6.1-sol for all codex work for now": pin `--model gpt-6.1-sol` on
   every Codex spawn. `~/.codex/config.toml` changed at 18:03:25 (not by the orchestrator) to
   `model = "gpt-6.1-sol"`, `model_reasoning_effort = "high"`; ao passes no effort flag, so a Codex spawn
-  runs at the effort of that file. The owner chose xhigh (answer "1") before the sol message; the file
-  still says high.
+  runs at the effort of that file. The owner chose xhigh (answer "1") and set it in that file at 18:50:49
+  (`model_reasoning_effort = "xhigh"`); the 18:55 text first said "still high", which was wrong (not
+  re-checked).
 - ao-64 killed 18:49 (archive `ao-64_2026-10-22T22-49-00-901Z`); watcher 2750995 stopped with TERM before
   it; watcher 530444 (state `~/.cache/fleet_watch/aofork-2026-10-22e`) watches ao-63 and ao-65.
 - RH design r5 (`f66f885e`): review r5 by ao-67 (Codex gpt-6-astra at effort high, watcher 386227, state
@@ -64,9 +65,23 @@
   copy `brief-aofork-rh-design-r6.md`; branch fast-forwarded to `9f37813a`; r5 copies in
   `backup/ao-65-herdr-r5/`). A re-review of r6 goes to a new Codex reviewer on gpt-6.1-sol.
 - Relaunch round 2 done at `0aa13578` (`554facd9..0aa13578`, 7 commits; 3728 passed, 1 expected fail, 29
-  skipped; red 0/16/6/0; M-6 a design only). Its reviewer (new Codex, gpt-6.1-sol now) waits for the
-  owner's effort answer; brief ready: `brief-review-session-relaunch-r2-astra.md` (branch to be moved to
-  `0aa13578`, review file `session_relaunch_review_r2_astra6.md`).
+  skipped; red 0/16/6/0; M-6 a design only).
+
+**Update 2026-10-22 19:30 EDT.**
+- RH design r6 by ao-65 on main (`3ad87bd4`: design, doc 0004 corrections, `r6_` fixtures): B-1 by a
+  connected-socket guard (connect, re-read the listener, then write; qualified on real restarts and a
+  handoff), an `ss` peer helper as the fallback; RH split into RH-A (no destructive request) and a gated
+  RH-B; NM-1 measured safe; R-H1 narrowed; fit round M, 13 product files; OQ-1..OQ-14 (OQ-11..14 new).
+  ao-65 idle, done (router row closed).
+- ao-68: relaunch review r2 (Codex `gpt-6.1-sol` xhigh, footer checked), branch `review/session-relaunch-r2`
+  at `0aa13578`, brief `brief-review-session-relaunch-r2-sol61.md`, review file
+  `development/reviews/session_relaunch_review_r2_sol61.md`.
+- ao-69: RH design r6 review (Codex `gpt-6.1-sol` xhigh), branch at main `3ad87bd4`, brief
+  `brief-review-rh-design-r6-sol61.md`, review file `development/reviews/rh_design_review_r6_sol61.md`.
+- Watcher 932326 (state `~/.cache/fleet_watch/aofork-2026-10-22f`) watches ao-68 and ao-69; 530444 watches
+  ao-63 and ao-65; 386227 still watches ao-67 (done; close it only on the owner's word).
+- If a sol reviewer goes quiet with no report, search its rollout for `cyber_policy` (stops on ao-47,
+  2026-10-21).
 
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
