@@ -555,15 +555,18 @@ async function getTmuxForegroundCommand(
  * replaces it. A rejected probe is unknown, so the record is neither reused nor
  * archived. The one exception is a runtime with no server at all
  * (RUNTIME_NO_SERVER_ERROR_CODE): no session can exist then, as after a host
- * restart, and `ao start` must be able to launch a new orchestrator.
+ * restart, and `ao start` must be able to launch a new orchestrator. An
+ * answer that is not a boolean is unknown too (review r1 M-3, 2026-10-22):
+ * `undefined`, `null` or `0` from a faulty plugin is no proof of death.
  */
 async function isOrchestratorRuntimeAlive(
   runtime: Runtime,
   handle: RuntimeHandle,
   sessionId: SessionId,
 ): Promise<boolean> {
+  let alive: unknown;
   try {
-    return await runtime.isAlive(handle);
+    alive = await runtime.isAlive(handle);
   } catch (err: unknown) {
     const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
     if (code === RUNTIME_NO_SERVER_ERROR_CODE) return false;
@@ -572,6 +575,12 @@ async function isOrchestratorRuntimeAlive(
       { cause: err },
     );
   }
+  if (typeof alive !== "boolean") {
+    throw new Error(
+      `Cannot tell whether session ${sessionId} is alive (the liveness check answered ${String(alive)}, not true or false), so it is neither reused nor replaced. Check the runtime and retry.`,
+    );
+  }
+  return alive;
 }
 
 /** Reconstruct a Session object from raw metadata key=value pairs. */
@@ -1517,8 +1526,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // and we'd clobber meaningful statuses like "pr_open".
     if (handleFromMetadata && session.runtimeHandle && runtime) {
       try {
-        const alive = await runtime.isAlive(session.runtimeHandle);
-        if (!alive) {
+        // Only false is dead. An answer that is not a boolean is no answer
+        // (review r1 M-3, 2026-10-22), as a rejection: the stored status stays.
+        const alive: unknown = await runtime.isAlive(session.runtimeHandle);
+        if (alive === false) {
           // Process confirmed dead. Only claim "killed" if the session wasn't
           // already in a terminal state — otherwise keep merged/done/cleanup.
           if (!TERMINAL_SESSION_STATUSES.has(session.status)) {
