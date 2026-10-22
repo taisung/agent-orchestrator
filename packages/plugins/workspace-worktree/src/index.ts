@@ -265,11 +265,14 @@ export function create(config?: Record<string, unknown>): Workspace {
      * Same-ID R4 (B-7 item 7, design r3 m-1): true only when git answers the
      * expected success (`git rev-parse --is-inside-work-tree` prints `true`
      * and exits 0). False only for an explicit absence: the path does not
-     * exist (`lstat` answers `ENOENT`), or git answers "not a git
-     * repository" (exit 128). Every other answer rejects with the cause,
-     * because the check could not run: other output, `EACCES`, I/O, a
-     * signal, a git that cannot start, a timeout. Callers treat the
-     * rejection as unknown, never as "no workspace".
+     * exist (`lstat` answers `ENOENT`), or git exits 128 and its whole
+     * stderr is the "not a git repository" diagnostic of its repository
+     * discovery (round 2, M-1: the full line, in the C locale, never a
+     * substring, which a quoted path can hold). Every other answer rejects
+     * with the cause, because the check could not run: other output, another
+     * exit 128 (dubious ownership, an I/O error), `EACCES`, a signal, a git
+     * that cannot start, a timeout. Callers treat the rejection as unknown,
+     * never as "no workspace".
      */
     async exists(workspacePath: string): Promise<boolean> {
       try {
@@ -283,18 +286,23 @@ export function create(config?: Record<string, unknown>): Workspace {
           },
         );
       }
+      // git's two discovery forms: no repository up to the root, or up to a
+      // mount point. Neither names the queried path; git runs in it.
+      const notARepository =
+        /^fatal: not a git repository \((?:or any of the parent directories\): \.git|or any parent up to mount point [^\n]+\)\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.)$/;
       let stdout: string;
       try {
         ({ stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
           cwd: workspacePath,
           timeout: GIT_TIMEOUT,
+          env: { ...process.env, LC_ALL: "C" },
         }));
       } catch (err) {
         const failure = err as { code?: unknown; stderr?: unknown };
         if (
           failure.code === 128 &&
           typeof failure.stderr === "string" &&
-          /not a git repository/i.test(failure.stderr)
+          notARepository.test(failure.stderr.trim())
         ) {
           return false;
         }
