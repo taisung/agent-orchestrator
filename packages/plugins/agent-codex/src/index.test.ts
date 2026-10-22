@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   GH_WRAPPER,
   GIT_WRAPPER,
@@ -25,6 +25,7 @@ const {
   mockCreateReadStream,
   mockHomedir,
   mockReadLastJsonlEntry,
+  mockAppendFile,
 } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockWriteFile: vi.fn().mockResolvedValue(undefined),
@@ -38,6 +39,7 @@ const {
   mockCreateReadStream: vi.fn(),
   mockHomedir: vi.fn(() => "/mock/home"),
   mockReadLastJsonlEntry: vi.fn(),
+  mockAppendFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("node:child_process", () => {
@@ -48,6 +50,7 @@ vi.mock("node:child_process", () => {
 });
 
 vi.mock("node:fs/promises", () => ({
+  appendFile: mockAppendFile,
   writeFile: mockWriteFile,
   mkdir: mockMkdir,
   readFile: mockReadFile,
@@ -100,6 +103,22 @@ import {
   REVIEW_R2_M3_APPROVAL,
   RUNNING_ROW_0163,
 } from "./__fixtures__/panes-0.163.0.js";
+import RUNNING_01 from "./__fixtures__/codex-0.163.0-running-01.txt?raw";
+import RUNNING_02 from "./__fixtures__/codex-0.163.0-running-02.txt?raw";
+import RUNNING_03 from "./__fixtures__/codex-0.163.0-running-03.txt?raw";
+import RUNNING_04 from "./__fixtures__/codex-0.163.0-running-04.txt?raw";
+import RUNNING_05 from "./__fixtures__/codex-0.163.0-running-05.txt?raw";
+import RUNNING_06 from "./__fixtures__/codex-0.163.0-running-06.txt?raw";
+
+/** The six real captures of a running turn (see `__fixtures__/panes-0.163.0.ts`). */
+const REAL_RUNNING: Array<[string, string]> = [
+  ["01", RUNNING_01],
+  ["02", RUNNING_02],
+  ["03", RUNNING_03],
+  ["04", RUNNING_04],
+  ["05", RUNNING_05],
+  ["06", RUNNING_06],
+];
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -687,6 +706,13 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     expect(agent.detectActivity(REAL_IDLE_EMPTY_0163)).toBe("idle");
   });
 
+  it.each(REAL_RUNNING)(
+    "returns active for real running capture %s, and the parser reads a running turn",
+    (_n, capture) => {
+      expect(readBoth(capture)).toEqual(["active", true]);
+    },
+  );
+
   it("returns idle for the real screen whose composer holds an unsubmitted paste", () => {
     // Text in the composer with no running-turn row is not a running turn:
     // the paste waits for an Enter.
@@ -717,10 +743,32 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
     expect(agent.detectActivity(`${RUNNING_ROW_0163}\n${REAL_IDLE_EMPTY_0163}`)).toBe("idle");
   });
 
-  it("reads the running-turn row only directly above the composer", () => {
+  it("reads the running-turn row only in the status block directly above the composer", () => {
     expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 1))).toBe("active");
     expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 2))).toBe("idle");
     expect(agent.detectActivity(screenWithRowAbove(RUNNING_ROW_0163, 8))).toBe("idle");
+
+    // Blank rows: up to two, as in every real running capture.
+    const withBlanks = (blanks: number): string =>
+      screenWithRowAbove(RUNNING_ROW_0163, 1).replace(
+        `${RUNNING_ROW_0163}\n`,
+        `${RUNNING_ROW_0163}\n${"\n".repeat(blanks)}`,
+      );
+    expect(readBoth(withBlanks(1))).toEqual(["active", true]);
+    expect(readBoth(withBlanks(2))).toEqual(["active", true]);
+    expect(readBoth(withBlanks(3))).toEqual(["idle", false]);
+  });
+
+  it("returns idle for a status block with a row of another kind above the composer", () => {
+    // Derived from real capture 02: one row that is not a "└" row and not
+    // blank between the Tip row and the two blank rows, or in place of the
+    // Tip row. The status row is then a row of the transcript.
+    const tip = "  └ Tip: Type / to open the command popup; Tab autocompletes slash commands.\n";
+    expect(RUNNING_02).toContain(tip);
+    for (const other of ["    + Show details", "  Worked for 1s", "  the turn ended"]) {
+      expect(readBoth(RUNNING_02.replace(tip, `${tip}${other}\n`))).toEqual(["idle", false]);
+      expect(readBoth(RUNNING_02.replace(tip, `${other}\n`))).toEqual(["idle", false]);
+    }
   });
 
   it("never reads the words of transcript rows as a running turn, with or without a 'Worked for' line", () => {
@@ -831,6 +879,9 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
   });
 
   it("keeps the controls: the B-2 screen, the real running row and the two captured idle screens", () => {
+    // REAL_IDLE_EMPTY_0163 has the idle layout: "Worked for 18m 30s • 1:56 PM"
+    // and two blank rows above the composer.
+    expect(REAL_IDLE_EMPTY_0163).toContain("  Worked for 18m 30s • 1:56 PM\n\n\n› Ask Codex");
     expect(readBoth(REVIEW_B2_NESTED_PROMPT)).toEqual(["active", true]);
     expect(readBoth(DERIVED_MID_TURN_PASTE_0163)).toEqual(["active", true]);
     expect(readBoth(DERIVED_SUBMITTED_RUNNING_0163)).toEqual(["active", true]);
@@ -841,6 +892,77 @@ describe("detectActivity on Codex 0.163.0 screens", () => {
   it("keeps the older forms: a bare prompt and the 'tab to queue message' footer", () => {
     expect(agent.detectActivity("some output\n› ")).toBe("idle");
     expect(agent.detectActivity("output\n› draft\ntab to queue message")).toBe("idle");
+  });
+});
+
+// =========================================================================
+// recordActivity + getActivityState — the real running captures
+// =========================================================================
+describe("recordActivity and getActivityState on Codex 0.163.0 screens", () => {
+  const agent = create();
+  const session = makeSession({
+    runtimeHandle: makeTmuxHandle(),
+    workspacePath: "/workspace/test",
+  });
+  const logPath = "/workspace/test/.ao/activity.jsonl";
+
+  /**
+   * Keep the AO activity log in memory: `appendFile` adds to it and `open`
+   * reads it, so the activity-log code of core runs unchanged. The process
+   * is alive, and Codex has no native session JSONL.
+   */
+  function useMemoryActivityLog(): void {
+    let log = "";
+    let mtime = new Date();
+    mockTmuxWithProcess("codex");
+    mockReaddir.mockRejectedValue(new Error("ENOENT"));
+    mockAppendFile.mockImplementation(async (path: string, data: string) => {
+      if (path !== logPath) throw new Error(`Unexpected appendFile: ${path}`);
+      log += data;
+      mtime = new Date();
+    });
+    mockOpen.mockImplementation(async (path: string) => {
+      if (path !== logPath) return makeFakeFileHandle("");
+      if (log === "") throw new Error("ENOENT");
+      const buf = Buffer.from(log, "utf-8");
+      return {
+        stat: async () => ({ size: buf.length, mtime }),
+        read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const bytesRead = buf.copy(buffer, offset, position, position + length);
+          return { bytesRead, buffer };
+        },
+        close: async () => {},
+      };
+    });
+  }
+
+  afterEach(() => {
+    // The other tests keep the default: appendFile resolves.
+    mockAppendFile.mockReset().mockResolvedValue(undefined);
+  });
+
+  /** The state of each entry that recordActivity appended to the log. */
+  function recordedStates(): string[] {
+    return mockAppendFile.mock.calls.map(
+      (call) => (JSON.parse(String(call[1])) as { state: string }).state,
+    );
+  }
+
+  it.each(REAL_RUNNING)(
+    "records and returns active for real running capture %s (no native JSONL)",
+    async (_n, capture) => {
+      useMemoryActivityLog();
+      await agent.recordActivity!(session, capture);
+      const state = (await agent.getActivityState(session))?.state;
+      expect([recordedStates(), state]).toEqual([["active"], "active"]);
+    },
+  );
+
+  it("records and returns idle for the real idle capture (control)", async () => {
+    useMemoryActivityLog();
+    await agent.recordActivity!(session, REAL_IDLE_EMPTY_0163);
+    const state = (await agent.getActivityState(session))?.state;
+    expect([recordedStates(), state]).toEqual([["idle"], "idle"]);
   });
 });
 

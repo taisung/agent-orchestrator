@@ -9,10 +9,13 @@
  * The layout, from the bottom up: the footer row ("? for shortcuts" only
  * while the composer is empty, "tab to queue message" only during a turn),
  * the status line, a blank row, the composer, and during a turn the status
- * row ("◦ Working (5m 47s • esc to interrupt)") directly above the composer.
- * The composer starts with the prompt glyph in column 0. Codex indents its
- * wrapped rows and its further lines by 2 columns, so an indented "›" row is
- * message text (for example a quoted transcript), never the composer.
+ * block above the composer. Six real captures of a running 0.163.0 pane
+ * (`__fixtures__/codex-0.163.0-running-0*.txt`) show the block: the status row
+ * ("• Working (44s • esc to interrupt)"), at most two "  └ " rows (a command
+ * row and the Tip row), and two blank rows. The composer starts with the
+ * prompt glyph in column 0. Codex indents its wrapped rows and its further
+ * lines by 2 columns, so an indented "›" row is message text (for example a
+ * quoted transcript), never the composer.
  */
 
 /** The prompt row of the composer: the prompt glyph in column 0. */
@@ -42,10 +45,24 @@ const LIST_HINT = /\bpress (?:enter|a number)\b|\besc to (?:cancel|go back|dismi
 
 /**
  * The status row of a running turn: a bullet in column 0, the header, and the
- * elapsed time with "esc to interrupt" in parentheses
- * ("◦ Working (5m 47s • esc to interrupt)", "• Working (8s • esc to interrupt)").
+ * elapsed time with "esc to interrupt" in parentheses, and any text after the
+ * ")" ("• Working (3m 14s • esc to interrupt) · 2 background terminals running").
  */
 const STATUS_ROW = /^[•◦] \S.*\([^()]*\besc to interrupt\)/i;
+
+/**
+ * A row of the status block below the status row: the Tip row ("  └ Tip: Type
+ * / to open the command popup; …") or a command row ("  └ env -i HOME=…").
+ */
+const STATUS_DETAIL_ROW = /^ {2}└ /;
+
+/**
+ * The bounds of the status block in the six real captures: up to two "└" rows
+ * (capture 05: a command row and the Tip row), then up to two blank rows (two
+ * in every capture). The block accepts no other kind of row.
+ */
+const MAX_DETAIL_ROWS = 2;
+const MAX_BLANK_ROWS = 2;
 
 /** The placeholder text of an empty composer. */
 const PLACEHOLDER = "Ask Codex to do anything";
@@ -64,9 +81,10 @@ export interface CodexScreen {
   /** The composer, or null when none is in view (a selection list, or transcript rows below the last prompt row). */
   composer: CodexComposer | null;
   /**
-   * True only when the status row of a running turn is directly above the
-   * composer. Words in the composer text or in transcript rows never make it
-   * true, and with no composer in view it is false.
+   * True only when the status block of a running turn (the status row, at most
+   * two "└" rows, at most two blank rows) is directly above the composer. Words
+   * in the composer text or in transcript rows never make it true, and with no
+   * composer in view it is false.
    */
   runningTurn: boolean;
 }
@@ -125,14 +143,20 @@ function readComposer(lines: string[], prompt: number): CodexComposer {
 }
 
 /**
- * True when the status row of a running turn is directly above the prompt
- * row, with at most one blank row between them. No other row counts: the
- * words of the composer text and of the transcript ("Working tree clean.",
- * "Running tests failed") are never a running turn.
+ * True when the status block of a running turn is directly above the prompt
+ * row: the status row, then at most two "└" rows, then at most two blank
+ * rows, in this order. Any other row between the status row and the prompt
+ * row ends the block, so no other row counts: the words of the composer text
+ * and of the transcript ("Working tree clean.", "Running tests failed") are
+ * never a running turn.
  */
 function hasStatusRowAbove(lines: string[], prompt: number): boolean {
-  const above = (lines[prompt - 1] ?? "").trim() === "" ? prompt - 2 : prompt - 1;
-  return STATUS_ROW.test(lines[above] ?? "");
+  const isBlank = (index: number): boolean => index >= 0 && (lines[index] ?? "").trim() === "";
+  const isDetail = (index: number): boolean => STATUS_DETAIL_ROW.test(lines[index] ?? "");
+  let row = prompt - 1;
+  for (let blanks = 0; blanks < MAX_BLANK_ROWS && isBlank(row); blanks++) row--;
+  for (let details = 0; details < MAX_DETAIL_ROWS && isDetail(row); details++) row--;
+  return STATUS_ROW.test(lines[row] ?? "");
 }
 
 /**

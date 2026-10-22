@@ -14,6 +14,22 @@
  *
  * The DERIVED screens are not captures: each one changes a real capture as its
  * comment says, to show a state that no real capture of this version holds.
+ *
+ * The six files `codex-0.163.0-running-01.txt` to `-06.txt` next to this file
+ * are real captures of a running turn: read-only `capture-pane -p` of the
+ * ao-56 pane (Codex 0.163.0, 80x24) by the orchestrator on 2026-10-21, 17:46
+ * to 17:55 EDT, kept byte for byte with their blank rows. The tests import
+ * them with `?raw`. Each one ends with the status block above the empty
+ * composer: the status row, 0 to 2 "  └ " rows (the Tip row, and in 05 a
+ * command row), and 2 blank rows. SHA-256:
+ * - 01 163a64fda972956dde445060c2f73e7f9c04d4480e2c26807fefd6ecf70dae4d
+ * - 02 773f637c87ee9413338bab5de8870ac0bee93dd45fd2e9582550c0d38fedc9ef
+ * - 03 a0ab7ca85a162e361cfa1b2f3afc30dfd31f9699b5ca0047fc751c27d098f821
+ * - 04 10b1b6f3a6b2c378ae3fc957021d6e8c6e6557b4c4033000b22e1284af48ef84
+ * - 05 172ac0e023d699e4cf29b4b0c8189fbc4dcc24ae1fa725cf76c8781a0e434a8b
+ * - 06 613096c7c0c3d2b6305b6c8b17260c3499a9cb3e26c289cc56628c55cff73cba
+ * REAL_IDLE_EMPTY_0163 is byte-equal to the orchestrator's file
+ * `codex-0.163.0-idle-empty.txt` of the same capture set.
  */
 export const REAL_UNSUBMITTED_PASTE_0163 =
   "\u2022 Review complete: R2 NOT-SOUND; R3 NOT-SOUND; R4 SOUND-WITH-CHANGES. Found 7 blockers and 4 major\n  Worked for 15m 54s \u2022 12:24 PM\n\n\u203a Your .agent_task.md is replaced with the round-2 brief: re-check the same-ID design revision r2\n  by ao-52. Your worktree is now at 628e0fbf. Read the brief in full and execute it autonomously\n  through to the deliverable. Report via .agent_report.md when done, no mid-task ACK needed.\n\n  ao-51 \u00b7 weekly 77% left \u00b7 GPT-6-Astra xhigh \u00b7 Context 68% used \u00b7 3.64M in\n                                                                        \u26a0 2 warnings \u00b7 f2 to view\n";

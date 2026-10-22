@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { readCodexScreen } from "./codex-screen.js";
+import RUNNING_01 from "./__fixtures__/codex-0.163.0-running-01.txt?raw";
+import RUNNING_02 from "./__fixtures__/codex-0.163.0-running-02.txt?raw";
+import RUNNING_03 from "./__fixtures__/codex-0.163.0-running-03.txt?raw";
+import RUNNING_04 from "./__fixtures__/codex-0.163.0-running-04.txt?raw";
+import RUNNING_05 from "./__fixtures__/codex-0.163.0-running-05.txt?raw";
+import RUNNING_06 from "./__fixtures__/codex-0.163.0-running-06.txt?raw";
 import {
   DERIVED_MID_TURN_PASTE_0163,
   DERIVED_SUBMITTED_RUNNING_0163,
@@ -15,7 +22,62 @@ import {
   RUNNING_ROW_0163,
 } from "./__fixtures__/panes-0.163.0.js";
 
+/** The six real captures of a running turn, by number (see `__fixtures__/panes-0.163.0.ts`). */
+const REAL_RUNNING: Record<string, string> = {
+  "01": RUNNING_01,
+  "02": RUNNING_02,
+  "03": RUNNING_03,
+  "04": RUNNING_04,
+  "05": RUNNING_05,
+  "06": RUNNING_06,
+};
+
+/** The first row of capture `n` that starts with `prefix`. */
+function rowOf(n: string, prefix: string): string {
+  const row = (REAL_RUNNING[n] ?? "").split("\n").find((line) => line.startsWith(prefix));
+  if (row === undefined) throw new Error(`capture ${n} has no row that starts with ${prefix}`);
+  return row;
+}
+
+/** The status row, the Tip row and the command row of the real captures. */
+const STATUS_01 = rowOf("01", "• Working (3s");
+const STATUS_04 = rowOf("04", "• Working (3m 14s");
+const TIP_ROW = rowOf("02", "  └ Tip:");
+const COMMAND_ROW = rowOf("05", "  └ env -i");
+
+/** The composer, the status line and the footer of capture 01 (its last 4 rows). */
+const COMPOSER_ROWS = RUNNING_01.trimEnd().split("\n").slice(-4);
+
+/** A transcript row, the `above` rows, then COMPOSER_ROWS. */
+function screen(...above: string[]): string {
+  return ["  transcript line", ...above, ...COMPOSER_ROWS].join("\n");
+}
+
 describe("readCodexScreen on Codex 0.163.0 screens", () => {
+  it("keeps the six real running captures byte for byte (the SHA-256 of the orchestrator's files)", () => {
+    const sums = Object.fromEntries(
+      Object.entries(REAL_RUNNING).map(([n, capture]) => [
+        n,
+        createHash("sha256").update(capture, "utf8").digest("hex").slice(0, 8),
+      ]),
+    );
+    expect(sums).toEqual({
+      "01": "163a64fd",
+      "02": "773f637c",
+      "03": "a0ab7ca8",
+      "04": "10b1b6f3",
+      "05": "172ac0e0",
+      "06": "613096c7",
+    });
+  });
+
+  it.each(Object.entries(REAL_RUNNING))(
+    "reads real running capture %s: an empty composer below the status block, a running turn",
+    (_n, capture) => {
+      expect(readCodexScreen(capture)).toEqual({ composer: { empty: true }, runningTurn: true });
+    },
+  );
+
   it("reads the real idle screen: an empty composer and no running turn", () => {
     expect(readCodexScreen(REAL_IDLE_EMPTY_0163)).toEqual({
       composer: { empty: true },
@@ -177,23 +239,87 @@ describe("readCodexScreen on Codex 0.163.0 screens", () => {
     });
   });
 
-  it("reads a running turn only from the status row directly above the composer", () => {
-    const bottom = REAL_IDLE_EMPTY_0163.trimEnd().split("\n").slice(-4);
-    const screen = (...above: string[]): string =>
-      ["  transcript line", ...above, ...bottom].join("\n");
-
+  it("reads a running turn from the status block: the status row, up to two └ rows, up to two blank rows", () => {
+    // The layouts of the real captures: 01 (no └ row), 02 03 06 (the Tip
+    // row), 04 (text after the ")"), 05 (a command row and the Tip row).
+    expect(readCodexScreen(screen(STATUS_01, "", "")).runningTurn).toBe(true);
+    expect(readCodexScreen(screen(STATUS_01, TIP_ROW, "", "")).runningTurn).toBe(true);
+    expect(readCodexScreen(screen(STATUS_04, TIP_ROW, "", "")).runningTurn).toBe(true);
+    expect(readCodexScreen(screen(STATUS_01, COMMAND_ROW, TIP_ROW, "", "")).runningTurn).toBe(true);
+    // Fewer blank rows: the derived screens and the B-2 screen of the reviews.
     expect(readCodexScreen(screen(RUNNING_ROW_0163)).runningTurn).toBe(true);
     expect(readCodexScreen(screen(RUNNING_ROW_0163, "")).runningTurn).toBe(true);
-    expect(readCodexScreen(screen("• Working (8s • esc to interrupt)", "")).runningTurn).toBe(true);
+    expect(readCodexScreen(screen(STATUS_01, TIP_ROW)).runningTurn).toBe(true);
+  });
 
-    // A row between the status row and the composer, or two blank rows.
-    expect(readCodexScreen(screen(RUNNING_ROW_0163, "  transcript line")).runningTurn).toBe(false);
-    expect(readCodexScreen(screen(RUNNING_ROW_0163, "", "")).runningTurn).toBe(false);
-    // Running words and "esc to interrupt" outside the status row form.
-    expect(readCodexScreen(screen("  Working (5m 47s • esc to interrupt)")).runningTurn).toBe(
+  it("reads no running turn past the bounds of the status block", () => {
+    // Three blank rows, three └ rows, a blank row above a └ row.
+    expect(readCodexScreen(screen(STATUS_01, "", "", "")).runningTurn).toBe(false);
+    expect(
+      readCodexScreen(screen(STATUS_01, COMMAND_ROW, COMMAND_ROW, TIP_ROW, "", "")).runningTurn,
+    ).toBe(false);
+    expect(readCodexScreen(screen(STATUS_01, "", TIP_ROW, "", "")).runningTurn).toBe(false);
+  });
+
+  it("reads no running turn when a row of another kind is between the status row and the composer", () => {
+    // Derived from capture 02: one row that is not a └ row and not blank.
+    for (const other of [
+      "    + Show details",
+      "  Worked for 1s",
+      "  transcript line",
+      "• Ran pnpm test",
+      "  └",
+    ]) {
+      expect(readCodexScreen(screen(STATUS_01, TIP_ROW, other, "", "")).runningTurn).toBe(false);
+      expect(readCodexScreen(screen(STATUS_01, other, "", "")).runningTurn).toBe(false);
+    }
+  });
+
+  it("reads no running turn for a status-row text in a transcript row above a 'Worked for' row or a text row", () => {
+    // Derived: the real idle layout ("Worked for", two blank rows, composer)
+    // below a status-shaped transcript row, with and without a Tip row.
+    expect(readCodexScreen(screen(STATUS_01, "  Worked for 1s", "", "")).runningTurn).toBe(false);
+    expect(readCodexScreen(screen(STATUS_01, TIP_ROW, "  Worked for 1s", "", "")).runningTurn).toBe(
       false,
     );
-    expect(readCodexScreen(screen("• Running the suite again")).runningTurn).toBe(false);
+    expect(readCodexScreen(screen(STATUS_01, "  Working tree clean.", "", "")).runningTurn).toBe(
+      false,
+    );
+    expect(readCodexScreen(screen(STATUS_01, "• Ran pnpm test", "", "")).runningTurn).toBe(false);
+  });
+
+  it("reads no running turn for a status-row text inside the composer", () => {
+    // The real bottom of a composer with text (REAL_UNSUBMITTED_PASTE_0163):
+    // a blank row, the status line and the warnings row, no "? for shortcuts".
+    const footer = REAL_UNSUBMITTED_PASTE_0163.trimEnd().split("\n").slice(-3);
+    const above = ["  Worked for 1s", "", ""];
+
+    // The status row as the first row of the message.
+    expect(readCodexScreen([...above, `› ${STATUS_01}`, ...footer].join("\n"))).toEqual({
+      composer: { empty: false, firstLine: STATUS_01 },
+      runningTurn: false,
+    });
+
+    // A whole status block quoted in the further rows of the message, which
+    // Codex indents by 2 columns.
+    const quoted = [
+      ...above,
+      "› why does the pane show this block",
+      `  ${STATUS_01}`,
+      `  ${TIP_ROW}`,
+      ...footer,
+    ].join("\n");
+    expect(readCodexScreen(quoted)).toEqual({
+      composer: { empty: false, firstLine: "why does the pane show this block" },
+      runningTurn: false,
+    });
+  });
+
+  it("reads no running turn from running words or 'esc to interrupt' outside the status row form", () => {
+    expect(
+      readCodexScreen(screen("  Working (5m 47s • esc to interrupt)", "", "")).runningTurn,
+    ).toBe(false);
+    expect(readCodexScreen(screen("• Running the suite again", "", "")).runningTurn).toBe(false);
     expect(readCodexScreen(screen("Working on task (esc to interrupt)")).runningTurn).toBe(false);
   });
 
