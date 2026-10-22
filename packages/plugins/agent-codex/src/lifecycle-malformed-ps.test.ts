@@ -10,6 +10,11 @@
  * Only `tmux` and `ps` are stand-ins (the pane TTY and the process list), and
  * the runtime answers alive. app-2 is a live session (its activity is
  * "active"), so the poll is not a probe outage.
+ *
+ * Round 3 (review r2, M-2, M-3 and M-4): the same holds for a `ps` row with
+ * a PID that is not a positive safe integer, for tmux's missing-target line
+ * for another session, and for a Herdr process-info answer for another pane
+ * (the `herdr` stand-in). On 8e9efe95 each one wrote `killed`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -18,20 +23,36 @@ import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
 
 const child = vi.hoisted(() => ({
-  ps: "valid-dead" as "exec-error" | "malformed" | "valid-dead",
+  ps: "valid-dead" as "exec-error" | "malformed" | "valid-dead" | "unsafe-pid",
+  tmux: "pane" as "pane" | "wrong-target",
+  herdrPane: "w7:p1",
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   const { promisify } = await import("node:util");
-  // No real tmux or ps runs: the callback form refuses them.
+  // No real tmux, ps or herdr runs: the callback form refuses them.
   const execFile = ((cmd: string, ...rest: unknown[]) => {
-    if (cmd === "tmux" || cmd === "ps") throw new Error(`unexpected command: ${cmd}`);
+    if (cmd === "tmux" || cmd === "ps" || cmd === "herdr") {
+      throw new Error(`unexpected command: ${cmd}`);
+    }
     return (actual.execFile as (...args: unknown[]) => unknown)(cmd, ...rest);
   }) as typeof actual.execFile;
   Object.defineProperty(execFile, promisify.custom, {
     value: async (cmd: string) => {
-      if (cmd === "tmux") return { stdout: "/dev/pts/73\n", stderr: "" };
+      if (cmd === "herdr") {
+        const processInfo = { pane_id: child.herdrPane, foreground_processes: [] };
+        return { stdout: JSON.stringify({ result: { process_info: processInfo } }), stderr: "" };
+      }
+      if (cmd === "tmux") {
+        if (child.tmux === "wrong-target") {
+          throw Object.assign(new Error("Command failed: tmux list-panes"), {
+            code: 1,
+            stderr: "can't find session: unrelated\n",
+          });
+        }
+        return { stdout: "/dev/pts/73\n", stderr: "" };
+      }
       if (cmd === "ps") {
         if (child.ps === "exec-error") {
           throw Object.assign(new Error("Command failed: ps -eo pid,tty,args"), {
@@ -41,6 +62,12 @@ vi.mock("node:child_process", async (importOriginal) => {
         }
         if (child.ps === "malformed") {
           return { stdout: "procfs temporarily unavailable\n", stderr: "" };
+        }
+        if (child.ps === "unsafe-pid") {
+          return {
+            stdout: "    PID TT       COMMAND\n999999999999999999999 pts/73   /bin/bash\n",
+            stderr: "",
+          };
         }
         return { stdout: "    PID TT       COMMAND\n  123 pts/73   /bin/bash\n", stderr: "" };
       }
@@ -68,6 +95,8 @@ let root: string;
 const originalStateRoot = process.env["AO_STATE_ROOT"];
 
 beforeEach(() => {
+  child.tmux = "pane";
+  child.herdrPane = "w7:p1";
   root = mkdtempSync(join(tmpdir(), "ao-codex-lifecycle-"));
   process.env["AO_STATE_ROOT"] = join(root, "state");
 });
@@ -79,7 +108,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function setup() {
+function setup(runtimeName: "tmux" | "herdr" = "tmux") {
   const projectPath = join(root, "my-app");
   mkdirSync(projectPath, { recursive: true });
   const configPath = join(root, "agent-orchestrator.yaml");
@@ -129,8 +158,9 @@ function setup() {
     loadFromConfig: vi.fn(async () => undefined),
   } as unknown as PluginRegistry;
 
-  for (const id of ["app-1", "app-2"]) {
+  for (const [index, id] of ["app-1", "app-2"].entries()) {
     const worktree = join(root, id);
+    const paneId = runtimeName === "herdr" ? `w7:p${index + 1}` : id;
     mkdirSync(worktree);
     writeMetadata(sessionsDir, id, {
       project: "my-app",
@@ -140,7 +170,7 @@ function setup() {
       prAutoDetect: "off",
       worktree,
       createdAt: "2026-01-01T00:00:00.000Z",
-      runtimeHandle: JSON.stringify({ id, runtimeName: "tmux", data: {} }),
+      runtimeHandle: JSON.stringify({ id: paneId, runtimeName, data: {} }),
     });
   }
   const sessionManager = createSessionManager({ config, registry });
@@ -194,6 +224,38 @@ describe("same-id R4 round 2 (review r1, M-2): the lifecycle with the real Codex
   it("control: a valid process list without codex gives app-1 killed after two polls", async () => {
     child.ps = "valid-dead";
     const { config, sessionsDir, lifecycle } = setup();
+    await poll(config, lifecycle, 2);
+    const record = readMetadataRaw(sessionsDir, "app-1");
+    expect(record?.["status"]).toBe("killed");
+    expect(record?.["killedReason"]).toBe("agent-exited");
+  });
+});
+
+describe("same-id R4 round 3 (review r2, M-2, M-3, M-4): the lifecycle with the real Codex plugin", () => {
+  it("keeps app-1 working over two polls when a ps row has a PID that is too large to be exact", async () => {
+    child.ps = "unsafe-pid";
+    const { config, sessionsDir, lifecycle } = setup();
+    await poll(config, lifecycle, 2);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["status"]).toBe("working");
+  });
+
+  it("keeps app-1 working over two polls when tmux answers the missing-target line for another session", async () => {
+    child.tmux = "wrong-target";
+    const { config, sessionsDir, lifecycle } = setup();
+    await poll(config, lifecycle, 2);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["status"]).toBe("working");
+  });
+
+  it("keeps app-1 working over two polls when herdr answers the process-info of another pane", async () => {
+    child.herdrPane = "w99:p8";
+    const { config, sessionsDir, lifecycle } = setup("herdr");
+    await poll(config, lifecycle, 2);
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["status"]).toBe("working");
+  });
+
+  it("control: an empty Herdr process list for the requested pane gives app-1 killed after two polls", async () => {
+    // Every query gets the answer for w7:p1, so only app-1 (pane w7:p1) reads it.
+    const { config, sessionsDir, lifecycle } = setup("herdr");
     await poll(config, lifecycle, 2);
     const record = readMetadataRaw(sessionsDir, "app-1");
     expect(record?.["status"]).toBe("killed");

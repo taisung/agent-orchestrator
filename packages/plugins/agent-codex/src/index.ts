@@ -561,7 +561,7 @@ function createCodexAgent(): Agent {
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
       // Same-ID R4 (B-7 item 10): false only when the check ran and found no
       // agent: a `ps` list without it, or the tmux server's answer that the
-      // pane does not exist ("can't find session/window/pane", or "no current
+      // pane does not exist ("can't find session: <name>", or "no current
       // target" from a server without sessions). Every other failure rejects
       // with the cause (a `tmux` or `ps` that cannot run or answer, "no server
       // running", a timeout), so a caller reads unknown, never "exited".
@@ -590,10 +590,26 @@ function createCodexAgent(): Agent {
             { timeout: 30_000 },
           ));
         } catch (err: unknown) {
-          const stderr = (err as { stderr?: unknown }).stderr;
+          // Round 3 (M-4): only tmux's own answer for this target is a missing
+          // pane: a call that ended with exit code 1 (no signal, no timeout)
+          // whose whole diagnostic is "can't find session: <name>", or "no
+          // current target" from a server that has no session (tmux 3.4). A
+          // line for another target, a line among others, or a killed call
+          // says nothing about this pane.
+          const failure = err as {
+            code?: unknown;
+            signal?: unknown;
+            killed?: unknown;
+            stderr?: unknown;
+          };
+          const diagnostic =
+            typeof failure.stderr === "string" ? failure.stderr.replace(/\n$/, "") : undefined;
           if (
-            typeof stderr === "string" &&
-            /^(?:can't find (?:session|window|pane): |no current target$)/m.test(stderr)
+            failure.code === 1 &&
+            !failure.signal &&
+            failure.killed !== true &&
+            (diagnostic === `can't find session: ${handle.id}` ||
+              diagnostic === "no current target")
           ) {
             return false;
           }
@@ -619,11 +635,16 @@ function createCodexAgent(): Agent {
           throw new Error("codex: ps -eo pid,tty,args failed", { cause: err });
         }
         // The header, then one "PID TTY ARGS" row per process (ps lists itself).
+        // Round 3 (M-2): a PID is a positive safe integer; one row with another
+        // PID (0, or too large to be exact) rejects the whole reply.
         const [psHeader = "", ...psRows] = psOut.trimEnd().split("\n");
         if (
           !/^\s*PID\s+TTY?\s+(?:ARGS|COMMAND|CMD)\s*$/.test(psHeader) ||
           psRows.length === 0 ||
-          !psRows.every((row) => /^\s*\d+\s+\S+\s+\S/.test(row))
+          !psRows.every((row) => {
+            const pid = /^\s*([1-9]\d*)\s+\S+\s+\S/.exec(row)?.[1];
+            return pid !== undefined && Number.isSafeInteger(Number(pid));
+          })
         ) {
           throw new Error(
             `codex: ps -eo pid,tty,args answered a reply that is not a process list (first line ${JSON.stringify(psHeader.slice(0, 80))})`,

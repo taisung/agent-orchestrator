@@ -643,9 +643,10 @@ class PaneGoneError extends Error {}
  * tmux: the processes on the pane TTY), and `/proc` gives their exact
  * argument vectors (M-1). Same-ID R4 (B-7 item 11): throws `PaneGoneError`
  * only when the tmux server answers that the pane does not exist ("can't
- * find session/window/pane", or "no current target" from a server without
- * sessions). Every other failure of `tmux` (no server at the socket, a
- * connection error, a timeout, a tmux that cannot start) or of `ps`, and a
+ * find session: <name>", or "no current target" from a server without
+ * sessions; round 3, M-4: with exit code 1, and as the whole diagnostic).
+ * Every other failure of `tmux` (no server at the socket, a connection
+ * error, a timeout, a tmux that cannot start) or of `ps`, and a
  * herdr check that cannot answer, rejects with another error: the pane may
  * still run, so no caller may read it as gone (a send then restores).
  * Round 2 (M-2): a malformed answer of a call that succeeds (empty or other
@@ -672,9 +673,23 @@ async function findPaneOpenCodeProcess(
         { timeout: 5_000 },
       ));
     } catch (err) {
-      const stderr = String((err as { stderr?: unknown }).stderr ?? "");
-      if (/^(?:can't find (?:session|window|pane): |no current target$)/m.test(stderr)) {
-        throw new PaneGoneError(stderr.trim(), { cause: err });
+      const failure = err as {
+        code?: unknown;
+        signal?: unknown;
+        killed?: unknown;
+        stderr?: unknown;
+      };
+      const stderr = String(failure.stderr ?? "");
+      // Round 3 (M-4): gone only for exit code 1 (no signal, no timeout) and
+      // a whole diagnostic that is tmux's answer for this target.
+      const diagnostic = typeof failure.stderr === "string" ? stderr.replace(/\n$/, "") : undefined;
+      if (
+        failure.code === 1 &&
+        !failure.signal &&
+        failure.killed !== true &&
+        (diagnostic === `can't find session: ${handle.id}` || diagnostic === "no current target")
+      ) {
+        throw new PaneGoneError(diagnostic, { cause: err });
       }
       throw new Error(
         `tmux list-panes -t ${exactPaneTarget(handle.id)} could not answer${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
@@ -696,8 +711,15 @@ async function findPaneOpenCodeProcess(
       timeout: 5_000,
     });
     // One "PID TTY" row per process, without a header (ps lists itself).
+    // Round 3 (M-2): a PID is a positive safe integer; one row with another
+    // PID rejects the whole reply (it is not left out).
     const psRows = psOut.trimEnd().split("\n");
-    if (!psRows.every((row) => /^\s*\d+\s+\S+\s*$/.test(row))) {
+    if (
+      !psRows.every((row) => {
+        const pid = /^\s*([1-9]\d*)\s+\S+\s*$/.exec(row)?.[1];
+        return pid !== undefined && Number.isSafeInteger(Number(pid));
+      })
+    ) {
       throw new Error(
         `ps -eo pid=,tty= answered a reply that is not a process list (first line ${JSON.stringify((psRows[0] ?? "").slice(0, 80))})`,
       );
@@ -705,9 +727,7 @@ async function findPaneOpenCodeProcess(
     const panePids: number[] = [];
     for (const line of psRows) {
       const cols = line.trim().split(/\s+/);
-      if (!ttys.has(cols[1] ?? "")) continue;
-      const pid = Number(cols[0]);
-      if (Number.isSafeInteger(pid)) panePids.push(pid);
+      if (ttys.has(cols[1] ?? "")) panePids.push(Number(cols[0]));
     }
     return findOpenCodeProcess(panePids, sessionId);
   }
@@ -1300,7 +1320,7 @@ function createOpenCodeAgent(): Agent {
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
       // Same-ID R4 (B-7 item 10): false only when the check ran and found no
       // agent: a `ps` list without it, or the tmux server's answer that the
-      // pane does not exist ("can't find session/window/pane", or "no current
+      // pane does not exist ("can't find session: <name>", or "no current
       // target" from a server without sessions). Every other failure rejects
       // with the cause (a `tmux` or `ps` that cannot run or answer, "no server
       // running", a timeout), so a caller reads unknown, never "exited".
@@ -1329,10 +1349,26 @@ function createOpenCodeAgent(): Agent {
             { timeout: 30_000 },
           ));
         } catch (err: unknown) {
-          const stderr = (err as { stderr?: unknown }).stderr;
+          // Round 3 (M-4): only tmux's own answer for this target is a missing
+          // pane: a call that ended with exit code 1 (no signal, no timeout)
+          // whose whole diagnostic is "can't find session: <name>", or "no
+          // current target" from a server that has no session (tmux 3.4). A
+          // line for another target, a line among others, or a killed call
+          // says nothing about this pane.
+          const failure = err as {
+            code?: unknown;
+            signal?: unknown;
+            killed?: unknown;
+            stderr?: unknown;
+          };
+          const diagnostic =
+            typeof failure.stderr === "string" ? failure.stderr.replace(/\n$/, "") : undefined;
           if (
-            typeof stderr === "string" &&
-            /^(?:can't find (?:session|window|pane): |no current target$)/m.test(stderr)
+            failure.code === 1 &&
+            !failure.signal &&
+            failure.killed !== true &&
+            (diagnostic === `can't find session: ${handle.id}` ||
+              diagnostic === "no current target")
           ) {
             return false;
           }
@@ -1358,11 +1394,16 @@ function createOpenCodeAgent(): Agent {
           throw new Error("opencode: ps -eo pid,tty,args failed", { cause: err });
         }
         // The header, then one "PID TTY ARGS" row per process (ps lists itself).
+        // Round 3 (M-2): a PID is a positive safe integer; one row with another
+        // PID (0, or too large to be exact) rejects the whole reply.
         const [psHeader = "", ...psRows] = psOut.trimEnd().split("\n");
         if (
           !/^\s*PID\s+TTY?\s+(?:ARGS|COMMAND|CMD)\s*$/.test(psHeader) ||
           psRows.length === 0 ||
-          !psRows.every((row) => /^\s*\d+\s+\S+\s+\S/.test(row))
+          !psRows.every((row) => {
+            const pid = /^\s*([1-9]\d*)\s+\S+\s+\S/.exec(row)?.[1];
+            return pid !== undefined && Number.isSafeInteger(Number(pid));
+          })
         ) {
           throw new Error(
             `opencode: ps -eo pid,tty,args answered a reply that is not a process list (first line ${JSON.stringify(psHeader.slice(0, 80))})`,

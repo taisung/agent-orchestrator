@@ -490,14 +490,14 @@ describe("isProcessRunning", () => {
 
   // Same-ID R4 (B-7 item 10): false only for the server's answer that the
   // pane does not exist; a tmux or ps that cannot answer rejects with the cause.
-  it("returns false when tmux answers that the pane does not exist", async () => {
+  it("rejects 'can't find window', which tmux does not answer for a session-only target (round 3, M-4)", async () => {
     mockExecFileAsync.mockRejectedValue(
       Object.assign(new Error("Command failed: tmux list-panes"), {
         code: 1,
         stderr: "can't find window: test-session\n",
       }),
     );
-    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow();
     expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
   });
 
@@ -585,6 +585,76 @@ describe("isProcessRunning", () => {
   it("control: a valid list with opencode on the pane TTY answers true", async () => {
     mockPaneAnswers("/dev/pts/73\n", `${VALID_PS}  124 pts/73   /usr/bin/opencode\n`);
     expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(true);
+  });
+
+  // Same-ID R4 round 3 (review r2, M-2): a PID is a positive safe integer;
+  // one row with another PID rejects the whole reply. A valid list without
+  // the agent stays false (the control above).
+  it("rejects a ps row with PID 0", async () => {
+    mockPaneAnswers("/dev/pts/73\n", "    PID TT       COMMAND\n      0 pts/73   /bin/bash\n");
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  it("rejects a ps row with a PID too large to be exact", async () => {
+    mockPaneAnswers(
+      "/dev/pts/73\n",
+      "    PID TT       COMMAND\n999999999999999999999 pts/73   /bin/bash\n",
+    );
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  it("rejects a valid list with one more row whose PID is 0", async () => {
+    mockPaneAnswers("/dev/pts/73\n", `${VALID_PS}      0 pts/9    /bin/sh\n`);
+    await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(/not a process list/);
+  });
+
+  // Same-ID R4 round 3 (review r2, M-4): only a tmux call that ended with
+  // exit code 1 and whose whole diagnostic is tmux's missing-target line for
+  // this session ("can't find session: test-session", or "no current target")
+  // is a missing pane. Every other failure rejects, and no ps runs.
+  function tmuxFails(failure: Record<string, unknown>) {
+    mockExecFileAsync.mockRejectedValue(
+      Object.assign(new Error("Command failed: tmux list-panes"), failure),
+    );
+  }
+
+  for (const [label, failure] of [
+    [
+      "the missing-target line names another session",
+      { code: 1, stderr: "can't find session: unrelated\n" },
+    ],
+    [
+      "'no current target' comes after another line",
+      { code: 1, stderr: "server unavailable\nno current target\n" },
+    ],
+    [
+      "the line for this session comes with another line",
+      { code: 1, stderr: "can't find session: test-session\nlost server\n" },
+    ],
+    [
+      "the call was killed (a timeout) with the line for this session",
+      { code: null, killed: true, signal: "SIGTERM", stderr: "can't find session: test-session\n" },
+    ],
+    ["the call has another exit code", { code: 2, stderr: "can't find session: test-session\n" }],
+    ["the call has no exit code", { stderr: "can't find session: test-session\n" }],
+  ] as const) {
+    it(`rejects a tmux failure where ${label}`, async () => {
+      tmuxFails(failure);
+      await expect(agent.isProcessRunning(makeTmuxHandle())).rejects.toThrow(
+        "tmux list-panes -t =test-session: failed",
+      );
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "ps",
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  }
+
+  it("control: exit code 1 and 'can't find session: <name>' for this session answer false", async () => {
+    tmuxFails({ code: 1, stderr: "can't find session: test-session\n" });
+    expect(await agent.isProcessRunning(makeTmuxHandle())).toBe(false);
+    expect(mockExecFileAsync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
   });
 
   it("rejects with the helper's error, before any tmux or ps call, for a name that is not a safe tmux name", async () => {
@@ -2163,11 +2233,35 @@ describe("confirmLaunch (I-3)", () => {
     ).rejects.toThrow("did not run OpenCode on session ses_made within 2 s");
   });
 
-  it("fails at once when the pane is gone", async () => {
+  it("fails at once, but not as a gone pane, for a tmux failure without an exit code (round 3, M-4)", async () => {
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === "tmux") {
         return Promise.reject(
           Object.assign(new Error("Command failed"), {
+            stderr: "can't find session: abc-sess-1\n",
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+    const started = Date.now();
+    await expect(
+      agent.confirmLaunch!(tmuxSession(), await preparedSession(), {
+        ...quick,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow("tmux list-panes -t =abc-sess-1: could not answer");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  // Same-ID R4 round 3 (review r2, M-4): the gone pane is exit code 1 with
+  // tmux's whole missing-target diagnostic for this session.
+  it("control: fails at once when tmux answers with exit code 1 that the session does not exist", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") {
+        return Promise.reject(
+          Object.assign(new Error("Command failed"), {
+            code: 1,
             stderr: "can't find session: abc-sess-1\n",
           }),
         );
@@ -2221,6 +2315,47 @@ describe("confirmLaunch (I-3)", () => {
     expect(err!.message).not.toContain("is gone");
     expect(err!.message).toContain("ps -eo pid=,tty= answered a reply that is not a process list");
   });
+
+  // Same-ID R4 round 3 (review r2, M-2 and M-4): an impossible PID and a
+  // missing-target line for another session are unknown at launch too.
+  for (const [label, answer, expected] of [
+    [
+      "ps answers PID 0",
+      { ps: "      0 pts/7\n" },
+      "ps -eo pid=,tty= answered a reply that is not a process list",
+    ],
+    [
+      "ps answers a PID too large to be exact",
+      { ps: "999999999999999999999 pts/7\n" },
+      "ps -eo pid=,tty= answered a reply that is not a process list",
+    ],
+    [
+      "tmux answers the missing-target line for another session",
+      { tmux: { code: 1, stderr: "can't find session: unrelated\n" } },
+      "tmux list-panes -t =abc-sess-1: could not answer: can't find session: unrelated",
+    ],
+  ] as const) {
+    it(`does not read the pane as gone or without OpenCode at launch when ${label} (round 3)`, async () => {
+      mockExecFileAsync.mockImplementation((cmd: string) => {
+        if (cmd === "tmux" && "tmux" in answer) {
+          return Promise.reject(Object.assign(new Error("Command failed"), answer.tmux));
+        }
+        return Promise.resolve({
+          stdout: cmd === "tmux" ? "/dev/pts/7\n" : "ps" in answer ? answer.ps : "",
+          stderr: "",
+        });
+      });
+      const err = await agent.confirmLaunch!(tmuxSession(), await preparedSession(), quick).then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      );
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err!.message).not.toContain("is gone");
+      expect(err!.message).not.toContain("did not run OpenCode");
+      expect(err!.message).toContain(expected);
+    });
+  }
 
   it("gives promptDelivered true when the session shows a user message, with the pane environment", async () => {
     paneProcesses([[4242, "pts/7", ["opencode", "--session", "ses_made", "--prompt", "Go"]]]);
@@ -2884,11 +3019,31 @@ describe("deliverMessage (I-5)", () => {
     expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
   });
 
-  it("refuses a gone pane at once", async () => {
+  it("does not read a tmux failure without an exit code as a gone pane (round 3, M-4)", async () => {
     mockExecFileAsync.mockImplementation((cmd: string) =>
       cmd === "tmux"
         ? Promise.reject(
             Object.assign(new Error("exit 1"), { stderr: "can't find session: abc-sess-1" }),
+          )
+        : Promise.reject(new Error(`unexpected ${cmd}`)),
+    );
+    const err = await failure(agent.deliverMessage!(session(), TEXT));
+
+    expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+    expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
+    expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+  });
+
+  // Same-ID R4 round 3 (review r2, M-4): a gone pane is exit code 1 with
+  // tmux's whole missing-target diagnostic for this session.
+  it("control: refuses a gone pane at once when tmux answers with exit code 1 that the session does not exist", async () => {
+    mockExecFileAsync.mockImplementation((cmd: string) =>
+      cmd === "tmux"
+        ? Promise.reject(
+            Object.assign(new Error("exit 1"), {
+              code: 1,
+              stderr: "can't find session: abc-sess-1\n",
+            }),
           )
         : Promise.reject(new Error(`unexpected ${cmd}`)),
     );
@@ -2958,6 +3113,54 @@ describe("deliverMessage (I-5)", () => {
       mockExecFileAsync.mockImplementation((cmd: string) =>
         Promise.resolve({ stdout: cmd === "tmux" ? tty : ps, stderr: "" }),
       );
+      const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
+
+      const err = (outcome as { error: Error }).error;
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(AgentNotAttachedError);
+      expect(err.message).toContain("cannot check the OpenCode TUI of sess-1");
+      expect(mockPromptOpenCodeSession).not.toHaveBeenCalled();
+    });
+  }
+
+  // Same-ID R4 round 3 (review r2, M-2 and M-4): an impossible PID, and a
+  // missing-target diagnostic that is not tmux's whole answer for this
+  // session from a call that ended with exit code 1, are unknown: no
+  // AgentNotAttachedError (so no restore), no send.
+  for (const [label, answer] of [
+    ["ps answers PID 0", { ps: "      0 pts/7\n" }],
+    ["ps answers a PID too large to be exact", { ps: "999999999999999999999 pts/7\n" }],
+    ["ps answers one more row with PID 0", { ps: "   4242 pts/7\n      0 pts/9\n" }],
+    [
+      "tmux answers the missing-target line for another session",
+      { tmux: { code: 1, stderr: "can't find session: unrelated\n" } },
+    ],
+    [
+      "tmux answers the line for this session with another line",
+      { tmux: { code: 1, stderr: "server unavailable\ncan't find session: abc-sess-1\n" } },
+    ],
+    [
+      "a killed tmux call carries the line for this session",
+      {
+        tmux: {
+          code: null,
+          killed: true,
+          signal: "SIGTERM",
+          stderr: "can't find session: abc-sess-1\n",
+        },
+      },
+    ],
+  ] as const) {
+    it(`does not read the pane as gone or without a TUI when ${label}: no AgentNotAttachedError, no send`, async () => {
+      mockExecFileAsync.mockImplementation((cmd: string) => {
+        if (cmd === "tmux" && "tmux" in answer) {
+          return Promise.reject(Object.assign(new Error("Command failed"), answer.tmux));
+        }
+        return Promise.resolve({
+          stdout: cmd === "tmux" ? "/dev/pts/7\n" : "ps" in answer ? answer.ps : "",
+          stderr: "",
+        });
+      });
       const outcome = await withFakeTimers(() => agent.deliverMessage!(session(), TEXT));
 
       const err = (outcome as { error: Error }).error;
