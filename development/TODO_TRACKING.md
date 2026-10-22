@@ -549,6 +549,18 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
 
 ## Known Issues
 
+- **`ao start` reuses a dead orchestrator when no tmux server runs, and `ao stop` in the orchestrator's own
+  pane stops only half** (found 2026-10-22 by the owner). Incident (EDT): in the orchestrator pane the owner
+  quit Claude Code, ran `ao stop` (it returned with an error that is lost: no kill, no archive, the lifecycle
+  worker 65891 kept running), then `exit` (11:00:21; the last session, so the tmux server ended). `ao start`
+  then created no session: `runStartup` (`cli/src/commands/start.ts`) reuses any orchestrator record that is
+  not terminal, and with no tmux server `runtime-tmux` `isAlive` rejects (`RUNTIME_NO_SERVER_ERROR_CODE`),
+  so `enrichSessionWithRuntimeState` keeps `status=working`. The exception for exactly this case
+  (`isOrchestratorRuntimeAlive`, killed-status fix `a62e798c`: no server means not alive) is used only by
+  `spawnOrchestrator`, which `runStartup` does not reach. The lifecycle worker wrote `killed` at 11:03:32,
+  47 s after the owner started a tmux server by hand (11:02:45). Second defect: `ao stop` kills the session
+  before it stops the lifecycle worker, so a stop typed in the orchestrator's own pane ends itself first.
+  The same no-server path follows a host restart. Fix dispatched to ao-63 (owner "1", 11:20 EDT).
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then

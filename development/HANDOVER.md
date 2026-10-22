@@ -28,6 +28,13 @@ No worker session and no watcher exists at the handover: the owner asked between
 inactive agents, worktrees and branches, so ao-52, ao-60 and ao-62 are closed too. New workers start the
 next tasks.
 
+**Update 2026-10-22 11:20 EDT**: the owner ran `ao stop`, then `exit`, then `ao start`. `ao start` created no
+orchestrator session (Known Issues, first entry). This orchestrator now runs in a tmux session `0` that the owner
+made by hand at 11:02:45; AO does not know it, and the record `ao-orchestrator` reads `killed`. So no watcher can
+reach this pane: the orchestrator waits on a worker's report file with a background loop. Owner answer "1":
+ao-63 (Claude Code Opus 5.5) fixes both defects, a Codex review follows. Do not run `ao start` before the fix
+lands and is built: the record is terminal now, so `ao start` would start a second orchestrator Claude.
+
 ## Live Sessions and Worktrees
 
 All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees under
@@ -37,6 +44,7 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | --- | --- | --- |
 | ao-orchestrator | this session, primary checkout, `main`. Transcript `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | a new session continues here |
 | ao-orchestrator-1 | stale `killed` record, no worktree | leave |
+| ao-63 | Claude Code Opus 5.5, branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` at `dc7815d2`. Spawned 11:19:57, brief `brief-aofork-start-no-server.md` (incident, defects A and B, required behavior A1 to A4 and B, scratch marker `/tmp/aosns`, private servers `aosns-*`, no `ao send`) sent 11:20; router row open | running; the orchestrator's background loop reads `.agent_report.md`. No watcher |
 
 **Closed by this handover**: ao-55 (R4 landed), ao-54 (F-6 landed), and ao-52, ao-60, ao-62 (idle, owner
 "clean up inactive agents, worktrees, and branches"). See "Close record" below.
