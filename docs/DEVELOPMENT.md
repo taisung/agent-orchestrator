@@ -248,9 +248,18 @@ lines:
   layout): "Message sent — could not confirm it was received". An emptied composer is no proof of
   delivery, and words on the screen are never "processing".
 
-The exit code is 0 for all four lines (this change keeps the exit codes). Every other agent keeps the
-loop of `09546110`: "processing" when its `detectActivity` answers `active`, else up to two retry
-`Enter`s, or one at each check for a prompt with text above `tab to queue message`.
+The exit code is 0 for all four lines (this change keeps the exit codes). Every other agent (Claude
+Code, Gemini, OpenCode on the tmux path) uses one loop. At each check its `detectActivity` goes first:
+
+- `waiting_input` (a dialog or a permission prompt): "Message sent — the pane waits for an answer: check
+  `<session>` (tmux pane `<pane>`)", no key, exit code 0. An `Enter` there would answer the prompt with
+  the option under the cursor.
+- `active`: "Message sent and processing".
+- Every other answer keeps the rules of `09546110`: "Message queued (session finishing previous task)"
+  for `Press up to edit queued messages`, else one retry `Enter` after checks 1 and 2 (one at each check
+  for a prompt with text above `tab to queue message`), and "Message sent — could not confirm it was
+  received" after check 3. A retry `Enter` goes to a screen that read as not waiting; a dialog that
+  opens after that read still gets it.
 
 The Codex parser reads the composer at its own position: the prompt row with `›` in column 0, with only
 indented or blank rows below it. Codex indents the further rows of the composer text by 2 columns, so an
@@ -286,6 +295,46 @@ Limits of the status-block rule, with no real capture to check them:
   directly above the composer, reads as a running turn. The parser cannot tell it from a real status
   block. No real capture has this layout: in the two real idle captures, a `Worked for` row ends the
   finished turn.
+
+### Claude Code screens (2.1.304 to 2.1.307)
+
+The claude-code `detectActivity` reads the structure of the screen, not words. From the bottom, Claude
+Code draws the footer (`⏵⏵ bypass permissions on (shift+tab to cycle)` in every session that ao starts:
+a mode, not a prompt) and the status line, then the input box: a rule row (`─` only), the prompt row
+(`❯` and a no-break space, then the input), a rule row. The plugin finds the box as the last rule row
+with at most 4 rows below it, the rule row above it, and the prompt row directly below that one.
+
+- With the box in view, the first column-0 row above it decides. Blank rows, indented rows (a `⎿  Tip:`
+  row, the right-aligned token, effort, auto-compact and `Ctrl+Y` rows) and the rows of a panel note
+  (`╭`, `│`, `╰`, the diff-panel note) are skipped. A spinner row (a spinner frame `·`, `✢`, `✳`, `✶`,
+  `✻`, `✽` or `*`, a word that ends in `…`, then `(` and a time, as in
+  `✻ Waddling… (15s · ↓ 692 tokens · thinking with xhigh effort)`) is `active`. Any other row (the
+  `✻ Brewed for 4s · done` row of a finished turn, `●` for a message or a tool call, `❯` for a user turn)
+  is `idle`. A transcript entry starts at column 0 and indents its other rows, so a spinner row, a
+  prompt or a footer that a message quotes, and any text in the input box, do not change the answer.
+- With no box in view, an open dialog is `waiting_input`: the last row that starts with `❯` is a cursor
+  on a numbered choice (`❯ 1. Red`), the dialog shows another numbered choice, and no `●` row follows the
+  cursor. The older rules stay for screens with no box: a bare prompt on the last row is `idle`,
+  `Do you want to proceed?` or `(Y)es ... (N)o` in the last 5 rows is `waiting_input`, and everything
+  else is `active`.
+
+So a regular `ao send` sends at once to an idle pane, waits while a turn runs (and sends at the timeout
+with "Sending anyway"), and waits at a dialog and refuses at the timeout with exit code 1 and no key.
+After the send, a running turn prints "processing" at the first check, and a dialog prints the
+waits-for-an-answer line. The fixtures are in `packages/plugins/agent-claude-code/src/__fixtures__/`:
+real 2.1.306 and 2.1.307 panes (idle, idle with `paste again to expand`, running, running with the
+diff-panel note) and 2.1.304 fullscreen captures (dialogs, running and idle screens).
+
+Limits, with no real capture to check them:
+
+- No real capture of a 2.1.30x permission prompt exists. Its `waiting_input` answer comes from the
+  numbered-choice rule and a derived test.
+- A row of another kind at column 0 between the spinner row and the box (for example a queued message,
+  if Claude Code draws it at column 0) makes a running pane read `idle`. A spinner row with no time, a
+  spinner word with `…` inside it, or a spinner row that wraps in a narrow pane reads as no spinner row.
+- The bash-mode `!` prompt, the slash-command menu and more than 4 rows below the box hide the box, and
+  the screen then reads by the older rules (mostly `active`).
+- An old spinner row at column 0 that only blank or indented rows separate from the box reads `active`.
 
 ---
 
