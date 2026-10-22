@@ -1,0 +1,60 @@
+
+
+❯ LIVE CHECK B2b, marker BETA2-59-9d1e.
+  This is the second line of a long message that the orchestrator sends to check that ao send
+  delivers more than two hundred characters as one message.
+  This is the third line.
+  Reply with the marker and the number of lines that you received, and nothing else. Use no tool.
+
+● BETA2-59-9d1e 4
+
+✻ Cooked for 2s · done 10:55 PM
+
+❯ LIVE CHECK B7: use the Bash tool to run the command python3 -c 'import time; time.sleep(40)'
+  exactly once, then reply with exactly ZETA2-59. Use no other tool.
+
+● I did not run this command. It is a standalone 40-second sleep written in Python instead of
+  Bash. The harness blocked the same wait twice, and the block message says not to work around it.
+  Running it through Python would bypass that block.
+
+  I did not reply ZETA2-59, because the wait did not happen. To run the wait yourself, type !
+  python3 -c 'import time; time.sleep(40)' in the prompt. If you allow another tool, I can use
+  Monitor with an until-loop and then reply ZETA2-59.
+
+✻ Worked for 2s · done 10:56 PM
+
+❯ LIVE CHECK B8: when your current task is done, reply with exactly EPSILON2-59 and nothing else.
+  Use no tool.
+
+● EPSILON2-59
+
+✻ Cooked for 1s · done 10:56 PM
+
+❯ LIVE CHECK B9: use the Bash tool to run this command exactly once: python3 -c "import hashlib;
+  [hashlib.sha256(str(i).encode()).digest() for i in range(40000000)]" . It is a CPU task, not a
+  wait. Then reply with exactly OMEGA-59. Use no other tool.
+
+● I did not run this command. It is a long CPU loop that does the same job as the sleeps. The
+  harness blocked those waits, and the block message says not to work around it. I did not reply
+  OMEGA-59, because the task did not run.
+
+  If you need a real CPU benchmark, tell me its purpose and I can help you write a shorter one. If
+  you want a wait, type ! <command> in the prompt to run it yourself.
+
+✻ Worked for 3s · done 10:58 PM
+
+❯ LIVE CHECK B10, marker KAPPA-59-4b2a, sent while your turn runs.
+  This second line makes the message long enough to need the bracketed paste path of ao send,
+  which is more than two hundred characters in total.
+  When your current task is done, reply with the marker and the number of lines that you
+  received, and nothing else.
+
+● KAPPA-59-4b2a 3
+
+✻ Cooked for 1s · done 10:58 PM
+                                                                                    63930 tokens
+──────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────
+  ao-59 | Haiku 5.5 | 6% | 5h 1% | wk 26% | $0.02 | in 63k
+  paste again to expand

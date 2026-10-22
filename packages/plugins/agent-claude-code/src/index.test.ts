@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import type * as ChildProcess from "node:child_process";
 import type * as Fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -8,6 +9,7 @@ import {
   GIT_WRAPPER,
   type Session,
   type RuntimeHandle,
+  type ActivityState,
   type AgentLaunchConfig,
   type WorkspaceHooksConfig,
 } from "@aoagents/ao-core";
@@ -65,6 +67,23 @@ vi.mock("node:os", () => ({
 }));
 
 import { create, manifest, default as defaultExport, resetPsCache, METADATA_UPDATER_SCRIPT } from "./index.js";
+import IDLE_BYPASS_307 from "./__fixtures__/claude-2.1.307-idle-bypass.txt?raw";
+import IDLE_PASTE_HINT_307 from "./__fixtures__/claude-2.1.307-idle-paste-hint.txt?raw";
+import RUNNING_01_306 from "./__fixtures__/claude-2.1.306-running-01.txt?raw";
+import RUNNING_DIFFPANEL_306 from "./__fixtures__/claude-2.1.306-running-diffpanel.txt?raw";
+import DIALOG_T1_304 from "./__fixtures__/claude-2.1.304-dialog-t1-01_before.txt?raw";
+import DIALOG_T3_304 from "./__fixtures__/claude-2.1.304-dialog-t3-00b_after_down.txt?raw";
+import DIALOG_T4_304 from "./__fixtures__/claude-2.1.304-dialog-t4-00c_typed_text.txt?raw";
+import DIALOG_T5_OPEN_304 from "./__fixtures__/claude-2.1.304-dialog-t5-00_dialog_open.txt?raw";
+import DIALOG_T5_PASTE1_304 from "./__fixtures__/claude-2.1.304-dialog-t5-paste1-03_verify1.txt?raw";
+import DIALOG_T5_PASTE3_304 from "./__fixtures__/claude-2.1.304-dialog-t5-paste3-03_verify1.txt?raw";
+import RUNNING_T2_00B_304 from "./__fixtures__/claude-2.1.304-running-t2-00b_after_key_2.txt?raw";
+import RUNNING_T2_03_304 from "./__fixtures__/claude-2.1.304-running-t2-03_verify1.txt?raw";
+import RUNNING_T4_304 from "./__fixtures__/claude-2.1.304-running-t4-03_verify1.txt?raw";
+import RUNNING_T8_304 from "./__fixtures__/claude-2.1.304-running-t8-03_verify1.txt?raw";
+import IDLE_T1_304 from "./__fixtures__/claude-2.1.304-idle-t1-03_verify1.txt?raw";
+import IDLE_T2_INPUT_304 from "./__fixtures__/claude-2.1.304-idle-t2-02_input_text.txt?raw";
+import IDLE_T5_PASTE4_304 from "./__fixtures__/claude-2.1.304-idle-t5-paste4-03_verify1.txt?raw";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -636,10 +655,11 @@ describe("detectActivity", () => {
     expect(agent.detectActivity("Do you want to proceed?\n")).toBe("waiting_input");
   });
 
-  it("returns waiting_input for bypass permissions prompt", () => {
-    expect(agent.detectActivity("bypass all future permissions for this session\n")).toBe(
-      "waiting_input",
-    );
+  it("never reads the bypass permissions text as waiting_input", () => {
+    // The footer of every session that ao starts says `⏵⏵ bypass permissions
+    // on`: a mode, not a prompt. A line with no input box keeps the default.
+    expect(agent.detectActivity("bypass all future permissions for this session\n")).toBe("active");
+    expect(agent.detectActivity(IDLE_BYPASS_307)).toBe("idle");
   });
 
   it("returns active when queued message indicator is visible", () => {
@@ -665,13 +685,221 @@ describe("detectActivity", () => {
       agent.detectActivity("Reading file src/index.ts\nThinking...\nDo you want to proceed?\n"),
     ).toBe("waiting_input");
     expect(agent.detectActivity("Searching codebase...\n(Y)es / (N)o\n")).toBe("waiting_input");
-    expect(
-      agent.detectActivity("Writing to out.ts\nbypass all future permissions for this session\n"),
-    ).toBe("waiting_input");
   });
 
   it("returns active for non-empty output with no special patterns", () => {
     expect(agent.detectActivity("some random terminal output\n")).toBe("active");
+  });
+});
+
+// =========================================================================
+// detectActivity on real Claude Code 2.1.304 to 2.1.307 screens
+// =========================================================================
+// The 2.1.306 and 2.1.307 files are real 98x60 panes of 2026-10-21 (ao-59
+// idle, ao-55 and ao-52 running), copied byte for byte from the
+// orchestrator's fixtures. The 2.1.304 files are the 120x50 fullscreen
+// captures of as-77 (2026-10-20, `dialog_paste_2026_10_20/captures/`, the
+// trial and file name are in each name). On 48f500af every 2.1.304 file
+// reads `active`, and every 2.1.306 and 2.1.307 file reads `waiting_input`
+// (the bypass footer).
+describe("detectActivity on Claude Code 2.1.304 to 2.1.307 screens", () => {
+  const agent = create();
+
+  const FIXTURES: Record<string, string> = {
+    "claude-2.1.307-idle-bypass.txt": IDLE_BYPASS_307,
+    "claude-2.1.307-idle-paste-hint.txt": IDLE_PASTE_HINT_307,
+    "claude-2.1.306-running-01.txt": RUNNING_01_306,
+    "claude-2.1.306-running-diffpanel.txt": RUNNING_DIFFPANEL_306,
+    "claude-2.1.304-dialog-t1-01_before.txt": DIALOG_T1_304,
+    "claude-2.1.304-dialog-t3-00b_after_down.txt": DIALOG_T3_304,
+    "claude-2.1.304-dialog-t4-00c_typed_text.txt": DIALOG_T4_304,
+    "claude-2.1.304-dialog-t5-00_dialog_open.txt": DIALOG_T5_OPEN_304,
+    "claude-2.1.304-dialog-t5-paste1-03_verify1.txt": DIALOG_T5_PASTE1_304,
+    "claude-2.1.304-dialog-t5-paste3-03_verify1.txt": DIALOG_T5_PASTE3_304,
+    "claude-2.1.304-running-t2-00b_after_key_2.txt": RUNNING_T2_00B_304,
+    "claude-2.1.304-running-t2-03_verify1.txt": RUNNING_T2_03_304,
+    "claude-2.1.304-running-t4-03_verify1.txt": RUNNING_T4_304,
+    "claude-2.1.304-running-t8-03_verify1.txt": RUNNING_T8_304,
+    "claude-2.1.304-idle-t1-03_verify1.txt": IDLE_T1_304,
+    "claude-2.1.304-idle-t2-02_input_text.txt": IDLE_T2_INPUT_304,
+    "claude-2.1.304-idle-t5-paste4-03_verify1.txt": IDLE_T5_PASTE4_304,
+  };
+
+  /** The SHA-256 of the source files (the orchestrator's fixtures and the as-77 captures). */
+  const SOURCE_SHA256: Record<string, string> = {
+    "claude-2.1.307-idle-bypass.txt":
+      "83f9fcc94eb8a7c3b00d959cb604cd6972dfcac56857583943d962101a9de331",
+    "claude-2.1.307-idle-paste-hint.txt":
+      "f2e40810d3c002940b065b7f31c78d733a28b878eeb2f0cb47d7d16e53fc5212",
+    "claude-2.1.306-running-01.txt":
+      "fba92a4cd48aa0f66249004ce8a3c0494129183a6768923ef98c81480c890d55",
+    "claude-2.1.306-running-diffpanel.txt":
+      "3d4436bfe226856446230a61fd623cc1b44cb9c37ad365c25cdfefb56b4b7623",
+    "claude-2.1.304-dialog-t1-01_before.txt":
+      "267ba2d0587b949f0ddeeb676946068de7a94b7e36ebb383994f990cc1cbd48e",
+    "claude-2.1.304-dialog-t3-00b_after_down.txt":
+      "507f2d19d7250934481e7d8a60c313e476167480b3782746e99fab9eac9ed88d",
+    "claude-2.1.304-dialog-t4-00c_typed_text.txt":
+      "bf484662cf614a56866b99ada0bc8b150be73cbb3dabbb03c0851efee990ca16",
+    "claude-2.1.304-dialog-t5-00_dialog_open.txt":
+      "f339bb1fe8eae0a7f0ed4eeb23b9871524ab48488f16444375e6410a650be4b6",
+    "claude-2.1.304-dialog-t5-paste1-03_verify1.txt":
+      "0110b0af58267270b6f49839a836181560a0c4067acbad3300882cfa37aa1e4e",
+    "claude-2.1.304-dialog-t5-paste3-03_verify1.txt":
+      "625b6a14e1a99547e83738301dd69fc2c7430e211a5fa080d15bfcdb9acb9317",
+    "claude-2.1.304-running-t2-00b_after_key_2.txt":
+      "99b471f3b9ccb7866b5e041000ccd0928469216c6f1ba93049937ffc85ee0a21",
+    "claude-2.1.304-running-t2-03_verify1.txt":
+      "d593f4865d1835d828b43777b0ffa2c0116f960a9a01311ecf5ec12e2d600dd0",
+    "claude-2.1.304-running-t4-03_verify1.txt":
+      "0ffb8897fac95ee46213d4b24d7b7f9309f8eff76146ab1fa8e11aa458afe8f5",
+    "claude-2.1.304-running-t8-03_verify1.txt":
+      "41636e2d4a4eeef3e228abebc1fdd655549563bc1b9b175ecd3bc41f4bc23c8f",
+    "claude-2.1.304-idle-t1-03_verify1.txt":
+      "c036944289ab2dee486a0fd3c10e2978312c74481ecbb95297e09bf17ea40b18",
+    "claude-2.1.304-idle-t2-02_input_text.txt":
+      "82e1de7bfdb258a840bf40b70dbce6ad1dc74ceb02b85acf0d268e697ac14dc4",
+    "claude-2.1.304-idle-t5-paste4-03_verify1.txt":
+      "b3395a47a1fa83046810b0391c426ab2f23e990dd6e4b5a7e6bea11e5ed12035",
+  };
+
+  /** The state of each real screen: from the name, `dialog` reads `waiting_input`. */
+  const EXPECTED: Array<[string, ActivityState]> = Object.keys(FIXTURES).map((name) => [
+    name,
+    name.includes("-dialog-") ? "waiting_input" : name.includes("-running-") ? "active" : "idle",
+  ]);
+
+  const SPINNER_01 = "✻ Waddling… (15s · ↓ 692 tokens · thinking with xhigh effort)";
+  const DONE_ROW = "✻ Brewed for 4s · done 10:41 PM";
+  const PROMPT_ROW = "❯\u00a0";
+
+  /** A real screen with its only row `row` replaced by `rows`. */
+  function replaceRow(screen: string, row: string, rows: string[]): string {
+    const all = screen.replace(/\n$/, "").split("\n");
+    expect(all.filter((line) => line === row)).toHaveLength(1);
+    const at = all.indexOf(row);
+    return [...all.slice(0, at), ...rows, ...all.slice(at + 1)].join("\n") + "\n";
+  }
+
+  /** IDLE_BYPASS_307 with the input box, the status line and the footer replaced by `rows`. */
+  function replaceBox(rows: string[]): string {
+    const all = IDLE_BYPASS_307.replace(/\n$/, "").split("\n");
+    expect(all.slice(-4, -3)).toEqual([PROMPT_ROW]);
+    return [...all.slice(0, -5), ...rows].join("\n") + "\n";
+  }
+
+  it("keeps the real screens byte for byte (the SHA-256 of the source files)", () => {
+    const sums = Object.fromEntries(
+      Object.entries(FIXTURES).map(([name, screen]) => [
+        name,
+        createHash("sha256").update(screen, "utf8").digest("hex"),
+      ]),
+    );
+    expect(sums).toEqual(SOURCE_SHA256);
+  });
+
+  it.each(EXPECTED)("reads real screen %s as %s", (name, state) => {
+    expect(agent.detectActivity(FIXTURES[name] ?? "")).toBe(state);
+  });
+
+  it("reads the real screens the same with the trailing line end and blank rows left out", () => {
+    for (const [name, state] of EXPECTED) {
+      expect([name, agent.detectActivity((FIXTURES[name] ?? "").trimEnd())]).toEqual([name, state]);
+    }
+  });
+
+  it("reads a spinner row that a message quotes in the transcript of an idle pane as idle", () => {
+    const quoted = replaceRow(IDLE_BYPASS_307, DONE_ROW, [
+      "● The pane showed this row:",
+      `  ${SPINNER_01}`,
+    ]);
+    expect(agent.detectActivity(quoted)).toBe("idle");
+
+    const userTurn = replaceRow(IDLE_BYPASS_307, DONE_ROW, [`❯ ${SPINNER_01}`]);
+    expect(agent.detectActivity(userTurn)).toBe("idle");
+  });
+
+  it("reads a spinner row text in the input box as idle", () => {
+    expect(
+      agent.detectActivity(replaceRow(IDLE_BYPASS_307, PROMPT_ROW, [`${PROMPT_ROW}${SPINNER_01}`])),
+    ).toBe("idle");
+    expect(
+      agent.detectActivity(
+        replaceRow(IDLE_BYPASS_307, PROMPT_ROW, [`${PROMPT_ROW}look at this`, `  ${SPINNER_01}`]),
+      ),
+    ).toBe("idle");
+  });
+
+  it("reads a spinner row with a transcript entry between it and the input box as idle", () => {
+    const ended = replaceRow(RUNNING_01_306, SPINNER_01, [SPINNER_01, "● Done."]);
+    expect(agent.detectActivity(ended)).toBe("idle");
+
+    const doneRow = replaceRow(RUNNING_01_306, SPINNER_01, [SPINNER_01, "", DONE_ROW]);
+    expect(agent.detectActivity(doneRow)).toBe("idle");
+  });
+
+  it("reads a running turn past blank, indented and panel rows (real layouts, more blank rows)", () => {
+    const blanks = replaceRow(RUNNING_01_306, SPINNER_01, [SPINNER_01, "", "", "", "", ""]);
+    expect(agent.detectActivity(blanks)).toBe("active");
+
+    const tip = replaceRow(RUNNING_01_306, SPINNER_01, [
+      SPINNER_01,
+      "  ⎿  Tip: Use /voice to enable push-to-talk dictation",
+    ]);
+    expect(agent.detectActivity(tip)).toBe("active");
+  });
+
+  it("reads a quoted permission prompt in a message or in the input box as idle", () => {
+    const quoted = replaceRow(IDLE_BYPASS_307, DONE_ROW, [
+      "● The pane asked:",
+      "  Do you want to proceed?",
+      "  ❯ 1. Yes",
+      "    2. No",
+    ]);
+    expect(agent.detectActivity(quoted)).toBe("idle");
+
+    const input = replaceRow(IDLE_BYPASS_307, PROMPT_ROW, [
+      `${PROMPT_ROW}Do you want to proceed? (Y)es / (N)o`,
+    ]);
+    expect(agent.detectActivity(input)).toBe("idle");
+
+    const running = replaceRow(RUNNING_01_306, SPINNER_01, [
+      "● Do you want to proceed?",
+      "  (Y)es / (N)o",
+      "",
+      SPINNER_01,
+    ]);
+    expect(agent.detectActivity(running)).toBe("active");
+  });
+
+  it("reads a permission prompt in place of the input box as waiting_input (derived layout)", () => {
+    // No real capture of a 2.1.30x permission prompt exists: the rows below
+    // are derived. The real AskUserQuestion captures above are real.
+    const prompt = replaceBox([
+      "─".repeat(98),
+      " Bash command",
+      "",
+      "   sleep 40",
+      "   Wait 40 seconds",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. Yes, and don't ask again for sleep commands in /tmp/scratch",
+      "   3. No",
+      "",
+      " Esc to cancel · Tab to amend · ctrl+e to explain",
+    ]);
+    expect(agent.detectActivity(prompt)).toBe("waiting_input");
+  });
+
+  it("reads no dialog for a numbered user turn above a reply, with no input box in view", () => {
+    const screen = replaceBox([
+      "❯ 1. Fix the tests",
+      "  2. Run the gates",
+      "",
+      "● I start with the tests.",
+    ]);
+    expect(agent.detectActivity(screen)).toBe("active");
   });
 });
 

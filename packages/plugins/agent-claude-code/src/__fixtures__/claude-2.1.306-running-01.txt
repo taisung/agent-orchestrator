@@ -1,0 +1,60 @@
+     - **D3** non-vacuity: in a scratch copy, put back the substring match (M-1), the
+     malformed-success negative
+       (M-2, one agent) and the Herdr substring match (M-3); quote the tests that fail for each.
+     - **D4** gates as in R4 (the package filters, the integration package with no agent binary on
+     `PATH`,
+       `pnpm lint`, `pnpm typecheck`, `pnpm build`, one full `pnpm -r --no-bail test`), next to
+     `fa2f7ac8`.
+     - **D5** commits: conventional, a WHY body, no trailer, no emoji, no issue number, staged by
+     name, no amend,
+       no push, no PR. `git branch -r --contains HEAD` prints nothing.
+
+     ## 3. Report-back
+
+     Line 1 of your `.agent_report.md` is set to `running|...` now. When done, put the round-2
+     report at the
+     top, with the FIRST LINE exactly `done|<commit-sha>|<one-line summary>`, and the earlier
+     reports below it.
+     Do NOT run `ao send` for a done report. If blocked, write
+     `blocked|<best-commit-or-none>|<reason>` as line
+     1 and run
+     `AO_CONFIG_PATH=/home/taisung/local/agent-orchestrator/agent-orchestrator.yaml ao send
+     --no-wait ao-orchestrator "blocked|<best-commit-or-none>|<short reason>"`
+     with no quotes, apostrophes, backticks, dollar signs, parentheses or semicolons in the
+     reason. Then STOP.
+
+● Bash(touch /tmp/aor4-r2-marker; ls -la --time-style=full-iso /tmp/aor4-r2-marker; ls -la
+  --time-style=full-iso /home/taisung/.ao/bin | tee /tmp/aor4/notes/r2-aobin-before.txt; mkdir -p
+  /tmp/aor4/r2/notes; cd /home/taisung/.worktrees/agent-orchestrator/ao-55; G="env -i
+  HOME=/home/taisung PATH=/home/taisung/.local/bin:/usr/bin:/bin LANG=C.UTF-8 git"; $G status
+  --short; $G log --oneline -1; $G show main:development/reviews/same_id_r4_review_r1_astra6.md >
+  /tmp/aor4/r2/notes/review-r1.md; wc -l /tmp/aor4/r2/notes/review-r1.md; head -1
+  .agent_report.md)
+  ⎿  Running on a Linux machine
+     -rw-r--r-- 1 taisung users 0 2026-10-21 23:03:15.613014726 -0400 /tmp/aor4-r2-marker
+     total 28
+     drwxr-xr-x 2 taisung users 4096 2026-10-16 12:16:13.968933443 -0400 .
+     drwxr-xr-x 3 taisung users 4096 2026-02-24 12:30:43.815475733 -0500 ..
+     -rwxr-xr-x 1 taisung users 5466 2026-10-16 12:16:13.966933494 -0400 ao-metadata-helper.sh
+     -rw-r--r-- 1 taisung users    5 2026-10-16 12:16:13.968933443 -0400 .ao-version
+     -rwxr-xr-x 1 taisung users 2213 2026-10-16 12:16:13.967933468 -0400 gh
+     -rwxr-xr-x 1 taisung users 3471 2026-10-16 12:16:13.968933443 -0400 git
+     ?? .agent_report.md
+     ?? .agent_task.md
+     fa2f7ac8 docs: correct what R4 changes after a tmux server exit and for an OpenCode send
+     730 /tmp/aor4/r2/notes/review-r1.md
+     running|none|same-id R4 round 2 dispatched 2026-10-21 23:03 EDT
+
+● Read(/tmp/aor4/r2/notes/review-r1.md)
+  ⎿  Read 506 lines
+
+● Read(/tmp/aor4/r2/notes/review-r1.md · lines 507-736)
+  ⎿  Read 225 lines
+
+✻ Waddling… (15s · ↓ 692 tokens · thinking with xhigh effort)
+                                      4% until auto-compact · current: 2.1.306 · latest: 2.1.307
+──────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────
+  ao-55 | Opus 5.5 | 45% | 5h 2% | wk 27% | $72.99 | in 449k
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent

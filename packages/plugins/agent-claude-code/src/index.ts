@@ -642,26 +642,107 @@ async function findClaudeProcess(handle: RuntimeHandle): Promise<number | null> 
 // Terminal Output Patterns for detectActivity
 // =============================================================================
 
+// The screen of Claude Code 2.1.304 to 2.1.307, from the bottom: the footer
+// (`⏵⏵ bypass permissions on (shift+tab to cycle)` is a mode, not a prompt)
+// and the status line, then the input box: a rule row, the prompt row (`❯`
+// and a no-break space, then the input), a rule row. A running turn shows its
+// spinner row above the box, for example
+// `✻ Waddling… (15s · ↓ 692 tokens · thinking with xhigh effort)`. Between the
+// spinner row and the box there can be blank rows, indented rows (a `⎿  Tip:`
+// row, the right-aligned token, effort or auto-compact row) and the box of a
+// panel note (`╭`, `│`, `╰`). Every transcript entry starts at column 0 (`●`
+// for a message or a tool call, `❯` for a user turn, `✻ Brewed for 4s · done`
+// after a turn) and indents its other rows, so a spinner row that a message
+// quotes is never the first column-0 row above the box. An open dialog
+// (AskUserQuestion, a permission prompt) takes the place of the box.
+
+/** A rule row of the input box or of a dialog. */
+const RULE_ROW = /^─{10,}$/;
+/** The prompt row of the input box. A dialog's cursor row (`❯ 1. Red`) is not one. */
+const PROMPT_ROW = /^❯(?:$|\u00a0| (?!\d+\. ))/;
+/** A dialog's cursor on a numbered choice (`❯ 1. Red`, ` ❯ 1. Yes`, `│ ❯ 1. Yes`). */
+const CHOICE_CURSOR_ROW = /^[ │]*❯ \d+\. /;
+/** A numbered choice of a dialog without the cursor (`  2. Blue`). */
+const CHOICE_ROW = /^[ │]+\d+\. \S/;
+/** The spinner row of a running turn: a spinner frame, a word and `…`, then the time. */
+const SPINNER_ROW = /^[·✢✳✶✻✽*] \S[^…]*… \(\d+[hms]\b/;
+/** A row of a panel note between the spinner row and the box (the diff-panel note). */
+const PANEL_ROW = /^[╭│╰]/;
+/** The rows below the input box: the status line and the footer (2 in every capture). */
+const MAX_FOOTER_ROWS = 4;
+
+/**
+ * The index of the upper rule row of the input box, or -1: the last rule row
+ * at most MAX_FOOTER_ROWS rows above the end, the rule row above it, and the
+ * prompt row directly below that one.
+ */
+function findInputBoxTop(rows: string[]): number {
+  let bottom = -1;
+  for (let i = rows.length - 1; i >= 0 && i >= rows.length - 1 - MAX_FOOTER_ROWS; i--) {
+    if (RULE_ROW.test(rows[i] ?? "")) {
+      bottom = i;
+      break;
+    }
+  }
+  for (let i = bottom - 1; i >= 0; i--) {
+    if (RULE_ROW.test(rows[i] ?? "")) return PROMPT_ROW.test(rows[i + 1] ?? "") ? i : -1;
+  }
+  return -1;
+}
+
+/** True when the first column-0 row above the box, past blank, indented and panel rows, is a spinner row. */
+function hasSpinnerRowAbove(rows: string[], boxTop: number): boolean {
+  for (let i = boxTop - 1; i >= 0; i--) {
+    const row = rows[i] ?? "";
+    if (row === "" || /^\s/.test(row) || PANEL_ROW.test(row)) continue;
+    return SPINNER_ROW.test(row);
+  }
+  return false;
+}
+
+/**
+ * True when a dialog of numbered choices is open: the last `❯` row is its
+ * cursor, the rows from the rule row above the cursor to the end hold another
+ * numbered choice, and no transcript entry (`●`) comes after the cursor.
+ */
+function showsChoiceDialog(rows: string[]): boolean {
+  let cursor = rows.length - 1;
+  while (cursor >= 0 && !/^[ │]*❯/.test(rows[cursor] ?? "")) cursor--;
+  if (cursor < 0 || !CHOICE_CURSOR_ROW.test(rows[cursor] ?? "")) return false;
+  const after = rows.slice(cursor + 1);
+  if (after.some((row) => row.startsWith("●"))) return false;
+  let top = cursor;
+  while (top > 0 && !RULE_ROW.test(rows[top - 1] ?? "")) top--;
+  return [...rows.slice(top, cursor), ...after].some((row) => CHOICE_ROW.test(row));
+}
+
 /** Classify Claude Code's activity state from terminal output (pure, sync). */
 function classifyTerminalOutput(terminalOutput: string): ActivityState {
   // Empty output — can't determine state
   if (!terminalOutput.trim()) return "idle";
 
-  const lines = terminalOutput.trim().split("\n");
-  const lastLine = lines[lines.length - 1]?.trim() ?? "";
+  const rows = terminalOutput
+    .trimEnd()
+    .split("\n")
+    .map((row) => row.trimEnd());
 
-  // Check the last line FIRST — if the prompt is visible, the agent is idle
-  // regardless of historical output (e.g. "Reading file..." from earlier).
-  // The ❯ is Claude Code's prompt character.
+  // The input box is in view: a spinner row above it is a running turn, and
+  // every other screen is idle, whatever the footer, a hint row, the
+  // transcript or the input says.
+  const boxTop = findInputBoxTop(rows);
+  if (boxTop >= 0) return hasSpinnerRowAbove(rows, boxTop) ? "active" : "idle";
+
+  // No input box. A bare prompt on the last line (a layout with no footer)
+  // is idle, also after historical "Reading file..." output.
+  const lastLine = rows[rows.length - 1]?.trim() ?? "";
   if (/^[❯>$#]\s*$/.test(lastLine)) return "idle";
 
-  // Check the bottom of the buffer for permission prompts BEFORE checking
-  // full-buffer active indicators. Historical "Thinking"/"Reading" text in
-  // the buffer must not override a current permission prompt at the bottom.
-  const tail = lines.slice(-5).join("\n");
+  // A dialog in place of the input box waits for an answer. The checks of
+  // the bottom rows stay for the layouts with no input box.
+  if (showsChoiceDialog(rows)) return "waiting_input";
+  const tail = rows.slice(-5).join("\n");
   if (/Do you want to proceed\?/i.test(tail)) return "waiting_input";
   if (/\(Y\)es.*\(N\)o/i.test(tail)) return "waiting_input";
-  if (/bypass.*permissions/i.test(tail)) return "waiting_input";
 
   // Everything else is "active" — the agent is processing, waiting for
   // output, or showing content. Specific patterns (e.g. "esc to interrupt",

@@ -1,0 +1,60 @@
+  - Keep PRs focused — one issue per PR.
+
+  PR Best Practices
+
+  - Write a clear PR title and description explaining what changed and why.
+  - Link the issue in the PR description so it auto-closes when merged.
+  - If the repo has CI checks, make sure they pass before requesting review.
+  - Respond to every review comment, even if just to acknowledge it.
+
+  Project Context
+
+  - Project: agent-orchestrator
+  - Repository: taisung/agent-orchestrator
+  - Default branch: main
+  - Tracker: github
+
+  Task
+
+  Work on issue: LIVE-SEND-CHECK-CLAUDE do no work. Wait for messages from the orchestrator and
+  answer each one exactly as it asks. Use no tool unless a message asks for one. No file change,
+  no git, no push, no PR.
+  Create a branch named so that it auto-links to the issue tracker (e.g.
+  feat/LIVE-SEND-CHECK-CLAUDE do no work. Wait for messages from the orchestrator and answer each
+  one exactly as it asks. Use no tool unless a message asks for one. No file change, no git, no
+  push, no PR.).
+
+  Project Rules
+
+  Use conventional commits (feat:, fix:, chore:, docs:, refactor:, test:).
+  Write clear commit messages that explain WHY, not just WHAT.
+  Use TypeScript strict mode.
+  Use ESM modules with .js extensions in imports (e.g., import { foo } from "./bar.js").
+  Use node: prefix for built-in modules (e.g., import { readFile } from "node:fs").
+  Prefer const over let, never use var.
+  Use type imports for type-only imports: import type { Foo } from "./bar.js".
+  No any types - use unknown with type guards instead.
+
+  This is a pnpm monorepo with workspaces.
+  Run commands from root with pnpm -r (recursive) or from specific package directories.
+  Before pushing: pnpm build && pnpm typecheck && pnpm lint && pnpm test.
+  Always build packages before running dependent packages.
+
+  Before pushing, run these commands:
+  - pnpm build (build all packages)
+  - pnpm typecheck (type check all packages)
+  - pnpm lint (or pnpm lint:fix to auto-fix)
+
+● I am ready and waiting for a message from the orchestrator. I did not use any tool. I made no
+  file change and ran no git command.
+
+  The current branch is feat/live-send-check-claude-do-no-work-wait-for-messages-from-the. It
+  already matches the branch name in the brief, so I did not create a new branch.
+
+✻ Brewed for 4s · done 10:41 PM
+                                                                                    56272 tokens
+──────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────
+  ao-59 | Haiku 5.5 | 6% | 5h 1% | wk 26% | $0.01 | in 55k
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent
