@@ -1,12 +1,30 @@
 # Handover
 
-**Last Updated**: 2026-10-22 15:22 EDT
+**Last Updated**: 2026-10-22 16:08 EDT (dispatch of Next Priorities 1 to 3; the rest of this file is the 15:22 handover)
 **Latest Code Commit**: de7c1bfc (docs(development): state when Ctrl-C of ao stop exits) - the last commit of the `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`); built and live since 2026-10-22 14:35 EDT, pushed in `2bb51734` (CI 4 of 4 passed)
 **Session Summary**: [0012_summary_session_2026_10_21_to_22.md](0012_summary_session_2026_10_21_to_22.md)
 **Progress Tracker**: [TODO_TRACKING.md](TODO_TRACKING.md)
 **Profile**: `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md`
 
 ## Current Status
+
+**Dispatched 2026-10-22 16:01 EDT** (the new orchestrator `ao-orchestrator` runs as an AO session since
+15:47:51; owner: "run 1, 2 and 3 in parallel"). `main` = `origin/main` = `d5b6a180` (CI 4 of 4 passed).
+- Next Priorities 1: ao-64 reviews the progress note and runs the landing gates on `3e366a01` (one round,
+  because `e6695161` has the code of `main`). Branch `review/progress-note-r4` at `3e366a01`, brief
+  `.agent_task_r4.md` (copy `brief-review-progress-note-r4-astra.md`), review file
+  `development/reviews/start_no_server_review_r4_astra6.md` (uncommitted in its tree).
+- Next Priorities 2: ao-63 authors `ao session relaunch` on the new branch `feat/session-relaunch` at
+  `3e366a01`, brief `.agent_task_relaunch.md` (copy `brief-aofork-session-relaunch.md`). It writes a design
+  checkpoint (`running|none|relaunch design ...`) and goes on without a wait; read it when the watcher
+  reports it.
+- Next Priorities 3: ao-65 (new, Claude Code Opus 5.5) runs the Herdr 0.9.5 live check, scratch only,
+  with the update check off (the owner did not allow it), no code, no commit. Branch
+  `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` at `d5b6a180`, brief `.agent_task.md`
+  (copy `brief-aofork-herdr-live-095.md`); deliverables uncommitted in its tree:
+  `development/reviews/herdr_live_check_095_opus.md` and `development/artifacts/herdr_095_live_check/`.
+- ao-63's input box suggestion (`do item 4, ...`) was a dim Claude Code prompt suggestion, not typed text;
+  it came back after a clear, and the relaunch pointer replaced it (owner: clear it).
 
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
@@ -43,11 +61,12 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 
 | Session | State | Disposition |
 | --- | --- | --- |
-| ao-orchestrator | the record of the old launch reads `killed` (2026-10-20 launch, tmux session gone since 11:00). The owner's `ao start` archives it and starts the new orchestrator under the same ID. The old session's transcript: `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | the new orchestrator continues here |
-| tmux session `0` | the owner's hand-made session that ran the old orchestrator Claude; AO does not know it | the owner ends it; never touch it |
+| ao-orchestrator | new launch 2026-10-22 15:47:51 by the owner's `ao start`, `working`; the old record is archived as `ao-orchestrator_2026-10-22T19-47-51-588Z`. The old session's transcript: `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl` | the orchestrator |
+| tmux session `0` | the owner's hand-made session that ran the old orchestrator Claude; AO does not know it; still present, no client, at 16:00 | the owner ends it; never touch it |
 | ao-orchestrator-1 | stale `killed` record of 2026-10-14, no worktree | leave |
-| ao-63 | Claude Code Opus 5.5, idle, context 18% (compacted). Branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` at `3e366a01`: `dc7815d2..e6695161` landed (14 `-` in `git cherry main`), `e08df7a3` and `3e366a01` not landed (2 `+`). Its input box shows `do item 4, copy both streams at once`; nobody submitted it, and its author is not known (the owner, or a Claude Code suggestion). Never press Enter on it | keep (owner "2a"): author of the relaunch round; report `.agent_report.md` (copy `reports/ao-63_start_no_server.report.md`, without the addendum) |
-| ao-64 | Codex gpt-6-astra xhigh, `fast` mode (the owner turned it on), idle, context 14% (compacted). Branch `validate/main-start-no-server` at `de7c1bfc` (an ancestor of `main`). Its untracked review copies were removed after a `cmp` (backup `backup/ao-64-reviews/`) | keep (owner "2a"): reviewer of the progress note and of the relaunch round |
+| ao-63 | Claude Code Opus 5.5, working since 16:01 on the relaunch round, context 18%. Branch `feat/session-relaunch` at `3e366a01` (made 16:00; the old branch `feat/aosns-read-agent-task-md-in-your-worktree-and-execute-it-it` stays at `3e366a01`): `dc7815d2..e6695161` landed, `e08df7a3` and `3e366a01` not landed | author of the relaunch round; report `.agent_report.md` (copies `reports/ao-63_start_no_server.report.md`, and `reports/ao-63_progress_note.report.md` with the addendum, 16:00) |
+| ao-64 | Codex gpt-6-astra xhigh, `fast` mode (the owner turned it on), working since 16:01 on review r4 and gates, context 15%. Branch `review/progress-note-r4` at `3e366a01` (made 16:00; `validate/main-start-no-server` stays at `de7c1bfc`). Its untracked copy of the gates file (equal to `main`) went to `backup/ao-64-reviews/` | reviewer of the progress note, then of the relaunch round |
+| ao-65 | Claude Code Opus 5.5, spawned 15:59, working since 16:01 on the Herdr 0.9.5 live check. Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` at `d5b6a180` | Herdr step 1; no code, no commit |
 
 **Lifecycle workers (now)**: 2087525 (this config) and 2087614 (agent-skills), restarted 2026-10-22 14:35 EDT
 by exact PID on the build of `213fd5e9` (source `de7c1bfc`). First polls 14:36:12 and 14:36:14: 0 failures,
@@ -56,13 +75,15 @@ health `ok`. Pid files: `~/.agent-orchestrator/60756641ca25-agent-orchestrator/l
 ("already running"). The workers of Nexus, VSF and the Nexus config of this fork do not run until their
 orchestrators run `ao start`. The global OpenCode service does not run.
 
-**Watchers**: none runs. Once the new orchestrator runs as an AO session, give each new worker one watcher.
-Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
+**Watchers**: one runs since 2026-10-22 16:00:02: PID 2750995, state `~/.cache/fleet_watch/aofork-2026-10-22b`,
+watching ao-63, ao-64 and ao-65, notify and fallback `ao-orchestrator`, `-i 60 -s 20`, preseeded. The three
+briefs are sentinel-only (no `ao send` from the workers). Start form: `FLEET_WATCH_STATE=<state dir> setsid nohup bash /home/taisung/agent-skills/scripts/fleet_watch.sh
 -o ao-orchestrator -w /home/taisung/.worktrees/agent-orchestrator --fallback ao-orchestrator -i 60 -s 20
 --preseed <id> <id> < /dev/null > <state dir>/nohup.out 2>&1 &`. Stop with TERM only, then check that the
 process ended.
 
-**Router log** (`development/artifacts/model_router_log/log.csv`): no open row. The ao-63 rows (rounds 1 to 3)
+**Router log** (`development/artifacts/model_router_log/log.csv`): 3 open rows since 16:05: ao-64 (reviewer,
+review r4 and gates), ao-63 (author, relaunch round), ao-65 (investigator, Herdr live check). The ao-63 rows (rounds 1 to 3)
 and the ao-64 review rows read `landed=in-review`; the ao-64 gates row reads `yes`. Close a row with
 `router_log.py close ... --landed in-review` and token counts: Codex from the last `total_token_usage` of
 the rollout (ao-64: `~/.codex/sessions/2026/10/22/rollout-2026-10-22T12-06-42-01a1645d-*.jsonl`), Claude from
