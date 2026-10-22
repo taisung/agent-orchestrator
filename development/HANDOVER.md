@@ -220,7 +220,7 @@ add the missing-`TMUX_TMPDIR` fallback.
      through the rebuilt parser.
    - Round-4 results: R2a re-check r4 by ao-57 LAND-SAFE (21:29, 1 nonblocking m-1: the active-record
      refusal text); Codex send round 4 by ao-54 DONE at `f39d63db` (21:33), its re-check r4 by ao-56
-     DISPATCHED 21:37. The owner answered "1a 2a 3a" (about 21:45 EDT): R2a LANDED on `main` now as
+     DISPATCHED 21:37. The owner answered "1a 2a 3a" (after 21:37, before 21:39 EDT): R2a LANDED on `main` at 21:39 as
      `f98aa6e7..18810ae4` (clean cherry-pick of `09546110..26368d76`, 21 commits, source equal to
      `26368d76`), NOT built and NOT live (one rebuild after the Codex send fix); m-1 goes into R4; R4 by
      ao-55, review by ao-57. `git merge-tree` of `main` with `f39d63db` is clean.
