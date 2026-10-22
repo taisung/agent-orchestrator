@@ -239,7 +239,7 @@ lines:
 
 - `detectActivity` answers `waiting_input` (an approval prompt): "Message sent — the pane waits for an
   approval: check `<session>` (tmux pane `<pane>`)". This check comes before every other reading.
-- The status row of a running turn is directly above the composer: "Message sent and processing".
+- The status block of a running turn is directly above the composer: "Message sent and processing".
 - After the third check the composer still holds text that starts like the message, or a
   `[Pasted Content ...]` block: "Message not submitted: the text is still in the input box of
   `<session>` (tmux pane `<pane>`); check the pane and press Enter". The text match only chooses this
@@ -261,12 +261,29 @@ end of a list row, an approval label (a list row that starts with `Yes,` or `No,
 (`Press enter to confirm or esc to go back`, `Press a number to choose · esc to dismiss`). Otherwise a
 numbered list is composer text. The footer hint
 `? for shortcuts` (empty composer) counts only in the last row, below a blank row under a one-row
-composer. A running turn is only the status row in its 0.163.0 form, a bullet in column 0 and
-`esc to interrupt` in parentheses (`◦ Working (5m 47s • esc to interrupt)`), directly above the prompt
-row with at most one blank row between. The words of the composer text, of the footer and of the
+composer. A running turn is only the status block of 0.163.0 directly above the prompt row, in this
+order: the status row (a bullet `•` or `◦` in column 0, a word, `esc to interrupt` in parentheses, and
+any text after the `)`, as in `• Working (3m 14s • esc to interrupt) · 2 background terminals running`),
+then at most two `└` rows (two spaces, `└` and a space at the start of the row: the Tip row, and a
+command row while Codex waits for a background terminal), then at most two blank rows. Six real captures of a running 0.163.0 pane
+(`packages/plugins/agent-codex/src/__fixtures__/codex-0.163.0-running-01.txt` to `-06.txt`) set these
+bounds: each one has two blank rows, and 0, 1 or 2 `└` rows. A row of any other kind between the
+status row and the prompt row (a `Worked for` row, `+ Show details`, text) ends the block, so the
+status row is then a transcript row. The words of the composer text, of the footer and of the
 transcript ("Working tree clean.") never count. With no composer in view the parser reads no running
 turn, and `detectActivity` keeps its older rules for that screen (a running word or `esc to interrupt`
-in the last 8 rows is `active`).
+in the last 8 rows is `active`). The idle wait before a send (without `--no-wait`) and the activity log
+(`recordActivity`) read the same answer, so a running turn makes the send wait.
+
+Limits of the status-block rule, with no real capture to check them:
+
+- A status row that wraps in a narrow pane, or a queued message that Codex draws between the status
+  block and the composer, puts a row of another kind into the block. The pane then reads as idle: the
+  idle wait sends at once, `recordActivity` records `idle`, and the send prints "could not confirm",
+  never "processing". The tests do not cover these layouts.
+- A transcript row in the status-row form, followed by at most two `└` rows and at most two blank rows
+  directly above the composer, reads as a running turn. The parser cannot tell it from a real status
+  block. No real idle capture has this layout: a finished turn ends with a `Worked for` row.
 
 ---
 
