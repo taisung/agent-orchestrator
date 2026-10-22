@@ -8,7 +8,7 @@
  * files do not cover. Each test fails on 75f1c98b; the controls pass there.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type * as ChildProcess from "node:child_process";
 import type * as OpenCodeApi from "../opencode-api.js";
@@ -236,6 +236,63 @@ describe("same-id R4, B-7 items 2 and 3: the cleanup keeps an OpenCode session t
       }
     },
   );
+
+  // Same-ID R4 round 3 (review r2, M-5): a record or latest archive whose
+  // content is not a well-formed record may name the session, so the
+  // cleanup keeps it. Each case removed ses_shared on 8e9efe95 (the lenient
+  // parser read the record as naming nothing).
+  function writeOtherRecord(place: "active" | "archive", content: string): void {
+    const dir = place === "archive" ? join(ctx.sessionsDir, "archive") : ctx.sessionsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, place === "archive" ? "app-2_2026-10-20T00-00-00-000Z" : "app-2"),
+      content,
+    );
+  }
+
+  for (const place of ["active", "archive"] as const) {
+    for (const [label, content] of [
+      ["a line without a delimiter (review r2)", "opencodeSessionId\n"],
+      ["a line with an empty key", "project=my-app\n=ses_shared\n"],
+      ["a key that comes twice", "opencodeSessionId=ses_shared\nopencodeSessionId=ses_other\n"],
+    ] as const) {
+      it(`round 3 (M-5): a malformed ${place} record with ${label} keeps the session, with the holder reason`, async () => {
+        deadOpenCodeSession();
+        writeOtherRecord(place, content);
+        const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+        expectKept(await sm.cleanup("my-app"));
+      });
+    }
+  }
+
+  for (const [label, place, content] of [
+    [
+      "an active record with comments and blank lines that names another OpenCode session",
+      "active",
+      "# written by hand\n\nproject=my-app\nstatus=working\nopencodeSessionId=ses_other\n",
+    ],
+    ["an empty latest archive", "archive", ""],
+  ] as const) {
+    it(`round 3 (M-5) control: ${label} is not a holder, so the cleanup removes the session`, async () => {
+      deadOpenCodeSession();
+      writeOtherRecord(place, content);
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      const result = await sm.cleanup("my-app");
+
+      expect(result.killed).toContain("app-1");
+      expect(api.remove.mock.calls.map((call) => call[0])).toEqual(["ses_shared"]);
+    });
+  }
+
+  it("round 3 (M-5) control: a well-formed archive that names the session keeps it", async () => {
+    deadOpenCodeSession();
+    writeOtherRecord("archive", "project=my-app\nopencodeSessionId=ses_shared\n");
+    const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+    expectKept(await sm.cleanup("my-app"));
+  });
 
   it("control: no other record and no archive name the session, so the cleanup removes it", async () => {
     deadOpenCodeSession();

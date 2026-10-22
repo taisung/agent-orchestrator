@@ -86,7 +86,7 @@ import { join, dirname, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { SessionId, SessionMetadata } from "./types.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
-import { parseKeyValueContent } from "./key-value.js";
+import { parseKeyValueContent, parseKeyValueContentStrict } from "./key-value.js";
 import { deliveryLockName, isDeliveryLockSupported, printableLockName } from "./delivery-lock.js";
 
 // ---------------------------------------------------------------------------
@@ -444,6 +444,26 @@ export function readMetadataRaw(
 }
 
 /**
+ * Same-ID R4 round 3 (M-5): `readMetadataRaw` for a holder decision. Null
+ * only when the record file is missing (`ENOENT`). A read error, and content
+ * that is not a well-formed record (`parseKeyValueContentStrict`), throw:
+ * neither shows that the record names nothing.
+ */
+export function readMetadataStrict(
+  dataDir: string,
+  sessionId: SessionId,
+): Record<string, string> | null {
+  let content: string;
+  try {
+    content = readFileSync(metadataPath(dataDir, sessionId), "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  return parseKeyValueContentStrict(content);
+}
+
+/**
  * Write full metadata for a session (overwrites existing file).
  */
 export function writeMetadata(
@@ -732,6 +752,41 @@ export function readArchivedMetadataRaw(
   } catch {
     return null;
   }
+}
+
+/**
+ * Same-ID R4 round 3 (M-5): `readArchivedMetadataRaw` for a holder decision.
+ * Null only when the session has no archive file (or no archive directory,
+ * `ENOENT`). A directory or file that cannot be read, and content that is
+ * not a well-formed record (`parseKeyValueContentStrict`), throw.
+ */
+export function readArchivedMetadataStrict(
+  dataDir: string,
+  sessionId: SessionId,
+): Record<string, string> | null {
+  validateSessionId(sessionId);
+  const archiveDir = join(dataDir, "archive");
+  let files: string[];
+  try {
+    files = readdirSync(archiveDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+
+  const prefix = `${sessionId}_`;
+  let latest: string | null = null;
+  for (const file of files) {
+    if (!file.startsWith(prefix)) continue;
+    // The same choice as readArchivedMetadataRaw: a digit after the
+    // separator, and the lexicographically last name.
+    const charAfterPrefix = file[prefix.length];
+    if (!charAfterPrefix || charAfterPrefix < "0" || charAfterPrefix > "9") continue;
+    if (!latest || file > latest) latest = file;
+  }
+
+  if (!latest) return null;
+  return parseKeyValueContentStrict(readFileSync(join(archiveDir, latest), "utf-8"));
 }
 
 /**

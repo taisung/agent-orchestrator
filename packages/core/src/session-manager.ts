@@ -67,7 +67,9 @@ import {
 } from "./types.js";
 import {
   readMetadataRaw,
+  readMetadataStrict,
   readArchivedMetadataRaw,
+  readArchivedMetadataStrict,
   updateArchivedMetadata,
   updateMetadataIf,
   GENERATION_KEY,
@@ -1013,7 +1015,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * that cannot be checked (`listMetadata` leaves it out), an active record
    * that cannot be read, an archive directory that cannot be listed, and a
    * latest archive that cannot be read. Only a missing file or directory
-   * (`ENOENT`) names nothing.
+   * (`ENOENT`) names nothing. Round 3 (M-5): a record or latest archive
+   * whose content is not a well-formed record (a line without "=", a key
+   * that comes twice) also answers "held"; only a well-formed record that
+   * does not name `openCodeId` is "not this session".
    */
   function hasOtherOpenCodeRecord(
     sessionsDir: string,
@@ -1023,12 +1028,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     try {
       for (const id of listRecordIds(sessionsDir)) {
         if (id === sessionId) continue;
-        if (readRecordStrict(sessionsDir, id)?.["opencodeSessionId"] === openCodeId) return true;
+        if (readMetadataStrict(sessionsDir, id)?.["opencodeSessionId"] === openCodeId) return true;
       }
       for (const id of listArchivedSessionIdsStrict(sessionsDir)) {
-        // The ID has an archive file, so a null here is a read error (which
-        // readArchivedMetadataRaw answers as null) or a removal since.
-        const archived = readArchivedMetadataRaw(sessionsDir, id);
+        // The ID has an archive file, so a null here is a removal since.
+        const archived = readArchivedMetadataStrict(sessionsDir, id);
         if (!archived || archived["opencodeSessionId"] === openCodeId) return true;
       }
       return false;

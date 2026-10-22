@@ -8,6 +8,8 @@ import {
   readMetadata,
   readMetadataRaw,
   readArchivedMetadataRaw,
+  readArchivedMetadataStrict,
+  readMetadataStrict,
   writeMetadata,
   updateMetadata,
   deleteMetadata,
@@ -689,5 +691,89 @@ describe("metadata value injection hardening", () => {
 
     const meta = readMetadata(dataDir, "app-1");
     expect(meta?.status).toBe("working");
+  });
+});
+
+// Same-ID R4 round 3 (review r2, M-5): the strict reads of a holder decision.
+// Null only for a missing file; a read error and content that is not a
+// well-formed record throw, where readMetadataRaw would answer a partial
+// record. Comments, blank lines and an empty file stay legal.
+describe("readMetadataStrict / readArchivedMetadataStrict (same-id R4 round 3, M-5)", () => {
+  function writeRecord(name: string, content: string): void {
+    writeFileSync(join(dataDir, name), content);
+  }
+
+  it("reads a well-formed record as readMetadataRaw does, with comments, blank lines and CRLF", () => {
+    const content =
+      "# note\r\n\r\nproject = my-app\r\nsummary=a=b\r\n  opencodeSessionId=ses_a\r\n";
+    writeRecord("app-1", content);
+    expect(readMetadataStrict(dataDir, "app-1")).toEqual({
+      project: "my-app",
+      summary: "a=b",
+      opencodeSessionId: "ses_a",
+    });
+    expect(readMetadataStrict(dataDir, "app-1")).toEqual(readMetadataRaw(dataDir, "app-1"));
+  });
+
+  it("answers null for a missing record, and an empty object for an empty one", () => {
+    expect(readMetadataStrict(dataDir, "app-1")).toBeNull();
+    writeRecord("app-1", "");
+    expect(readMetadataStrict(dataDir, "app-1")).toEqual({});
+  });
+
+  for (const [label, content, message] of [
+    [
+      "a line without a delimiter",
+      "project=my-app\nopencodeSessionId\n",
+      "line 2 is not a key=value line",
+    ],
+    ["a line with an empty key", "=ses_a\n", "line 1 is not a key=value line"],
+    ["a key with a space in it", "opencode SessionId=ses_a\n", "line 1 is not a key=value line"],
+    [
+      "a key that comes twice",
+      "status=working\nstatus=killed\n",
+      "line 2 sets status a second time",
+    ],
+  ] as const) {
+    it(`throws for ${label}, where readMetadataRaw answers a partial record`, () => {
+      writeRecord("app-1", content);
+      expect(() => readMetadataStrict(dataDir, "app-1")).toThrow(message);
+      expect(readMetadataRaw(dataDir, "app-1")).not.toBeNull();
+    });
+  }
+
+  it("throws for a record that cannot be read", () => {
+    writeRecord("app-1", "status=working\n");
+    fsProbe.fail = (call) =>
+      call === "readFileSync" ? Object.assign(new Error("EIO"), { code: "EIO" }) : undefined;
+    expect(() => readMetadataStrict(dataDir, "app-1")).toThrow("EIO");
+  });
+
+  it("reads the latest archive, and answers null when the session has no archive", () => {
+    expect(readArchivedMetadataStrict(dataDir, "app-1")).toBeNull();
+    mkdirSync(join(dataDir, "archive"), { recursive: true });
+    writeRecord("archive/app-1_2026-10-19T00-00-00-000Z", "opencodeSessionId=ses_old\n");
+    writeRecord("archive/app-1_2026-10-20T00-00-00-000Z", "opencodeSessionId=ses_new\n");
+    writeRecord("archive/app-1x_2026-10-21T00-00-00-000Z", "opencodeSessionId=ses_other\n");
+    expect(readArchivedMetadataStrict(dataDir, "app-1")).toEqual({ opencodeSessionId: "ses_new" });
+    expect(readArchivedMetadataStrict(dataDir, "app-2")).toBeNull();
+  });
+
+  it("throws for a latest archive that is not a well-formed record, where readArchivedMetadataRaw answers an empty record", () => {
+    mkdirSync(join(dataDir, "archive"), { recursive: true });
+    writeRecord("archive/app-1_2026-10-20T00-00-00-000Z", "opencodeSessionId\n");
+    expect(() => readArchivedMetadataStrict(dataDir, "app-1")).toThrow(
+      "line 1 is not a key=value line",
+    );
+    expect(readArchivedMetadataRaw(dataDir, "app-1")).toEqual({});
+  });
+
+  it("throws for a latest archive that cannot be read, where readArchivedMetadataRaw answers null", () => {
+    mkdirSync(join(dataDir, "archive"), { recursive: true });
+    writeRecord("archive/app-1_2026-10-20T00-00-00-000Z", "opencodeSessionId=ses_a\n");
+    fsProbe.fail = (call) =>
+      call === "readFileSync" ? Object.assign(new Error("EIO"), { code: "EIO" }) : undefined;
+    expect(() => readArchivedMetadataStrict(dataDir, "app-1")).toThrow("EIO");
+    expect(readArchivedMetadataRaw(dataDir, "app-1")).toBeNull();
   });
 });
