@@ -50,6 +50,24 @@
 - ao-63's input box suggestion (`do item 4, ...`) was a dim Claude Code prompt suggestion, not typed text;
   it came back after a clear, and the relaunch pointer replaced it (owner: clear it).
 
+**Update 2026-10-22 18:55 EDT.**
+- Codex model (owner, 18:50): "use gpt-6.1-sol for all codex work for now": pin `--model gpt-6.1-sol` on
+  every Codex spawn. `~/.codex/config.toml` changed at 18:03:25 (not by the orchestrator) to
+  `model = "gpt-6.1-sol"`, `model_reasoning_effort = "high"`; ao passes no effort flag, so a Codex spawn
+  runs at the effort of that file. The owner chose xhigh (answer "1") before the sol message; the file
+  still says high.
+- ao-64 killed 18:49 (archive `ao-64_2026-10-22T22-49-00-901Z`); watcher 2750995 stopped with TERM before
+  it; watcher 530444 (state `~/.cache/fleet_watch/aofork-2026-10-22e`) watches ao-63 and ao-65.
+- RH design r5 (`f66f885e`): review r5 by ao-67 (Codex gpt-6-astra at effort high, watcher 386227, state
+  `aofork-2026-10-22d`): NOT-SOUND, 1 B 6 M 2 m (`9f37813a`). B-1: the listener check sees a replaced herdr
+  server only after the close was sent. ao-65 writes RH design r6 since 18:52 (brief `.agent_task_rh_r6.md`,
+  copy `brief-aofork-rh-design-r6.md`; branch fast-forwarded to `9f37813a`; r5 copies in
+  `backup/ao-65-herdr-r5/`). A re-review of r6 goes to a new Codex reviewer on gpt-6.1-sol.
+- Relaunch round 2 done at `0aa13578` (`554facd9..0aa13578`, 7 commits; 3728 passed, 1 expected fail, 29
+  skipped; red 0/16/6/0; M-6 a design only). Its reviewer (new Codex, gpt-6.1-sol now) waits for the
+  owner's effort answer; brief ready: `brief-review-session-relaunch-r2-astra.md` (branch to be moved to
+  `0aa13578`, review file `session_relaunch_review_r2_astra6.md`).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
