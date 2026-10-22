@@ -24,9 +24,12 @@ export function parseKeyValueContent(content: string): Record<string, string> {
  * a key of letters, digits, "_", "." or "-", and no key may come twice. Any
  * other line throws: the lenient parser leaves it out, or keeps only the
  * last of two values.
+ * Round 4 (review r3, m-1): a separate set holds the keys, because a value
+ * set on `__proto__` of the result makes no own key to check.
  */
 export function parseKeyValueContentStrict(content: string): Record<string, string> {
   const result: Record<string, string> = {};
+  const seen = new Set<string>();
   for (const [index, line] of content.split("\n").entries()) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -35,9 +38,10 @@ export function parseKeyValueContentStrict(content: string): Record<string, stri
     if (!/^[A-Za-z0-9_.-]+$/.test(key)) {
       throw new Error(`line ${index + 1} is not a key=value line`);
     }
-    if (Object.hasOwn(result, key)) {
+    if (seen.has(key)) {
       throw new Error(`line ${index + 1} sets ${key} a second time`);
     }
+    seen.add(key);
     result[key] = trimmed.slice(eqIndex + 1).trim();
   }
   return result;

@@ -266,6 +266,18 @@ describe("same-id R4, B-7 items 2 and 3: the cleanup keeps an OpenCode session t
     }
   }
 
+  // Round 4 (review r3, m-1): the key __proto__ twice is a key twice. On
+  // c02c0c02 the strict parser missed it, and the cleanup removed ses_shared.
+  for (const place of ["active", "archive"] as const) {
+    it(`round 4 (review r3, m-1): a malformed ${place} record with the key __proto__ twice keeps the session, with the holder reason`, async () => {
+      deadOpenCodeSession();
+      writeOtherRecord(place, "__proto__=a\n__proto__=a\n");
+      const sm = createSessionManager({ config: ctx.config, registry: ctx.mockRegistry });
+
+      expectKept(await sm.cleanup("my-app"));
+    });
+  }
+
   for (const [label, place, content] of [
     [
       "an active record with comments and blank lines that names another OpenCode session",

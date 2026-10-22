@@ -742,6 +742,27 @@ describe("readMetadataStrict / readArchivedMetadataStrict (same-id R4 round 3, M
     });
   }
 
+  // Round 4 (review r3, m-1): a value set on `__proto__` makes no own key, so
+  // on c02c0c02 the duplicate check missed it and the record named nothing.
+  for (const [label, content] of [
+    ["one value", "__proto__=a\n__proto__=a\n"],
+    ["two values", "__proto__=a\n__proto__=b\n"],
+  ] as const) {
+    it(`throws for the key __proto__ twice with ${label} (review r3)`, () => {
+      writeRecord("app-1", content);
+      expect(() => readMetadataStrict(dataDir, "app-1")).toThrow(
+        "line 2 sets __proto__ a second time",
+      );
+    });
+  }
+
+  it("control: one __proto__ line is a record that names nothing, with a plain prototype", () => {
+    writeRecord("app-1", "__proto__=a\n");
+    const record = readMetadataStrict(dataDir, "app-1");
+    expect(record).toEqual({});
+    expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+  });
+
   it("throws for a record that cannot be read", () => {
     writeRecord("app-1", "status=working\n");
     fsProbe.fail = (call) =>
