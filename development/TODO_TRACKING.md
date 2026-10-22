@@ -446,8 +446,14 @@ Decided as author and reviewer agree: OD-2 to OD-13, OD-15, OD-16, OD-20 (a) (ap
 shell writers), OD-21 (a) (OpenCode namespace in the canonical store). OD-14 is narrowed: a process-group
 supervisor with a journal; only hooks that start no daemons are supported, and a child that leaves the
 group is outside the guarantee. OD-18 (a): a legacy send goes to the visible exact name with a notice,
-only after an atomic no-token check inside tmux, which also guards every other legacy mutation. Files:
-`development/reviews/same_id_design_r{1..3}_opus.md`, `same_id_design_review_r{1..3}_astra6.md`.
+only after an atomic no-token check inside tmux, which also guards every other legacy mutation. After
+review r4 (answer "5b 6a", 2026-10-21 about 20:56 EDT): OD-22 (a): no unbound OpenCode removal or
+interrupt, and from R3b on ao refuses to reuse an existing OpenCode session (it starts a fresh one) until
+the optional round RO qualifies a bound transport and an actual-store hold check; OD-23 (a): the
+`@ao_launch ""` trust limit is accepted and documented; OD-24 (a): a moved Herdr socket leaves the session
+`unknown`. Design r5 covers only RW and R2b-2 (with the association serialization moved before R2b-2);
+R3a, R3b, RH and RO come later. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
+`same_id_design_review_r{1..4}_astra6.md`.
 
 ## Known Issues
 
