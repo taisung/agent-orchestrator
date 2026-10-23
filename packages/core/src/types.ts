@@ -1837,6 +1837,13 @@ export interface SessionRelaunchOptions {
    */
   callerTty?: string | null;
   /**
+   * Whether the caller is the foreground process group of its terminal
+   * (review r2): true or false, null when the caller cannot tell. In the
+   * session's own pane only a foreground caller starts the agent there; a
+   * background one (`&`) does not own the terminal. Undefined: not checked.
+   */
+  callerForeground?: boolean | null;
+  /**
    * Run the launch script as a child of the caller on the caller's terminal.
    * Core calls it only when the caller runs in the session's own pane; a
    * relaunch from the own pane without it is refused.

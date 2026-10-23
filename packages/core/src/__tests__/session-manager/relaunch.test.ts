@@ -1056,3 +1056,184 @@ describe("Review r1 M-1, M-4: a spawn and an orchestrator start store their laun
     expect(record["launchTokenAt"]).toBe(record["createdAt"]);
   });
 });
+
+describe("Review r2 M-1: every reader of the agent uses the pane that the record binds", () => {
+  /** The agent runs in %2; the selected window of the session shows %3. */
+  const AGENT_PANE = "%2";
+  const sees = (handle: RuntimeHandle | null | undefined): boolean =>
+    agentRunning && handle?.data["agentPane"] === AGENT_PANE;
+
+  function bindTo(sessionId: string, pane: string, at = LONG_AGO()): void {
+    updateMetadata(env.sessionsDir, sessionId, {
+      restoredAt: at,
+      launchToken: THIS_LAUNCH,
+      launchTokenAt: at,
+      launchPane: pane,
+    });
+  }
+
+  beforeEach(() => {
+    // A process check reads the pane that the handle names; without one it
+    // reads the selected window (%3), where the agent never runs.
+    vi.mocked(plugins.agent.isProcessRunning).mockImplementation(async (handle) => sees(handle));
+    vi.mocked(plugins.agent.getActivityState).mockImplementation(async (session) =>
+      sees(session.runtimeHandle) ? { state: "active", timestamp: new Date() } : EXITED,
+    );
+    extraPanes = [
+      { paneId: AGENT_PANE, tty: "/dev/pts/72", foregroundCommand: "bash", shellIdle: true },
+    ];
+  });
+
+  it("confirms the agent in its bound pane while another window is selected, and two lifecycle polls keep it working", async () => {
+    writeRecord("app-1", { status: "killed", killedReason: "agent-exited" });
+    bindTo("app-1", AGENT_PANE);
+
+    const result = await sm.relaunch!("app-1");
+
+    expect(result).toMatchObject({ running: true, agentState: "running" });
+    expect(vi.mocked(plugins.runtime.runInPane!).mock.calls[0][1]).toBe(AGENT_PANE);
+    const after = recordOf("app-1")!;
+    expect(after).toMatchObject({ status: "working", launchPane: AGENT_PANE });
+    // Out of the launch grace, with the binding kept (the same launch time).
+    bindTo("app-1", AGENT_PANE, LONG_AGO());
+    lifecycle = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: sm,
+      projectId: "my-app",
+    });
+    await pollOnce(lifecycle);
+    await pollOnce(lifecycle);
+
+    expect(recordOf("app-1")).toMatchObject({ status: "working" });
+    expect(recordOf("app-1")!["killedReason"]).toBeUndefined();
+    // The stored handle never names the pane; only the read session does.
+    expect(JSON.parse(recordOf("app-1")!["runtimeHandle"]).data).not.toHaveProperty("agentPane");
+    expect((await sm.get("app-1"))?.runtimeHandle?.data["agentPane"]).toBe(AGENT_PANE);
+  });
+
+  it("names the pane in the session only while the binding counts", async () => {
+    writeRecord("app-1");
+    expect((await sm.get("app-1"))?.runtimeHandle?.data).not.toHaveProperty("agentPane");
+    const at = LONG_AGO();
+    bindTo("app-1", AGENT_PANE, at);
+    expect((await sm.get("app-1"))?.runtimeHandle?.data["agentPane"]).toBe(AGENT_PANE);
+    // A restore moves restoredAt and writes no token: the pane no longer counts.
+    updateMetadata(env.sessionsDir, "app-1", {
+      restoredAt: new Date(Date.parse(at) + 1_000).toISOString(),
+    });
+    expect((await sm.get("app-1"))?.runtimeHandle?.data).not.toHaveProperty("agentPane");
+  });
+
+  it("refuses before the claim when the agent of the bound pane still runs, though the selected window shows none", async () => {
+    writeRecord("app-1");
+    bindTo("app-1", AGENT_PANE);
+    agentRunning = true;
+    const before = recordOf("app-1");
+
+    await expect(sm.relaunch!("app-1")).rejects.toThrow(/its agent process \(mock\) still runs/);
+    expect(plugins.runtime.runInPane).not.toHaveBeenCalled();
+    expect(recordOf("app-1")).toEqual(before);
+  });
+});
+
+describe("Review r2 M-4: a bound pane that is gone is not replaced by another pane", () => {
+  it.each([
+    ["without --continue", {}],
+    ["with --continue", { continueConversation: true }],
+  ])(
+    "refuses %s before the claim and types nothing when only an unrelated idle pane is left",
+    async (_name, options) => {
+      writeRecord("app-1");
+      const at = LONG_AGO();
+      updateMetadata(env.sessionsDir, "app-1", {
+        restoredAt: at,
+        launchToken: THIS_LAUNCH,
+        launchTokenAt: at,
+        launchPane: "%2",
+      });
+      // %2 was closed; %3 is an idle shell of another window.
+      const lookup = vi.fn(async () => ({ id: CONVERSATION, source: "the hook record" }));
+      Object.assign(plugins.agent, { getOwnConversationId: lookup });
+      const before = recordOf("app-1");
+
+      const err = await sm.relaunch!("app-1", options).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SessionRelaunchRefusedError);
+      expect((err as Error).message).toMatch(
+        /the pane %2 of its last launch no longer exists in tmux session h-app-1/,
+      );
+      expect((err as SessionRelaunchRefusedError).next).toMatch(
+        /^start its agent by hand in a pane of the session, or restore it/,
+      );
+      expect(plugins.runtime.runInPane).not.toHaveBeenCalled();
+      expect(lookup).not.toHaveBeenCalled();
+      expect(recordOf("app-1")).toEqual(before);
+    },
+  );
+});
+
+describe("Review r2: the operators that make a launch command not execable", () => {
+  it.each([
+    ["false || mock-agent"],
+    ["mock-agent | tee log"],
+    ["mock-agent; echo done"],
+    ["mock-agent & wait"],
+    ["mock-agent < in"],
+    ["mock-agent > out"],
+    ["(mock-agent)"],
+    ["{ mock-agent; }"],
+    ["mock-agent `id`"],
+    ["mock-agent\necho done"],
+    ["mock-agent $(cat a; cat b)"],
+  ])("runs %j as it is, without exec", async (command) => {
+    vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue(command);
+    writeRecord("app-1");
+
+    await sm.relaunch!("app-1");
+
+    const script = readFileSync(
+      scriptOf(vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2]),
+      "utf-8",
+    );
+    expect(script).toContain(`\n${command}\n`);
+    expect(script).not.toMatch(/^exec /m);
+  });
+
+  it("execs a command whose operators are all in quotes", async () => {
+    vi.mocked(plugins.agent.getLaunchCommand).mockReturnValue(
+      "mock-agent --prompt 'a | b; c && d'",
+    );
+    writeRecord("app-1");
+
+    await sm.relaunch!("app-1");
+
+    const script = readFileSync(
+      scriptOf(vi.mocked(plugins.runtime.runInPane!).mock.calls[0][2]),
+      "utf-8",
+    );
+    expect(script).toContain("\nexec mock-agent --prompt 'a | b; c && d'\n");
+  });
+});
+
+describe("Review r2: a background ao in the session's own pane", () => {
+  it.each([
+    [false, /runs in the background of the session's own pane/],
+    [null, /cannot tell whether this ao process is the foreground job/],
+  ])(
+    "refuses before the claim when the caller's foreground state is %s",
+    async (callerForeground, reason) => {
+      writeRecord("app-1");
+      paneCommand = "ao";
+      paneIdle = false;
+      const before = recordOf("app-1");
+      const run = vi.fn();
+
+      await expect(
+        sm.relaunch!("app-1", { callerTty: PANE_TTY, callerForeground, runInCallerTerminal: run }),
+      ).rejects.toThrow(reason);
+      expect(run).not.toHaveBeenCalled();
+      expect(recordOf("app-1")).toEqual(before);
+    },
+  );
+});

@@ -42,6 +42,87 @@ export function exactPaneTarget(name: string): string {
   return `=${name}:`;
 }
 
+/**
+ * Session relaunch (review r2 M-1): the key in `RuntimeHandle.data` that
+ * names the tmux pane of the session's agent. Core sets it (in memory, never
+ * in the stored handle) when the record binds a pane to its last launch, so
+ * every reader of the agent (its process check, its activity, the output and
+ * the messages of the lifecycle) uses that pane and not the session's
+ * current window, which the owner can change. A handle without it is read
+ * as before.
+ */
+export const AGENT_PANE_KEY = "agentPane";
+
+/** A tmux pane ID: `%` and the number that tmux gives the pane. */
+const TMUX_PANE_ID = /^%\d+$/;
+
+/** The agent's pane of a tmux handle (AGENT_PANE_KEY), or null when it names none. */
+export function agentPaneOf(handle: {
+  runtimeName: string;
+  data: Record<string, unknown>;
+}): string | null {
+  if (handle.runtimeName !== "tmux") return null;
+  const pane = handle.data?.[AGENT_PANE_KEY];
+  return typeof pane === "string" && TMUX_PANE_ID.test(pane) ? pane : null;
+}
+
+/** The `-t` target of the agent's pane: its pane ID, else the session's current pane. */
+export function agentPaneTarget(handle: {
+  id: string;
+  runtimeName: string;
+  data: Record<string, unknown>;
+}): string {
+  return agentPaneOf(handle) ?? exactPaneTarget(handle.id);
+}
+
+/** The `list-panes -F` format of `agentPaneTty`. */
+export const AGENT_PANE_FORMAT = "#{pane_id} #{session_name} #{pane_tty}";
+
+/**
+ * The terminal of the agent's pane from the answer of
+ * `list-panes -t <pane> -F AGENT_PANE_FORMAT` (the panes of the pane's
+ * window): the pane's TTY, or null when the pane now belongs to another
+ * session (the session's agent pane does not exist). Any other answer is not
+ * a list of panes with that pane in it, so it throws.
+ */
+export function agentPaneTty(stdout: string, paneId: string, sessionName: string): string | null {
+  const lines = stdout.replace(/\n$/, "").split("\n");
+  const fields = lines.map((line) => /^(%\d+) (\S+) (\/dev\/\S+)$/.exec(line));
+  if (fields.some((f) => f === null)) {
+    throw new Error(
+      `tmux list-panes -t ${paneId} answered ${JSON.stringify(stdout.trim().slice(0, 80))}, not a list of panes`,
+    );
+  }
+  const own = fields.find((f) => f?.[1] === paneId);
+  if (!own) {
+    throw new Error(`tmux list-panes -t ${paneId} answered no line for pane ${paneId}`);
+  }
+  return own[2] === sessionName ? own[3] : null;
+}
+
+/**
+ * tmux 3.4's whole answer for a pane ID that does not exist: exit code 1, no
+ * signal, and the stderr "can't find pane: <pane>", or "no current target"
+ * from a server with no session at all. Any other failure says nothing about
+ * the pane.
+ */
+export function isTmuxPaneGone(err: unknown, paneId: string): boolean {
+  const failure = (typeof err === "object" && err !== null ? err : {}) as {
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+    stderr?: unknown;
+  };
+  const diagnostic =
+    typeof failure.stderr === "string" ? failure.stderr.replace(/\n$/, "") : undefined;
+  return (
+    failure.code === 1 &&
+    !failure.signal &&
+    failure.killed !== true &&
+    (diagnostic === `can't find pane: ${paneId}` || diagnostic === "no current target")
+  );
+}
+
 /** Run a tmux command and return stdout. */
 function tmux(...args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

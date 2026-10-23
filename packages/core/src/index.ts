@@ -49,6 +49,12 @@ export {
   getPaneTTY as getTmuxPaneTTY,
   exactSessionTarget,
   exactPaneTarget,
+  AGENT_PANE_KEY,
+  AGENT_PANE_FORMAT,
+  agentPaneOf,
+  agentPaneTarget,
+  agentPaneTty,
+  isTmuxPaneGone,
 } from "./tmux.js";
 
 // herdr — command wrappers

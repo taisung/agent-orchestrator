@@ -131,7 +131,7 @@ import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
-import { exactPaneTarget, exactSessionTarget } from "./tmux.js";
+import { AGENT_PANE_KEY, agentPaneTarget, exactSessionTarget } from "./tmux.js";
 import {
   isRuntimeStopConfirmed,
   isRuntimeStopUnconfirmedError,
@@ -817,18 +817,19 @@ function sleep(ms: number): Promise<void> {
 const TMUX_PANE_GONE = Symbol("tmux pane gone");
 
 /**
- * The foreground command of the session's pane, `TMUX_PANE_GONE` when the
- * session does not exist, or null when tmux could not answer. tmux 3.4
+ * The foreground command of the session's pane (the agent's pane when the
+ * handle names one, review r2 M-1), `TMUX_PANE_GONE` when the session or
+ * that pane does not exist, or null when tmux could not answer. tmux 3.4
  * prints empty format values and exits 0 for a target that does not exist,
  * so empty output means gone, not unknown.
  */
 async function getTmuxForegroundCommand(
-  sessionName: string,
+  handle: RuntimeHandle,
 ): Promise<string | typeof TMUX_PANE_GONE | null> {
   try {
     const { stdout } = await execFileAsync(
       "tmux",
-      ["display-message", "-p", "-t", exactPaneTarget(sessionName), "#{pane_current_command}"],
+      ["display-message", "-p", "-t", agentPaneTarget(handle), "#{pane_current_command}"],
       { timeout: 5_000 },
     );
     const command = stdout.trim();
@@ -879,11 +880,30 @@ function metadataToSession(
   createdAt?: Date,
   modifiedAt?: Date,
 ): Session {
-  return sessionFromMetadata(sessionId, meta, {
+  const session = sessionFromMetadata(sessionId, meta, {
     projectId,
     createdAt,
     lastActivityAt: modifiedAt ?? new Date(),
   });
+  // Session relaunch (review r2 M-1): the pane that the record binds to its
+  // last launch is the agent's pane, for every reader of the agent.
+  const pane = lastLaunchBinding(meta)?.pane;
+  if (session.runtimeHandle && pane) {
+    session.runtimeHandle = withAgentPane(session.runtimeHandle, pane);
+  }
+  return session;
+}
+
+/**
+ * Session relaunch (review r2 M-1): a tmux handle that names the agent's
+ * pane (AGENT_PANE_KEY), so its process check, its activity and the
+ * lifecycle read that pane and not the session's current window. Kept in
+ * memory only; the stored handle never has it. Another runtime's handle is
+ * returned as it is.
+ */
+function withAgentPane(handle: RuntimeHandle, paneId: string): RuntimeHandle {
+  if (handle.runtimeName !== "tmux" || !/^%\d+$/.test(paneId)) return handle;
+  return { ...handle, data: { ...handle.data, [AGENT_PANE_KEY]: paneId } };
 }
 
 export interface SessionManagerDeps {
@@ -3997,7 +4017,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           agentPlugin.isProcessRunning(handle).catch(() => true),
           captureOutput(handle),
           handle.runtimeName === "tmux"
-            ? getTmuxForegroundCommand(handle.id)
+            ? getTmuxForegroundCommand(handle)
             : Promise.resolve(agentPlugin.processName),
         ]);
 
@@ -4045,7 +4065,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           agentPlugin.isProcessRunning(handle).catch(() => true),
           captureOutput(handle),
           handle.runtimeName === "tmux"
-            ? getTmuxForegroundCommand(handle.id)
+            ? getTmuxForegroundCommand(handle)
             : Promise.resolve(agentPlugin.processName),
         ]);
 
@@ -5054,9 +5074,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
     }
 
-    // 6. Liveness: the tmux session exists, the agent process does not run,
-    //    and the pane of the agent is known (the pane of the last relaunch,
-    //    else the only pane of the session; review r1 M-1). From another
+    // 6. Liveness: the tmux session exists, the agent process does not run
+    //    (in the pane that the record binds, which `handle` names, else in
+    //    the session's current window; review r2 M-1), and the pane of the
+    //    agent is known (the bound pane, which must still exist, else the
+    //    only pane of the session; review r1 M-1, r2 M-4). From another
     //    shell, that pane's own shell must wait for input.
     const probe = async (what: string, check: () => Promise<unknown>): Promise<boolean> => {
       try {
@@ -5088,19 +5110,47 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
     if (!panes) return refuse(`its tmux session ${handle.id} does not exist`, restoreNext);
     const binding = lastLaunchBinding(raw);
-    const recordedPane = binding?.pane ? panes.find((p) => p.paneId === binding.pane) : undefined;
-    const pane = recordedPane ?? (panes.length === 1 ? panes[0] : undefined);
+    // The pane that the last launch bound is the agent's pane. The one-pane
+    // rule is only for a record that binds none: a bound pane that is gone
+    // is not replaced by another pane of the session (review r2 M-4).
+    if (binding?.pane && !panes.some((p) => p.paneId === binding.pane)) {
+      refuse(
+        `the pane ${binding.pane} of its last launch no longer exists in tmux session ${handle.id}`,
+        `start its agent by hand in a pane of the session, or ${restoreNext}`,
+      );
+    }
+    const pane = binding?.pane
+      ? panes.find((p) => p.paneId === binding.pane)
+      : panes.length === 1
+        ? panes[0]
+        : undefined;
     if (!pane) {
       return refuse(
         `its tmux session ${handle.id} has ${panes.length} panes, and its record does not name the pane of its agent`,
         `close the other windows and panes of tmux session ${handle.id} (keep the agent's pane), then try again`,
       );
     }
+    // Every check of the agent after the start reads this pane (review r2 M-1).
+    const agentHandle = withAgentPane(handle, pane.paneId);
     const runInCallerTerminal = options.runInCallerTerminal;
     const inOwnPane = !!options.callerTty && options.callerTty === pane.tty;
     if (inOwnPane && !runInCallerTerminal) {
       refuse(
         "this command runs in the session's own pane, and this caller cannot start the agent here",
+        "run the relaunch from another shell",
+      );
+    }
+    // Review r2: in the own pane the agent gets the terminal of `ao`, which
+    // only a foreground job owns.
+    if (inOwnPane && options.callerForeground === false) {
+      refuse(
+        "this ao process runs in the background of the session's own pane, so its agent would not own the terminal",
+        "run `ao session relaunch` in the foreground of the pane (without &), or from another shell",
+      );
+    }
+    if (inOwnPane && options.callerForeground === null) {
+      refuse(
+        "AO cannot tell whether this ao process is the foreground job of the session's own pane (no /proc)",
         "run the relaunch from another shell",
       );
     }
@@ -5420,7 +5470,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
       const left = deadline - Date.now();
       if (left <= 0) break;
-      const answer = await outcomeWithin(() => agent.isProcessRunning(handle), left);
+      const answer = await outcomeWithin(() => agent.isProcessRunning(agentHandle), left);
       if (childEnded) {
         agentState = "absent";
         break;
@@ -5440,7 +5490,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     settle(finalState);
     const postLaunchSetup = agent.postLaunchSetup?.bind(agent);
     if (finalState === "running" && postLaunchSetup) {
-      const relaunched: Session = { ...session, workspacePath, restoredAt: new Date() };
+      const relaunched: Session = {
+        ...session,
+        runtimeHandle: agentHandle,
+        workspacePath,
+        restoredAt: new Date(),
+      };
       const metadataBefore = { ...(relaunched.metadata ?? {}) };
       const setup = await outcomeWithin(
         () => postLaunchSetup(relaunched),
