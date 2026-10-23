@@ -337,7 +337,7 @@ delete land/session-relaunch".
   10:15, before the build. Its section 8 is done: doc 0004 §1, §5a and §8 now describe the fit-1 build
   (owner request "correct the doc 0004 description").
 
-**Update 2026-10-23 13:55 EDT: fit-2a coded; two blind code reviews running.**
+**Update 2026-10-23 13:52 EDT: fit-2a coded; two blind code reviews running.**
 - ao-73 finished fit-2a: `feat/herdr-fit2a` tip `a999a78f`, 6 commits on `36caf8a9` (1 to 4, docs 4d, test-only
   5). The 9 product files of design r11 8.1; product +1711 -246 (design about 1,030), tests +3972. Gates pass
   (core 1847 + 1 expected fail, runtime-herdr 261, cli 447, others as base; red set = base 21; gitleaks clean);
