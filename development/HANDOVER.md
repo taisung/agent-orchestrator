@@ -337,6 +337,23 @@ delete land/session-relaunch".
   10:15, before the build. Its section 8 is done: doc 0004 §1, §5a and §8 now describe the fit-1 build
   (owner request "correct the doc 0004 description").
 
+**Update 2026-10-23 13:55 EDT: fit-2a coded; two blind code reviews running.**
+- ao-73 finished fit-2a: `feat/herdr-fit2a` tip `a999a78f`, 6 commits on `36caf8a9` (1 to 4, docs 4d, test-only
+  5). The 9 product files of design r11 8.1; product +1711 -246 (design about 1,030), tests +3972. Gates pass
+  (core 1847 + 1 expected fail, runtime-herdr 261, cli 447, others as base; red set = base 21; gitleaks clean);
+  162/181 new tests fail on the base, 33 D2 mutants each fail. 16 deviations, 4 open questions (report copy
+  `reports/ao-73_herdr_fit2a_impl.report.md`). A simulated cherry-pick of the 6 commits onto main is clean.
+- Owner "push": `e43db964..6b58bf64` (docs), CI 4 of 4 success.
+- Owner 21: ao-63 closed (its CI fix is on main as `ade84189`; briefs in `backup-closed-sessions/`), watcher
+  530444 stopped.
+- Owner 20 (1): two blind code reviews of `36caf8a9..a999a78f`: **ao-82** (Codex gpt-6.1-sol, xhigh; brief
+  `brief-review-herdr-fit2a-code-sol61.md`, file `development/reviews/herdr_fit2a_code_review_r1_sol61.md`,
+  scratch `/tmp/aof2as`) and **ao-83** (OpenCode Muse 1.3; `brief-review-herdr-fit2a-code-muse13.md`,
+  `..._r1_muse13.md`, `/tmp/aof2am`). Both branches moved to `a999a78f` with `reset --keep`; both read their
+  brief by themselves (no send). Hold the first review in `held/` until the second finishes. Watcher
+  `aofork-2026-10-23a` (parent 1239456, child 1239466) watches ao-82 and ao-83; watcher 2303560 still watches
+  ao-73, which stays for the review fixes.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
