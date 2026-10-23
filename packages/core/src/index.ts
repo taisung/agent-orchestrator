@@ -35,7 +35,32 @@ export {
   updateMetadata,
   deleteMetadata,
   listMetadata,
+  launchIdentityToken,
 } from "./metadata.js";
+
+// Herdr fit-2 — typed errors of a create, a refused send and a blocked start
+export {
+  RUNTIME_CREATE_PARTIAL_ERROR_CODE,
+  RUNTIME_SEND_REFUSED_ERROR_CODE,
+  ORCHESTRATOR_START_BLOCKED_ERROR_CODE,
+  RuntimeCreatePartialError,
+  isRuntimeCreatePartialError,
+  RuntimeSendRefusedError,
+  isRuntimeSendRefusedError,
+  OrchestratorStartBlockedError,
+  isOrchestratorStartBlockedError,
+  isWellFormedHandle,
+} from "./runtime-errors.js";
+export type {
+  RuntimeCreateStage,
+  RuntimeSendAdmission,
+  OrchestratorStartBlockedReason,
+  BlockingLaunchKind,
+  BlockingLaunch,
+} from "./runtime-errors.js";
+
+// Herdr fit-2 — the admission lock of a project
+export { admissionLock } from "./delivery-lock.js";
 
 // tmux — command wrappers
 export {
@@ -71,6 +96,8 @@ export {
   herdrExecOptions,
   HerdrPinError,
   HERDR_PIN_ERROR_CODE,
+  isHerdrPinError,
+  herdrPreRequestRefusal,
 } from "./herdr.js";
 export type { HerdrPaneProcess, HerdrCliFailure, HerdrInvocation, HerdrEndpoint } from "./herdr.js";
 

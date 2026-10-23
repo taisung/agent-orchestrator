@@ -58,3 +58,34 @@ export function herdrRejection(
     stderr: fixture.stderr,
   });
 }
+
+/**
+ * Herdr fit-2: one section of a forms log of the live check
+ * (`r8_cli_forms_log.txt`, `r9_cli_forms_log.txt`): the line `<section>:
+ * <command>`, then the indented fields `exit=<n>`, `stdout=<repr>` and
+ * `stderr=<repr>`, each text as a Python string literal in single quotes.
+ */
+export function herdrFormsLogEntry(file: string, section: string): HerdrFixture {
+  const lines = readFileSync(`${FIXTURES}${file}`, "utf-8").split("\n");
+  const start = lines.findIndex((line) => line.startsWith(`${section}: `));
+  if (start < 0) throw new Error(`${file} has no section ${section}`);
+  const field = (key: string): string => {
+    for (let i = start + 1; i < lines.length && lines[i].startsWith("  "); i++) {
+      if (lines[i].startsWith(`  ${key}=`)) return lines[i].slice(key.length + 3);
+    }
+    throw new Error(`section ${section} of ${file} has no ${key} field`);
+  };
+  const text = (key: string): string => {
+    const repr = field(key);
+    if (repr.length < 2 || !repr.startsWith("'") || !repr.endsWith("'")) {
+      throw new Error(`section ${section} of ${file} has a malformed ${key} field`);
+    }
+    return repr.slice(1, -1).replace(/\\(\\|n|')/g, (_, c: string) => (c === "n" ? "\n" : c));
+  };
+  return {
+    command: lines[start].slice(section.length + 2),
+    exit: Number(field("exit")),
+    stdout: text("stdout"),
+    stderr: text("stderr"),
+  };
+}

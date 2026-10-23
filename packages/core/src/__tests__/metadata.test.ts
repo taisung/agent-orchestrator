@@ -3,7 +3,7 @@ import type * as Fs from "node:fs";
 import { mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   readMetadata,
   readMetadataRaw,
@@ -15,6 +15,7 @@ import {
   deleteMetadata,
   listMetadata,
   reserveSessionId,
+  launchIdentityToken,
 } from "../metadata.js";
 
 /**
@@ -796,5 +797,53 @@ describe("readMetadataStrict / readArchivedMetadataStrict (same-id R4 round 3, M
       call === "readFileSync" ? Object.assign(new Error("EIO"), { code: "EIO" }) : undefined;
     expect(() => readArchivedMetadataStrict(dataDir, "app-1")).toThrow("EIO");
     expect(readArchivedMetadataRaw(dataDir, "app-1")).toBeNull();
+  });
+});
+
+// Herdr fit-2 (design r11 4.8): the identity token of a launch.
+describe("launchIdentityToken", () => {
+  const launch = {
+    reservationId: "",
+    runtimeHandle: '{"id":"w7:p1","runtimeName":"herdr","data":{}}',
+    tmuxName: "",
+    createdAt: "2026-10-23T10:00:00.000Z",
+    restoredAt: "",
+    status: "working",
+  };
+
+  it("is the first 16 hex characters of the SHA-256 of the launch identity values in order", () => {
+    const values = [launch.reservationId, launch.runtimeHandle, "", launch.createdAt, ""];
+    const expected = createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 16);
+    expect(launchIdentityToken(launch)).toBe(expected);
+    expect(launchIdentityToken(launch)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("reads a missing key as an empty value", () => {
+    const { tmuxName: _tmuxName, restoredAt: _restoredAt, reservationId: _r, ...rest } = launch;
+    expect(launchIdentityToken(rest)).toBe(launchIdentityToken(launch));
+  });
+
+  it("changes with each identity key", () => {
+    for (const key of ["reservationId", "runtimeHandle", "tmuxName", "createdAt", "restoredAt"]) {
+      expect(launchIdentityToken({ ...launch, [key]: "changed" }), key).not.toBe(
+        launchIdentityToken(launch),
+      );
+    }
+  });
+
+  it("does not change with a status, launchFailed, claim, generation or launch token write", () => {
+    for (const [key, value] of [
+      ["status", "killed"],
+      ["launchFailed", "herdr pane run timed out"],
+      ["launchPid", "4242"],
+      ["launchPidStart", "123456"],
+      ["generation", "9"],
+      ["launchToken", "a-relaunch-token"],
+      ["launchTokenAt", "2026-10-23T11:00:00.000Z"],
+    ]) {
+      expect(launchIdentityToken({ ...launch, [key]: value }), key).toBe(
+        launchIdentityToken(launch),
+      );
+    }
   });
 });

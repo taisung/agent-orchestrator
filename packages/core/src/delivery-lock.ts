@@ -24,7 +24,10 @@
  * who reads a ledger can hold its names. See the spec (section 4, item 6).
  */
 import { createHash } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import { connect, createServer } from "node:net";
+import { basename, dirname, join, resolve } from "node:path";
+import { OrchestratorStartBlockedError } from "./runtime-errors.js";
 
 /** How long a probe waits for the kernel's answer before it counts the name as held. */
 const PROBE_TIMEOUT_MS = 1_000;
@@ -40,12 +43,73 @@ export function isDeliveryLockSupported(platform: string = process.platform): bo
  * (so the state root, the project and the agent session key), plus the
  * attempt token for an attempt lock. Two state roots, two sessions, two
  * attempts and two users never share a name. The session record lock
- * (metadata.ts) uses the kind "record" with the real path of the record.
+ * (metadata.ts) uses the kind "record" with the real path of the record, and
+ * the admission lock of a project (admissionLock) the kind "admission".
  */
-export function deliveryLockName(kind: "ledger" | "attempt" | "record", subject: string): string {
+export function deliveryLockName(
+  kind: "ledger" | "attempt" | "record" | "admission",
+  subject: string,
+): string {
   const uid = typeof process.getuid === "function" ? String(process.getuid()) : "nouid";
   const hash = createHash("sha256").update(subject, "utf-8").digest("hex").slice(0, 32);
   return `\0ao-delivery-${uid}-${kind}-${hash}`;
+}
+
+/** The `code` of a file system error, or undefined. */
+function errnoCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Herdr fit-2: the admission lock of the project whose sessions directory is
+ * `sessionsDir`. Its subject is the real path of the directory, also before
+ * the directory exists: the real path of the nearest existing ancestor plus
+ * the missing names, in path order. AO makes a missing sessions directory
+ * with `mkdirSync(..., { recursive: true })`, which makes real directories,
+ * so a caller before and a caller after that `mkdir` get the same subject and
+ * the same lock name. A path whose real path AO cannot fix (`ENOTDIR`,
+ * `EACCES`, `ELOOP`, a dangling symlink, ...) throws
+ * OrchestratorStartBlockedError (`admission-path`).
+ */
+export function admissionLock(
+  sessionsDir: string,
+  projectId: string,
+): { subject: string; name: string } {
+  const refuse = (code: string, path: string): never => {
+    throw new OrchestratorStartBlockedError(
+      `AO cannot fix the admission path of project ${projectId} (${code} at ${path}); no orchestrator was started.`,
+      { projectId, reason: "admission-path" },
+    );
+  };
+  let current = resolve(sessionsDir);
+  const missing: string[] = [];
+  for (;;) {
+    let real: string | undefined;
+    try {
+      real = realpathSync(current);
+    } catch (err) {
+      const code = errnoCode(err) ?? "unknown error";
+      if (code !== "ENOENT") return refuse(code, current);
+      let entry: string | undefined;
+      try {
+        lstatSync(current);
+        entry = "ENOENT";
+      } catch (lstatErr) {
+        const lstatCode = errnoCode(lstatErr) ?? "unknown error";
+        if (lstatCode !== "ENOENT") entry = lstatCode;
+      }
+      // The entry exists, but its real path does not (a dangling symlink).
+      if (entry !== undefined) return refuse(entry, current);
+      const parent = dirname(current);
+      if (parent === current) return refuse(code, current);
+      missing.unshift(basename(current));
+      current = parent;
+      continue;
+    }
+    const subject = join(real, ...missing);
+    return { subject, name: deliveryLockName("admission", subject) };
+  }
 }
 
 /** The name as `ss -xlp` and `/proc/net/unix` show it (`@` for the NUL byte). */

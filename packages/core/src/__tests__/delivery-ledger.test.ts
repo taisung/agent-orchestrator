@@ -246,7 +246,8 @@ function isAlive(child: Child): boolean {
 
 beforeAll(() => {
   childDir = mkdtempSync(join(tmpdir(), "ao-ledger-child-"));
-  for (const name of ["delivery-ledger", "delivery-lock", "atomic-write"]) {
+  // runtime-errors: delivery-lock.ts imports it (herdr fit-2, the admission refusal).
+  for (const name of ["delivery-ledger", "delivery-lock", "atomic-write", "runtime-errors"]) {
     const source = readFileSync(new URL(`../${name}.ts`, import.meta.url), "utf-8");
     const output = ts.transpileModule(source, {
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },

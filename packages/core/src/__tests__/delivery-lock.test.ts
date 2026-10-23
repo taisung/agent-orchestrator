@@ -1,11 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as NetModule from "node:net";
 import ts from "typescript";
+import { isOrchestratorStartBlockedError } from "../runtime-errors.js";
 import {
+  admissionLock,
   deliveryLockName,
   holdDeliveryLock,
   isDeliveryLockHeld,
@@ -131,11 +141,15 @@ async function hold(name: string): Promise<DeliveryLock> {
 
 beforeAll(() => {
   childDir = mkdtempSync(join(tmpdir(), "ao-lock-child-"));
-  const source = readFileSync(new URL("../delivery-lock.ts", import.meta.url), "utf-8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  writeFileSync(join(childDir, "delivery-lock.js"), output);
+  // delivery-lock.ts imports runtime-errors.ts (herdr fit-2: the admission
+  // refusal), which has no runtime import of its own.
+  for (const name of ["delivery-lock", "runtime-errors"]) {
+    const source = readFileSync(new URL(`../${name}.ts`, import.meta.url), "utf-8");
+    const output = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    writeFileSync(join(childDir, `${name}.js`), output);
+  }
   writeFileSync(join(childDir, "package.json"), '{"type":"module"}\n');
   writeFileSync(join(childDir, "child.js"), CHILD);
 });
@@ -314,5 +328,84 @@ describe("a lock that the OS releases (I-5 round 4, M-4)", () => {
     expect(isDeliveryLockSupported("linux")).toBe(true);
     expect(isDeliveryLockSupported("darwin")).toBe(false);
     expect(isDeliveryLockSupported("win32")).toBe(false);
+  });
+});
+
+// Herdr fit-2 (design r11 4.9): the subject of the admission lock is fixed
+// before and after AO makes the sessions directory.
+describe("admissionLock", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "ao-admission-")));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function refusal(sessionsDir: string): unknown {
+    try {
+      admissionLock(sessionsDir, "my-app");
+    } catch (err) {
+      return err;
+    }
+    return undefined;
+  }
+
+  it("an existing directory: its real path, under the kind admission", () => {
+    const sessionsDir = join(dir, "sessions");
+    mkdirSync(sessionsDir);
+    const lock = admissionLock(sessionsDir, "my-app");
+    expect(lock.subject).toBe(sessionsDir);
+    expect(lock.name).toBe(deliveryLockName("admission", sessionsDir));
+    expect(lock.name).not.toBe(deliveryLockName("record", sessionsDir));
+    expect(lock.name).toContain("-admission-");
+  });
+
+  it("a symlinked parent gives one subject before and after the mkdir", () => {
+    mkdirSync(join(dir, "real"));
+    symlinkSync(join(dir, "real"), join(dir, "link"));
+    const sessionsDir = join(dir, "link", "abc-my-app", "sessions");
+
+    const before = admissionLock(sessionsDir, "my-app");
+    mkdirSync(sessionsDir, { recursive: true });
+    const after = admissionLock(sessionsDir, "my-app");
+
+    expect(before.subject).toBe(join(dir, "real", "abc-my-app", "sessions"));
+    expect(after).toEqual(before);
+  });
+
+  it("a relative path and a path with dot segments give the subject of the absolute path", () => {
+    mkdirSync(join(dir, "a"));
+    const lock = admissionLock(join(dir, "a", "..", "a", "missing"), "my-app");
+    expect(lock.subject).toBe(join(dir, "a", "missing"));
+  });
+
+  it("ENOTDIR: a file in the path refuses with admission-path", () => {
+    writeFileSync(join(dir, "file"), "");
+    const err = refusal(join(dir, "file", "sessions"));
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect(err).toMatchObject({ projectId: "my-app", reason: "admission-path", blocking: [] });
+    expect((err as Error).message).toBe(
+      `AO cannot fix the admission path of project my-app (ENOTDIR at ${join(dir, "file", "sessions")}); no orchestrator was started.`,
+    );
+  });
+
+  it("a dangling symlink refuses with admission-path at the link", () => {
+    symlinkSync(join(dir, "gone"), join(dir, "dangling"));
+    const err = refusal(join(dir, "dangling", "sessions"));
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect((err as Error).message).toBe(
+      `AO cannot fix the admission path of project my-app (ENOENT at ${join(dir, "dangling")}); no orchestrator was started.`,
+    );
+  });
+
+  it("ELOOP: a symlink loop refuses with admission-path", () => {
+    symlinkSync(join(dir, "b"), join(dir, "a"));
+    symlinkSync(join(dir, "a"), join(dir, "b"));
+    const err = refusal(join(dir, "a", "sessions"));
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect((err as Error).message).toContain("(ELOOP at ");
   });
 });

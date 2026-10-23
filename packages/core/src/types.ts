@@ -1,4 +1,6 @@
 import type { ObservabilityLevel } from "./observability.js";
+import { isWellFormedHandle } from "./runtime-errors.js";
+import { safeJsonParse } from "./utils/validation.js";
 
 /**
  * Agent Orchestrator — Core Type Definitions
@@ -135,6 +137,19 @@ export const NO_SERVER_BOUND_MS = 300_000; // 5 minutes
  * `Runtime.isAlive`.
  */
 export const RUNTIME_NO_SERVER_ERROR_CODE = "ERR_RUNTIME_NO_SERVER";
+
+/**
+ * Runtimes whose answers do not prove that a launch ended: a server can run
+ * where the recorded endpoint does not reach it, and pane IDs come back after
+ * a restart. Startup never retires a record of such a runtime on a runtime
+ * answer.
+ */
+export const LAUNCH_END_UNPROVEN_RUNTIMES: ReadonlySet<string> = new Set(["herdr"]);
+
+/** True when `name` is in LAUNCH_END_UNPROVEN_RUNTIMES. */
+export function isLaunchEndUnproven(name: string | null | undefined): boolean {
+  return typeof name === "string" && LAUNCH_END_UNPROVEN_RUNTIMES.has(name);
+}
 
 /** Session status constants */
 export const SESSION_STATUS = {
@@ -301,8 +316,30 @@ export interface OrchestratorSpawnConfig {
 export interface Runtime {
   readonly name: string;
 
-  /** Create a new session environment and return a handle */
+  /**
+   * Create a session environment and return its handle. On failure, a
+   * runtime throws a plain error only when nothing of the session can exist
+   * in it: no request reached the runtime, or the runtime removed what it
+   * made. Core then runs the ordinary rollback: it discards a prepared agent
+   * session, removes the workspace and releases the reservation. When
+   * something may exist (a request was sent, an answer is unknown, a cleanup
+   * is not confirmed), the runtime throws `RuntimeCreatePartialError` with
+   * the handle of what may exist and `closed: "nothing"`; it closes nothing,
+   * and core keeps the record, the workspace and the agent session (a "kept
+   * failed launch"). runtime-herdr follows this with the measured conditions
+   * of its rule Q. runtime-tmux keeps its earlier behavior (it kills the tmux
+   * session that it made, best effort, before it throws); these Herdr
+   * measurements do not qualify it.
+   */
   create(config: RuntimeCreateConfig): Promise<RuntimeHandle>;
+
+  /**
+   * Optional: check that `create()` can start a session now, with the binary
+   * and endpoint that `create()` will use. Throws a message for the
+   * operator. A readiness sample, not a reservation of the endpoint, and
+   * never evidence about an existing session.
+   */
+  preflight?(): Promise<void>;
 
   /**
    * Destroy a session environment. Core does not call it directly: every
@@ -425,6 +462,25 @@ export interface RuntimeHandle {
   runtimeName: string;
   /** Runtime-specific data */
   data: Record<string, unknown>;
+}
+
+/**
+ * Herdr fit-2: true when the stored `runtimeHandle` of a record may name a
+ * launch of a runtime in LAUNCH_END_UNPROVEN_RUNTIMES. A handle of the stored
+ * shape (isWellFormedHandle) counts by its `runtimeName`. A text that does not give one counts
+ * when it names herdr, or when the project's selected runtime
+ * (`selectedRuntime`) is in the set. A record without a handle is false: the
+ * caller decides it apart.
+ */
+export function isUnprovenLaunchRecord(
+  raw: Readonly<Record<string, string>>,
+  selectedRuntime: string | null | undefined,
+): boolean {
+  const text = raw["runtimeHandle"];
+  if (!text) return false;
+  const handle = safeJsonParse<unknown>(text);
+  if (isWellFormedHandle(handle)) return isLaunchEndUnproven(handle.runtimeName);
+  return /"runtimeName"\s*:\s*"herdr"/.test(text) || isLaunchEndUnproven(selectedRuntime);
 }
 
 export interface RuntimeMetrics {

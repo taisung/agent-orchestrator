@@ -63,7 +63,8 @@ vi.mock("../delivery-lock.js", async (importOriginal) => {
   };
 });
 
-const SOURCES = ["metadata", "delivery-lock", "atomic-write", "key-value"];
+// runtime-errors: delivery-lock.ts imports it (herdr fit-2, the admission refusal).
+const SOURCES = ["metadata", "delivery-lock", "atomic-write", "key-value", "runtime-errors"];
 
 const CHILD = `
 import { writeFileSync, existsSync } from "node:fs";

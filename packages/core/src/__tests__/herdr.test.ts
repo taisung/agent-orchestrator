@@ -25,13 +25,15 @@ const {
   herdrInvocationFor,
   HerdrPinError,
   HERDR_PIN_ERROR_CODE,
+  herdrPreRequestRefusal,
+  isHerdrPinError,
 } = await import("../herdr.js");
 const { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync } =
   await import("node:fs");
 const { tmpdir } = await import("node:os");
 const { join } = await import("node:path");
 const { RUNTIME_NO_SERVER_ERROR_CODE } = await import("../types.js");
-const { herdrFixture, herdrRejection } = await import("./herdr-fixtures.js");
+const { herdrFixture, herdrFormsLogEntry, herdrRejection } = await import("./herdr-fixtures.js");
 
 function paneProcesses(processes: unknown[]) {
   return {
@@ -838,5 +840,136 @@ describe("Herdr fit F-6: herdrInvocationFor and row 8 with a handle", () => {
   it("keeps the empty ID of a handle: an empty list with no call", async () => {
     expect(await getHerdrPaneProcesses({ id: "", runtimeName: "herdr", data: PINS })).toEqual([]);
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+// Herdr fit-2 rule Q (design r11 4.3): a create call's failure is a refusal
+// of the CLI that sent no request only in the exact measured forms.
+describe("Herdr fit-2 rule Q: herdrPreRequestRefusal", () => {
+  /** The failure of a recorded call, read with the command ID of its words. */
+  function failureOf(
+    fixture: { command: string; exit: number; stdout: string; stderr: string },
+    words: "workspace create" | "pane run",
+  ) {
+    return readHerdrCliFailure(herdrRejection(fixture), HERDR_CLI_IDS[words]);
+  }
+  const r8 = (section: string) => herdrFormsLogEntry("r8_cli_forms_log.txt", section);
+  const r9 = (section: string) => herdrFormsLogEntry("r9_cli_forms_log.txt", section);
+  const FAKE = "/tmp/aohd5/fake";
+
+  it("Q1: the CLI's no-server text for exactly the pinned socket (r8)", () => {
+    expect(
+      herdrPreRequestRefusal(
+        failureOf(r8("r8_ws_create_stale_socket_file"), "workspace create"),
+        `${FAKE}/r8_ws_create_stale_socket_file.sock`,
+      ),
+    ).toBe("no-server");
+    expect(
+      herdrPreRequestRefusal(
+        failureOf(r8("r8_pane_run_stale_socket_file"), "pane run"),
+        `${FAKE}/r8_pane_run_stale_socket_file.sock`,
+      ),
+    ).toBe("no-server");
+  });
+
+  it("Q2: the CLI's protocol refusal after its ping, newer and older (r8, r9)", () => {
+    for (const [fixture, words, socket] of [
+      [r8("r8_ws_create_ping_protocol_19"), "workspace create", "/any"],
+      [r8("r8_ws_create_ping_protocol_23"), "workspace create", "/any"],
+      [r8("r8_pane_run_ping_protocol_19"), "pane run", "/any"],
+      [r9("r9_pane_run_ping_protocol_23"), "pane run", "/any"],
+      [r9("r9_pane_run_ping_protocol_19_control"), "pane run", "/any"],
+    ] as const) {
+      const failure = failureOf(fixture, words);
+      expect(failure?.code, fixture.command).toBe("protocol_mismatch");
+      expect(herdrPreRequestRefusal(failure, socket), fixture.command).toBe("protocol");
+    }
+  });
+
+  // T-4.1b's near misses at the rule: each may have reached the server.
+  it("T-4.1b: the near misses are not qualified", () => {
+    const stale = failureOf(r8("r8_ws_create_stale_socket_file"), "workspace create");
+    const staleRun = failureOf(r8("r8_pane_run_stale_socket_file"), "pane run");
+    const sessionForm = failureOf(
+      herdrFixture("noserver_never_workspace_create"),
+      "workspace create",
+    );
+    const noSuffix = failureOf(
+      r8("r8_ws_create_server_sends_cli_no_server_text"),
+      "workspace create",
+    );
+    // The CLI's text with another socket than the endpoint of step 1.
+    expect(herdrPreRequestRefusal(stale, `${FAKE}/elsewhere.sock`)).toBeNull();
+    // The Q1 text on pane run, with a socket other than endpoint.socket.
+    expect(
+      herdrPreRequestRefusal(staleRun, `${FAKE}/r8_ws_create_stale_socket_file.sock`),
+    ).toBeNull();
+    // The session-form suffix ("run `herdr session attach <s>` ...").
+    expect(sessionForm?.code).toBe("server_not_running");
+    expect(
+      herdrPreRequestRefusal(sessionForm, "/tmp/aohd/xdg/config/herdr/sessions/aohd-1/herdr.sock"),
+    ).toBeNull();
+    // No suffix (a server that sends the CLI's prefix itself), also with its own socket.
+    expect(noSuffix?.code).toBe("server_not_running");
+    expect(herdrPreRequestRefusal(noSuffix, `${FAKE}/elsewhere.sock`)).toBeNull();
+    // protocol_mismatch with another text, and with the prefix later in the text.
+    for (const message of [
+      "the server protocol differs",
+      "relay: client protocol 22 is newer than server protocol 19; restart",
+      "client protocol 22 is newer than server protocol 19",
+      "client protocol x is newer than server protocol 19; restart",
+    ]) {
+      expect(
+        herdrPreRequestRefusal({ code: "protocol_mismatch", message }, "/any"),
+        message,
+      ).toBeNull();
+    }
+    // Another F1 code after the request, and pane_not_found after the request.
+    expect(
+      herdrPreRequestRefusal(
+        failureOf(r8("r8_ws_create_error_after_request"), "workspace create"),
+        "/any",
+      ),
+    ).toBeNull();
+    expect(
+      herdrPreRequestRefusal(
+        failureOf(r8("r8_pane_run_pane_not_found_after_request"), "pane run"),
+        "/any",
+      ),
+    ).toBeNull();
+    // The 0.8.0 envelope on stdout at exit 0, a timeout, and no failure form.
+    const envelope = {
+      command: "herdr workspace create",
+      exit: 0,
+      stdout: '{"id":"cli:workspace:create","error":{"code":"server_not_running","message":"x"}}\n',
+      stderr: "",
+    };
+    expect(failureOf(envelope, "workspace create")).toBeNull();
+    const timeout = Object.assign(herdrRejection(r8("r8_ws_create_stale_socket_file")), {
+      killed: true,
+      signal: "SIGTERM",
+      code: null,
+    });
+    expect(readHerdrCliFailure(timeout, "cli:workspace:create")).toBeNull();
+    expect(herdrPreRequestRefusal(null, `${FAKE}/r8_ws_create_stale_socket_file.sock`)).toBeNull();
+  });
+});
+
+describe("Herdr fit-2: isHerdrPinError", () => {
+  it("accepts HerdrPinError and an error of its shape from another copy", () => {
+    expect(isHerdrPinError(new HerdrPinError("one pin"))).toBe(true);
+    expect(isHerdrPinError(Object.assign(new Error("pins"), { code: HERDR_PIN_ERROR_CODE }))).toBe(
+      true,
+    );
+  });
+
+  it("refuses another code, a message that is not text and values that are not objects", () => {
+    expect(isHerdrPinError(Object.assign(new Error("x"), { code: "ERR_RUNTIME_NO_SERVER" }))).toBe(
+      false,
+    );
+    expect(isHerdrPinError({ code: HERDR_PIN_ERROR_CODE, message: 7 })).toBe(false);
+    expect(isHerdrPinError({ code: HERDR_PIN_ERROR_CODE })).toBe(false);
+    expect(isHerdrPinError(null)).toBe(false);
+    expect(isHerdrPinError(HERDR_PIN_ERROR_CODE)).toBe(false);
   });
 });

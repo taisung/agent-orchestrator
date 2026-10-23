@@ -81,7 +81,7 @@ import {
   rmSync,
   realpathSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { SessionId, SessionMetadata } from "./types.js";
@@ -341,6 +341,19 @@ export function launchIdentity(
   record: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   return Object.fromEntries(LAUNCH_IDENTITY_KEYS.map((key) => [key, record[key] ?? ""]));
+}
+
+/**
+ * Herdr fit-2: the identity token of a launch, the first 16 hex characters of
+ * the SHA-256 of its launch identity values (LAUNCH_IDENTITY_KEYS, in order).
+ * It changes with a reservation, a spawn, a restore, a partial-handle write
+ * and a relaunch claim; a status, `launchFailed` or claim write does not
+ * change it. It names a launch to the operator and is not a secret. It is
+ * not the record key `launchToken` (session relaunch), and it is not stored.
+ */
+export function launchIdentityToken(record: Readonly<Record<string, string | undefined>>): string {
+  const values = LAUNCH_IDENTITY_KEYS.map((key) => record[key] ?? "");
+  return createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 16);
 }
 
 /** True when `record` holds every value in `expected` (a missing key equals an empty value). */

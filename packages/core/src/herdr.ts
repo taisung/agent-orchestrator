@@ -125,6 +125,40 @@ export function isHerdrNoServer(failure: HerdrCliFailure | null): boolean {
   );
 }
 
+/** The start of the herdr CLI's protocol refusal after its ping (Q2). */
+const HERDR_PROTOCOL_REFUSAL_RE =
+  /^client protocol \d+ is (newer|older) than server protocol \d+; /;
+
+/**
+ * Herdr fit-2 rule Q: whether a failure of a create call (`workspace create`
+ * or `pane run`, read by readHerdrCliFailure) is an answer of the herdr CLI
+ * that sent no request to the server at `socket`:
+ * - `no-server` (Q1): `server_not_running` with exactly the CLI's text for
+ *   that socket, "no herdr server is running at <socket>; run `herdr` to
+ *   start or attach it" (no listener);
+ * - `protocol` (Q2): `protocol_mismatch` with the CLI's text after its ping,
+ *   "client protocol <n> is newer|older than server protocol <m>; ...".
+ * Anything else is null: the request may have reached the server. The rule
+ * trusts the CLI's texts (herdr 0.9.5); a server that sends the same text in
+ * the same form would look like the CLI (residual R-Q).
+ */
+export function herdrPreRequestRefusal(
+  failure: HerdrCliFailure | null,
+  socket: string,
+): "no-server" | "protocol" | null {
+  if (!failure) return null;
+  if (
+    failure.code === "server_not_running" &&
+    failure.message === `${HERDR_NO_SERVER_PREFIX}${socket}; run \`herdr\` to start or attach it`
+  ) {
+    return "no-server";
+  }
+  if (failure.code === "protocol_mismatch" && HERDR_PROTOCOL_REFUSAL_RE.test(failure.message)) {
+    return "protocol";
+  }
+  return null;
+}
+
 /** Herdr fit F-2: herdr's pane ID grammar, `w<n>:p<m>` in bijective base 32. */
 export const HERDR_PANE_ID_RE = /^w[0-9A-HJKMNP-TV-Z]+:p[0-9A-HJKMNP-TV-Z]+$/;
 
@@ -168,6 +202,13 @@ export class HerdrPinError extends Error {
     super(`the herdr pins of this record are malformed: ${detail}`);
     this.name = "HerdrPinError";
   }
+}
+
+/** True for HerdrPinError, also from another copy of core: its `code` and a text `message`. */
+export function isHerdrPinError(err: unknown): err is HerdrPinError {
+  if (typeof err !== "object" || err === null) return false;
+  const value = err as Record<string, unknown>;
+  return value["code"] === HERDR_PIN_ERROR_CODE && typeof value["message"] === "string";
 }
 
 /** True when the text has a control character (C0, DEL or C1). */
