@@ -171,6 +171,32 @@ describe("stopRuntime without Runtime.stop: destroy, then isAlive", () => {
   });
 });
 
+describe("T-7.16: the no-server row applies only to a runtime outside the unproven set", () => {
+  it("a stop-less runtime named herdr: destroy resolves, isAlive rejects with no-server: unknown", async () => {
+    const runtime = { ...fallbackRuntime("resolves", "no server"), name: "herdr" };
+    const handle: RuntimeHandle = { id: "w3:p2", runtimeName: "herdr", data: {} };
+
+    const stopped = await stopRuntime(runtime, handle);
+
+    expect(stopped.outcome).toBe("unknown");
+    expect(isRuntimeStopConfirmed(stopped)).toBe(false);
+  });
+
+  it("a herdr handle through a stop-less runtime of another name is unknown too", async () => {
+    const runtime = fallbackRuntime("resolves", "no server");
+    const handle: RuntimeHandle = { id: "w3:p2", runtimeName: "herdr", data: {} };
+
+    expect((await stopRuntime(runtime, handle)).outcome).toBe("unknown");
+  });
+
+  it("control: a stop-less mock runtime keeps destroyed", async () => {
+    const runtime = { ...fallbackRuntime("resolves", "no server"), name: "mock" };
+    const handle: RuntimeHandle = { id: "mock-1", runtimeName: "mock", data: {} };
+
+    expect((await stopRuntime(runtime, handle)).outcome).toBe("destroyed");
+  });
+});
+
 describe("stopRuntime with Runtime.stop", () => {
   const answers: RuntimeStopOutcome[] = [
     { outcome: "destroyed" },

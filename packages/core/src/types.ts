@@ -1864,6 +1864,16 @@ export interface SessionMetadata {
 export interface SessionManager {
   spawn(config: SessionSpawnConfig): Promise<Session>;
   spawnOrchestrator(config: OrchestratorSpawnConfig): Promise<Session>;
+  /**
+   * Optional (Herdr fit-2, design r11 5.3.2): the known-Herdr orchestrator
+   * records of a project that core would reuse now (the reuse predicate R,
+   * without R8), decided under the admission lock A after a probe of the
+   * same identity token. It writes nothing. A refusal throws
+   * `OrchestratorStartBlockedError` (`records-unreadable`, `admission-busy`,
+   * `admission-path`). `ao start` asks it for the candidates that
+   * `isUnprovenLaunchRecord` accepts; a manager without it reuses none.
+   */
+  findReusableOrchestrators?(projectId: string): Promise<Session[]>;
   restore(sessionId: SessionId): Promise<Session>;
   list(projectId?: string): Promise<Session[]>;
   get(sessionId: SessionId): Promise<Session | null>;

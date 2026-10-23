@@ -11,8 +11,8 @@
  * publication rule, 4.5). Two agent stand-ins: a Claude Code shape (no
  * prepared agent session) and an OpenCode shape (prepareAgentSession,
  * confirmLaunch, getRestoreCommand, postLaunchSetup; it records its discards
- * and starts no agent). The assertions that need fit-2b (startup admission,
- * the F-9 retirement and the status line) come with it (design 8.1).
+ * and starts no agent). The assertions that need fit-2b come with it (design
+ * 8.1): the start blocks of the startup admission (T-4.16, T-4.20c, T-4.20d).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
@@ -263,6 +263,7 @@ import {
   getProjectBaseDir,
   getSessionsDir,
   getWorktreesDir,
+  isOrchestratorStartBlockedError,
   isRuntimeCreatePartialError,
   readMetadataRaw,
   updateMetadata,
@@ -531,6 +532,14 @@ function q1(socket: string, id = "cli:request"): Error {
     "server_not_running",
     `no herdr server is running at ${socket}; run \`herdr\` to start or attach it`,
   );
+}
+
+/** Herdr fit-2b G (design r11 4.7): the kinds of a blocked direct core start, as [ID, kind, reason]. */
+async function startBlockedKinds(h: Harness): Promise<Array<[string, string, string]>> {
+  const err = await startError(h);
+  expect(isOrchestratorStartBlockedError(err)).toBe(true);
+  if (!isOrchestratorStartBlockedError(err)) return [];
+  return err.blocking.map((b) => [b.sessionId, b.kind, b.reason]);
 }
 
 async function spawnError(h: Harness): Promise<unknown> {
@@ -1168,6 +1177,13 @@ describe("Herdr fit-2 F-4: the resident restore settles its own claim (T-4.16, T
     expect(err).not.toBeInstanceOf(SessionLaunchInProgressError);
     expect(existsSync(worktree)).toBe(true);
     expect(warnings).toEqual([]);
+    // fit-2b (design 8.1): a direct core start in isolated mode is blocked by
+    // the record (R8), not as a launch in progress (no claim stays).
+    const workspaces = commands().filter((c) => c === "workspace create").length;
+    expect(await startBlockedKinds(h)).toEqual([
+      ["app-orchestrator-1", "not-reused", "an isolated record"],
+    ]);
+    expect(commands().filter((c) => c === "workspace create")).toHaveLength(workspaces);
   });
 
   it("T-4.16b: the settlement write throws; one warning, the claim stays, kill refuses in progress", async () => {
@@ -1553,6 +1569,11 @@ describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T
     );
     expect(warning).not.toMatch(/another launch/);
     expect(await killError(h, ORCH)).toBeInstanceOf(SessionLaunchInProgressError);
+    // fit-2b (design 8.1): a start in the same process is blocked by the
+    // claim of this process (R1).
+    expect(await startBlockedKinds(h)).toEqual([
+      [ORCH, "in-progress", `launch in progress by ao process ${process.pid}`],
+    ]);
     expect(existsSync(worktree)).toBe(true);
     expectNoClose();
   });
@@ -1573,6 +1594,10 @@ describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T
     );
     expect(warnings[0]).toContain(`record file ${recordFile}`);
     expect(renamesLogged()).toEqual(["rename:before", "rename:before", "rename"]);
+    // fit-2b (design 8.1): a start in the same process is blocked by P (R3).
+    expect(await startBlockedKinds(h)).toEqual([
+      [ORCH, "create-incomplete", "create create-pending"],
+    ]);
   });
 
   it("T-4.20e (1): the write throws and the record is replaced before the read: not own", async () => {

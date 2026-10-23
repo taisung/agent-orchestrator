@@ -7,6 +7,7 @@
  */
 import {
   RUNTIME_NO_SERVER_ERROR_CODE,
+  isLaunchEndUnproven,
   type Runtime,
   type RuntimeHandle,
   type RuntimeStopOutcome,
@@ -218,7 +219,13 @@ async function stopOrThrow(runtime: Runtime, handle: RuntimeHandle): Promise<Run
     alive = await isAlive.call(runtime, handle);
   } catch (err) {
     const noServer = isNoServerRejection(err);
-    if (noServer && !destroyFailed) return { outcome: "destroyed" };
+    // Herdr fit-2 (design r11 5.3.7): "no server, so the destroyed session is
+    // gone" holds only for a runtime outside LAUNCH_END_UNPROVEN_RUNTIMES. A
+    // server of a runtime in the set can still run the session where the
+    // endpoint does not reach it.
+    const endUnproven =
+      isLaunchEndUnproven(safeString(runtime.name)) || isLaunchEndUnproven(handle.runtimeName);
+    if (noServer && !destroyFailed && !endUnproven) return { outcome: "destroyed" };
     return {
       outcome: "unknown",
       detail: noServer

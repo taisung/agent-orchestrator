@@ -76,6 +76,7 @@ import {
   type SessionRelaunchResult,
   type SessionStatus,
   type RuntimePaneState,
+  type RuntimeStopOutcome,
   PR_STATE,
 } from "./types.js";
 import {
@@ -90,13 +91,14 @@ import {
   deleteMetadata,
   holdsExpected,
   launchIdentity,
+  launchIdentityToken,
   listMetadata,
   reserveSessionRecord,
   withRecordLock,
 } from "./metadata.js";
 import { buildPrompt } from "./prompt-builder.js";
 import { generateOrchestratorPrompt } from "./orchestrator-prompt.js";
-import { HERDR_RUNTIME_NAME } from "./herdr.js";
+import { HERDR_RUNTIME_NAME, isHerdrPaneId, isHerdrPinError } from "./herdr.js";
 import { shellEscape } from "./utils.js";
 import {
   getSessionsDir,
@@ -117,7 +119,12 @@ import {
   settleDelivery,
   type DeliveryAttempt,
 } from "./delivery-ledger.js";
-import { isDeliveryLockSupported } from "./delivery-lock.js";
+import {
+  admissionLock,
+  holdDeliveryLock,
+  isDeliveryLockSupported,
+  type DeliveryLock,
+} from "./delivery-lock.js";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
   getOpenCodeSession,
@@ -130,8 +137,13 @@ import {
 } from "./opencode-api.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import {
+  OrchestratorStartBlockedError,
   isRuntimeCreatePartialError,
   isRuntimeSendRefusedError,
+  isWellFormedHandle,
+  type BlockingLaunch,
+  type BlockingLaunchKind,
+  type OrchestratorStartBlockedReason,
   type RuntimeCreatePartialError,
 } from "./runtime-errors.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
@@ -1101,60 +1113,211 @@ async function getTmuxForegroundCommand(
   }
 }
 
+/** Herdr fit-2 (design r11 4.2): the default wait for the admission lock A. */
+const ADMISSION_WAIT_MS = 30_000;
+
+/** Herdr fit-2 (design r11 4.7): the core bound of each probe, and of each stop under A. */
+const ADMISSION_PROBE_TIMEOUT_MS = 10_000;
+
+/** Herdr fit-2 (design r11 5.3.2): the admission rounds of one operation. */
+const ADMISSION_ROUNDS = 3;
+
+/** A bound in milliseconds as text, for example "10 s" or "0.2 s". */
+function secondsText(ms: number): string {
+  return `${ms / 1000} s`;
+}
+
+/** The first line of an error text, at most 200 characters. */
+function firstErrorLine(err: unknown): string {
+  const text = (err instanceof Error ? err.message : String(err)).split("\n")[0]?.trim() ?? "";
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
 /**
- * Liveness of an orchestrator record before `spawnOrchestrator` reuses or
- * replaces it. A rejected probe is unknown, so the record is neither reused nor
- * archived. The one exception is a runtime with no server at all
- * (RUNTIME_NO_SERVER_ERROR_CODE): no session can exist then, as after a host
- * restart, and `ao start` must be able to launch a new orchestrator. An
- * answer that is not a boolean is unknown too (review r1 M-3, 2026-10-22):
- * `undefined`, `null` or `0` from a faulty plugin is no proof of death.
- *
- * Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
- * it with the full startup guard): for a record whose runtime is Herdr,
- * neither `false` nor the no-server code is "gone". A Herdr server can still
- * run the launch where the endpoint does not reach it, and pane IDs come back
- * after a restart, so before RH no Herdr answer proves that a launch ended.
- * Both are unknown, as a rejected probe: the record is neither reused nor
- * archived.
+ * Herdr fit-2 (design r11 4.7): the answer of the classifier for an old
+ * orchestrator record. `notBoolean` marks an answer of `isAlive` that is not
+ * a boolean (review r1 M-3, 2026-10-22: `undefined`, `null` or `0` from a
+ * faulty plugin is no proof of death).
  */
-async function isOrchestratorRuntimeAlive(
+export type OrchestratorLiveness =
+  | { state: "alive" }
+  | { state: "ended"; reason: string }
+  | { state: "unknown"; reason: string; cause?: unknown; notBoolean?: boolean };
+
+/**
+ * Herdr fit-2 (design r11 4.7): the liveness of an old orchestrator record by
+ * one `isAlive` of `runtime` (the handle's runtime, `runtimeForHandle`) with
+ * the core bound `probeTimeoutMs`. `isAlive` true is alive. A runtime outside
+ * LAUNCH_END_UNPROVEN_RUNTIMES has ended when it answers false or rejects
+ * with RUNTIME_NO_SERVER_ERROR_CODE (no session can exist then, as after a
+ * host restart). For a runtime in the set (herdr) neither is "ended" (owner
+ * decision OQ-F1 (b)): a server can still run the launch where the endpoint
+ * does not reach it, and pane IDs come back after a restart, so before RH no
+ * Herdr answer proves that a launch ended. No plugin, any other rejection, an
+ * answer that is not a boolean and no answer in time are unknown.
+ */
+export async function classifyOrchestratorLiveness(
+  runtime: Runtime | null,
+  handle: RuntimeHandle,
+  probeTimeoutMs: number = ADMISSION_PROBE_TIMEOUT_MS,
+): Promise<OrchestratorLiveness> {
+  const runtimeName = handle.runtimeName || runtime?.name || "unknown";
+  const unproven = isLaunchEndUnproven(runtimeName);
+  if (!runtime) return { state: "unknown", reason: `no ${runtimeName} runtime plugin is loaded` };
+  const answer = await outcomeWithin(async () => runtime.isAlive(handle), probeTimeoutMs);
+  if (answer.kind === "timeout") {
+    return {
+      state: "unknown",
+      reason: `the ${runtimeName} check did not answer within ${secondsText(probeTimeoutMs)}`,
+    };
+  }
+  if (answer.kind === "error") {
+    const err = answer.error;
+    if (isHerdrPinError(err)) {
+      return { state: "unknown", reason: `its ${runtimeName} pins are malformed`, cause: err };
+    }
+    if (errorCode(err) === RUNTIME_NO_SERVER_ERROR_CODE) {
+      return unproven
+        ? {
+            state: "unknown",
+            reason: `no ${runtimeName} server answers at the socket`,
+            cause: err,
+          }
+        : { state: "ended", reason: `no ${runtimeName} server runs (${firstErrorLine(err)})` };
+    }
+    return {
+      state: "unknown",
+      reason: `the ${runtimeName} check failed: ${firstErrorLine(err)}`,
+      cause: err,
+    };
+  }
+  if (answer.value === true) return { state: "alive" };
+  if (answer.value === false) {
+    return unproven
+      ? {
+          state: "unknown",
+          reason: `${runtimeName} answered that the pane does not exist or that it has another terminal`,
+        }
+      : { state: "ended", reason: `${runtimeName} answered that ${handle.id} does not exist` };
+  }
+  return {
+    state: "unknown",
+    reason: `the liveness check answered ${String(answer.value)}, not true or false`,
+    notBoolean: true,
+  };
+}
+
+/**
+ * The liveness of a project-mode orchestrator record of a runtime outside
+ * LAUNCH_END_UNPROVEN_RUNTIMES, before `spawnOrchestrator` reuses or replaces
+ * it (today's rule, with the classifier): true is alive, false is ended;
+ * unknown throws, so the record is neither reused nor archived. Core G
+ * decides a record of a runtime in the set before this runs; the classifier
+ * never answers "ended" for one.
+ */
+async function outsideSetOrchestratorAlive(
   runtime: Runtime | null,
   handle: RuntimeHandle,
   sessionId: SessionId,
+  probeTimeoutMs: number,
 ): Promise<boolean> {
-  const unknown = (cause: unknown): Error =>
-    new Error(
-      `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
-      { cause },
-    );
-  // Herdr fit-2 (design r11 4.6): no runtime may answer for the handle (its
-  // runtime is in LAUNCH_END_UNPROVEN_RUNTIMES and not loaded): unknown.
-  if (!runtime) {
-    throw unknown(new Error(`no runtime plugin ${handle.runtimeName} is loaded`));
-  }
-  const herdrRecord = (handle.runtimeName || runtime.name) === HERDR_RUNTIME_NAME;
-  let alive: unknown;
-  try {
-    alive = await runtime.isAlive(handle);
-  } catch (err: unknown) {
-    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-    if (code === RUNTIME_NO_SERVER_ERROR_CODE && !herdrRecord) return false;
-    throw unknown(err);
-  }
-  if (typeof alive !== "boolean") {
+  const liveness = await classifyOrchestratorLiveness(runtime, handle, probeTimeoutMs);
+  if (liveness.state === "alive") return true;
+  if (liveness.state === "ended") return false;
+  if (liveness.notBoolean) {
     throw new Error(
-      `Cannot tell whether session ${sessionId} is alive (the liveness check answered ${String(alive)}, not true or false), so it is neither reused nor replaced. Check the runtime and retry.`,
+      `Cannot tell whether session ${sessionId} is alive (${liveness.reason}), so it is neither reused nor replaced. Check the runtime and retry.`,
     );
   }
-  if (!alive && herdrRecord) {
-    throw unknown(
-      new Error(
-        `herdr answered that pane ${handle.id} does not exist or has another terminal; before RH no herdr answer proves that a launch ended`,
-      ),
-    );
+  throw new Error(
+    `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
+    { cause: liveness.cause ?? new Error(liveness.reason) },
+  );
+}
+
+/**
+ * Herdr fit-2 (design r11 5.3.8): a record that blocks an orchestrator start,
+ * with what message M needs beyond BlockingLaunch.
+ */
+interface BlockedRecord {
+  launch: BlockingLaunch;
+  /** `<state>` of message M. */
+  state: string;
+  /** The `createIncomplete` stage of the stored handle. */
+  stage?: string;
+  /** The label of the herdr workspace (the session or tmux name). */
+  label: string;
+  /** True when the stored handle has both pins (herdrBin, herdrSocket). */
+  pinned: boolean;
+}
+
+/** The lines of one record in message M (design r11 5.3.8); each value in a command is shell-quoted. */
+function blockedRecordLines(record: BlockedRecord): string[] {
+  const { launch, state } = record;
+  const id = launch.sessionId;
+  if (launch.kind === "in-progress") {
+    return [
+      `${id}: ${state}.`,
+      `  Wait for ao process ${launch.launcherPid}; if it hangs, stop that process, then run ao start again.`,
+    ];
   }
-  return alive;
+  if (launch.kind === "damaged") {
+    return [
+      `${id}: ${state}. Its runtime handle cannot be read (${launch.handle ?? ""}). Retire it by hand: docs/DEVELOPMENT.md, "Retire a Herdr record by hand".`,
+    ];
+  }
+  const worktree = launch.worktree ?? "unknown";
+  const lines = [
+    `${id}: ${state}. Herdr pane ${launch.pane || "(none)"} (terminal ${launch.terminal ?? "unknown"}), workspace ${launch.workspace ?? "unknown"}, worktree ${worktree}, socket ${launch.socket ?? "not recorded"}: ${launch.answer ?? "not checked"}.`,
+  ];
+  const bin = shellEscape(launch.bin ?? HERDR_RUNTIME_NAME);
+  const at =
+    record.pinned && launch.socket ? `HERDR_SOCKET_PATH=${shellEscape(launch.socket)} ` : "";
+  const lookFor = `(look for the label ${shellEscape(record.label)} and the cwd ${shellEscape(worktree)})`;
+  if (record.stage === "create-pending") {
+    lines.push(
+      `  AO did not record the endpoint of this launch: it is the endpoint of the ao process that started it (its HERDR_SOCKET_PATH, else its HERDR_SESSION, else the default socket).`,
+      `  Check:  ${bin} workspace list ${lookFor}`,
+    );
+  } else if (!launch.pane) {
+    lines.push(`  Check:  ${at}${bin} workspace list ${lookFor}`);
+  } else {
+    lines.push(`  Check:  ${at}${bin} pane get ${shellEscape(launch.pane)}`);
+    lines.push(`  If it runs, use it:  ao session attach ${shellEscape(id)}`);
+  }
+  lines.push(
+    `  If it does not run, or after you close it:  ao session kill ${shellEscape(id)} --confirm-runtime-closed ${shellEscape(launch.identityToken)}`,
+  );
+  return lines;
+}
+
+/** Message M (design r11 5.3.8): the message of a start that records block. */
+function blockedStartMessage(projectId: string, records: readonly BlockedRecord[]): string {
+  return [
+    `No new orchestrator was started for project ${projectId}: AO cannot tell that every earlier herdr orchestrator launch of the project ended.`,
+    ...records.flatMap(blockedRecordLines),
+    "Before RH, AO takes no herdr answer as proof that a launch ended. Then run ao start again.",
+  ].join("\n");
+}
+
+/** Herdr fit-2 (design r11 4.1, 5.3.8): an OrchestratorStartBlockedError with one sentence. */
+function startBlocked(
+  projectId: string,
+  reason: Exclude<OrchestratorStartBlockedReason, "records">,
+  cause?: unknown,
+  detail?: string,
+): OrchestratorStartBlockedError {
+  const message =
+    reason === "records-unreadable"
+      ? `The session records of project ${projectId} could not be read (${shortErrorText(cause)}); no orchestrator was started.`
+      : reason === "admission-busy"
+        ? `Another ao process is admitting an orchestrator for project ${projectId} now. Run ao start again after it ends.`
+        : reason === "admission-unsupported"
+          ? "This platform has no admission lock; AO starts no herdr orchestrator here."
+          : reason === "admission-path"
+            ? `AO cannot fix the admission path of project ${projectId} (${detail ?? shortErrorText(cause)}); no orchestrator was started.`
+            : `The orchestrator records of project ${projectId} changed during the check; run ao start again.`;
+  return new OrchestratorStartBlockedError(message, { projectId, reason, cause });
 }
 
 /** Reconstruct a Session object from raw metadata key=value pairs. */
@@ -1191,9 +1354,32 @@ function withAgentPane(handle: RuntimeHandle, paneId: string): RuntimeHandle {
   return { ...handle, data: { ...handle.data, [AGENT_PANE_KEY]: paneId } };
 }
 
+/**
+ * Herdr fit-2 (design r11 4.2): a stage of an orchestrator admission, for the
+ * test hook `SessionManagerDeps.admission.onStage`.
+ */
+export type AdmissionStage =
+  | "subject-fixed"
+  | "lock-held"
+  | "sessions-dir-ready"
+  | "before-reservation"
+  | "transition-written";
+
 export interface SessionManagerDeps {
   config: OrchestratorConfig;
   registry: PluginRegistry;
+  /**
+   * Herdr fit-2 (design r11 4.2), for tests: the wait for the admission lock
+   * A (`waitMs`, default 30 000), the core bound of each probe and of each
+   * stop under A (`probeTimeoutMs`, default 10 000), and a hook that each
+   * admission awaits at its stages (`info.selected`: the records that G1
+   * selected in the round, 0 before G1 runs). Production code passes nothing.
+   */
+  admission?: {
+    waitMs?: number;
+    probeTimeoutMs?: number;
+    onStage?: (stage: AdmissionStage, info: { selected: number }) => Promise<void>;
+  };
 }
 
 /** Create a SessionManager instance. */
@@ -2792,6 +2978,439 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
   }
 
+  /** Herdr fit-2 (design r11 4.2): the bounds and the stage hook of each admission. */
+  const admission = {
+    waitMs: deps.admission?.waitMs ?? ADMISSION_WAIT_MS,
+    probeTimeoutMs: deps.admission?.probeTimeoutMs ?? ADMISSION_PROBE_TIMEOUT_MS,
+    async stage(stage: AdmissionStage, selected: number): Promise<void> {
+      await deps.admission?.onStage?.(stage, { selected });
+    },
+  };
+
+  /**
+   * Herdr fit-2 (design r11 5.3.1): a runtime stop under A, with the core
+   * bound. No answer in time is `unknown`; nothing else changes.
+   */
+  async function stopWithinBound(
+    runtime: Runtime,
+    handle: RuntimeHandle,
+  ): Promise<RuntimeStopOutcome> {
+    const answer = await outcomeWithin(
+      () => stopRuntime(runtime, handle),
+      admission.probeTimeoutMs,
+    );
+    if (answer.kind === "value") return answer.value;
+    return {
+      outcome: "unknown" as const,
+      detail:
+        answer.kind === "timeout"
+          ? `the ${runtime.name} stop did not answer within ${secondsText(admission.probeTimeoutMs)}`
+          : `the ${runtime.name} stop failed: ${shortErrorText(answer.error)}`,
+      ...(answer.kind === "error" ? { cause: answer.error } : {}),
+    };
+  }
+
+  /** A record that G1 selected (design r11 5.3.3), as this round read it. */
+  interface AdmissionRecord {
+    id: string;
+    raw: Record<string, string>;
+    /** launchIdentityToken of `raw`: the key of its probe answers. */
+    token: string;
+    /** The PID of its live launch owner (R1), or null. */
+    owner: number | null;
+  }
+
+  /** The decision of G2 for one record (design r11 4.7). */
+  interface AdmissionJudgement {
+    record: AdmissionRecord;
+    /** Why it blocks; undefined while R1 to R6 (and R8 for a start) pass. */
+    block?: { kind: BlockingLaunchKind; reason: string };
+    /** Its handle of a runtime in LAUNCH_END_UNPROVEN_RUNTIMES (R2), when it has one. */
+    handle?: RuntimeHandle;
+  }
+
+  const answerKey = (record: AdmissionRecord): string => `${record.id}\0${record.token}`;
+
+  /**
+   * Herdr fit-2 G1 (design r11 5.3.3): the known-Herdr orchestrator records
+   * of a project, read strictly, whatever their status, activity,
+   * `killedReason` or `launchFailed`, and whatever the project's runtime is
+   * now: a stored handle that `isUnprovenLaunchRecord` accepts (rows 1 to 3),
+   * or no handle and a live launch owner while the project selects a runtime
+   * of the set (row 4). A record that cannot be listed or read refuses the
+   * start (`records-unreadable`).
+   */
+  async function selectOrchestratorRecords(
+    projectId: string,
+    project: ProjectConfig,
+    sessionsDir: string,
+    selectedRuntime: string,
+    excludeId?: string,
+  ): Promise<AdmissionRecord[]> {
+    let ids: string[];
+    try {
+      ids = listRecordIds(sessionsDir);
+    } catch (err) {
+      throw startBlocked(projectId, "records-unreadable", err);
+    }
+    const selected: AdmissionRecord[] = [];
+    for (const id of ids) {
+      if (id === excludeId) continue;
+      let raw: Record<string, string> | null;
+      try {
+        raw = readRecordStrict(sessionsDir, id);
+      } catch (err) {
+        throw startBlocked(projectId, "records-unreadable", err);
+      }
+      if (!raw || !isOrchestratorSessionRecord(id, raw, project.sessionPrefix)) continue;
+      const byHandle = isUnprovenLaunchRecord(raw, selectedRuntime);
+      if (!byHandle && (raw["runtimeHandle"] || !isLaunchEndUnproven(selectedRuntime))) continue;
+      const owner = await liveLaunchOwner(raw);
+      // Row 5: no handle and no live owner is not selected (today's rule, L-2).
+      if (!byHandle && owner === null) continue;
+      selected.push({ id, raw, token: launchIdentityToken(raw), owner });
+    }
+    return selected;
+  }
+
+  /**
+   * Herdr fit-2 G2 (design r11 4.7): decide a selected record from its fields
+   * by R1 to R6, and for a start by R8 (`r8` answers the reason when R8
+   * fails). A restore blocks on every record that it selects. R7 (an `alive`
+   * answer for this identity token) is applied apart (`withAnswer`).
+   */
+  function judgeOrchestratorRecord(
+    record: AdmissionRecord,
+    selectedRuntime: string,
+    options: { r8?: (id: string) => string | undefined; restoreOf?: string },
+  ): AdmissionJudgement {
+    // R1.
+    if (record.owner !== null) {
+      return {
+        record,
+        block: { kind: "in-progress", reason: `launch in progress by ao process ${record.owner}` },
+      };
+    }
+    // R2.
+    const text = record.raw["runtimeHandle"] ?? "";
+    const parsed = text ? safeJsonParse<unknown>(text) : null;
+    if (!isWellFormedHandle(parsed) || !isLaunchEndUnproven(parsed.runtimeName)) {
+      return {
+        record,
+        block: { kind: "damaged", reason: "its runtime handle cannot be read" },
+      };
+    }
+    const handle = parsed;
+    const blocks = (kind: BlockingLaunchKind, reason: string): AdmissionJudgement => ({
+      record,
+      handle,
+      block: { kind, reason },
+    });
+    // R3.
+    const stage = handle.data["createIncomplete"];
+    if (stage !== undefined) return blocks("create-incomplete", `create ${String(stage)}`);
+    // R4 to R6.
+    if (record.raw["launchFailed"]) return blocks("not-reused", "its launch failed");
+    if (handle.runtimeName !== selectedRuntime) {
+      return blocks("not-reused", `the project now selects ${selectedRuntime}`);
+    }
+    const status = record.raw["status"] ?? "";
+    if (TERMINAL_STATUSES.has(status as SessionStatus)) {
+      return blocks("not-reused", `its status is ${status}`);
+    }
+    // R8.
+    const r8 = options.r8?.(record.id);
+    if (r8) return blocks("not-reused", r8);
+    if (options.restoreOf) {
+      return blocks("not-reused", `the restore of ${options.restoreOf} would launch next to it`);
+    }
+    return { record, handle };
+  }
+
+  /** R7: a record that passes R1 to R6 (and R8) blocks `unproven` unless its answer is `alive`. */
+  function withAnswer(
+    judged: AdmissionJudgement,
+    answers: ReadonlyMap<string, OrchestratorLiveness>,
+  ): AdmissionJudgement {
+    if (judged.block || !judged.handle) return judged;
+    const answer = answers.get(answerKey(judged.record));
+    if (!answer || answer.state === "alive") return judged;
+    return { ...judged, block: { kind: "unproven", reason: answer.reason } };
+  }
+
+  /** The probe of one record outside A (design r11 5.3.2), through its handle's runtime and pins. */
+  async function probeAdmissionRecord(handle: RuntimeHandle): Promise<OrchestratorLiveness> {
+    return classifyOrchestratorLiveness(
+      runtimeForHandle(handle, null),
+      handle,
+      admission.probeTimeoutMs,
+    );
+  }
+
+  /**
+   * Herdr fit-2 (design r11 5.3.2, 5.3.8): the error of a blocked admission.
+   * With A released, each blocking record with a pane ID in herdr's grammar
+   * gets one probe (an answer of the rounds for its identity token is
+   * reused), in parallel, to fill `answer` in message M; these probes decide
+   * nothing.
+   */
+  async function blockedAdmission(
+    projectId: string,
+    project: ProjectConfig,
+    blocking: readonly AdmissionJudgement[],
+    answers: Map<string, OrchestratorLiveness>,
+  ): Promise<OrchestratorStartBlockedError> {
+    const answerOf = async (judged: AdmissionJudgement): Promise<string | undefined> => {
+      const { handle, block } = judged;
+      if (!handle || block?.kind === "in-progress") return undefined;
+      if (!isHerdrPaneId(handle.id)) return "AO has no pane ID for this launch";
+      const key = answerKey(judged.record);
+      let answer = answers.get(key);
+      if (!answer) {
+        answer = await probeAdmissionRecord(handle);
+        answers.set(key, answer);
+      }
+      if (answer.state !== "alive") return answer.reason;
+      return `the pane runs, but the record is not reusable (${block?.reason ?? "it is not reusable"})`;
+    };
+    const filled = await Promise.all(blocking.map(answerOf));
+    const records = blocking.map((judged, index): BlockedRecord => {
+      const { record, handle, block } = judged;
+      const raw = record.raw;
+      const data = handle?.data ?? {};
+      const text = (key: string): string | undefined => {
+        const value = data[key];
+        return typeof value === "string" && value ? value : undefined;
+      };
+      const kind = block?.kind ?? "unproven";
+      const status = raw["status"] || "unknown";
+      const stage =
+        typeof data["createIncomplete"] === "string" ? data["createIncomplete"] : undefined;
+      const state =
+        kind === "in-progress"
+          ? (block?.reason ?? "launch in progress")
+          : [
+              `status ${status}`,
+              ...(raw["launchFailed"] ? ["launch failed"] : []),
+              ...(stage ? [`create ${stage}`] : []),
+              ...(kind === "not-reused" && block ? [block.reason] : []),
+            ].join(", ");
+      const launch: BlockingLaunch = {
+        sessionId: record.id,
+        kind,
+        reason: block?.reason ?? "",
+        status,
+        launchFailed: Boolean(raw["launchFailed"]),
+        ...(kind === "damaged" ? { handle: (raw["runtimeHandle"] ?? "").slice(0, 80) } : {}),
+        ...(handle && handle.id ? { pane: handle.id } : {}),
+        ...(text("terminalId") ? { terminal: text("terminalId") } : {}),
+        ...(text("workspaceId") ? { workspace: text("workspaceId") } : {}),
+        worktree:
+          raw["worktree"] || join(getWorktreesDir(config.configPath, project.path), record.id),
+        ...(text("herdrSocket") ? { socket: text("herdrSocket") } : {}),
+        ...(text("herdrBin") ? { bin: text("herdrBin") } : {}),
+        ...(filled[index] !== undefined ? { answer: filled[index] } : {}),
+        ...(record.owner !== null ? { launcherPid: record.owner } : {}),
+        identityToken: record.token,
+      };
+      return {
+        launch,
+        state,
+        ...(stage ? { stage } : {}),
+        label: text("sessionId") ?? raw["tmuxName"] ?? record.id,
+        pinned: Object.hasOwn(data, "herdrBin") && Object.hasOwn(data, "herdrSocket"),
+      };
+    });
+    return new OrchestratorStartBlockedError(blockedStartMessage(projectId, records), {
+      projectId,
+      reason: "records",
+      blocking: records.map((record) => record.launch),
+    });
+  }
+
+  /** What an admission round decided when no record needed a probe. */
+  type AdmissionDecision<T> =
+    | { kind: "done"; value: T }
+    | { kind: "blocked"; blocking: AdmissionJudgement[] }
+    | { kind: "next" };
+
+  /** One admission (design r11 5.3.2): start, restore or reuse-only. */
+  interface AdmissionRun<T> {
+    mode: "start" | "restore" | "reuse-only";
+    projectId: string;
+    project: ProjectConfig;
+    sessionsDir: string;
+    /** Start and restore: the create runtime is in LAUNCH_END_UNPROVEN_RUNTIMES. */
+    createInSet: boolean;
+    /** Restore: its own ID, which G leaves out. */
+    excludeId?: string;
+    /** Start: the reason when R8 fails for a record, else undefined. */
+    r8?: (id: string) => string | undefined;
+    /**
+     * The decision of a round in which no record needs a probe, under A. It
+     * runs the admitted step and answers its result, or "blocked", or "next"
+     * (a change: the next round decides). `checkSubject` checks that the real
+     * path of the sessions directory is still the subject.
+     */
+    decide(round: {
+      judged: AdmissionJudgement[];
+      answers: ReadonlyMap<string, OrchestratorLiveness>;
+      checkSubject: () => void;
+      selected: number;
+    }): Promise<AdmissionDecision<T>>;
+    /** Reuse-only: the answer after round 3 from the last round's records. */
+    exhausted?(judged: AdmissionJudgement[], answers: ReadonlyMap<string, OrchestratorLiveness>): T;
+  }
+
+  /**
+   * Herdr fit-2 F-7 (design r11 4.9, 5.3.1, 5.3.2): the admission rounds. The
+   * subject of lock A is fixed once, before A. Each round holds A (busy:
+   * `admission-busy`), makes (start) and checks the sessions directory, reads
+   * the records (G1) and decides them (G2). A round in which a record needs a
+   * probe releases A and probes outside A; its answer counts only for the
+   * identity token that it probed. No Herdr call runs under A. After three
+   * rounds with a record that still needs a probe: `records-changed` (a
+   * reuse-only decision answers what it can). On a platform without the lock
+   * (OQ-F6 (a)) a start or restore whose create runtime is in the set, or
+   * whose G1 (read without A) selects a record, refuses
+   * (`admission-unsupported`); a reuse-only decision runs without A.
+   */
+  async function runAdmission<T>(run: AdmissionRun<T>): Promise<T> {
+    const { mode, projectId, project, sessionsDir } = run;
+    const { subject, name } = admissionLock(sessionsDir, projectId);
+    await admission.stage("subject-fixed", 0);
+    const selectedRuntime = project.runtime ?? config.defaults.runtime;
+    const supported = isDeliveryLockSupported();
+    const answers = new Map<string, OrchestratorLiveness>();
+    const checkSubject = (made?: string): void => {
+      let real: string;
+      try {
+        real = realpathSync(sessionsDir);
+      } catch (err) {
+        throw startBlocked(
+          projectId,
+          "admission-path",
+          err,
+          `${errorCode(err) ?? "unknown error"} at ${sessionsDir}`,
+        );
+      }
+      if (real !== subject) {
+        throw startBlocked(
+          projectId,
+          "admission-path",
+          undefined,
+          `the real path of ${sessionsDir} is now ${real}, not ${subject}${made ? `; the empty directories that this start made stay, from ${made} on` : ""}`,
+        );
+      }
+    };
+    const sessionsDirExists = (): boolean => {
+      try {
+        return statSync(sessionsDir).isDirectory();
+      } catch (err) {
+        if (errorCode(err) === "ENOENT") return false;
+        throw startBlocked(
+          projectId,
+          "admission-path",
+          err,
+          `${errorCode(err) ?? "unknown error"} at ${sessionsDir}`,
+        );
+      }
+    };
+    const judgeAll = (records: AdmissionRecord[]): AdmissionJudgement[] =>
+      records.map((record) =>
+        judgeOrchestratorRecord(record, selectedRuntime, {
+          ...(mode === "start" && run.r8 ? { r8: run.r8 } : {}),
+          ...(mode === "restore" && run.excludeId ? { restoreOf: run.excludeId } : {}),
+        }),
+      );
+
+    if (!supported && mode !== "reuse-only") {
+      const selected = sessionsDirExists()
+        ? await selectOrchestratorRecords(
+            projectId,
+            project,
+            sessionsDir,
+            selectedRuntime,
+            run.excludeId,
+          )
+        : [];
+      if (run.createInSet || selected.length > 0)
+        throw startBlocked(projectId, "admission-unsupported");
+      // Nothing to admit against, and no lock: today's path.
+      if (mode === "start") mkdirSync(sessionsDir, { recursive: true });
+      const decided = await run.decide({
+        judged: [],
+        answers,
+        checkSubject: () => {},
+        selected: 0,
+      });
+      if (decided.kind === "done") return decided.value;
+      throw startBlocked(projectId, "records-changed");
+    }
+
+    let lastJudged: AdmissionJudgement[] = [];
+    for (let round = 1; round <= ADMISSION_ROUNDS; round++) {
+      const lock: DeliveryLock | null = supported
+        ? await holdDeliveryLock(name, admission.waitMs)
+        : null;
+      if (supported && !lock) throw startBlocked(projectId, "admission-busy");
+      let toProbe: AdmissionJudgement[];
+      let blocking: AdmissionJudgement[] | undefined;
+      try {
+        await admission.stage("lock-held", 0);
+        let hasDir: boolean;
+        if (mode === "start") {
+          const made = mkdirSync(sessionsDir, { recursive: true }) ?? undefined;
+          checkSubject(made);
+          hasDir = true;
+        } else {
+          hasDir = sessionsDirExists();
+          if (hasDir) checkSubject();
+        }
+        await admission.stage("sessions-dir-ready", 0);
+        const selected = hasDir
+          ? await selectOrchestratorRecords(
+              projectId,
+              project,
+              sessionsDir,
+              selectedRuntime,
+              run.excludeId,
+            )
+          : [];
+        const judged = judgeAll(selected);
+        lastJudged = judged;
+        toProbe =
+          mode === "restore"
+            ? []
+            : judged.filter((j) => !j.block && j.handle && !answers.has(answerKey(j.record)));
+        if (toProbe.length === 0) {
+          const decided = await run.decide({
+            judged,
+            answers,
+            checkSubject,
+            selected: selected.length,
+          });
+          if (decided.kind === "done") return decided.value;
+          if (decided.kind === "blocked") blocking = decided.blocking;
+        }
+      } finally {
+        lock?.release();
+      }
+      if (blocking) throw await blockedAdmission(projectId, project, blocking, answers);
+      // After round 3 no round reads the records again, so a probe then decides nothing.
+      if (toProbe.length > 0 && round < ADMISSION_ROUNDS) {
+        await Promise.all(
+          toProbe.map(async (judged) => {
+            if (!judged.handle) return;
+            answers.set(answerKey(judged.record), await probeAdmissionRecord(judged.handle));
+          }),
+        );
+      }
+    }
+    if (run.exhausted) return run.exhausted(lastJudged, answers);
+    throw startBlocked(projectId, "records-changed");
+  }
+
   // Define methods as local functions so `this` is not needed
   async function spawn(spawnConfig: SessionSpawnConfig): Promise<Session> {
     const project = config.projects[spawnConfig.projectId];
@@ -3292,18 +3911,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Get the sessions directory for this project
     const sessionsDir = getProjectSessionsDir(project);
 
-    // Validate and store .origin file before reserving any identity so that
-    // a validation failure does not leave an orphaned metadata entry.
-    if (config.configPath) {
-      validateAndStoreOrigin(config.configPath, project.path);
-    }
-
-    let sessionId: string;
-    let tmuxName: string | undefined;
     let branch: string;
     let workspacePath: string;
-    // B-1 (round 4): the record that this start reserved; its writes go there only.
-    let own: OwnLaunchRecord;
     // Herdr fit-2 (design r11 4.4, 4.5): as for a worker spawn, a create
     // runtime in LAUNCH_END_UNPROVEN_RUNTIMES takes the launch claim, and the
     // reservation holds the pending handle P with the orchestrator role.
@@ -3316,15 +3925,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     /**
      * Same-ID R2a: stop a live orchestrator before this start replaces it.
      * Only `destroyed` or `absent` goes on; anything else throws, so the
-     * start removes no record and creates no runtime.
+     * start removes no record and creates no runtime. Herdr fit-2 (design
+     * r11 5.3.1): it runs under A, with the core bound.
      */
     const orchestratorRuntime = plugins.runtime;
+    const orchestratorAgent = plugins.agent;
     const stopOrchestratorOrRefuse = async (handle: RuntimeHandle, kept: string): Promise<void> => {
       // Herdr fit-2 (design r11 4.6): through the handle's runtime; one that
       // is in the set and not loaded is an unconfirmed stop.
       const handleRuntime = runtimeForHandle(handle, orchestratorRuntime);
       const stopped = handleRuntime
-        ? await stopRuntime(handleRuntime, handle)
+        ? await stopWithinBound(handleRuntime, handle)
         : notLoadedStop(handle);
       if (!isRuntimeStopConfirmed(stopped)) {
         throw new RuntimeStopUnconfirmedError({
@@ -3337,25 +3948,55 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     };
 
-    if (orchestratorWorkspaceMode === "project") {
-      sessionId = `${project.sessionPrefix}-orchestrator`;
-      tmuxName = config.configPath
-        ? `${generateConfigHash(config.configPath)}-${sessionId}`
-        : undefined;
-      branch = project.defaultBranch;
-      workspacePath = project.path;
-
-      if (plugins.agent.setupWorkspaceHooks) {
-        await plugins.agent.setupWorkspaceHooks(workspacePath, { dataDir: sessionsDir });
+    const fixedId = `${project.sessionPrefix}-orchestrator`;
+    const fixedTmuxName = config.configPath
+      ? `${generateConfigHash(config.configPath)}-${fixedId}`
+      : undefined;
+    const selectedRuntime = project.runtime ?? config.defaults.runtime;
+    const reusesLiveRecord =
+      orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore";
+    /** Herdr fit-2 R8 (design r11 4.7): the reason when this start may not reuse a record. */
+    const r8 = (id: string): string | undefined => {
+      if (id !== fixedId) return "an isolated record";
+      if (orchestratorWorkspaceMode !== "project") {
+        return `the workspace mode is now ${orchestratorWorkspaceMode}`;
       }
+      if (!reusesLiveRecord) {
+        return `the strategy ${orchestratorSessionStrategy} would stop it, and a Herdr stop cannot confirm before RH`;
+      }
+      return undefined;
+    };
+    /** True when G1 would select `raw` (a record of the set that appeared during the launch step). */
+    const selectedByG1 = async (raw: Record<string, string>): Promise<boolean> =>
+      isUnprovenLaunchRecord(raw, selectedRuntime) ||
+      (!raw["runtimeHandle"] &&
+        isLaunchEndUnproven(selectedRuntime) &&
+        (await liveLaunchOwner(raw)) !== null);
 
-      const existingRaw = readMetadataRaw(sessionsDir, sessionId);
+    type StartAdmitted =
+      | { reused: Session }
+      | { reserved: Record<string, string>; sessionId: string; tmuxName: string | undefined };
+
+    /**
+     * The launch step of project mode, under A (design r11 5.3.2): today's
+     * branch for a fixed-ID record of a runtime outside the set, with the
+     * dispatch of 4.6 and each runtime call bounded; then the subject check
+     * and the reservation with P. A record of the set that appears here is
+     * decided by the next round.
+     */
+    const reserveProjectMode = async (
+      checkSubject: () => void,
+      selected: number,
+    ): Promise<AdmissionDecision<StartAdmitted>> => {
+      const id = fixedId;
+      const existingRaw = readMetadataRaw(sessionsDir, id);
+      if (existingRaw && (await selectedByG1(existingRaw))) return { kind: "next" };
       // B-2: another `ao start` still launches this orchestrator. Its rollback
       // or its later writes would hit the record that this start makes, so
       // neither reuse nor replace it.
-      if (existingRaw) await assertNoLiveLauncher(sessionId, existingRaw, "replace");
+      if (existingRaw) await assertNoLiveLauncher(id, existingRaw, "replace");
       const existingOrchestrator = existingRaw?.["runtimeHandle"]
-        ? metadataToSession(sessionId, existingRaw, orchestratorConfig.projectId)
+        ? metadataToSession(id, existingRaw, orchestratorConfig.projectId)
         : null;
       // B-1 (round 4): the liveness check awaits; the old orchestrator is
       // stopped and its record removed only while the record still names
@@ -3363,30 +4004,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // meantime keeps its record (the reservation below then fails, and
       // the concurrent path decides again from the new record).
       const stillNames = (read: Record<string, string>): boolean => {
-        const current = readMetadataRaw(sessionsDir, sessionId);
+        const current = readMetadataRaw(sessionsDir, id);
         return !!current && holdsExpected(current, launchIdentity(read));
       };
       if (existingRaw && existingOrchestrator?.runtimeHandle) {
-        const existingAlive = await isOrchestratorRuntimeAlive(
+        const existingAlive = await outsideSetOrchestratorAlive(
           runtimeForHandle(existingOrchestrator.runtimeHandle, plugins.runtime),
           existingOrchestrator.runtimeHandle,
-          sessionId,
+          id,
+          admission.probeTimeoutMs,
         );
-        if (
-          existingAlive &&
-          (orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore")
-        ) {
+        if (existingAlive && reusesLiveRecord) {
           // Round 8 (M-1): null only for a missing record; a record that
           // cannot be read throws and keeps the runtime.
-          const persistedRaw = readRecordStrict(sessionsDir, sessionId);
+          const persistedRaw = readRecordStrict(sessionsDir, id);
           if (persistedRaw?.["runtimeHandle"]) {
-            const persisted = metadataToSession(
-              sessionId,
-              persistedRaw,
-              orchestratorConfig.projectId,
-            );
+            if (await selectedByG1(persistedRaw)) return { kind: "next" };
+            const persisted = metadataToSession(id, persistedRaw, orchestratorConfig.projectId);
             persisted.metadata["orchestratorSessionReused"] = "true";
-            return persisted;
+            return { kind: "done", value: { reused: persisted } };
           }
           // The record is gone (another process archived or deleted it)
           // while its runtime still runs: no record names that runtime, so
@@ -3408,63 +4044,130 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               existingOrchestrator.runtimeHandle,
               "its record kept; no second orchestrator was started",
             );
-            deleteMetadata(sessionsDir, sessionId, false, launchIdentity(existingRaw));
+            deleteMetadata(sessionsDir, id, false, launchIdentity(existingRaw));
           }
         } else {
-          deleteMetadata(
-            sessionsDir,
-            sessionId,
-            orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
-            launchIdentity(existingRaw),
-          );
+          deleteMetadata(sessionsDir, id, reusesLiveRecord, launchIdentity(existingRaw));
         }
       }
 
-      let reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
+      await admission.stage("before-reservation", selected);
+      checkSubject();
+      let reservedRecord = reserveSessionRecord(sessionsDir, id, reservation ?? undefined);
       if (!reservedRecord) {
-        const concurrentRaw = readMetadataRaw(sessionsDir, sessionId);
-        if (concurrentRaw) await assertNoLiveLauncher(sessionId, concurrentRaw, "replace");
+        const concurrentRaw = readMetadataRaw(sessionsDir, id);
+        if (concurrentRaw && (await selectedByG1(concurrentRaw))) return { kind: "next" };
+        if (concurrentRaw) await assertNoLiveLauncher(id, concurrentRaw, "replace");
         const concurrentSession = concurrentRaw?.["runtimeHandle"]
-          ? metadataToSession(sessionId, concurrentRaw, orchestratorConfig.projectId)
+          ? metadataToSession(id, concurrentRaw, orchestratorConfig.projectId)
           : null;
         if (concurrentRaw && concurrentSession?.runtimeHandle) {
-          const concurrentAlive = await isOrchestratorRuntimeAlive(
+          const concurrentAlive = await outsideSetOrchestratorAlive(
             runtimeForHandle(concurrentSession.runtimeHandle, plugins.runtime),
             concurrentSession.runtimeHandle,
-            sessionId,
+            id,
+            admission.probeTimeoutMs,
           );
-          if (
-            concurrentAlive &&
-            (orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore")
-          ) {
+          if (concurrentAlive && reusesLiveRecord) {
             concurrentSession.metadata["orchestratorSessionReused"] = "true";
-            return concurrentSession;
+            return { kind: "done", value: { reused: concurrentSession } };
           }
           if (!concurrentAlive) {
-            deleteMetadata(
-              sessionsDir,
-              sessionId,
-              orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
-              launchIdentity(concurrentRaw),
-            );
-            reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
+            deleteMetadata(sessionsDir, id, reusesLiveRecord, launchIdentity(concurrentRaw));
+            checkSubject();
+            reservedRecord = reserveSessionRecord(sessionsDir, id, reservation ?? undefined);
           }
         } else {
-          reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
+          checkSubject();
+          reservedRecord = reserveSessionRecord(sessionsDir, id, reservation ?? undefined);
         }
         if (!reservedRecord) {
-          throw new Error(`Session ${sessionId} already exists but is not in a reusable state`);
+          throw new Error(`Session ${id} already exists but is not in a reusable state`);
         }
       }
-      own = ownLaunchRecord(sessionsDir, sessionId, reservedRecord);
+      return {
+        kind: "done",
+        value: { reserved: reservedRecord, sessionId: id, tmuxName: fixedTmuxName },
+      };
+    };
+
+    // Herdr fit-2 F-7 (design r11 5.3.2): the admission of this start. G
+    // blocks a known-Herdr orchestrator record that it cannot reuse; it
+    // reuses only the project-mode record that R accepts with an `alive`
+    // answer for its identity token. Nothing is written before the admitted
+    // step, which runs under A: the `.origin` file, the project-mode hooks,
+    // then the reuse, or the old-record branch and the reservation with P.
+    const admitted = await runAdmission<StartAdmitted>({
+      mode: "start",
+      projectId: orchestratorConfig.projectId,
+      project,
+      sessionsDir,
+      createInSet: unproven,
+      r8,
+      decide: async ({ judged, answers, checkSubject, selected }) => {
+        const decided = judged.map((entry) => withAnswer(entry, answers));
+        const blocking = decided.filter((entry) => entry.block);
+        if (blocking.length > 0) return { kind: "blocked", blocking };
+        const candidate = decided.find((entry) => entry.handle);
+        // Validate and store .origin file before reserving any identity so that
+        // a validation failure does not leave an orphaned metadata entry.
+        if (config.configPath) {
+          validateAndStoreOrigin(config.configPath, project.path);
+        }
+        if (orchestratorWorkspaceMode === "project" && orchestratorAgent.setupWorkspaceHooks) {
+          await orchestratorAgent.setupWorkspaceHooks(project.path, { dataDir: sessionsDir });
+        }
+        if (candidate) {
+          // r10: the hooks awaited, so the record must still hold the
+          // identity token of the deciding round and pass R1 to R6; else the
+          // next round decides.
+          const current = readRecordStrict(sessionsDir, candidate.record.id);
+          if (!current || launchIdentityToken(current) !== candidate.record.token) {
+            return { kind: "next" };
+          }
+          const again = judgeOrchestratorRecord(
+            { ...candidate.record, raw: current, owner: await liveLaunchOwner(current) },
+            selectedRuntime,
+            { r8 },
+          );
+          if (again.block) return { kind: "next" };
+          const persisted = metadataToSession(
+            candidate.record.id,
+            current,
+            orchestratorConfig.projectId,
+          );
+          persisted.metadata["orchestratorSessionReused"] = "true";
+          return { kind: "done", value: { reused: persisted } };
+        }
+        if (orchestratorWorkspaceMode === "project") {
+          return reserveProjectMode(checkSubject, selected);
+        }
+        // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
+        // Each isolated orchestrator gets its own numbered session and workspace.
+        await admission.stage("before-reservation", selected);
+        checkSubject();
+        const identity = reserveNextOrchestratorIdentity(project, sessionsDir, reservation);
+        return {
+          kind: "done",
+          value: {
+            reserved: identity.record,
+            sessionId: identity.sessionId,
+            tmuxName: identity.tmuxName,
+          },
+        };
+      },
+    });
+    if ("reused" in admitted) return admitted.reused;
+
+    const sessionId = admitted.sessionId;
+    const tmuxName = admitted.tmuxName;
+    // B-1 (round 4): the record that this start reserved; its writes go there only.
+    const own: OwnLaunchRecord = ownLaunchRecord(sessionsDir, sessionId, admitted.reserved);
+    if (orchestratorWorkspaceMode === "project") {
+      branch = project.defaultBranch;
+      workspacePath = project.path;
     } else {
-      // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
-      // Each isolated orchestrator gets its own numbered session and workspace.
-      const identity = reserveNextOrchestratorIdentity(project, sessionsDir, reservation);
-      sessionId = identity.sessionId;
-      tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
-      own = ownLaunchRecord(sessionsDir, sessionId, identity.record);
 
       try {
         // m-13: refuse an unsafe branch before any git runs. Inside the
@@ -3815,6 +4518,39 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     return session;
+  }
+
+  /**
+   * Herdr fit-2 (design r11 5.3.2, 5.3.5): the reuse-only decision for the
+   * CLI. It answers the known-Herdr orchestrator records of the project that
+   * R accepts (R1 to R7, without R8: any workspace mode and any strategy),
+   * read strictly under A in the deciding round, each with an `alive` answer
+   * for its identity token. It writes nothing and admits nothing. After three
+   * rounds with a record that still needs a probe, it answers the records
+   * that are reusable and drops the rest.
+   */
+  async function findReusableOrchestrators(projectId: string): Promise<Session[]> {
+    const project = config.projects[projectId];
+    if (!project) throw new Error(`Unknown project: ${projectId}`);
+    const reusable = (
+      judged: AdmissionJudgement[],
+      answers: ReadonlyMap<string, OrchestratorLiveness>,
+    ): Session[] =>
+      judged
+        .filter(
+          (entry) =>
+            !entry.block && entry.handle && answers.get(answerKey(entry.record))?.state === "alive",
+        )
+        .map((entry) => metadataToSession(entry.record.id, entry.record.raw, projectId));
+    return runAdmission<Session[]>({
+      mode: "reuse-only",
+      projectId,
+      project,
+      sessionsDir: getProjectSessionsDir(project),
+      createInSet: false,
+      decide: async ({ judged, answers }) => ({ kind: "done", value: reusable(judged, answers) }),
+      exhausted: reusable,
+    });
   }
 
   async function list(projectId?: string): Promise<Session[]> {
@@ -5341,7 +6077,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // compares its launch identity: an archive, a new reservation, or another
     // restore or launch of the ID stops the restore, and nothing is written.
     let owned: Record<string, string> = raw;
-    if (fromArchive) {
+    const stillOwned = (): boolean => {
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      return !!current && holdsExpected(current, launchIdentity(owned));
+    };
+    // 7a. Herdr fit-2 (design r11 5.2.4): `transition` keeps what the
+    //     write-back puts back.
+    let transition:
+      | {
+          before: { runtimeHandle: string; restoredAt: string };
+          publishedClaim: Readonly<Record<string, string>>;
+        }
+      | undefined;
+
+    /**
+     * 6b. From an archive: the copy-back. Herdr fit-2 (design r11 5.2.4): for
+     * an orchestrator record under A, directly after the subject check.
+     */
+    const copyBackArchive = (checkSubject?: () => void): void => {
+      if (!fromArchive) return;
       // Keep the stored spawn identity when copying the archive back. The
       // copy-back is a reservation: it never writes over an active record
       // (another restore or a new reservation), and only while the latest
@@ -5372,6 +6126,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         opencodeSessionId: raw["opencodeSessionId"],
         pinnedSummary: raw["pinnedSummary"],
       };
+      checkSubject?.();
       const reserved = reserveSessionRecord(
         sessionsDir,
         sessionId,
@@ -5386,110 +6141,140 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         );
       }
       owned = reserved;
-    }
-    const stillOwned = (): boolean => {
-      const current = readMetadataRaw(sessionsDir, sessionId);
-      return !!current && holdsExpected(current, launchIdentity(owned));
     };
 
-    // B-1 (round 4): the checks above awaited. Stop before the old runtime
-    // is stopped when another process changed the launch meanwhile (the
-    // runtime name is the same for every launch of the ID).
-    if (!stillOwned()) {
-      throw recordChangedError(
-        sessionsDir,
-        sessionId,
-        "it was restored",
-        "no runtime was destroyed or created",
-      );
-    }
-
-    // 7. Stop the old runtime if still alive (e.g. tmux session survives agent
-    // crash). Same-ID R2a (N-2): only a confirmed stop (destroyed or absent)
-    // lets the restore go on. Review r1 (M-1): the stop runs before the
-    // workspace is recreated, and a refusal removes the archive copy-back of
-    // this restore again while it still holds the values that
-    // releaseCopyBack compares (review r2 and r3, M-1), so a refused restore
-    // with no other operation on the ID leaves the record, the archive and
-    // the workspace as they were. A copy-back where one of those values
-    // changed during the stop, or that another operation replaced, stays,
-    // and the refusal says so.
-    //    Herdr fit-2 (design r11 4.6, 5.2.4): the stop goes through the
-    //    handle's runtime; one in LAUNCH_END_UNPROVEN_RUNTIMES that is not
-    //    loaded is unknown. A runtimeHandle text that gives no handle but
-    //    names herdr (or a project whose runtime is in the set) refuses like
-    //    an unconfirmed stop: a skipped stop would let a second launch start
-    //    next to a launch that no handle names.
-    const refuseStep7 = (handle: RuntimeHandle, stopped: UnconfirmedRuntimeStop): never => {
-      throw new RuntimeStopUnconfirmedError({
-        sessionId,
-        handle,
-        stop: stopped,
-        kept: fromArchive
-          ? releaseCopyBack(sessionsDir, sessionId, owned)
-          : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
-        retry: `ao session restore ${sessionId}`,
-      });
-    };
-    if (session.runtimeHandle) {
-      const handleRuntime = runtimeForHandle(session.runtimeHandle, plugins.runtime);
-      const stopped = handleRuntime
-        ? await stopRuntime(handleRuntime, session.runtimeHandle)
-        : notLoadedStop(session.runtimeHandle);
-      if (!isRuntimeStopConfirmed(stopped)) refuseStep7(session.runtimeHandle, stopped);
-    } else if (raw["runtimeHandle"] && isUnprovenLaunchRecord(raw, plugins.runtime.name)) {
-      const text = raw["runtimeHandle"];
-      refuseStep7(
-        { id: "", runtimeName: HERDR_RUNTIME_NAME, data: {} },
-        {
-          outcome: "unknown",
-          detail: `the runtime handle of ${sessionId} cannot be read (${text.slice(0, 80)}); retire it by hand`,
-        },
-      );
-    }
-
-    // 7a. Herdr fit-2 (design r11 5.2.4): the transition write. Before any
-    //     runtime of this restore exists, the record gets the pending handle
-    //     P, a new launch time and this process's claim, compared by the
-    //     launch identity and the claim values as read. `transition` keeps
-    //     what the write-back puts back.
-    let transition:
-      | {
-          before: { runtimeHandle: string; restoredAt: string };
-          publishedClaim: Readonly<Record<string, string>>;
-        }
-      | undefined;
-    if (unproven) {
-      const readClaim = {
-        [LAUNCH_PID_KEY]: owned[LAUNCH_PID_KEY] ?? "",
-        [LAUNCH_PID_START_KEY]: owned[LAUNCH_PID_START_KEY] ?? "",
-      };
-      const transitioned = updateMetadataIf(
-        sessionsDir,
-        sessionId,
-        { ...launchIdentity(owned), ...readClaim },
-        {
-          runtimeHandle: JSON.stringify(pendingHandle(plugins.runtime.name)),
-          restoredAt: new Date().toISOString(),
-          ...(ownClaim ?? {}),
-        },
-      );
-      if (!transitioned) {
+    /**
+     * Steps 7 and 7a. Herdr fit-2 (design r11 5.2.4): for an orchestrator
+     * record of a create runtime in the set, under A (`underA`): the stop has
+     * the core bound, and the subject check comes directly before the
+     * transition write.
+     */
+    const stopAndTransition = async (underA?: { checkSubject: () => void }): Promise<void> => {
+      // B-1 (round 4): the checks above awaited. Stop before the old runtime
+      // is stopped when another process changed the launch meanwhile (the
+      // runtime name is the same for every launch of the ID).
+      if (!stillOwned()) {
         throw recordChangedError(
           sessionsDir,
           sessionId,
           "it was restored",
-          "its old runtime was stopped; no runtime was created",
+          "no runtime was destroyed or created",
         );
       }
-      transition = {
-        before: {
-          runtimeHandle: owned["runtimeHandle"] ?? "",
-          restoredAt: owned["restoredAt"] ?? "",
-        },
-        publishedClaim: ownClaim ?? readClaim,
+
+      // 7. Stop the old runtime if still alive (e.g. tmux session survives agent
+      // crash). Same-ID R2a (N-2): only a confirmed stop (destroyed or absent)
+      // lets the restore go on. Review r1 (M-1): the stop runs before the
+      // workspace is recreated, and a refusal removes the archive copy-back of
+      // this restore again while it still holds the values that
+      // releaseCopyBack compares (review r2 and r3, M-1), so a refused restore
+      // with no other operation on the ID leaves the record, the archive and
+      // the workspace as they were. A copy-back where one of those values
+      // changed during the stop, or that another operation replaced, stays,
+      // and the refusal says so.
+      //    Herdr fit-2 (design r11 4.6, 5.2.4): the stop goes through the
+      //    handle's runtime; one in LAUNCH_END_UNPROVEN_RUNTIMES that is not
+      //    loaded is unknown. A runtimeHandle text that gives no handle but
+      //    names herdr (or a project whose runtime is in the set) refuses like
+      //    an unconfirmed stop: a skipped stop would let a second launch start
+      //    next to a launch that no handle names.
+      const refuseStep7 = (handle: RuntimeHandle, stopped: UnconfirmedRuntimeStop): never => {
+        throw new RuntimeStopUnconfirmedError({
+          sessionId,
+          handle,
+          stop: stopped,
+          kept: fromArchive
+            ? releaseCopyBack(sessionsDir, sessionId, owned)
+            : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
+          retry: `ao session restore ${sessionId}`,
+        });
       };
-      owned = transitioned;
+      if (session.runtimeHandle) {
+        const handleRuntime = runtimeForHandle(session.runtimeHandle, plugins.runtime);
+        const stopped = !handleRuntime
+          ? notLoadedStop(session.runtimeHandle)
+          : underA
+            ? await stopWithinBound(handleRuntime, session.runtimeHandle)
+            : await stopRuntime(handleRuntime, session.runtimeHandle);
+        if (!isRuntimeStopConfirmed(stopped)) refuseStep7(session.runtimeHandle, stopped);
+      } else if (raw["runtimeHandle"] && isUnprovenLaunchRecord(raw, plugins.runtime?.name)) {
+        const text = raw["runtimeHandle"];
+        refuseStep7(
+          { id: "", runtimeName: HERDR_RUNTIME_NAME, data: {} },
+          {
+            outcome: "unknown",
+            detail: `the runtime handle of ${sessionId} cannot be read (${text.slice(0, 80)}); retire it by hand`,
+          },
+        );
+      }
+
+      // 7a. Herdr fit-2 (design r11 5.2.4): the transition write. Before any
+      //     runtime of this restore exists, the record gets the pending handle
+      //     P, a new launch time and this process's claim, compared by the
+      //     launch identity and the claim values as read.
+      if (unproven && plugins.runtime) {
+        const readClaim = {
+          [LAUNCH_PID_KEY]: owned[LAUNCH_PID_KEY] ?? "",
+          [LAUNCH_PID_START_KEY]: owned[LAUNCH_PID_START_KEY] ?? "",
+        };
+        underA?.checkSubject();
+        const transitioned = updateMetadataIf(
+          sessionsDir,
+          sessionId,
+          { ...launchIdentity(owned), ...readClaim },
+          {
+            runtimeHandle: JSON.stringify(pendingHandle(plugins.runtime.name)),
+            restoredAt: new Date().toISOString(),
+            ...(ownClaim ?? {}),
+          },
+        );
+        if (!transitioned) {
+          throw recordChangedError(
+            sessionsDir,
+            sessionId,
+            "it was restored",
+            "its old runtime was stopped; no runtime was created",
+          );
+        }
+        transition = {
+          before: {
+            runtimeHandle: owned["runtimeHandle"] ?? "",
+            restoredAt: owned["restoredAt"] ?? "",
+          },
+          publishedClaim: ownClaim ?? readClaim,
+        };
+        owned = transitioned;
+        if (underA) await admission.stage("transition-written", 0);
+      }
+    };
+
+    // 6a. Herdr fit-2 F-7 (design r11 5.2.4, 5.3.2): the restore of an
+    //     orchestrator record is an admission in restore mode: the subject,
+    //     then A; G without this ID, and any record that it selects blocks
+    //     (no probe). Under A: the copy-back and, for a create runtime in the
+    //     set, the old runtime's stop and the transition write; then A is
+    //     released (7b), and P and the claim carry the protection. For a
+    //     create runtime outside the set A covers 6a and 6b only. A worker
+    //     restore takes no A (L-3).
+    if (isOrchestratorSessionRecord(sessionId, raw, project.sessionPrefix)) {
+      await runAdmission<undefined>({
+        mode: "restore",
+        projectId,
+        project,
+        sessionsDir,
+        createInSet: unproven,
+        excludeId: sessionId,
+        decide: async ({ judged, checkSubject }) => {
+          if (judged.length > 0) return { kind: "blocked", blocking: judged };
+          copyBackArchive(checkSubject);
+          if (unproven) await stopAndTransition({ checkSubject });
+          return { kind: "done", value: undefined };
+        },
+      });
+      if (!unproven) await stopAndTransition();
+    } else {
+      copyBackArchive();
+      await stopAndTransition();
     }
     /**
      * Herdr fit-2 (design r11 5.2.4): undo the transition write after a
@@ -6328,6 +7113,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   return {
     spawn,
     spawnOrchestrator,
+    findReusableOrchestrators,
     restore,
     relaunch,
     list,

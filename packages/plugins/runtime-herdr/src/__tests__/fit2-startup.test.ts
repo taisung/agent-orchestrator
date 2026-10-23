@@ -6,8 +6,9 @@
  * runtime: no other runtime answers for it (unknown, or no probe). Restore
  * refuses a damaged handle that names herdr, or that a Herdr project stored.
  * Through the built core with the real runtime-herdr plugin (or none) and a
- * tmux stand-in that records each call with its handle. Startup keeps fit-1's
- * interim refusal until fit-2b (design 8.1, T-7.8a).
+ * tmux stand-in that records each call with its handle. At startup core G
+ * (fit-2b commit 5) blocks a Herdr record of a project that now selects tmux
+ * (R5, T-7.8), so no runtime but herdr probes it.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
@@ -66,9 +67,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  RUNTIME_NO_SERVER_ERROR_CODE,
   RuntimeStopUnconfirmedError,
   createSessionManager,
   deleteMetadata,
+  isOrchestratorStartBlockedError,
   getSessionsDir,
   readMetadataRaw,
   writeMetadata,
@@ -122,8 +125,14 @@ interface StandInCall {
   handle?: RuntimeHandle;
 }
 
-/** A tmux stand-in that records each call with its handle and answers isAlive false. */
-function tmuxStandIn(): { runtime: Runtime; calls: StandInCall[] } {
+/**
+ * A tmux stand-in that records each call with its handle and answers isAlive
+ * false, or what `isAlive` (a hook of the test) answers.
+ */
+function tmuxStandIn(isAlive?: (handle: RuntimeHandle) => Promise<boolean>): {
+  runtime: Runtime;
+  calls: StandInCall[];
+} {
   const calls: StandInCall[] = [];
   const runtime = {
     name: "tmux",
@@ -136,7 +145,7 @@ function tmuxStandIn(): { runtime: Runtime; calls: StandInCall[] } {
     },
     isAlive: async (handle: RuntimeHandle) => {
       calls.push({ method: "isAlive", handle });
-      return false;
+      return isAlive ? isAlive(handle) : false;
     },
     sendMessage: async (handle: RuntimeHandle) => {
       calls.push({ method: "sendMessage", handle });
@@ -164,6 +173,7 @@ function setup(options: {
   herdrLoaded: boolean;
   mode?: "project" | "isolated";
   strategy?: "reuse" | "delete";
+  tmuxIsAlive?: (handle: RuntimeHandle) => Promise<boolean>;
 }): Harness {
   const projectPath = join(root, "my-app");
   mkdirSync(projectPath, { recursive: true });
@@ -195,7 +205,7 @@ function setup(options: {
   const sessionsDir = getSessionsDir(configPath, projectPath);
   mkdirSync(sessionsDir, { recursive: true });
 
-  const tmux = tmuxStandIn();
+  const tmux = tmuxStandIn(options.tmuxIsAlive);
   const runtimes: Record<string, Runtime> = { tmux: tmux.runtime };
   if (options.herdrLoaded) runtimes["herdr"] = create({ binPath: herdr.bin });
   const workspaceCalls: string[] = [];
@@ -281,58 +291,126 @@ function tmuxCallsWithHerdrHandle(h: Harness): StandInCall[] {
   return h.tmuxCalls.filter((call) => call.handle?.runtimeName === "herdr");
 }
 
-const CANNOT_TELL =
-  "Cannot tell whether session app-orchestrator is alive, so it is neither reused nor replaced. Check the runtime and retry.";
+/** Herdr fit-2b G (design r11 4.7): a blocked start as [ID, kind, reason, answer]. */
+function blockedRows(err: unknown): Array<[string, string, string, string | undefined]> {
+  expect(isOrchestratorStartBlockedError(err)).toBe(true);
+  if (!isOrchestratorStartBlockedError(err)) return [];
+  return err.blocking.map((b) => [b.sessionId, b.kind, b.reason, b.answer]);
+}
 
-describe("T-7.8a: the start probes an old Herdr record through herdr (fit-1's interim refusal)", () => {
+// fit-2a's T-7.8a (the start sites on fit-1's interim refusal) is replaced by
+// T-7.8 in fit-2b commit 5 (design r11 8.2).
+describe("T-7.8: runtime mismatch at the start: blocked, and no tmux call with the Herdr handle", () => {
   for (const strategy of ["reuse", "delete"] as const) {
-    it(`(1) herdr loaded, its pane answers pane_not_found; strategy ${strategy}`, async () => {
-      const h = setup({ selects: "tmux", herdrLoaded: true, strategy });
-      writeRecord(h, "app-orchestrator", JSON.stringify(HERDR_HANDLE), "working");
-      const before = h.file("app-orchestrator");
-      const entries = h.dir();
-      await expect(h.sm.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(CANNOT_TELL);
-      expect(herdr.calls).toEqual([["pane", "get", "w3:p2"]]);
-      expect(h.tmuxCalls).toEqual([]);
-      expect(h.file("app-orchestrator")).toBe(before);
-      expect(h.dir()).toEqual(entries);
-    });
+    for (const [label, herdrLoaded, paneGet, answer] of [
+      [
+        "herdr loaded, its pane runs",
+        true,
+        {
+          pane: {
+            pane_id: "w3:p2",
+            terminal_id: "term_a",
+            agent: "stand-in",
+            agent_status: "idle",
+          },
+        },
+        "the pane runs, but the record is not reusable (the project now selects tmux)",
+      ],
+      [
+        "herdr loaded, its pane answers pane_not_found",
+        true,
+        null,
+        "herdr answered that the pane does not exist or that it has another terminal",
+      ],
+      ["no herdr plugin loaded", false, null, "no herdr runtime plugin is loaded"],
+    ] as const) {
+      it(`${label}; strategy ${strategy}: not-reused ("the project now selects tmux"), the record unchanged`, async () => {
+        const h = setup({ selects: "tmux", herdrLoaded, strategy });
+        if (paneGet) herdr.paneGet = paneGet;
+        writeRecord(h, "app-orchestrator", JSON.stringify(HERDR_HANDLE), "working");
+        const before = h.file("app-orchestrator");
+        const entries = h.dir();
+        const err = await h.sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+        expect(blockedRows(err)).toEqual([
+          ["app-orchestrator", "not-reused", "the project now selects tmux", answer],
+        ]);
+        expect((err as Error).message).toContain(
+          "app-orchestrator: status working, the project now selects tmux. Herdr pane w3:p2",
+        );
+        // R5 decides before any probe; one probe through herdr fills message M.
+        expect(herdr.calls).toEqual(herdrLoaded ? [["pane", "get", "w3:p2"]] : []);
+        expect(h.tmuxCalls).toEqual([]);
+        expect(h.workspaceCalls).toEqual([]);
+        expect(h.file("app-orchestrator")).toBe(before);
+        expect(h.dir()).toEqual(entries);
+      });
+    }
+  }
+});
 
-    it(`(2) no herdr plugin loaded: unknown with zero runtime calls; strategy ${strategy}`, async () => {
-      const h = setup({ selects: "tmux", herdrLoaded: false, strategy });
-      writeRecord(h, "app-orchestrator", JSON.stringify(HERDR_HANDLE), "working");
-      const before = h.file("app-orchestrator");
-      const entries = h.dir();
-      const err = await h.sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
-      expect((err as Error).message).toBe(CANNOT_TELL);
-      expect(((err as Error).cause as Error).message).toBe("no runtime plugin herdr is loaded");
+describe("T-7.8b: the concurrent fixed-ID branch for a tmux record while the project selects herdr", () => {
+  it("zero herdr calls with a tmux handle; the branch probes through the tmux stand-in", async () => {
+    const harness: { h?: Harness } = {};
+    let replaced = false;
+    const newHandle = { id: "app-orchestrator-new", runtimeName: "tmux", data: {} };
+    const h = setup({
+      selects: "herdr",
+      herdrLoaded: true,
+      tmuxIsAlive: async () => {
+        // Another start replaces the record during the first probe, so this
+        // start's delete and reservation fail and the concurrent branch runs.
+        if (!replaced && harness.h) {
+          replaced = true;
+          writeRecord(harness.h, "app-orchestrator", JSON.stringify(newHandle), "working");
+        }
+        return false;
+      },
+    });
+    harness.h = h;
+    const oldHandle = { id: "app-orchestrator-old", runtimeName: "tmux", data: {} };
+    writeRecord(h, "app-orchestrator", JSON.stringify(oldHandle), "working");
+    // The launch itself fails at the herdr create (the stand-in answers only
+    // pane get); this test reads the branch before it.
+    await h.sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+    expect(h.tmuxCalls.map((call) => [call.method, call.handle?.id])).toEqual([
+      ["isAlive", "app-orchestrator-old"],
+      ["isAlive", "app-orchestrator-new"],
+    ]);
+    expect(
+      herdr.calls.filter((args) => args.some((arg) => arg.startsWith("app-orchestrator"))),
+    ).toEqual([]);
+    expect(herdr.calls.every((args) => args[0] === "status" && args[1] === "server")).toBe(true);
+  });
+});
+
+describe("T-7.10: control: tmux and mock records with no server", () => {
+  for (const runtimeName of ["tmux", "mock"] as const) {
+    it(`a ${runtimeName} record whose server is gone is archived, and a new orchestrator starts`, async () => {
+      const noServer = Object.assign(new Error("no server running on /tmp/tmux-0/default"), {
+        code: RUNTIME_NO_SERVER_ERROR_CODE,
+      });
+      const h = setup({
+        selects: "tmux",
+        herdrLoaded: true,
+        tmuxIsAlive: async () => {
+          throw noServer;
+        },
+      });
+      const oldHandle = { id: "app-orchestrator-old", runtimeName, data: {} };
+      writeRecord(h, "app-orchestrator", JSON.stringify(oldHandle), "working");
+      const session = await h.sm.spawnOrchestrator({ projectId: "my-app" });
+      expect(session.id).toBe("app-orchestrator");
+      expect(session.runtimeHandle?.runtimeName).toBe("tmux");
+      const archived = readdirSync(join(h.sessionsDir, "archive"));
+      expect(archived).toHaveLength(1);
+      expect(archived[0]).toMatch(/^app-orchestrator_/);
+      expect(readFileSync(join(h.sessionsDir, "archive", archived[0]!), "utf-8")).toContain(
+        `runtimeHandle=${JSON.stringify(oldHandle)}`,
+      );
+      expect(h.tmuxCalls.map((call) => call.method)).toEqual(["isAlive", "create"]);
       expect(herdr.calls).toEqual([]);
-      expect(h.tmuxCalls).toEqual([]);
-      expect(h.file("app-orchestrator")).toBe(before);
-      expect(h.dir()).toEqual(entries);
     });
   }
-
-  it("(3) herdr loaded, its pane alive; strategy delete: the stop goes through herdr and refuses", async () => {
-    const h = setup({ selects: "tmux", herdrLoaded: true, strategy: "delete" });
-    herdr.paneGet = {
-      pane: { pane_id: "w3:p2", terminal_id: "term_a", agent: "stand-in", agent_status: "idle" },
-    };
-    writeRecord(h, "app-orchestrator", JSON.stringify(HERDR_HANDLE), "working");
-    const before = h.file("app-orchestrator");
-    const entries = h.dir();
-    const err = await h.sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RuntimeStopUnconfirmedError);
-    expect((err as Error).message).toMatch(
-      /^runtime stop unconfirmed \(unknown\): the Herdr close cannot yet check the terminal .*; its record kept; no second orchestrator was started$/,
-    );
-    // The probe, and no herdr call for the stop (it closes nothing).
-    expect(herdr.calls).toEqual([["pane", "get", "w3:p2"]]);
-    expect(h.tmuxCalls).toEqual([]);
-    expect(h.workspaceCalls).toEqual([]);
-    expect(h.file("app-orchestrator")).toBe(before);
-    expect(h.dir()).toEqual(entries);
-  });
 });
 
 describe("T-7.8c: restore of a Herdr record while the project selects tmux", () => {

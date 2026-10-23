@@ -112,8 +112,12 @@ export {
 export type { ConfirmedRuntimeStop, UnconfirmedRuntimeStop } from "./runtime-stop.js";
 
 // Session manager — session CRUD
-export { createSessionManager } from "./session-manager.js";
-export type { SessionManagerDeps } from "./session-manager.js";
+export { createSessionManager, classifyOrchestratorLiveness } from "./session-manager.js";
+export type {
+  SessionManagerDeps,
+  AdmissionStage,
+  OrchestratorLiveness,
+} from "./session-manager.js";
 
 // Lifecycle manager — state machine + reaction engine
 export { createLifecycleManager } from "./lifecycle-manager.js";

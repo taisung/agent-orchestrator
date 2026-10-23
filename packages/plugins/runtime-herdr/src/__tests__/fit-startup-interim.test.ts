@@ -1,13 +1,13 @@
 /**
- * Herdr fit-1 interim startup rule (owner decision OQ-F1 (b), 2026-10-22; the
- * fit-2 guard G replaces it), through core `spawnOrchestrator` (the built
- * core) with the real runtime-herdr plugin. Only `herdr` is a stand-in: it
- * answers with the recorded 0.9.5 answers of the live check. After fit F-1 a
- * closed pane is `isAlive` false and no server is RUNTIME_NO_SERVER_ERROR_CODE;
- * for a Herdr record neither is "gone", so project mode neither archives the
- * old record nor starts a new orchestrator. (Isolated mode reads no old
- * record in core; `ao start` checks it, see the CLI test
- * start-herdr-interim.test.ts.)
+ * An old Herdr orchestrator record at core `spawnOrchestrator` (owner decision
+ * OQ-F1 (b), 2026-10-22), through the built core with the real runtime-herdr
+ * plugin. Only `herdr` is a stand-in: it answers with the recorded 0.9.5
+ * answers of the live check. After fit F-1 a closed pane is `isAlive` false
+ * and no server is RUNTIME_NO_SERVER_ERROR_CODE; for a Herdr record neither
+ * is "gone", so project mode neither archives the old record nor starts a new
+ * orchestrator. fit-1 refused with an interim text; Herdr fit-2 G (design r11
+ * 5.3.10) refuses with OrchestratorStartBlockedError (`records`, kind
+ * `unproven`) and message M. fit2-startup.test.ts has the other cases of G.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -45,6 +45,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 import {
   createSessionManager,
   getSessionsDir,
+  isOrchestratorStartBlockedError,
+  launchIdentityToken,
   readMetadataRaw,
   writeMetadata,
   type Agent,
@@ -136,14 +138,35 @@ function setup() {
   return { sessionsDir, sm: createSessionManager({ config, registry }) };
 }
 
-describe("Herdr fit-1 interim: core spawnOrchestrator with an old Herdr orchestrator (project mode)", () => {
-  for (const name of ["closedpane_pane_get", "noserver_never_pane_get"]) {
-    it(`${name}: refuses as for an unknown answer; the record stays, nothing is created`, async () => {
+describe("Herdr fit-2 G: core spawnOrchestrator with an old Herdr orchestrator (project mode)", () => {
+  for (const [name, answer] of [
+    [
+      "closedpane_pane_get",
+      "herdr answered that the pane does not exist or that it has another terminal",
+    ],
+    ["noserver_never_pane_get", "no herdr server answers at the socket"],
+  ] as const) {
+    it(`${name}: blocked (unproven) with message M; the record stays, nothing is created`, async () => {
       herdrStandIn.paneGet = herdrRejection(herdrFixture(name));
       const { sessionsDir, sm } = setup();
+      const before = readMetadataRaw(sessionsDir, "app-orchestrator")!;
 
-      await expect(sm.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
-        "Cannot tell whether session app-orchestrator is alive, so it is neither reused nor replaced. Check the runtime and retry.",
+      const err = await sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+
+      expect(isOrchestratorStartBlockedError(err)).toBe(true);
+      if (!isOrchestratorStartBlockedError(err)) return;
+      expect(err.blocking.map((b) => [b.sessionId, b.kind])).toEqual([
+        ["app-orchestrator", "unproven"],
+      ]);
+      expect(err.message).toBe(
+        [
+          "No new orchestrator was started for project my-app: AO cannot tell that every earlier herdr orchestrator launch of the project ended.",
+          `app-orchestrator: status working. Herdr pane w3:p2 (terminal term_a), workspace w3, worktree ${join(root, "my-app")}, socket not recorded: ${answer}.`,
+          "  Check:  'herdr' pane get 'w3:p2'",
+          "  If it runs, use it:  ao session attach 'app-orchestrator'",
+          `  If it does not run, or after you close it:  ao session kill 'app-orchestrator' --confirm-runtime-closed '${launchIdentityToken(before)}'`,
+          "Before RH, AO takes no herdr answer as proof that a launch ended. Then run ao start again.",
+        ].join("\n"),
       );
 
       const record = readMetadataRaw(sessionsDir, "app-orchestrator");
