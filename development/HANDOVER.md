@@ -156,6 +156,29 @@
   `brief-aofork-herdr-fit2-r8.md`, deliverable `development/reviews/herdr_fit2_design_r8_opus.md`, scratch
   `/tmp/aohd5`, no script fixtures; r7 copies in `backup/ao-65-herdr-r7/`).
 
+**Update 2026-10-22 21:45 EDT.**
+- Pushed `389b8dfe..b789579f` (owner) because GitHub registered no CI run for `389b8dfe`; a Monitor task
+  waits for the `b789579f` runs.
+- Relaunch review r3 by ao-72 (`b4b18bf6`): NOT-LAND-SAFE, 0 B 3 new M (M-1 a reading SIGINT trap with
+  prefilled input passes the fresh-prompt check; M-2 the hook's wall-clock start time is not the event
+  order, and a failed or skipped hook leaves the old pointer; M-3 output and sends follow a bound pane
+  moved to another session); gates pass. ao-72 killed 21:38 (archive `ao-72_2026-10-23T01-38-32-679Z`).
+- **Owner decision 21:37 (relaunch option 1):** a narrow round 4, then land with documented limits. Fix
+  r3 M-3, the direct `ao send` gap (`send.ts:349-363`) and the failed-hook part of M-2; accept as
+  documented limits r3 M-1, the M-2 dispatch-delay and clock residual, and r1 M-6 (until same-ID R3).
+  Then one more review, then the landing. ao-63 works on round 4 since 21:40 (brief
+  `.agent_task_relaunch_r4.md`, copy `brief-aofork-session-relaunch-r4.md`, scratch `/tmp/aorl4`).
+- Herdr fit-2 design r8 by ao-65 on main (`0488d24d`, with doc 0004 facts and 5 `r8_` text fixtures):
+  admission lock A over G and the reservation, Herdr reservations with a pending handle and a launch
+  claim (also for agents without `prepareAgentSession`), rule Q (ordinary rollback only for Q0, Q1, Q2),
+  `runtimeForHandle`; 14 product files, size L; OQ-F4..F8. ao-65 idle, done.
+- **Owner (21:37): the fit-2 r8 review gets two lenses**: ao-74 (Codex `gpt-6.1-sol` xhigh, review file
+  `development/reviews/herdr_fit2_design_review_r8_sol61.md`) and ao-75 (OpenCode Muse Spark 1.3, review
+  file `development/reviews/herdr_fit2_design_review_r8_muse13.md`), blind to each other; briefs
+  `brief-review-herdr-fit2-r8-{sol61,muse13}.md`; watcher 2712612 (state `aofork-2026-10-22k`).
+  Owner question (21:30): why no OpenCode workers today: the routing gives HIGH work Opus authors and a
+  sol reviewer; OpenCode Muse is the L0/LOW author (ao-70) and a cheap extra lens, not a HIGH reviewer.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
