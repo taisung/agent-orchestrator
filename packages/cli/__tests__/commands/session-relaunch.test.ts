@@ -271,8 +271,13 @@ describe("session relaunch", () => {
     expect(text).toContain(
       "Limit: a SIGINT trap in the pane's shell that prints the prompt and reads input (for example read -e -i) passes the fresh-prompt check; prefilled text can run, or the launch line can be consumed. Relaunch only into a shell without such a trap",
     );
+    // Review r4 M-2: a refusal only when the hook could write its failure mark.
     expect(text).toContain(
-      "when a hook of that launch could not record an event (no flock, no bash 5, a failed read or write, a stop by SIGTERM, SIGHUP or SIGINT)",
+      "It also refuses when a hook of that launch could not record an event and wrote a failure mark of that launch instead (for example no flock, no bash 5, a failed read, a stop by SIGTERM, SIGHUP or SIGINT). A hook that cannot write that mark either gives no refusal (see the limit below).",
+    );
+    expect(text).not.toContain("a failed read or write");
+    expect(text).toContain(
+      "Limit: when the hook cannot write its failure mark, the older conversation stays current, and --continue resumes it with no warning. It can happen when a write fails for both the record and the mark (the directory of the conversation records cannot be written, or the disk is full), when a hook never starts, or when SIGKILL stops a hook. The directory is ~/.agent-orchestrator/<hash>-<project folder>/sessions/.agent-conversations. If it could have refused writes, or a hook could have been stopped, relaunch without --continue and pick the conversation in the agent (Claude Code: /resume).",
     );
     expect(text).toContain(
       "Limit: the hook orders events by its own start time from the wall clock; a delay before the hook body starts, or a clock step back, can leave the older conversation as current.",
