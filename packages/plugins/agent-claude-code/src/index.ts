@@ -6,6 +6,10 @@ import {
   DEFAULT_ACTIVE_WINDOW_MS,
   HERDR_RUNTIME_NAME,
   exactPaneTarget,
+  AGENT_PANE_FORMAT,
+  agentPaneOf,
+  agentPaneTty,
+  isTmuxPaneGone,
   isHerdrProcessRunning,
   removeAoBinFromPath,
   type Agent,
@@ -305,10 +309,19 @@ const CONVERSATION_ID =
  * - Its stdin is the terminal of the hook's tmux pane (`TMUX_PANE`), and the
  *   hook records that pane ID, which core compares with the session's pane.
  *
- * Every external step has a budget of 2 s (review r1 m-1), and the settings
- * entry is `async`, so the hook never delays the start of Claude Code. It
- * prints nothing to stdout (Claude Code adds the stdout of a SessionStart
- * hook to the conversation) and exits 0 in every case. Exported for testing.
+ * The record keeps the newest event of the session (review r2 M-3): the
+ * hook takes the time of its event first (`EPOCHREALTIME`, the wall clock)
+ * and, under `flock` on a lock file next to the record, replaces the record
+ * only when it holds no later event. An earlier event (startup) whose hook
+ * ends after the hook of a later one (clear) then changes nothing. Without
+ * `flock` or `EPOCHREALTIME` (bash 5) it records nothing.
+ *
+ * Every external step has a budget of 2 s (review r1 m-1: `timeout` around
+ * cat, jq, grep, tmux, readlink, mkdir, mv and rm; `flock -w 2`); without
+ * `timeout(1)` those steps run without one. The settings entry is `async`,
+ * so the hook never delays the start of Claude Code. It prints nothing to
+ * stdout (Claude Code adds the stdout of a SessionStart hook to the
+ * conversation) and exits 0 in every case. Exported for testing.
  */
 export const SESSION_START_SCRIPT = `#!/usr/bin/env bash
 # Session Start Hook for Agent Orchestrator (session relaunch, 2026-10-22)
@@ -318,8 +331,15 @@ export const SESSION_START_SCRIPT = `#!/usr/bin/env bash
 set -uo pipefail
 exec >/dev/null
 
+# The time of this event, taken first. Claude Code runs this hook in the
+# background, so an earlier event (startup) can end after a later one
+# (clear) of the same agent: only the newest event may stay recorded.
+event_at=\${EPOCHREALTIME:-}
+event_at=\${event_at//[!0-9]/}
+[[ "$event_at" =~ ^[0-9]{7,}$ ]] || exit 0
+
 # Every external step has a budget, so a slow tmux or an open stdin cannot
-# hold the hook.
+# hold the hook. Without timeout(1) the steps run without one.
 bounded() {
   local seconds=$1
   shift
@@ -340,9 +360,9 @@ if command -v jq &>/dev/null; then
   source=$(printf '%s' "$input" | bounded 2 jq -r '.source // empty' 2>/dev/null)
   transcript=$(printf '%s' "$input" | bounded 2 jq -r '.transcript_path // empty' 2>/dev/null)
 else
-  session_id=$(printf '%s' "$input" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  source=$(printf '%s' "$input" | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  transcript=$(printf '%s' "$input" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  session_id=$(printf '%s' "$input" | bounded 2 grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  source=$(printf '%s' "$input" | bounded 2 grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  transcript=$(printf '%s' "$input" | bounded 2 grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 fi
 [[ "$session_id" =~ $uuid_re ]] || exit 0
 [[ "$source" =~ ^[a-z_]{1,32}$ ]] || source=unknown
@@ -384,18 +404,32 @@ done
 
 # Not the pane's agent unless its stdin is the terminal of this tmux pane.
 pane_tty=$(bounded 2 tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || exit 0
-agent_tty=$(readlink "/proc/$agent/fd/0" 2>/dev/null) || exit 0
+agent_tty=$(bounded 2 readlink "/proc/$agent/fd/0" 2>/dev/null) || exit 0
 [[ -n "$pane_tty" && "$agent_tty" == "$pane_tty" ]] || exit 0
 
 dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
-mkdir -p "$dir" 2>/dev/null || exit 0
-tmp="$dir/.$AO_SESSION.$$.tmp"
-if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\nlaunchToken=%s\\npaneId=%s\\npaneTty=%s\\n' \\
-  "$session_id" "$source" "$transcript" "$agent" "$AO_LAUNCH_TOKEN" "$TMUX_PANE" "$pane_tty" > "$tmp" 2>/dev/null; then
-  mv -f "$tmp" "$dir/$AO_SESSION" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-else
-  rm -f "$tmp" 2>/dev/null
-fi
+bounded 2 mkdir -p "$dir" 2>/dev/null || exit 0
+command -v flock &>/dev/null || exit 0
+record="$dir/$AO_SESSION"
+{
+  # One writer at a time: read, compare and replace under the lock, so the
+  # record keeps the newest event of the session (review r2 M-3).
+  flock -w 2 9 || exit 0
+  if [[ -f "$record" ]]; then
+    recorded_at=""
+    while IFS='=' read -r key value; do
+      [[ "$key" == eventAt ]] && recorded_at=$value
+    done < "$record"
+    [[ "$recorded_at" =~ ^[0-9]+$ ]] && (( recorded_at > event_at )) && exit 0
+  fi
+  tmp="$dir/.$AO_SESSION.$$.tmp"
+  if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\nlaunchToken=%s\\npaneId=%s\\npaneTty=%s\\neventAt=%s\\n' \\
+    "$session_id" "$source" "$transcript" "$agent" "$AO_LAUNCH_TOKEN" "$TMUX_PANE" "$pane_tty" "$event_at" > "$tmp"; then
+    bounded 2 mv -f "$tmp" "$record" || bounded 2 rm -f "$tmp"
+  else
+    bounded 2 rm -f "$tmp"
+  fi
+} 9>>"$dir/.$AO_SESSION.lock" 2>/dev/null
 exit 0
 `;
 
@@ -731,9 +765,10 @@ const CLAUDE_PROCESS_RE = /(?:^|\/)claude(?:\s|$)/;
  * Check if a process named "claude" is running in the given runtime handle's context.
  * Uses herdr's pane process list, ps by TTY (for tmux), or a stored PID.
  * Answers false only for explicit, well-formed evidence of absence: tmux's
- * whole answer that the session does not exist, a valid process list with no
- * claude on a pane TTY, a Herdr list with no claude, or ESRCH for a stored
- * PID. Every other answer rejects with the cause (a check that cannot run, a
+ * whole answer that the session does not exist, or that the agent's pane
+ * that core names (review r2 M-1) does not exist or now belongs to another
+ * session, a valid process list with no claude on a pane TTY, a Herdr list
+ * with no claude, or ESRCH for a stored PID. Every other answer rejects with the cause (a check that cannot run, a
  * malformed or ambiguous answer), and callers read the rejection as unknown.
  */
 async function isClaudeProcessRunning(handle: RuntimeHandle): Promise<boolean> {
@@ -748,15 +783,31 @@ async function isClaudeProcessRunning(handle: RuntimeHandle): Promise<boolean> {
 
   // For tmux runtime, get the pane TTY and find claude on it
   if (handle.runtimeName === "tmux" && handle.id) {
-    const target = exactPaneTarget(handle.id);
+    const agentPane = agentPaneOf(handle);
+    const target = agentPane ?? exactPaneTarget(handle.id);
     let ttyOut: string;
     try {
-      ({ stdout: ttyOut } = await execFileAsync(
-        "tmux",
-        ["list-panes", "-t", target, "-F", "#{pane_tty}"],
-        { timeout: 5_000 },
-      ));
+      if (agentPane) {
+        // Session relaunch (review r2 M-1): only the agent's own pane, never
+        // the session's current window, which the owner can change. A pane
+        // that now belongs to another session is not this session's agent.
+        const { stdout } = await execFileAsync(
+          "tmux",
+          ["list-panes", "-t", agentPane, "-F", AGENT_PANE_FORMAT],
+          { timeout: 5_000 },
+        );
+        const tty = agentPaneTty(stdout, agentPane, handle.id);
+        if (tty === null) return false;
+        ttyOut = tty;
+      } else {
+        ({ stdout: ttyOut } = await execFileAsync(
+          "tmux",
+          ["list-panes", "-t", target, "-F", "#{pane_tty}"],
+          { timeout: 5_000 },
+        ));
+      }
     } catch (err: unknown) {
+      if (agentPane && isTmuxPaneGone(err, agentPane)) return false;
       if (isTmuxSessionGone(err, handle.id)) return false;
       throw new Error(`claude-code: tmux list-panes -t ${target} failed`, { cause: err });
     }

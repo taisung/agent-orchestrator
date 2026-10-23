@@ -156,8 +156,53 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       launchToken: THIS_LAUNCH,
       paneId: "%1",
       paneTty,
+      eventAt: expect.stringMatching(/^\d{16}$/),
     });
     expect(readFileSync(join(dir, `${OUTER}.out`), "utf-8")).toBe("");
+  });
+
+  it("keeps the later clear when the hook of the earlier startup of the same agent ends after it (review r2 M-3)", async () => {
+    // The earlier hook waits 1.4 s in its tmux step (within its 2 s budget).
+    writeFileSync(
+      join(fakeBin, "tmux"),
+      `#!/bin/bash\nif [ -n "\${TMUX_DELAY:-}" ]; then sleep "$TMUX_DELAY"; fi\nif [ "$1" = display-message ] && [ "$4" = "%1" ]; then echo ${shq(paneTty)}; exit 0; fi\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    // One stand-in claude (one agent PID, launch token and pane) runs the
+    // hook for its startup in the background, as an async hook runs, and
+    // 100 ms later the hook for a /clear.
+    const twoEvents = join(dir, "two-events");
+    mkdirSync(twoEvents);
+    writeFileSync(
+      join(twoEvents, "claude"),
+      [
+        "#!/bin/bash",
+        'event() { printf \'{"session_id":"%s","source":"%s","transcript_path":"%s/%s.jsonl"}\' "$1" "$2" "$HOOK_OUT_DIR" "$1"; }',
+        'TMUX_DELAY=1.4 bash "$1" <<< "$(event "$2" startup)" > /dev/null 2>&1 &',
+        "sleep 0.1",
+        'bash "$1" <<< "$(event "$3" clear)" > /dev/null 2>&1',
+        "wait",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    writeFileSync(join(dir, `${OUTER}.jsonl`), "{}\n");
+    writeFileSync(join(dir, `${OTHER}.jsonl`), "{}\n");
+
+    await runDetached([join(twoEvents, "claude"), hook, OUTER, OTHER].map(shq).join(" "), paneTty);
+
+    expect(recorded()).toMatchObject({
+      conversationId: OTHER,
+      source: "clear",
+      launchToken: THIS_LAUNCH,
+      paneId: "%1",
+    });
+    const lookup = await create().getOwnConversationId!(sessionOf(join(dir, "ws")), {
+      dataDir: sessionsDir,
+      launchToken: THIS_LAUNCH,
+      pane: { id: "%1", tty: paneTty },
+    });
+    expect(lookup.id).toBe(OTHER);
   });
 
   it("does not record a claude without the launch token (one that someone starts in another pane or window)", async () => {
@@ -222,6 +267,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       "head",
       "cut",
       "touch",
+      "flock",
     ]) {
       const path = execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).trim();
       symlinkSync(path, join(tools, tool));
@@ -234,6 +280,30 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       source: "startup",
       launchToken: THIS_LAUNCH,
     });
+  });
+
+  it("records nothing without flock, which keeps the newest event (review r2 M-3)", async () => {
+    const tools = join(dir, "tools");
+    mkdirSync(tools);
+    for (const tool of [
+      "bash",
+      "cat",
+      "readlink",
+      "mkdir",
+      "mv",
+      "rm",
+      "grep",
+      "head",
+      "cut",
+      "touch",
+    ]) {
+      const path = execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).trim();
+      symlinkSync(path, join(tools, tool));
+    }
+
+    await runDetached(claudeTree(OUTER), paneTty, treeEnv({ PATH: `${fakeBin}:${tools}` }));
+
+    expect(recorded()).toBeNull();
   });
 
   it("ends within its budget when tmux does not answer (review r1 m-1)", async () => {
