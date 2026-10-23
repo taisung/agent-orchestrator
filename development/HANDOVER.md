@@ -118,6 +118,15 @@
   also reports ~34800 errors from the untracked `packages/web` leftovers; use
   `--ignore-pattern 'packages/web/**'`. ao-70 is done; watcher 1353610 watches it.
 
+**Update 2026-10-22 20:35 EDT.**
+- Herdr fit design r7 by ao-65 on main (`68ec0c94`): F-1..F-9; a failed create throws
+  `RuntimeCreatePartialError` and keeps record, worktree and agent session ("kept failed launch"); guard G
+  in core and CLI makes `ao start` refuse while an old Herdr orchestrator record is not reused; new F-9
+  `ao session kill <id> --confirm-runtime-closed`; `Runtime.preflight()` incl. `spawn.ts`; 17 product
+  files, M+ (~1100 + 2000 test lines, 8 commits); OQ-F1 (b), OQ-F2 (a), OQ-F3 (a). ao-65 idle, done.
+- ao-71 reviews r7 (Codex `gpt-6.1-sol` xhigh, branch at `68ec0c94`, brief `brief-review-herdr-fit-r7-sol61.md`,
+  review file `development/reviews/herdr_fit_design_review_r7_sol61.md`); watcher 1732201 (state `~/.cache/fleet_watch/aofork-2026-10-22h`).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
