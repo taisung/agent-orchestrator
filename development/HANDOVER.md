@@ -354,7 +354,7 @@ delete land/session-relaunch".
   `aofork-2026-10-23a` (parent 1239456, child 1239466) watches ao-82 and ao-83; watcher 2303560 still watches
   ao-73, which stays for the review fixes.
 
-**Update 2026-10-23 14:38 EDT: fit-2a reviews in, fix round r2 running.**
+**Update 2026-10-23 14:37 EDT: fit-2a reviews in, fix round r2 running.**
 - ao-82 (Codex): LAND-WITH-CHANGES, 0 B 3 M 0 m (coverage: the settlement identity, the publication `before`
   identity, the restore write-back identity; current code passes ao-82's 3 probes). ao-83 (Muse): LAND-SAFE,
   0 B 0 M 5 m (m-1: a `blocked` pane without an agent name falls through to a raw send). Both on main
@@ -364,6 +364,10 @@ delete land/session-relaunch".
   `note-ao-73-fit2a-r2.md`, scratch `/tmp/aofit2a2`); then ao-82 checks alone; then a cherry-pick onto main.
   The send waited 14:21 to 14:36 for an attached client of ao-73 (`tmux a` on `/dev/pts/21`) to be idle 10 min.
 - Owner 23: ao-83 closed. Watcher `aofork-2026-10-23a` keeps watching ao-82.
+- r2 done 15:00: ao-73 tip `1b407dbd` (3 commits on `a999a78f`: 8 tests for M-1 to M-3, the m-1 fix with 3 tests,
+  the m-3 refactor); each ao-82 mutant fails its new test; runtime-herdr 272, core 1847 + 1, cli 447; red 21 = base.
+  ao-82 fast-forwarded to `1b407dbd` and checks it alone (note `.agent_note_fit2a_r2_check.md`, copy
+  `note-ao-82-fit2a-r2-check.md`, file `development/reviews/herdr_fit2a_code_review_r2_sol61.md`, scratch `/tmp/aof2as2`).
 
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
