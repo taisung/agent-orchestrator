@@ -321,13 +321,18 @@ const CONVERSATION_ID =
  * A hook of the agent that cannot record its event (no `EPOCHREALTIME` of
  * bash 5, no `flock`, a lock that stays busy, a failed read of its input,
  * of /proc or of tmux, a failed write, or a stop by SIGTERM, SIGHUP or
- * SIGINT) marks the record of its launch unusable (review r3 M-2): it writes
- * `.<session>.unusable` next to the record with the launch token and the
- * reason, and `getOwnConversationId` refuses every record of that launch.
- * The mark stays until the next launch (a new token). A claude that is not
- * the pane's agent (no token, a claude above it, another terminal) exits
- * without a mark. A hook that is killed with SIGKILL, or that cannot write
- * the mark either, leaves the record as it is.
+ * SIGINT) tries to mark the records of its launch unusable (review r3 M-2):
+ * it writes `.<session>.<launch token>.unusable` next to the record, with
+ * the token, the reason and the pane, and `getOwnConversationId` refuses
+ * every record of a launch whose mark exists. Each launch has its own mark
+ * (review r4 M-1), so a late failed hook of an earlier launch cannot remove
+ * or replace the mark of the current one. Nothing removes a mark: a later
+ * event of the same launch that records leaves it, and the marks of earlier
+ * launches stay on disk and do not count. A claude that is not the pane's
+ * agent (no token, a claude above it, another terminal) exits without a
+ * mark. A hook that cannot write the mark either (the same failed write, a
+ * full disk), a hook that SIGKILL stops, and a hook that Claude Code never
+ * starts leave no mark: the record stays as it is (a documented limit).
  *
  * Every external step has a budget of 2 s (review r1 m-1: `timeout` around
  * cat, jq, grep, tmux, readlink, mkdir, mv and rm; `flock -w 2`); without
@@ -372,15 +377,19 @@ dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
 record="$dir/$AO_SESSION"
 
 # From here on, a hook of the launch's agent that cannot record its event
-# marks the record of this launch unusable (review r3 M-2), so that
-# --continue refuses instead of taking an earlier conversation. A claude
-# that is not the pane's agent exits below without a mark.
+# marks the records of this launch unusable (review r3 M-2), so that
+# --continue refuses instead of taking an earlier conversation. When it
+# cannot write the mark either, nothing changes (a documented limit). A
+# claude that is not the pane's agent exits below without a mark.
 unusable() {
   trap - TERM HUP INT
   bounded 2 mkdir -p "$dir" 2>/dev/null
-  local tmp="$dir/.$AO_SESSION.unusable.$$.tmp"
+  # One mark for each launch (review r4 M-1): a late hook of an earlier
+  # launch writes its own mark and never touches the mark of this one.
+  local mark="$dir/.$AO_SESSION.$AO_LAUNCH_TOKEN.unusable"
+  local tmp="$mark.$$.tmp"
   if printf 'launchToken=%s\\nreason=%s\\npaneId=%s\\n' "$AO_LAUNCH_TOKEN" "$1" "$TMUX_PANE" > "$tmp" 2>/dev/null; then
-    bounded 2 mv -f "$tmp" "$dir/.$AO_SESSION.unusable" 2>/dev/null || bounded 2 rm -f "$tmp" 2>/dev/null
+    bounded 2 mv -f "$tmp" "$mark" 2>/dev/null || bounded 2 rm -f "$tmp" 2>/dev/null
   else
     bounded 2 rm -f "$tmp" 2>/dev/null
   fi
@@ -1445,26 +1454,31 @@ function createClaudeCodeAgent(): Agent {
       context: AgentConversationContext,
     ): Promise<AgentConversationLookup> {
       const file = join(context.dataDir, CONVERSATIONS_DIR_NAME, session.id);
-      // Review r3 M-2: a hook of the launch's agent that could not record its
-      // event marked every record of that launch unusable.
-      const mark = join(context.dataDir, CONVERSATIONS_DIR_NAME, `.${session.id}.unusable`);
-      let markContent: string | null = null;
-      try {
-        markContent = await readFile(mark, "utf-8");
-      } catch (err: unknown) {
-        if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) {
-          throw new Error(`claude-code: cannot read ${mark}`, { cause: err });
+      // Review r3 M-2, r4 M-1: a hook of the last launch's agent that could
+      // not record its event marked the records of that launch unusable, in
+      // a mark of that launch alone. Only that mark is read: the marks of
+      // earlier launches do not count, and they cannot replace this one. A
+      // token that is not a UUID names no mark (the hook writes only UUID
+      // tokens); the token check below refuses its record.
+      if (context.launchToken && CONVERSATION_ID.test(context.launchToken)) {
+        const mark = join(
+          context.dataDir,
+          CONVERSATIONS_DIR_NAME,
+          `.${session.id}.${context.launchToken}.unusable`,
+        );
+        let markContent: string | null = null;
+        try {
+          markContent = await readFile(mark, "utf-8");
+        } catch (err: unknown) {
+          if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) {
+            throw new Error(`claude-code: cannot read ${mark}`, { cause: err });
+          }
         }
-      }
-      if (markContent !== null) {
-        const marked = parseConversationRecord(markContent);
-        const markToken = marked["launchToken"] ?? "";
-        // A mark of an earlier launch (another valid token) does not count;
-        // a mark without a valid token counts for every launch.
-        if (!CONVERSATION_ID.test(markToken) || markToken === context.launchToken) {
+        if (markContent !== null) {
+          const reason = parseConversationRecord(markContent)["reason"] || "no reason given";
           return {
             id: null,
-            reason: `a SessionStart event of the session's last launch could not be recorded (${marked["reason"] || "no reason given"}; see ${mark}), so ${file} can hold an earlier conversation than its agent's current one`,
+            reason: `a SessionStart event of the session's last launch could not be recorded (${reason}; see ${mark}), so ${file} can hold an earlier conversation than its agent's current one`,
           };
         }
       }

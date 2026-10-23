@@ -20,6 +20,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -105,20 +106,46 @@ function recorded(): Record<string, string> | null {
   );
 }
 
-/** The mark of a hook of the launch's agent that could not record its event (review r3 M-2). */
-function markFile(): string {
-  return join(sessionsDir, ".agent-conversations", ".app-1.unusable");
+/**
+ * The mark of a hook of a launch's agent that could not record its event
+ * (review r3 M-2): one for each launch token (review r4 M-1).
+ */
+function markFile(token = THIS_LAUNCH): string {
+  return join(sessionsDir, ".agent-conversations", `.app-1.${token}.unusable`);
 }
 
-function marked(): Record<string, string> | null {
-  if (!existsSync(markFile())) return null;
+function marked(token = THIS_LAUNCH): Record<string, string> | null {
+  if (!existsSync(markFile(token))) return null;
   return Object.fromEntries(
-    readFileSync(markFile(), "utf-8")
+    readFileSync(markFile(token), "utf-8")
       .split("\n")
       .filter(Boolean)
       .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
   );
 }
+
+/** Every mark file of the session's records, of any launch. */
+function markFiles(): string[] {
+  const records = join(sessionsDir, ".agent-conversations");
+  if (!existsSync(records)) return [];
+  return readdirSync(records).filter((name) => name.includes("unusable"));
+}
+
+/** The tools of the hook, without flock. */
+const NO_FLOCK_TOOLS = [
+  "bash",
+  "cat",
+  "readlink",
+  "mkdir",
+  "mv",
+  "rm",
+  "grep",
+  "head",
+  "cut",
+  "jq",
+  "timeout",
+  "touch",
+];
 
 /** A directory of links to `tools`, for a PATH that lacks every other tool. */
 function toolsDir(name: string, tools: string[]): string {
@@ -238,21 +265,21 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ AO_LAUNCH_TOKEN: "" }));
 
     expect(recorded()).toBeNull();
-    expect(marked()).toBeNull();
+    expect(markFiles()).toEqual([]);
   });
 
   it("does not record a claude whose launch token is not a UUID", async () => {
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ AO_LAUNCH_TOKEN: "x; touch y" }));
 
     expect(recorded()).toBeNull();
-    expect(marked()).toBeNull();
+    expect(markFiles()).toEqual([]);
   });
 
   it("does not let a nested claude -p (stdin not the pane terminal) change the record", async () => {
     await runDetached(claudeTree(OUTER, { id: NESTED }), paneTty);
 
     expect(recorded()?.["conversationId"]).toBe(OUTER);
-    expect(marked()).toBeNull();
+    expect(markFiles()).toEqual([]);
     expect(existsSync(join(dir, `${NESTED}.out`))).toBe(true);
   });
 
@@ -260,7 +287,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER, { id: NESTED, stdin: paneTty }), paneTty);
 
     expect(recorded()?.["conversationId"]).toBe(OUTER);
-    expect(marked()).toBeNull();
+    expect(markFiles()).toEqual([]);
     expect(existsSync(join(dir, `${NESTED}.out`))).toBe(true);
   });
 
@@ -268,7 +295,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER), otherTty);
 
     expect(recorded()).toBeNull();
-    expect(marked()).toBeNull();
+    expect(markFiles()).toEqual([]);
   });
 
   it("does not record, and marks the launch's record unusable, when no claude process runs above the hook (review r3 M-2)", async () => {
@@ -409,6 +436,88 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       reason: expect.stringContaining(
         `a SessionStart event of the session's last launch could not be recorded (no flock; see ${markFile()})`,
       ),
+    });
+  }, 15_000);
+
+  it("keeps the mark of the last launch when a late failed hook of the earlier launch writes its own (review r4 M-1)", async () => {
+    writeFileSync(join(dir, `${OUTER}.jsonl`), "{}\n");
+    writeFileSync(join(dir, `${OTHER}.jsonl`), "{}\n");
+    const lookup = () =>
+      create().getOwnConversationId!(sessionOf(join(dir, "ws")), {
+        dataDir: sessionsDir,
+        launchToken: THIS_LAUNCH,
+        pane: { id: "%1", tty: paneTty },
+      });
+    // The last launch: A/startup is recorded, then the hook of B/clear has no flock.
+    await runDetached(claudeTree(OUTER), paneTty, treeEnv({ HOOK_TRANSCRIPT_DIR: dir }));
+    const noFlock = toolsDir("tools-no-flock", NO_FLOCK_TOOLS);
+    await runDetached(
+      claudeTree(OTHER),
+      paneTty,
+      treeEnv({ PATH: `${fakeBin}:${noFlock}`, HOOK_SOURCE: "clear", HOOK_TRANSCRIPT_DIR: dir }),
+    );
+    expect(marked()).toMatchObject({ launchToken: THIS_LAUNCH, reason: "no flock" });
+
+    // Then a late hook of the earlier launch (its agent in the same pane, its
+    // own token) fails at the lock, as in the review's reproducer.
+    const busyLock = toolsDir("tools-busy-lock", NO_FLOCK_TOOLS);
+    writeFileSync(join(busyLock, "flock"), "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+    await runDetached(
+      claudeTree(NESTED),
+      paneTty,
+      treeEnv({
+        PATH: `${fakeBin}:${busyLock}`,
+        AO_LAUNCH_TOKEN: EARLIER_LAUNCH,
+        HOOK_SOURCE: "clear",
+        HOOK_TRANSCRIPT_DIR: dir,
+      }),
+    );
+
+    expect(await lookup()).toEqual({
+      id: null,
+      reason: expect.stringContaining(
+        `a SessionStart event of the session's last launch could not be recorded (no flock; see ${markFile()})`,
+      ),
+    });
+    expect(marked()).toEqual({ launchToken: THIS_LAUNCH, reason: "no flock", paneId: "%1" });
+    expect(marked(EARLIER_LAUNCH)).toEqual({
+      launchToken: EARLIER_LAUNCH,
+      reason: "the record lock stayed busy for 2 s",
+      paneId: "%1",
+    });
+    expect(recorded()).toMatchObject({ conversationId: OUTER, source: "startup" });
+  }, 15_000);
+
+  it("keeps the mark of a launch when a later event of the same launch records (review r4)", async () => {
+    writeFileSync(join(dir, `${OUTER}.jsonl`), "{}\n");
+    writeFileSync(join(dir, `${OTHER}.jsonl`), "{}\n");
+    // The hook of the first event has no flock: the launch's mark.
+    const noFlock = toolsDir("tools-no-flock", NO_FLOCK_TOOLS);
+    await runDetached(
+      claudeTree(OUTER),
+      paneTty,
+      treeEnv({ PATH: `${fakeBin}:${noFlock}`, HOOK_TRANSCRIPT_DIR: dir }),
+    );
+    expect(marked()).toMatchObject({ reason: "no flock" });
+
+    // A later /clear of the same agent records: the failed event before it
+    // can be newer than any recorded one, so the mark stays.
+    await runDetached(
+      claudeTree(OTHER),
+      paneTty,
+      treeEnv({ HOOK_SOURCE: "clear", HOOK_TRANSCRIPT_DIR: dir }),
+    );
+
+    expect(recorded()).toMatchObject({ conversationId: OTHER, source: "clear" });
+    expect(marked()).toEqual({ launchToken: THIS_LAUNCH, reason: "no flock", paneId: "%1" });
+    const lookup = await create().getOwnConversationId!(sessionOf(join(dir, "ws")), {
+      dataDir: sessionsDir,
+      launchToken: THIS_LAUNCH,
+      pane: { id: "%1", tty: paneTty },
+    });
+    expect(lookup).toEqual({
+      id: null,
+      reason: expect.stringContaining("could not be recorded (no flock;"),
     });
   }, 15_000);
 
@@ -757,18 +866,19 @@ describe("getOwnConversationId: only the ID that the agent of the last launch re
     });
   });
 
-  it("ignores the mark of an earlier launch, and refuses on a mark without a valid launch token (review r3 M-2)", async () => {
+  it("reads only the mark of the last launch: the mark of an earlier launch does not count (review r4 M-1)", async () => {
     const own = writeTranscript(OUTER, 1_000);
     writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own });
-    writeFileSync(markFile(), `launchToken=${EARLIER_LAUNCH}\nreason=no flock\n`);
+    writeFileSync(markFile(EARLIER_LAUNCH), `launchToken=${EARLIER_LAUNCH}\nreason=no flock\n`);
     const earlier = await agent.getOwnConversationId!(sessionOf(workspace), context());
+    // The mark of the last launch counts by its name, whatever it holds.
     writeFileSync(markFile(), "reason=no flock\n");
-    const tokenless = await agent.getOwnConversationId!(sessionOf(workspace), context());
+    const own_ = await agent.getOwnConversationId!(sessionOf(workspace), context());
 
     expect(earlier.id).toBe(OUTER);
-    expect(tokenless).toEqual({
+    expect(own_).toEqual({
       id: null,
-      reason: expect.stringContaining("could not be recorded (no flock;"),
+      reason: expect.stringContaining(`could not be recorded (no flock; see ${markFile()})`),
     });
   });
 
