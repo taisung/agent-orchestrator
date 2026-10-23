@@ -131,7 +131,7 @@ import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
-import { AGENT_PANE_KEY, agentPaneTarget, exactSessionTarget } from "./tmux.js";
+import { AGENT_PANE_KEY, agentPaneOf, exactPaneTarget, exactSessionTarget } from "./tmux.js";
 import {
   isRuntimeStopConfirmed,
   isRuntimeStopUnconfirmedError,
@@ -821,18 +821,28 @@ const TMUX_PANE_GONE = Symbol("tmux pane gone");
  * handle names one, review r2 M-1), `TMUX_PANE_GONE` when the session or
  * that pane does not exist, or null when tmux could not answer. tmux 3.4
  * prints empty format values and exits 0 for a target that does not exist,
- * so empty output means gone, not unknown.
+ * so empty output means gone, not unknown. The agent's pane counts only
+ * while it belongs to the handle's session (review r3 M-3: a pane keeps its
+ * ID when it moves to another session); a moved pane is gone.
  */
 async function getTmuxForegroundCommand(
   handle: RuntimeHandle,
 ): Promise<string | typeof TMUX_PANE_GONE | null> {
+  const agentPane = agentPaneOf(handle);
   try {
     const { stdout } = await execFileAsync(
       "tmux",
-      ["display-message", "-p", "-t", agentPaneTarget(handle), "#{pane_current_command}"],
+      agentPane
+        ? ["display-message", "-p", "-t", agentPane, "#{session_name} #{pane_current_command}"]
+        : ["display-message", "-p", "-t", exactPaneTarget(handle.id), "#{pane_current_command}"],
       { timeout: 5_000 },
     );
-    const command = stdout.trim();
+    let command = stdout.trim();
+    if (agentPane) {
+      const owner = `${handle.id} `;
+      if (!command.startsWith(owner)) return TMUX_PANE_GONE;
+      command = command.slice(owner.length).trim();
+    }
     return command.length > 0 ? command : TMUX_PANE_GONE;
   } catch {
     return null;

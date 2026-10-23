@@ -52,7 +52,6 @@ export {
   AGENT_PANE_KEY,
   AGENT_PANE_FORMAT,
   agentPaneOf,
-  agentPaneTarget,
   agentPaneTty,
   isTmuxPaneGone,
 } from "./tmux.js";

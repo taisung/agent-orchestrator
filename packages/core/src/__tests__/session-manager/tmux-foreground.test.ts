@@ -8,10 +8,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
 
-/** `tmux display-message` answers with `foreground`, or fails when it is an Error. */
+/**
+ * `tmux display-message` answers with `foreground`, fails when it is an
+ * Error, or answers the result of the function for the call's arguments.
+ */
 const proc = vi.hoisted(() => ({
   calls: [] as string[][],
-  foreground: "" as string | Error,
+  foreground: "" as string | Error | ((args: string[]) => string),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -21,6 +24,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     if (cmd === "tmux" && args[0] === "display-message") {
       proc.calls.push(args);
       if (proc.foreground instanceof Error) throw proc.foreground;
+      if (typeof proc.foreground === "function") return proc.foreground(args);
       return proc.foreground;
     }
     throw Object.assign(new Error(`unexpected command: ${cmd} ${args.join(" ")}`), {
@@ -110,15 +114,46 @@ describe("send: the tmux foreground read before delivery", () => {
       launchTokenAt: at,
       launchPane: "%5",
     });
-    proc.foreground = `${ctx.mockAgent.processName}\n`;
+    proc.foreground = `rt-1 ${ctx.mockAgent.processName}\n`;
 
     const { done } = await sentWithin(5_000);
     await done;
 
-    expect(proc.calls[0]).toEqual(["display-message", "-p", "-t", "%5", "#{pane_current_command}"]);
+    expect(proc.calls[0]).toEqual([
+      "display-message",
+      "-p",
+      "-t",
+      "%5",
+      "#{session_name} #{pane_current_command}",
+    ]);
     const handle = vi.mocked(ctx.mockRuntime.sendMessage).mock.calls[0][0];
     expect(handle.data["agentPane"]).toBe("%5");
     expect(vi.mocked(ctx.mockAgent.isProcessRunning).mock.calls[0][0].data["agentPane"]).toBe("%5");
+  });
+
+  it("reads a bound pane that now belongs to another session as gone (review r3 M-3)", async () => {
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    updateMetadata(ctx.sessionsDir, "app-1", {
+      createdAt: at,
+      restoredAt: at,
+      launchToken: BOUND_LAUNCH,
+      launchTokenAt: at,
+      launchPane: "%5",
+    });
+    // join-pane moved %5 into another session, where the agent's name runs:
+    // the pane's command alone looks ready, its session is another one.
+    proc.foreground = (args) =>
+      args.at(-1) === "#{pane_current_command}"
+        ? `${ctx.mockAgent.processName}\n`
+        : `other-session ${ctx.mockAgent.processName}\n`;
+
+    const { sent, done } = await sentWithin(10_000);
+    expect(sent).toBe(false);
+
+    // As for a gone pane, the wait ends at its bound (20 s); the runtime's
+    // own check of the pane then refuses the send (runtime-tmux).
+    await vi.advanceTimersByTimeAsync(15_000);
+    await done;
   });
 
   it("delivers once the agent runs in the foreground", async () => {

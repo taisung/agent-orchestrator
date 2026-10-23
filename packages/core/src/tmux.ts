@@ -49,7 +49,9 @@ export function exactPaneTarget(name: string): string {
  * every reader of the agent (its process check, its activity, the output and
  * the messages of the lifecycle) uses that pane and not the session's
  * current window, which the owner can change. A handle without it is read
- * as before.
+ * as before. A tmux pane keeps its ID when it moves to another session, so
+ * a reader uses the pane only while it belongs to the handle's session
+ * (review r3 M-3: `agentPaneTty`, or the session name in the same tmux call).
  */
 export const AGENT_PANE_KEY = "agentPane";
 
@@ -64,15 +66,6 @@ export function agentPaneOf(handle: {
   if (handle.runtimeName !== "tmux") return null;
   const pane = handle.data?.[AGENT_PANE_KEY];
   return typeof pane === "string" && TMUX_PANE_ID.test(pane) ? pane : null;
-}
-
-/** The `-t` target of the agent's pane: its pane ID, else the session's current pane. */
-export function agentPaneTarget(handle: {
-  id: string;
-  runtimeName: string;
-  data: Record<string, unknown>;
-}): string {
-  return agentPaneOf(handle) ?? exactPaneTarget(handle.id);
 }
 
 /** The `list-panes -F` format of `agentPaneTty`. */

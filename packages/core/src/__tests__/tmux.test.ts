@@ -11,6 +11,8 @@ import {
   getPaneTTY,
   exactSessionTarget,
   exactPaneTarget,
+  agentPaneTty,
+  isTmuxPaneGone,
 } from "../tmux.js";
 
 // Mock child_process.execFile
@@ -396,5 +398,54 @@ describe("getPaneTTY", () => {
 
     const tty = await getPaneTTY("app-1");
     expect(tty).toBeNull();
+  });
+});
+
+/** A failed tmux call as execFile rejects it. */
+function tmuxFailure(stderr: string, extra: Record<string, unknown> = {}): Error {
+  return Object.assign(new Error(`Command failed: tmux\n${stderr}`), {
+    code: 1,
+    killed: false,
+    signal: null,
+    stderr,
+    ...extra,
+  });
+}
+
+describe("isTmuxPaneGone: only tmux's whole answer for a pane that does not exist (review r3)", () => {
+  it("accepts the whole answer for that pane, and the answer of a server with no session", () => {
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %5\n"), "%5")).toBe(true);
+    expect(isTmuxPaneGone(tmuxFailure("no current target\n"), "%5")).toBe(true);
+  });
+
+  it("rejects another pane, more lines, another exit code, a signal or a timeout", () => {
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %50\n"), "%5")).toBe(false);
+    expect(
+      isTmuxPaneGone(tmuxFailure("warning: server connection failed\ncan't find pane: %5\n"), "%5"),
+    ).toBe(false);
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %5\nretrying\n"), "%5")).toBe(false);
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %5\n", { code: 2 }), "%5")).toBe(false);
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %5\n", { signal: "SIGTERM" }), "%5")).toBe(
+      false,
+    );
+    expect(isTmuxPaneGone(tmuxFailure("can't find pane: %5\n", { killed: true }), "%5")).toBe(
+      false,
+    );
+    expect(isTmuxPaneGone(new Error("can't find pane: %5"), "%5")).toBe(false);
+  });
+});
+
+describe("agentPaneTty: the agent's pane only in its own session (review r3 M-3)", () => {
+  it("answers the pane's terminal in the session, null in another session", () => {
+    const panes = "%3 app-1 /dev/pts/3\n%5 app-1 /dev/pts/5\n";
+    expect(agentPaneTty(panes, "%5", "app-1")).toBe("/dev/pts/5");
+    expect(agentPaneTty("%5 other /dev/pts/5\n", "%5", "app-1")).toBeNull();
+  });
+
+  it("throws for an answer that is not a list of panes with that pane in it", () => {
+    expect(() => agentPaneTty("garbage\n", "%5", "app-1")).toThrow(/not a list of panes/);
+    expect(() => agentPaneTty("%3 app-1 /dev/pts/3\n", "%5", "app-1")).toThrow(
+      /answered no line for pane %5/,
+    );
   });
 });
