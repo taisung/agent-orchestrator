@@ -117,6 +117,7 @@ import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
 import { exactPaneTarget, exactSessionTarget } from "./tmux.js";
+import { HERDR_RUNTIME_NAME } from "./herdr.js";
 import {
   isRuntimeStopConfirmed,
   isRuntimeStopUnconfirmedError,
@@ -558,26 +559,44 @@ async function getTmuxForegroundCommand(
  * restart, and `ao start` must be able to launch a new orchestrator. An
  * answer that is not a boolean is unknown too (review r1 M-3, 2026-10-22):
  * `undefined`, `null` or `0` from a faulty plugin is no proof of death.
+ *
+ * Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
+ * it with the full startup guard): for a record whose runtime is Herdr,
+ * neither `false` nor the no-server code is "gone". A Herdr server can still
+ * run the launch where the endpoint does not reach it, and pane IDs come back
+ * after a restart, so before RH no Herdr answer proves that a launch ended.
+ * Both are unknown, as a rejected probe: the record is neither reused nor
+ * archived.
  */
 async function isOrchestratorRuntimeAlive(
   runtime: Runtime,
   handle: RuntimeHandle,
   sessionId: SessionId,
 ): Promise<boolean> {
+  const unknown = (cause: unknown): Error =>
+    new Error(
+      `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
+      { cause },
+    );
+  const herdrRecord = (handle.runtimeName || runtime.name) === HERDR_RUNTIME_NAME;
   let alive: unknown;
   try {
     alive = await runtime.isAlive(handle);
   } catch (err: unknown) {
     const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-    if (code === RUNTIME_NO_SERVER_ERROR_CODE) return false;
-    throw new Error(
-      `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
-      { cause: err },
-    );
+    if (code === RUNTIME_NO_SERVER_ERROR_CODE && !herdrRecord) return false;
+    throw unknown(err);
   }
   if (typeof alive !== "boolean") {
     throw new Error(
       `Cannot tell whether session ${sessionId} is alive (the liveness check answered ${String(alive)}, not true or false), so it is neither reused nor replaced. Check the runtime and retry.`,
+    );
+  }
+  if (!alive && herdrRecord) {
+    throw unknown(
+      new Error(
+        `herdr answered that pane ${handle.id} does not exist or has another terminal; before RH no herdr answer proves that a launch ended`,
+      ),
     );
   }
   return alive;

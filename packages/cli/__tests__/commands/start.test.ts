@@ -63,6 +63,7 @@ const {
   mockStopLifecycleWorker,
   mockStartDetachedStop,
   mockRuntime,
+  mockHerdrRuntime,
   oraLog,
 } = vi.hoisted(() => ({
   mockExec: vi.fn(),
@@ -82,6 +83,7 @@ const {
   mockStopLifecycleWorker: vi.fn(),
   mockStartDetachedStop: vi.fn(),
   mockRuntime: { name: "tmux", isAlive: vi.fn() },
+  mockHerdrRuntime: { name: "herdr", isAlive: vi.fn() },
   oraLog: [] as Array<[string, string | undefined]>,
 }));
 
@@ -143,7 +145,13 @@ vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async (): Promise<SessionManager> => mockSessionManager as SessionManager,
   getPluginRegistry: async () => ({
     get: (slot: string, name: string) =>
-      slot === "runtime" && name === "tmux" ? mockRuntime : null,
+      slot !== "runtime"
+        ? null
+        : name === "tmux"
+          ? mockRuntime
+          : name === "herdr"
+            ? mockHerdrRuntime
+            : null,
   }),
 }));
 
@@ -278,6 +286,7 @@ beforeEach(() => {
   mockStopLifecycleWorker.mockResolvedValue(true);
   mockStartDetachedStop.mockReset();
   mockRuntime.isAlive.mockReset();
+  mockHerdrRuntime.isAlive.mockReset();
   mockProcessCwd.mockReset();
   // Install-prompt defaults: skip the runtime install and decline optional
   // tool installs, preserving the pre-TTY behavior for tests that never
@@ -1200,6 +1209,181 @@ describe("start command — orchestrator liveness (defect A)", () => {
       "succeed",
       "Using existing orchestrator session: app-orchestrator",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
+// it with the full startup guard): after fit F-1, herdr 0.9.5 answers a
+// closed pane with isAlive false and a socket with no server with
+// RUNTIME_NO_SERVER_ERROR_CODE. For a Herdr record neither is "gone".
+// ---------------------------------------------------------------------------
+
+describe("start command — old Herdr orchestrators (fit-1 interim)", () => {
+  const handle = {
+    id: "w3:p2",
+    runtimeName: "herdr",
+    data: { workspaceId: "w3", paneId: "w3:p2", terminalId: "term_a" },
+  };
+
+  /** A Herdr orchestrator record as `sm.list` returns it; `persisted` is the record's own status. */
+  function herdrRecord(
+    overrides: Record<string, unknown> = {},
+    persisted: Record<string, string> = { status: "working" },
+  ): Record<string, unknown> {
+    return {
+      id: "app-orchestrator",
+      projectId: "my-app",
+      status: "working",
+      activity: null,
+      metadata: { role: "orchestrator", runtimeHandle: JSON.stringify(handle), ...persisted },
+      runtimeHandle: handle,
+      lastActivityAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  function errors(): string {
+    return vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+  }
+
+  const noServer = () =>
+    Object.assign(
+      new Error(
+        "herdr pane get w3:p2 could not answer: herdr error server_not_running: no herdr server is running at /tmp/aohd/herdr.sock",
+      ),
+      { code: RUNTIME_NO_SERVER_ERROR_CODE },
+    );
+  const GONE_REASON =
+    "herdr answered that pane w3:p2 does not exist or has another terminal; before RH no herdr answer proves that a launch ended";
+  const refusal = (reason: string) =>
+    `Cannot tell whether orchestrator session app-orchestrator is alive (${reason}). It is neither reused nor replaced, and no new orchestrator was started. Check the runtime and run \`ao start\` again.`;
+
+  for (const mode of ["project", "isolated"] as const) {
+    describe(`${mode} mode`, () => {
+      beforeEach(() => {
+        mockConfigRef.current = makeConfig({
+          "my-app": makeProject({ runtime: "herdr", orchestratorWorkspaceMode: mode }),
+        });
+        mockSessionManager.spawnOrchestrator.mockResolvedValue({
+          id: "app-orchestrator-2",
+          metadata: {},
+        });
+      });
+
+      for (const [label, record, answer, reason] of [
+        [
+          "a working record, isAlive false",
+          () => herdrRecord(),
+          () => mockHerdrRuntime.isAlive.mockResolvedValue(false),
+          GONE_REASON,
+        ],
+        [
+          "a working record, the no-server code",
+          () => herdrRecord(),
+          () => mockHerdrRuntime.isAlive.mockRejectedValue(noServer()),
+          noServer().message,
+        ],
+        [
+          "a working record that sm.list showed killed and exited (isAlive false)",
+          () => herdrRecord({ status: "killed", activity: "exited" }),
+          () => mockHerdrRuntime.isAlive.mockResolvedValue(false),
+          GONE_REASON,
+        ],
+        [
+          "a record that the lifecycle wrote killed (runtime), isAlive false",
+          () => herdrRecord({ status: "killed" }, { status: "killed", killedReason: "runtime" }),
+          () => mockHerdrRuntime.isAlive.mockResolvedValue(false),
+          GONE_REASON,
+        ],
+        [
+          "a record that the lifecycle wrote killed (runtime), the no-server code",
+          () =>
+            herdrRecord(
+              { status: "killed", activity: "exited" },
+              { status: "killed", killedReason: "runtime" },
+            ),
+          () => mockHerdrRuntime.isAlive.mockRejectedValue(noServer()),
+          noServer().message,
+        ],
+      ] as const) {
+        it(`${label}: exit 1 with the unknown refusal, and no new orchestrator`, async () => {
+          mockSessionManager.list.mockResolvedValue([record()]);
+          answer();
+
+          await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow(
+            "process.exit(1)",
+          );
+
+          expect(mockHerdrRuntime.isAlive).toHaveBeenCalledWith(handle);
+          expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+          expect(errors()).toContain(refusal(reason));
+          expect(oraLog.some(([, text]) => text?.includes("Starting a new one"))).toBe(false);
+          expect(oraLog).not.toContainEqual(["succeed", "Orchestrator session created"]);
+        });
+      }
+
+      it("a live working record is reused as before", async () => {
+        mockSessionManager.list.mockResolvedValue([herdrRecord()]);
+        mockHerdrRuntime.isAlive.mockResolvedValue(true);
+
+        await program.parseAsync(["node", "test", "start"]);
+
+        expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+        expect(oraLog).toContainEqual([
+          "succeed",
+          "Using existing orchestrator session: app-orchestrator",
+        ]);
+      });
+
+      it("a killed record whose pane runs is passed over as before (today's terminal rule)", async () => {
+        mockSessionManager.list.mockResolvedValue([
+          herdrRecord({ status: "killed" }, { status: "killed", killedReason: "runtime" }),
+        ]);
+        mockHerdrRuntime.isAlive.mockResolvedValue(true);
+
+        await program.parseAsync(["node", "test", "start"]);
+
+        expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
+        expect(oraLog.some(([, text]) => text?.startsWith("Using existing orchestrator"))).toBe(
+          false,
+        );
+      });
+
+      it("a record with another terminal status (done) is not probed, as before", async () => {
+        mockSessionManager.list.mockResolvedValue([
+          herdrRecord({ status: "done" }, { status: "done" }),
+        ]);
+
+        await program.parseAsync(["node", "test", "start"]);
+
+        expect(mockHerdrRuntime.isAlive).not.toHaveBeenCalled();
+        expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
+      });
+    });
+  }
+
+  it("control: a tmux record that sm.list showed killed is not probed, and a new orchestrator starts", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.spawnOrchestrator.mockResolvedValue({
+      id: "app-orchestrator",
+      metadata: {},
+    });
+    const tmuxHandle = { id: "hash-app-orchestrator", runtimeName: "tmux", data: {} };
+    mockSessionManager.list.mockResolvedValue([
+      herdrRecord(
+        { status: "killed", activity: "exited", runtimeHandle: tmuxHandle },
+        { status: "working", runtimeHandle: JSON.stringify(tmuxHandle) },
+      ),
+    ]);
+
+    await program.parseAsync(["node", "test", "start"]);
+
+    expect(mockRuntime.isAlive).not.toHaveBeenCalled();
+    expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
   });
 });
 

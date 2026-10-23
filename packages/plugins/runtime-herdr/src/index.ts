@@ -30,6 +30,11 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  HERDR_CLI_IDS,
+  RUNTIME_NO_SERVER_ERROR_CODE,
+  isHerdrNoServer,
+  isHerdrPaneId,
+  readHerdrCliFailure,
   type PluginModule,
   type Runtime,
   type RuntimeCreateConfig,
@@ -92,9 +97,11 @@ function assertValidSessionId(id: string): void {
 }
 
 /**
- * herdr answers `{"id":...,"result":{...}}` on success and `{"error":{"code","message"}}`
- * on failure, both with exit code 0 — so the error has to be read out of the body.
- * With `requireResult` (same-ID R4 round 4, M-1), only a `result` object answers.
+ * herdr answers `{"id":...,"result":{...}}` on success with exit code 0. herdr
+ * 0.8.0 answers a failure `{"error":{"code","message"}}` with exit code 0 too, so
+ * the error has to be read out of the body; 0.9.5 exits 1 and writes it to
+ * stderr (`herdrCallError`). With `requireResult` (same-ID R4 round 4, M-1),
+ * only a `result` object answers.
  */
 function parseHerdrResult(stdout: string, requireResult = false): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -146,14 +153,52 @@ function parseHerdrResult(stdout: string, requireResult = false): Record<string,
 
 /**
  * Same-ID R4 (B-7 item 9): herdr's explicit answer that a pane does not
- * exist. Round 2 (M-3): only the `pane_not_found` code of the error envelope
- * of a command that exits 0 (`herdrCode`, set by parseHerdrResult), never
- * text: a command that fails (herdr cannot start, a timeout, a signal, a
- * non-zero exit) has no `herdrCode`, whatever its message or binary path
- * holds. Any other failure means that the check could not run.
+ * exist. Round 2 (M-3): only the `pane_not_found` code of herdr's error
+ * envelope (`herdrCode`), never text: a command that fails (herdr cannot
+ * start, a timeout, a signal, a non-zero exit) has no `herdrCode`, whatever
+ * its message or binary path holds. Herdr fit F-1: the envelope counts on
+ * stdout at exit 0 (0.8.0, set by parseHerdrResult) and in the exact 0.9.5
+ * failure form (set by herdrCallError). Any other failure means that the
+ * check could not run.
  */
 function isPaneNotFound(err: unknown): boolean {
   return (err as { herdrCode?: unknown } | null)?.herdrCode === "pane_not_found";
+}
+
+/** A rejection whose `code` says that no herdr server answers at the socket. */
+function isNoServer(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === RUNTIME_NO_SERVER_ERROR_CODE;
+}
+
+/** The command ID of herdr's error answer for a call (HERDR_CLI_IDS), or "" for none. */
+function cliIdOf(args: readonly string[]): string {
+  const key = `${args[0] ?? ""} ${args[1] ?? ""}`;
+  return Object.hasOwn(HERDR_CLI_IDS, key) ? HERDR_CLI_IDS[key] : "";
+}
+
+/**
+ * Herdr fit F-1: the error of a failed herdr call. herdr 0.9.5's error answer
+ * (readHerdrCliFailure, with the call's command ID) throws as the 0.8.0
+ * envelope does, with `herdrCode`, and the CLI's no-server answer also has
+ * `code` RUNTIME_NO_SERVER_ERROR_CODE. Every other failure is thrown as it
+ * is: no `herdrCode`, and its `code` stays the one of `execFile` (an exit
+ * number or an errno name).
+ */
+function herdrCallError(args: readonly string[], err: unknown): unknown {
+  const failure = readHerdrCliFailure(err, cliIdOf(args));
+  if (!failure) return err;
+  return Object.assign(
+    new Error(`herdr error ${failure.code}: ${failure.message}`, { cause: err }),
+    { herdrCode: failure.code },
+    isHerdrNoServer(failure) ? { code: RUNTIME_NO_SERVER_ERROR_CODE } : {},
+  );
+}
+
+/** Herdr fit F-2: the refusal of a pane call for an ID outside herdr's grammar. */
+function notAPaneId(operation: string, id: unknown): Error {
+  return new Error(
+    `herdr ${operation}: ${JSON.stringify(id)} is not a herdr pane ID; no herdr call was made`,
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -209,16 +254,24 @@ export function create(config?: Record<string, unknown>): Runtime {
       ? raw.sendAttempts
       : DEFAULT_SEND_ATTEMPTS;
 
+  /** Run a herdr CLI command and return its stdout; a failure throws herdrCallError. */
+  async function herdrStdout(args: string[]): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(bin, args, { timeout: commandTimeoutMs });
+      return stdout;
+    } catch (err: unknown) {
+      throw herdrCallError(args, err);
+    }
+  }
+
   /** Run a herdr CLI command and return its parsed `result` object. */
   async function herdr(...args: string[]): Promise<Record<string, unknown>> {
-    const { stdout } = await execFileAsync(bin, args, { timeout: commandTimeoutMs });
-    return parseHerdrResult(stdout);
+    return parseHerdrResult(await herdrStdout(args));
   }
 
   /** `herdr` for a read that decides a negative: only a `result` object answers. */
   async function herdrResult(...args: string[]): Promise<Record<string, unknown>> {
-    const { stdout } = await execFileAsync(bin, args, { timeout: commandTimeoutMs });
-    return parseHerdrResult(stdout, true);
+    return parseHerdrResult(await herdrStdout(args), true);
   }
 
   /** Read a pane, returning raw terminal text (read commands answer in text, not JSON). */
@@ -242,15 +295,22 @@ export function create(config?: Record<string, unknown>): Runtime {
    * replaced terminal.
    * Round 4 (review r3, M-1): the pane counts only inside a `result` object;
    * a top-level `pane` is no answer of herdr.
+   * Herdr fit F-1: `pane_not_found` from either channel is null; the wrapper
+   * keeps the no-server `code` of its cause, which the lifecycle and startup
+   * read. F-2: an ID outside herdr's pane ID grammar rejects with no call.
    */
   async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
+    if (!isHerdrPaneId(paneId)) throw notAPaneId("pane get", paneId);
     let result: Record<string, unknown>;
     try {
       result = await herdrResult("pane", "get", paneId);
     } catch (err) {
       if (isPaneNotFound(err)) return null;
       const detail = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
-      throw new Error(`herdr pane get ${paneId} could not answer: ${detail}`, { cause: err });
+      throw Object.assign(
+        new Error(`herdr pane get ${paneId} could not answer: ${detail}`, { cause: err }),
+        isNoServer(err) ? { code: RUNTIME_NO_SERVER_ERROR_CODE } : {},
+      );
     }
     const pane = toPane(result.pane);
     if (!pane) throw new Error(`herdr pane get ${paneId} answered without a pane`);
@@ -350,7 +410,9 @@ export function create(config?: Record<string, unknown>): Runtime {
       const workspace = asRecord(result.workspace);
       const rootPane = toPane(result.root_pane);
       const workspaceId = typeof workspace?.workspace_id === "string" ? workspace.workspace_id : "";
-      if (!rootPane || !workspaceId) {
+      // Herdr fit F-2: a root pane ID outside herdr's grammar is no usable pane;
+      // no call is made with it.
+      if (!rootPane || !workspaceId || !isHerdrPaneId(rootPane.pane_id)) {
         throw new Error(
           `herdr workspace create returned no usable pane for session "${createConfig.sessionId}"`,
         );
@@ -445,6 +507,8 @@ export function create(config?: Record<string, unknown>): Runtime {
      * turn's completion can satisfy it.
      */
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
+      // Herdr fit F-2: no prompt, read or raw input for an ID outside the grammar.
+      if (!isHerdrPaneId(handle.id)) throw notAPaneId("send", handle.id);
       const settledState = await waitForSettledAgent(handle.id, settleTimeoutMs);
 
       if (settledState) {
@@ -477,6 +541,8 @@ export function create(config?: Record<string, unknown>): Runtime {
     },
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {
+      // Herdr fit F-2: an ID outside herdr's grammar names no pane to read.
+      if (!isHerdrPaneId(handle.id)) return "";
       // recent-unwrapped reaches the full scrollback of an alt-screen TUI agent,
       // which is the whole point of this runtime (0001 §4). It returns empty for a
       // pane with no detected agent, so fall back to the visible viewport.
@@ -497,6 +563,9 @@ export function create(config?: Record<string, unknown>): Runtime {
     async isAlive(handle: RuntimeHandle): Promise<boolean> {
       // Same-ID R4 (B-7 item 9): false only for `pane_not_found` and for a
       // pane ID that names another terminal; rejects when herdr cannot answer.
+      // Herdr fit F-1, F-2: `pane_not_found` also in the 0.9.5 failure form;
+      // no server at the socket rejects with RUNTIME_NO_SERVER_ERROR_CODE; an
+      // empty ID or one outside the grammar rejects with no call.
       const pane = await getPaneStrict(handle.id);
       if (!pane) return false;
 

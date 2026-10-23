@@ -32,7 +32,10 @@ import {
   isTerminalSession,
   isRuntimeStopUnconfirmedError,
   ConfigNotFoundError,
+  HERDR_RUNTIME_NAME,
   RUNTIME_NO_SERVER_ERROR_CODE,
+  TERMINAL_STATUSES,
+  type SessionStatus,
   type OrchestratorConfig,
   type ProjectConfig,
   type ParsedRepoUrl,
@@ -881,6 +884,44 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** True when the session has a runtime handle that its record stores (not one that core made). */
+function hasStoredHandle(session: Session): boolean {
+  return (
+    Boolean(session.runtimeHandle) &&
+    (Boolean(session.metadata?.["runtimeHandle"]) ||
+      Boolean(session.metadata?.["tmuxName"]?.trim()))
+  );
+}
+
+/** The runtime of the session's record: its handle's, else the project's. */
+function recordRuntimeName(
+  config: OrchestratorConfig,
+  project: ProjectConfig,
+  session: Session,
+): string {
+  return session.runtimeHandle?.runtimeName || project.runtime || config.defaults.runtime;
+}
+
+/**
+ * Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
+ * it with the full startup guard): a Herdr orchestrator record that `sm.list`
+ * shows terminal is still checked at startup when that terminal state came
+ * from a liveness probe: the enrichment of this `sm.list` (the record's own
+ * status is not terminal) or a persisted `killed` (the lifecycle writes it
+ * after probe answers). Before RH no Herdr answer proves that a launch ended,
+ * so such a record must not be passed over as if it had ended.
+ */
+function isHerdrProbeTerminal(
+  config: OrchestratorConfig,
+  project: ProjectConfig,
+  session: Session,
+): boolean {
+  if (!isTerminalSession(session) || !hasStoredHandle(session)) return false;
+  if (recordRuntimeName(config, project, session) !== HERDR_RUNTIME_NAME) return false;
+  const persisted = session.metadata?.["status"];
+  return !persisted || persisted === "killed" || !TERMINAL_STATUSES.has(persisted as SessionStatus);
+}
+
 /**
  * Defect A (2026-10-22): `sm.list` keeps the stored status when
  * `Runtime.isAlive` rejects, so the record of an orchestrator whose tmux
@@ -891,6 +932,8 @@ function errorMessage(err: unknown): string {
  * exist), is gone; any other rejection, or an answer that is not a boolean,
  * is unknown. Only a record with a stored handle is probed (the records whose
  * liveness `sm.list` trusts).
+ * Herdr fit-1 interim (as in core): for a record whose runtime is Herdr,
+ * false and the no-server code are unknown, never gone.
  */
 async function checkOrchestratorLiveness(
   registry: PluginRegistry,
@@ -899,18 +942,23 @@ async function checkOrchestratorLiveness(
   session: Session,
 ): Promise<OrchestratorLiveness> {
   const handle = session.runtimeHandle;
-  const storedHandle =
-    Boolean(session.metadata?.["runtimeHandle"]) || Boolean(session.metadata?.["tmuxName"]?.trim());
-  if (!handle || !storedHandle) return { state: "unchecked" };
+  if (!handle || !hasStoredHandle(session)) return { state: "unchecked" };
 
-  const runtimeName = handle.runtimeName || project.runtime || config.defaults.runtime;
+  const runtimeName = recordRuntimeName(config, project, session);
   const runtime = registry.get<Runtime>("runtime", runtimeName);
   if (!runtime) {
     return { state: "unknown", reason: `no runtime plugin "${runtimeName}" is loaded` };
   }
+  const herdrRecord = runtimeName === HERDR_RUNTIME_NAME;
   try {
     const alive: unknown = await runtime.isAlive(handle);
     if (alive === true) return { state: "alive" };
+    if (alive === false && herdrRecord) {
+      return {
+        state: "unknown",
+        reason: `herdr answered that pane ${handle.id} does not exist or has another terminal; before RH no herdr answer proves that a launch ended`,
+      };
+    }
     if (alive === false) {
       return { state: "gone", reason: `${runtimeName} answered that ${handle.id} does not exist` };
     }
@@ -920,7 +968,7 @@ async function checkOrchestratorLiveness(
     };
   } catch (err: unknown) {
     const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-    if (code === RUNTIME_NO_SERVER_ERROR_CODE) {
+    if (code === RUNTIME_NO_SERVER_ERROR_CODE && !herdrRecord) {
       return { state: "gone", reason: `no ${runtimeName} server runs (${errorMessage(err)})` };
     }
     return { state: "unknown", reason: errorMessage(err) };
@@ -997,21 +1045,26 @@ async function runStartup(
     const candidates = allSessions.filter(
       (s) =>
         isOrchestratorSession(s, project.sessionPrefix ?? projectId, allSessionPrefixes) &&
-        !isTerminalSession(s),
+        (!isTerminalSession(s) || isHerdrProbeTerminal(config, project, s)),
     );
 
     // Defect A: a candidate is reused only when it is alive (or unchecked, as
     // before); a gone one is left to `spawnOrchestrator`, which archives or
     // replaces its record (project mode) or starts the next ID (isolated
     // mode). An unknown one stops the start: it may still run.
+    // Herdr fit-1 interim: a Herdr record that is terminal only by a probe is
+    // checked too. Alive, it is passed over as every terminal record is
+    // (today's rule); unknown, it stops the start.
     const registry = candidates.length > 0 ? await getPluginRegistry(config) : null;
     const checked = registry
-      ? await Promise.all(
-          candidates.map(async (session) => ({
-            session,
-            liveness: await checkOrchestratorLiveness(registry, config, project, session),
-          })),
-        )
+      ? (
+          await Promise.all(
+            candidates.map(async (session) => ({
+              session,
+              liveness: await checkOrchestratorLiveness(registry, config, project, session),
+            })),
+          )
+        ).filter((c) => !(isTerminalSession(c.session) && c.liveness.state === "alive"))
       : [];
     const existingOrchestrators = checked
       .filter((c) => c.liveness.state === "alive" || c.liveness.state === "unchecked")

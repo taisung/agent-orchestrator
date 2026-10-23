@@ -52,8 +52,17 @@ export {
 } from "./tmux.js";
 
 // herdr — command wrappers
-export { HERDR_RUNTIME_NAME, getHerdrPaneProcesses, isHerdrProcessRunning } from "./herdr.js";
-export type { HerdrPaneProcess } from "./herdr.js";
+export {
+  HERDR_RUNTIME_NAME,
+  getHerdrPaneProcesses,
+  isHerdrProcessRunning,
+  HERDR_CLI_IDS,
+  readHerdrCliFailure,
+  isHerdrNoServer,
+  HERDR_PANE_ID_RE,
+  isHerdrPaneId,
+} from "./herdr.js";
+export type { HerdrPaneProcess, HerdrCliFailure } from "./herdr.js";
 
 // Runtime stop — the outcome that every destructive caller acts on (same-ID R2a)
 export {

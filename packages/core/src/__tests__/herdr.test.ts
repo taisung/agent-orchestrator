@@ -13,8 +13,17 @@ vi.mock("node:util", () => ({
       mockExecFile(...args),
 }));
 
-const { getHerdrPaneProcesses, isHerdrProcessRunning, HERDR_RUNTIME_NAME } =
-  await import("../herdr.js");
+const {
+  getHerdrPaneProcesses,
+  isHerdrProcessRunning,
+  HERDR_RUNTIME_NAME,
+  HERDR_CLI_IDS,
+  readHerdrCliFailure,
+  isHerdrNoServer,
+  isHerdrPaneId,
+} = await import("../herdr.js");
+const { RUNTIME_NO_SERVER_ERROR_CODE } = await import("../types.js");
+const { herdrFixture, herdrRejection } = await import("./herdr-fixtures.js");
 
 function paneProcesses(processes: unknown[]) {
   return {
@@ -316,5 +325,248 @@ describe("getHerdrPaneProcesses: only an answer for the requested pane is eviden
     expect(await getHerdrPaneProcesses("w7:p1")).toEqual([
       { pid: 7, name: "bash", cmdline: "bash" },
     ]);
+  });
+});
+
+// Herdr fit F-1 (W-2, W-6): herdr 0.9.5 answers an error with exit 1, empty
+// stdout and one stderr line. The recorded answers of the live check are the
+// test data (development/artifacts/herdr_095_live_check).
+describe("Herdr fit F-1: the 0.9.5 failure form of row 8 (getHerdrPaneProcesses)", () => {
+  /** A rejection in the F1 form with the given stderr line (and overrides). */
+  function f1(line: string, overrides: Record<string, unknown> = {}): Error {
+    return Object.assign(
+      herdrRejection({
+        command: "herdr pane process-info --pane w3:p2",
+        exit: 1,
+        stdout: "",
+        stderr: `${line}\n`,
+      }),
+      overrides,
+    );
+  }
+  const NOT_FOUND =
+    '{"error":{"code":"pane_not_found","message":"pane not found"},"id":"cli:pane:process_info"}';
+
+  for (const name of ["closedpane_pane_process_info", "closedws_pane_process_info"]) {
+    it(`T-1.2: ${name} answers an empty list, and isHerdrProcessRunning false`, async () => {
+      const fixture = herdrFixture(name);
+      expect(fixture.exit).toBe(1);
+      const pane = fixture.command.split(" ").at(-1) ?? "";
+      mockExecFile.mockRejectedValueOnce(herdrRejection(fixture));
+      expect(await getHerdrPaneProcesses(pane)).toEqual([]);
+      mockExecFile.mockRejectedValueOnce(herdrRejection(fixture));
+      expect(await isHerdrProcessRunning(pane, /(?:^|\/)claude(?:\s|$)/)).toBe(false);
+    });
+  }
+
+  it("T-1.3: noserver_stopped_pane_process_info rejects with the no-server code", async () => {
+    const fixture = herdrFixture("noserver_stopped_pane_process_info");
+    mockExecFile.mockRejectedValueOnce(herdrRejection(fixture));
+    const rejection = await getHerdrPaneProcesses("w3:p1").catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).toMatchObject({
+      code: RUNTIME_NO_SERVER_ERROR_CODE,
+      herdrCode: "server_not_running",
+      message: expect.stringContaining(
+        "herdr pane process-info --pane w3:p1 could not answer: herdr error server_not_running: no herdr server is running at ",
+      ),
+    });
+    mockExecFile.mockRejectedValueOnce(herdrRejection(fixture));
+    await expect(isHerdrProcessRunning("w3:p1", /codex/)).rejects.toMatchObject({
+      code: RUNTIME_NO_SERVER_ERROR_CODE,
+    });
+  });
+
+  for (const [label, rejection] of [
+    ["stdout not empty", () => f1(NOT_FOUND, { stdout: "x" })],
+    ["stdout absent", () => f1(NOT_FOUND, { stdout: undefined })],
+    ["two stderr lines", () => f1(`${NOT_FOUND}\n${NOT_FOUND}`)],
+    ["a carriage return", () => f1(`${NOT_FOUND}\r`)],
+    ["exit 2", () => f1(NOT_FOUND, { code: 2 })],
+    ["an errno code", () => f1(NOT_FOUND, { code: "ENOENT" })],
+    ["a signal", () => f1(NOT_FOUND, { signal: "SIGTERM" })],
+    ["killed (a timeout)", () => f1(NOT_FOUND, { killed: true })],
+    [
+      "a result key",
+      () =>
+        f1(
+          '{"error":{"code":"pane_not_found","message":"x"},"id":"cli:pane:process_info","result":null}',
+        ),
+    ],
+    ["an empty id", () => f1('{"error":{"code":"pane_not_found","message":"x"},"id":""}')],
+    [
+      "the id of pane get",
+      () => f1('{"error":{"code":"pane_not_found","message":"x"},"id":"cli:pane:get"}'),
+    ],
+    ["no id", () => f1('{"error":{"code":"pane_not_found","message":"x"}}')],
+    ["a null error", () => f1('{"error":null,"id":"cli:pane:process_info"}')],
+    ["an error list", () => f1('{"error":["pane_not_found"],"id":"cli:pane:process_info"}')],
+    ["an error without code", () => f1('{"error":{"message":"x"},"id":"cli:pane:process_info"}')],
+    [
+      "an error with an extra key",
+      () =>
+        f1(
+          '{"error":{"code":"pane_not_found","message":"x","pane":"w3:p2"},"id":"cli:pane:process_info"}',
+        ),
+    ],
+    ["an empty code", () => f1('{"error":{"code":"","message":"x"},"id":"cli:pane:process_info"}')],
+    [
+      "a message that is not text",
+      () => f1('{"error":{"code":"pane_not_found","message":3},"id":"cli:pane:process_info"}'),
+    ],
+    ["a JSON list", () => f1("[]")],
+    ["text that is not JSON", () => f1("pane_not_found")],
+    [
+      "r5_c_socket_mode_000_cli (Rust EACCES text)",
+      () => herdrRejection(herdrFixture("r5_c_socket_mode_000_cli")),
+    ],
+  ] as const) {
+    it(`T-1.4: a near miss of the form (${label}) rejects with no herdrCode and no no-server code`, async () => {
+      mockExecFile.mockRejectedValueOnce(rejection());
+      const err = await getHerdrPaneProcesses("w3:p2").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain(
+        "herdr pane process-info --pane w3:p2 could not answer: the command failed",
+      );
+      expect(err).not.toHaveProperty("herdrCode");
+      expect(err).not.toHaveProperty("code");
+    });
+  }
+
+  for (const [label, rejection, code] of [
+    [
+      "r5_b_ping_protocol_19 (protocol_mismatch)",
+      () =>
+        f1(
+          JSON.stringify({
+            id: "cli:pane:process_info",
+            error: JSON.parse(herdrFixture("r5_b_ping_protocol_19").stderr).error,
+          }),
+        ),
+      "protocol_mismatch",
+    ],
+    [
+      "server_unavailable",
+      () =>
+        f1('{"id":"cli:pane:process_info","error":{"code":"server_unavailable","message":"x"}}'),
+      "server_unavailable",
+    ],
+    [
+      "server_not_running from a server (no CLI prefix)",
+      () =>
+        f1(
+          '{"error":{"code":"server_not_running","message":"fake server says so"},"id":"cli:pane:process_info"}',
+        ),
+      "server_not_running",
+    ],
+  ] as const) {
+    it(`T-1.4b: the form with another code (${label}) rejects with that herdrCode and no no-server code`, async () => {
+      mockExecFile.mockRejectedValueOnce(rejection());
+      const err = await getHerdrPaneProcesses("w3:p2").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toMatchObject({ herdrCode: code });
+      expect(err).not.toHaveProperty("code");
+      mockExecFile.mockRejectedValueOnce(rejection());
+      await expect(isHerdrProcessRunning("w3:p2", /codex/)).rejects.toThrow(/could not answer/);
+    });
+  }
+
+  it("T-1.5: the 0.8.0 envelopes at exit 0 keep their answers", async () => {
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ error: { code: "pane_not_found", message: "gone" } }),
+      stderr: "",
+    });
+    expect(await getHerdrPaneProcesses("w3:p2")).toEqual([]);
+    mockExecFile.mockResolvedValueOnce({
+      stdout: JSON.stringify({ error: { code: "server_not_running", message: "x" } }),
+      stderr: "",
+    });
+    const err = await getHerdrPaneProcesses("w3:p2").catch((e: unknown) => e);
+    expect((err as Error).message).toContain("herdr error server_not_running");
+    expect(err).not.toHaveProperty("code");
+  });
+});
+
+describe("Herdr fit F-1: readHerdrCliFailure and isHerdrNoServer", () => {
+  it("reads every recorded 0.9.5 error answer with its own command ID", () => {
+    for (const [name, words] of [
+      ["closedpane_pane_get", "pane get"],
+      ["closedpane_pane_process_info", "pane process-info"],
+      ["closedpane_pane_read_visible", "pane read"],
+      ["closedpane_pane_run", "pane run"],
+      ["closedpane_pane_send_text", "pane send-text"],
+      ["closedpane_pane_send_keys", "pane send-keys"],
+      ["closedpane_agent_prompt", "agent prompt"],
+      ["blocked_herdr_agent_prompt", "agent prompt"],
+      ["noserver_never_workspace_create", "workspace create"],
+    ] as const) {
+      const failure = readHerdrCliFailure(herdrRejection(herdrFixture(name)), HERDR_CLI_IDS[words]);
+      expect(failure, name).not.toBeNull();
+    }
+  });
+
+  it("knows the no-server answer of the CLI only with its message prefix", () => {
+    const never = readHerdrCliFailure(
+      herdrRejection(herdrFixture("noserver_never_pane_get")),
+      "cli:pane:get",
+    );
+    expect(isHerdrNoServer(never)).toBe(true);
+    const fake = readHerdrCliFailure(
+      herdrRejection(herdrFixture("r5_b_pane_get_server_not_running_from_server")),
+      "cli:pane:get",
+    );
+    expect(fake).toEqual({ code: "server_not_running", message: "fake server says so" });
+    expect(isHerdrNoServer(fake)).toBe(false);
+    expect(isHerdrNoServer(null)).toBe(false);
+  });
+
+  it("reads nothing with an empty expected ID or a value that is not a rejection", () => {
+    const rejection = herdrRejection(herdrFixture("closedpane_pane_get"));
+    expect(readHerdrCliFailure(rejection, "")).toBeNull();
+    expect(readHerdrCliFailure(null, "cli:pane:get")).toBeNull();
+    expect(readHerdrCliFailure("pane_not_found", "cli:pane:get")).toBeNull();
+  });
+});
+
+// Herdr fit F-2 (W-8): AO makes no herdr call with an ID outside herdr's
+// pane ID grammar (`badid_pane_process_info_session_name`: the session-name
+// handle reached herdr).
+describe("Herdr fit F-2: the pane ID grammar of row 8", () => {
+  for (const id of [
+    "aohd-1",
+    "w1m:p1",
+    "wI:p1",
+    "w1:pL",
+    "W1:p1",
+    " w1:p1",
+    "w1:p1 ",
+    "w1:p1\n",
+    "w1:p",
+  ]) {
+    it(`T-2.1: ${JSON.stringify(id)} rejects with no call`, async () => {
+      expect(isHerdrPaneId(id)).toBe(false);
+      await expect(getHerdrPaneProcesses(id)).rejects.toThrow(/is not a herdr pane ID/);
+      await expect(isHerdrProcessRunning(id, /codex/)).rejects.toThrow(/is not a herdr pane ID/);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const id of ["w1R:p1", "w0:p1", "w11:p13", "w4:p0", "w1P:pZ"]) {
+    it(`T-2.2: ${id} is called`, async () => {
+      expect(isHerdrPaneId(id)).toBe(true);
+      mockExecFile.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          result: { process_info: { pane_id: id, foreground_processes: [] } },
+        }),
+        stderr: "",
+      });
+      expect(await getHerdrPaneProcesses(id)).toEqual([]);
+      expect(mockExecFile.mock.calls[0][1]).toEqual(["pane", "process-info", "--pane", id]);
+    });
+  }
+
+  it("keeps the empty ID: an empty list with no call (R4)", async () => {
+    expect(await getHerdrPaneProcesses("")).toEqual([]);
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 });
