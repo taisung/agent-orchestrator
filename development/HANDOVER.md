@@ -379,6 +379,18 @@ delete land/session-relaunch".
   "in progress": correct them when the fit-2a build is live. ao-73 (watcher 2303560) and ao-82 (watcher
   `aofork-2026-10-23a`) are idle. Next Herdr work: fit-2b (design r11 §8.2).
 
+**Update 2026-10-23 16:11 EDT: fit-2a pushed, built and live; ao-82 closed.**
+- Owner "proceed with your suggestions" (24, 25, 26 (a)): pushed `6b58bf64..b2064068`, CI 4 of 4 success (CI
+  `40016582171`). No dependency or `WRAPPER_VERSION` change (`0.2.6`) since `e43db964`. `pnpm build` 16:08:59 to
+  16:09:07, rc 0. Lifecycle workers restarted by exact PID: 3133311 -> **3539803** (agent-orchestrator), 3133656 ->
+  **3540453** (agent-skills); first polls 1 of 1 success each, health `ok`. Nexus 140323 not restarted (owner).
+- ao-82 closed (its r1 and r2 reviews on main, briefs in `backup-closed-sessions/`). Its watcher needed two
+  stops: TERM to the parent 1239456 left the loop 1239466 running under `flock`; TERM to 1239466 ended the
+  group. To stop a fleet watcher, stop its loop PID (the one the "watcher started" line names). The loops of
+  the watchers stopped earlier today are gone.
+- ao-73 stays for fit-2b (owner 26 (a)); its watcher `aofork-2026-10-22j` (loop 2303560, parent 2303556) runs.
+- Doc 0004 (§1, §3, §5, §5a) and doc 0013 (§9) describe the fit-2a build (`cab93027`).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
@@ -422,9 +434,9 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | ao-65 | Claude Code Opus 5.5, step 1 done 16:3x (findings and fixtures on `main` in `7b940495`); working since 17:58 on Herdr step 2, the RH design r5 (brief `.agent_task_rh_r5.md`, copy `brief-aofork-rh-design-r5.md`), context 10% (compacted after step 1). Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` fast-forwarded to `main` `9846cf6a` 17:57; its untracked step 1 copies (equal to `main`) went to `backup/ao-65-herdr/` | author of Herdr step 2; deliverables uncommitted: `development/reviews/rh_design_r5_opus.md` and an update of doc 0004; a new Codex reviewer next |
 | ao-66 | killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`). Branch `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it` kept at `13d3a129`; both commits landed (`-` in `git cherry main`) | deletable branch |
 
-**Lifecycle workers (now)**: 3133311 (this config) and 3133656 (agent-skills), restarted 2026-10-23 10:23 EDT
-by exact PID (4027448 -> 3133311, 4027591 -> 3133656) on the build of `e43db964` (relaunch, fit-1 and the CI
-fix). First polls: 1 of 1 success each, 0 failures, health `ok`
+**Lifecycle workers (now)**: 3539803 (this config) and 3540453 (agent-skills), restarted 2026-10-23 16:09 EDT
+by exact PID (3133311 -> 3539803, 3133656 -> 3540453) on the build of `b2064068` (relaunch, fit-1, the CI fix
+and fit-2a). First polls: 1 of 1 success each, 0 failures, health `ok`
 (`~/.agent-orchestrator/<hash>-observability/processes/lifecycle-manager-<pid>.json`). Pid files:
 `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. `ao start` keeps a running worker
@@ -618,7 +630,7 @@ the owner's `ao start` after the `ao start` / `ao stop` fix landed. Read the pro
 `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md` once. The global `ao` of this host runs from
 this checkout's `dist`, so every fleet runs what you land after a rebuild. Only you rebuild, only on the
 owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker` only after a restart by exact PID
-with `~/agent-skills/scripts/restart_lifecycle.py <pid> [--do]` (now 3133311 and 3133656).
+with `~/agent-skills/scripts/restart_lifecycle.py <pid> [--do]` (now 3539803 and 3540453).
 
 Four rounds landed on 2026-10-22 and are live and pushed. Two sessions stay for the next work (owner "2a"):
 ao-63 (Claude Code, the author of the start/stop fix) holds 2 unreviewed commits, a 30-second progress note

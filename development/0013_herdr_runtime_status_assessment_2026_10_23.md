@@ -113,7 +113,7 @@ or in a separate docs-only edit.
 **Done on 2026-10-23** (owner request), after the fit-1 build: doc 0004 §1, §5a (now "What AO reads", with
 the forms before and since fit-1) and §8 describe the live build.
 
-## 9. Update 2026-10-23 16:15 EDT: fit-1 and fit-2a are live
+## 9. Update 2026-10-23 16:11 EDT: fit-1 and fit-2a are live
 
 - The live `ao` is the build of 2026-10-23 16:09 of `b2064068` (`main` and `origin/main`; CI 4 of 4 success). It
   holds relaunch, fit-1 (since the 10:23 build of `e43db964`) and fit-2a (landed 15:14 as `a95608c1..5eda626c`;
