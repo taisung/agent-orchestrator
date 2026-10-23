@@ -661,10 +661,14 @@ describe("Herdr fit F-6: resolveHerdrEndpoint", () => {
     const env = { PATH: ["", "relative/bin", join(dir, "a"), join(dir, "b")].join(":"), X: "1" };
     mockExecFile.mockResolvedValueOnce(RUNNING);
 
+    // Herdr fit-2 (design r11 5.2.7): was { bin, socket, running: true }.
     await expect(resolveHerdrEndpoint({ binPath: "herdr", env })).resolves.toEqual({
       bin,
       socket: SOCKET,
       running: true,
+      compatible: true,
+      version: "0.9.5",
+      protocol: 22,
     });
     expect(mockExecFile.mock.calls[0][0]).toBe(bin);
     expect(mockExecFile.mock.calls[0][1]).toEqual(["status", "server", "--json"]);
@@ -690,10 +694,14 @@ describe("Herdr fit F-6: resolveHerdrEndpoint", () => {
       stdout: herdrFixture("noserver_never_status_server_json").stdout,
       stderr: "",
     });
+    // Herdr fit-2 (design r11 5.2.7): was { bin, socket, running: false }.
     await expect(resolveHerdrEndpoint({ binPath: bin, env: {} })).resolves.toEqual({
       bin,
       socket: SOCKET,
       running: false,
+      compatible: false,
+      version: null,
+      protocol: null,
     });
   });
 

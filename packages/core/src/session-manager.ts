@@ -33,6 +33,7 @@ import {
   isAgentDeliveryError,
   isAgentNotAttachedError,
   isIssueNotFoundError,
+  isLaunchEndUnproven,
   isRestorable,
   LAUNCH_GRACE_MS,
   NON_RESTORABLE_STATUSES,
@@ -127,7 +128,11 @@ import {
   type OpenCodeApiSession,
 } from "./opencode-api.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
-import { isRuntimeSendRefusedError } from "./runtime-errors.js";
+import {
+  isRuntimeCreatePartialError,
+  isRuntimeSendRefusedError,
+  type RuntimeCreatePartialError,
+} from "./runtime-errors.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
@@ -662,6 +667,251 @@ async function assertNoLiveLauncher(
 ): Promise<void> {
   const launcher = await liveLaunchOwner(raw);
   if (launcher !== null) throw new SessionLaunchInProgressError(sessionId, launcher, action);
+}
+
+/**
+ * Herdr fit-2 (design r11 4.4): the pending handle P of a launch whose create
+ * runtime is in LAUNCH_END_UNPROVEN_RUNTIMES. Spawn and start write it in the
+ * reservation, and restore in its transition write, before any runtime of
+ * the launch exists: a crashed launch then leaves a record that names its
+ * runtime. Its empty ID names no pane, so no probe or stop calls the runtime.
+ */
+function pendingHandle(runtimeName: string): RuntimeHandle {
+  return { id: "", runtimeName, data: { createIncomplete: "create-pending" } };
+}
+
+/** The launch keys of this process as a launch wrote them (currentLaunchClaim). */
+type LaunchClaim = Readonly<Record<string, string>>;
+
+/**
+ * One clear of an own launch claim (Herdr fit-2 4.5 and session relaunch,
+ * design r11 section 6): one conditional write of the cleared claim while
+ * the record holds the claim pair `claim` (and `identity`, when given).
+ * "done": written; "retry": the write answered null, which proves nothing
+ * (the record changed, or `existsSync` could not check the directory).
+ * With `extra` (the relaunch's end state), the record is read first under
+ * the same lock: "gone" when it does not hold those values, else the write
+ * adds `extra(current)`.
+ */
+function clearOwnLaunchClaimOnce(
+  sessionsDir: string,
+  sessionId: SessionId,
+  claim: LaunchClaim,
+  options: {
+    identity?: Readonly<Record<string, string>>;
+    extra?: (current: Readonly<Record<string, string>>) => Record<string, string>;
+  } = {},
+): "done" | "gone" | "retry" {
+  const expected = { ...(options.identity ?? {}), ...claim };
+  const { extra } = options;
+  return withRecordLock(sessionsDir, sessionId, () => {
+    let updates: Record<string, string> = { ...CLEARED_LAUNCH_CLAIM };
+    if (extra) {
+      const current = readMetadataRaw(sessionsDir, sessionId);
+      if (!current || !holdsExpected(current, expected)) return "gone";
+      updates = { ...updates, ...extra(current) };
+    }
+    return updateMetadataIf(sessionsDir, sessionId, expected, updates) ? "done" : "retry";
+  });
+}
+
+/**
+ * Herdr fit-2 (design r11 4.5): clear this operation's own launch claim
+ * `ownClaim` while the record holds `identity` (the launch identity of this
+ * operation's last own write) and that claim pair; no write when `ownClaim`
+ * is null. "settled": cleared. "nothing": the record is gone, names another
+ * launch, or holds other claim values (a later operation's claim, or none);
+ * another operation's claim is never cleared. An attempt that does not take
+ * effect is no proof (`updateMetadataIf` answers null also when `existsSync`
+ * cannot check the directory): one strict read follows, and while the record
+ * still holds both, one more attempt. A second attempt without effect
+ * throws, and so does a read or write error.
+ */
+function settleOwnClaim(
+  sessionsDir: string,
+  sessionId: SessionId,
+  identity: Readonly<Record<string, string>>,
+  ownClaim: LaunchClaim | null,
+): "settled" | "nothing" {
+  if (!ownClaim) return "nothing";
+  const attempt = () => clearOwnLaunchClaimOnce(sessionsDir, sessionId, ownClaim, { identity });
+  if (attempt() === "done") return "settled";
+  const current = readRecordStrict(sessionsDir, sessionId);
+  if (!current || !holdsExpected(current, { ...identity, ...ownClaim })) return "nothing";
+  if (attempt() === "done") return "settled";
+  throw new Error(
+    `the launch claim of ${sessionId} could not be cleared: its record held this launch and its claim, and the clear took no effect twice`,
+  );
+}
+
+/**
+ * Herdr fit-2 (design r11 4.5): "ao: the launch claim of <id> may remain
+ * (<error>); ...", for a settlement that threw.
+ */
+function claimMayRemainWarning(sessionId: SessionId, ownClaim: LaunchClaim, err: unknown): string {
+  return `ao: the launch claim of ${sessionId} may remain (${shortErrorText(err)}); while ao process ${ownClaim[LAUNCH_PID_KEY]} (start ${ownClaim[LAUNCH_PID_START_KEY]}) runs, AO treats the launch as in progress.`;
+}
+
+/** The record with `updates` merged as `updateMetadataIf` merges them (undefined keeps a key). */
+function mergedRecord(
+  record: Readonly<Record<string, string>>,
+  updates: Partial<Record<string, string>>,
+): Record<string, string> {
+  const next: Record<string, string> = { ...record };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) next[key] = value;
+  }
+  return next;
+}
+
+/** The answer of publishOwnLaunch. */
+type OwnPublication =
+  | { outcome: "written"; record: Record<string, string> }
+  | { outcome: "not-own" }
+  | {
+      outcome: "unwritable";
+      before: Record<string, string>;
+      after: Record<string, string>;
+      lastRead: "pending" | "unknown";
+      error: unknown;
+    };
+
+/**
+ * Herdr fit-2 (design r11 4.5, the publication rule): put this launch's
+ * runtime handle into its own record, `owned`. Two fixed identities, computed
+ * once from `owned` and the exact `updates`: `before` (the record as this
+ * launch wrote it last) and `after` (that record with the updates). An
+ * attempt writes `updates` only while the record holds `before`. An attempt
+ * that throws or answers null is undecided, and one strict read decides it:
+ * the record holds `after` (the attempt took effect, also when it threw):
+ * written; it holds `before`: one retry with the same `updates` (after the
+ * retry: unwritable); it holds neither, or no record: not own; the read
+ * throws: unwritable. At most two writes and two reads; only a record that
+ * holds the fixed `after` is adopted.
+ */
+function publishOwnLaunch(
+  sessionsDir: string,
+  sessionId: SessionId,
+  owned: Readonly<Record<string, string>>,
+  updates: Partial<Record<string, string>>,
+): OwnPublication {
+  const before = launchIdentity(owned);
+  const after = launchIdentity(mergedRecord(owned, updates));
+  for (let attempt = 1; ; attempt++) {
+    let error: unknown = new Error(
+      `the conditional write of the record of ${sessionId} took no effect`,
+    );
+    try {
+      const written = updateMetadataIf(sessionsDir, sessionId, before, updates);
+      if (written) return { outcome: "written", record: written };
+    } catch (err) {
+      error = err;
+    }
+    let current: Record<string, string> | null;
+    try {
+      current = readRecordStrict(sessionsDir, sessionId);
+    } catch (readErr) {
+      return { outcome: "unwritable", before, after, lastRead: "unknown", error: readErr };
+    }
+    if (current && holdsExpected(current, after)) return { outcome: "written", record: current };
+    if (!current || !holdsExpected(current, before)) return { outcome: "not-own" };
+    if (attempt >= 2) return { outcome: "unwritable", before, after, lastRead: "pending", error };
+  }
+}
+
+/**
+ * Herdr fit-2 (design r11 4.5): the handle publication of a spawn or start
+ * could not be decided (the record cannot be read or written now). The
+ * post-create catch passes it to the rollback, which removes nothing.
+ */
+class LaunchRecordUnwritableError extends Error {
+  constructor(
+    sessionId: SessionId,
+    readonly before: Record<string, string>,
+    readonly after: Record<string, string>,
+    readonly lastRead: "pending" | "unknown",
+    readonly handle: RuntimeHandle,
+    cause: unknown,
+  ) {
+    super(
+      `the record of ${sessionId} could not be written with the handle of this launch (${lastRead === "pending" ? "it still held its state before the write" : "it could not be read"}): ${shortErrorText(cause)}`,
+      { cause },
+    );
+    this.name = "LaunchRecordUnwritableError";
+  }
+}
+
+/** The pane, terminal, workspace and socket of a Herdr handle, for a warning. */
+function describeHandleInMemory(handle: RuntimeHandle): string {
+  const text = (key: string): string => {
+    const value = handle.data?.[key];
+    return typeof value === "string" && value ? value : "unknown";
+  };
+  return `${handle.runtimeName} pane ${handle.id || "unknown"} (terminal ${text("terminalId")}, workspace ${text("workspaceId")}, socket ${text("herdrSocket")})`;
+}
+
+/** The fit-2a end of every text that points to a retirement (design r11 8.1, note 7). */
+const RETIRE_BY_HAND =
+  'Check the runtime by hand (design 5.4.3), then retire the record by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+
+/**
+ * Herdr fit-2 (design r11 4.5, the unwritable path): the record of a launch
+ * cannot be read or written now. AO removes nothing (no stop, no
+ * agent-session discard, no workspace removal, no release, no copy-back
+ * removal) and keeps the handle in memory, which may already be on disk.
+ * With an own claim it makes the final owner-conditional settlements: on the
+ * fixed `before`, and when that takes no effect, on the fixed `after` (with
+ * no strict read after them: the warning covers the uncertain case). Then it
+ * warns once, with the variant that says what AO knows.
+ */
+function keepUnwritableLaunch(context: {
+  sessionsDir: string;
+  sessionId: SessionId;
+  error: unknown;
+  handle: RuntimeHandle;
+  worktree: string;
+  agentSession: string;
+  before: Readonly<Record<string, string>>;
+  after?: Readonly<Record<string, string>>;
+  ownClaim: LaunchClaim | null;
+}): void {
+  const { sessionsDir, sessionId, ownClaim } = context;
+  const recordFile = join(sessionsDir, sessionId);
+  const settleOn = (identity: Readonly<Record<string, string>>): "done" | "none" | "threw" => {
+    if (!ownClaim) return "none";
+    try {
+      return clearOwnLaunchClaimOnce(sessionsDir, sessionId, ownClaim, { identity }) === "done"
+        ? "done"
+        : "none";
+    } catch {
+      return "threw";
+    }
+  };
+  let settled: "before" | "after" | null = null;
+  const onBefore = settleOn(context.before);
+  if (onBefore === "done") settled = "before";
+  else if (onBefore === "none" && context.after && settleOn(context.after) === "done") {
+    settled = "after";
+  }
+  const beforeHandle = safeJsonParse<RuntimeHandle>(context.before["runtimeHandle"] ?? "");
+  const beforeText =
+    beforeHandle?.data?.["createIncomplete"] === "create-pending"
+      ? "the pending handle"
+      : `the handle of pane ${beforeHandle?.id || "unknown"}`;
+  const claimText = ownClaim
+    ? `The launch claim of ao process ${ownClaim[LAUNCH_PID_KEY]} (start ${ownClaim[LAUNCH_PID_START_KEY]}) may remain in the record, and the record may hold the pending handle or the handle above. While that process runs, AO treats the launch as in progress, and ao start and kill refuse it.`
+    : "The record may hold the pending handle or the handle above.";
+  const variant =
+    settled === "before"
+      ? `AO cleared its launch claim while the record held this launch's state before the write (${beforeText}). The handle above is not recorded.`
+      : settled === "after"
+        ? "The record holds the handle above: the write took effect although it threw. AO cleared its launch claim."
+        : `${claimText} Check runtimeHandle, restoredAt, launchPid and launchPidStart in ${recordFile} before you retire the record.`;
+  warnOperator(
+    `ao: the record of ${sessionId} could not be read or written (${shortErrorText(context.error)}), so AO removed nothing: no runtime stop, no agent-session discard, no workspace removal and no record removal. ` +
+      `The handle of this launch: ${describeHandleInMemory(context.handle)}; record file ${recordFile}; worktree ${context.worktree}; agent session ${context.agentSession}. ` +
+      `${variant} ${RETIRE_BY_HAND}`,
+  );
 }
 
 /**
@@ -1601,7 +1851,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   async function reserveNextSessionIdentity(
     project: ProjectConfig,
     sessionsDir: string,
-    launchClaim: Record<string, string> | null,
+    initial: Record<string, string> | null,
   ): Promise<{
     num: number;
     sessionId: string;
@@ -1632,7 +1882,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
       const record = usedNumbers.has(num)
         ? null
-        : reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+        : reserveSessionRecord(sessionsDir, sessionId, initial ?? undefined);
       if (record) {
         return { num, sessionId, tmuxName, record };
       }
@@ -1653,7 +1903,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   function reserveNextOrchestratorIdentity(
     project: ProjectConfig,
     sessionsDir: string,
-    launchClaim: Record<string, string> | null,
+    initial: Record<string, string> | null,
   ): {
     num: number;
     sessionId: string;
@@ -1700,7 +1950,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         const tmuxName = config.configPath
           ? generateTmuxName(config.configPath, orchestratorPrefix, num)
           : undefined;
-        const record = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+        const record = reserveSessionRecord(sessionsDir, sessionId, initial ?? undefined);
         if (record) {
           return { num, sessionId, tmuxName, record };
         }
@@ -2004,8 +2254,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * ID, so a record that names the runtime (by handle or tmux name), and a
    * reservation or a launch that has no runtime handle yet (it can create
    * the same name at any time, or created it and did not write it yet),
-   * may own it. Only no record, or a launched record that names another
-   * runtime, shows that no record owns it.
+   * may own it. Herdr fit-2: so does a record whose stored handle has
+   * `data.createIncomplete` (the pending handle P or a partial handle). Only
+   * no record, or a launched record that names another runtime, shows that
+   * no record owns it.
    */
   function recordMayOwnRuntime(
     record: Readonly<Record<string, string>> | null,
@@ -2013,6 +2265,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   ): boolean {
     if (!record) return false;
     if (!record["runtimeHandle"]) return true;
+    // Herdr fit-2 (design r11 4.4): a record with the pending handle P or a
+    // partial handle may own it too, as a record without a handle does.
+    const stored = safeJsonParse<{ data?: unknown }>(record["runtimeHandle"]);
+    const data = stored && typeof stored === "object" ? stored.data : undefined;
+    if (data && typeof data === "object" && "createIncomplete" in data) return true;
     return recordNamesRuntime(record, handle) || record["tmuxName"] === handle.id;
   }
 
@@ -2065,6 +2322,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         current,
       };
     };
+    /**
+     * Herdr fit-2: put a runtime handle into the own record by the
+     * publication rule (publishOwnLaunch); a written or adopted record
+     * becomes the own record.
+     */
+    const publishOutcome = (updates: Partial<Record<string, string>>): OwnPublication => {
+      const published = publishOwnLaunch(sessionsDir, sessionId, owned, updates);
+      if (published.outcome === "written") owned = published.record;
+      return published;
+    };
     return {
       sessionsDir,
       sessionId,
@@ -2074,6 +2341,36 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           throw recordChangedError(sessionsDir, sessionId, during, "its record was not written");
         }
         owned = written;
+      },
+      /** Herdr fit-2: the launch identity of this launch's last own write. */
+      identity(): Record<string, string> {
+        return launchIdentity(owned);
+      },
+      publishOutcome,
+      /**
+       * `publishOutcome` for a spawn or start: not own throws today's
+       * recordChangedError, unwritable throws LaunchRecordUnwritableError
+       * with the handle in memory.
+       */
+      publish(
+        updates: Partial<Record<string, string>>,
+        during: string,
+        handle: RuntimeHandle,
+      ): void {
+        const published = publishOutcome(updates);
+        if (published.outcome === "not-own") {
+          throw recordChangedError(sessionsDir, sessionId, during, "its record was not written");
+        }
+        if (published.outcome === "unwritable") {
+          throw new LaunchRecordUnwritableError(
+            sessionId,
+            published.before,
+            published.after,
+            published.lastRead,
+            handle,
+            published.error,
+          );
+        }
       },
       /**
        * The record now, and whether it is still this launch, gone, or
@@ -2164,6 +2461,113 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return undefined;
   }
 
+  /** The argument of rollbackLaunch and keepUnconfirmedLaunch. */
+  interface LaunchRollback {
+    own: OwnLaunchRecord;
+    runtime?: Runtime;
+    handle?: RuntimeHandle;
+    prepared?: PreparedAgentSession;
+    workspace?: RollbackWorkspace;
+    /** The error that failed the launch, for `launchFailed`. */
+    failure?: unknown;
+    /**
+     * Herdr fit-2: the record that a partial create publishes with its handle
+     * (given only with a RuntimeCreatePartialError).
+     */
+    partialRecord?: Partial<Record<string, string>>;
+    /** Herdr fit-2: the launch claim that this launch wrote, or null. */
+    ownClaim?: LaunchClaim | null;
+  }
+
+  /** The worktree and the agent session of a failed launch, for a warning. */
+  function keptResourcesOf(rollback: LaunchRollback, handle: RuntimeHandle) {
+    const workspacePath = handle.data?.["workspacePath"];
+    return {
+      worktree:
+        rollback.workspace?.path ??
+        (typeof workspacePath === "string" && workspacePath ? workspacePath : "unknown"),
+      agentSession: rollback.prepared
+        ? Object.values(rollback.prepared.metadata).join(", ") || "unnamed"
+        : "none prepared",
+    };
+  }
+
+  /**
+   * Herdr fit-2 F-4 (design r11 5.2.3): the rollback of a launch whose
+   * runtime is in LAUNCH_END_UNPROVEN_RUNTIMES (a partial create, or a
+   * failure after a create). True when the launch is kept: nothing is removed
+   * then. False only after a confirmed stop; the caller goes on with the
+   * ordinary removals.
+   * 0. A handle publication that could not be decided: the unwritable path.
+   * 1. The record is gone or replaced (this strict read proves it): remove
+   *    and write nothing, warn once. It cannot be read: the unwritable path.
+   * 2. A partial create: publish its handle (the publication rule; P goes).
+   * 3. Stop through the runtime; Herdr answers `unknown`, so
+   *    keepUnconfirmedLaunch keeps everything, writes `launchFailed` and
+   *    settles the claim.
+   */
+  async function keepUnprovenLaunch(
+    rollback: LaunchRollback,
+    runtime: Runtime,
+    handle: RuntimeHandle,
+  ): Promise<boolean> {
+    const { own } = rollback;
+    const ownClaim = rollback.ownClaim ?? null;
+    const kept = keptResourcesOf(rollback, handle);
+    const unwritable = (
+      error: unknown,
+      before: Readonly<Record<string, string>>,
+      after?: Readonly<Record<string, string>>,
+    ): true => {
+      keepUnwritableLaunch({
+        sessionsDir: own.sessionsDir,
+        sessionId: own.sessionId,
+        error,
+        handle,
+        before,
+        after,
+        ownClaim,
+        ...kept,
+      });
+      return true;
+    };
+    const notOwn = (state: "gone" | "replaced" | "not-own"): true => {
+      warnOperator(
+        `ao: kept the failed launch of ${own.sessionId}: its record was ${state === "gone" ? "removed (archived or deleted)" : "replaced (another reservation, launch or restore of the ID)"} during the launch, so AO removed nothing and wrote nothing. ` +
+          `Kept: ${describeHandleInMemory(handle)}; worktree ${kept.worktree}; agent session ${kept.agentSession}. ` +
+          "Check the runtime by hand (design 5.4.3), and remove by hand only what no session uses.",
+      );
+      return true;
+    };
+    // 0.
+    if (rollback.failure instanceof LaunchRecordUnwritableError) {
+      return unwritable(rollback.failure.cause, rollback.failure.before, rollback.failure.after);
+    }
+    // 1.
+    const checked = own.checkOrUnknown();
+    if (checked.state === "unknown") return unwritable(checked.error, own.identity());
+    if (checked.state !== "own") return notOwn(checked.state);
+    // 2.
+    if (rollback.partialRecord) {
+      const published = own.publishOutcome({
+        ...rollback.partialRecord,
+        runtimeHandle: JSON.stringify(handle),
+        [RESERVATION_KEY]: "",
+      });
+      if (published.outcome === "not-own") return notOwn("not-own");
+      if (published.outcome === "unwritable") {
+        return unwritable(published.error, published.before, published.after);
+      }
+    }
+    // 3.
+    const stopped = await stopRuntime(runtime, handle);
+    if (!isRuntimeStopConfirmed(stopped)) {
+      keepUnconfirmedLaunch(rollback, handle, stopped);
+      return true;
+    }
+    return false;
+  }
+
   /**
    * B-1 (round 4): undo a launch that failed. The record and the workspace
    * are removed only while the record is still this launch (or gone): a new
@@ -2187,21 +2591,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * (`stopRuntime` answers `other-launch` or `unknown`) ends the rollback
    * there (keepUnconfirmedLaunch): the agent session, the workspace and the
    * record stay, and the record gets `launchFailed`. The answer says
-   * whether that happened.
+   * whether that happened. Herdr fit-2 F-4: a runtime in
+   * LAUNCH_END_UNPROVEN_RUNTIMES goes through keepUnprovenLaunch first.
    */
-  async function rollbackLaunch(rollback: {
-    own: OwnLaunchRecord;
-    runtime?: Runtime;
-    handle?: RuntimeHandle;
-    prepared?: PreparedAgentSession;
-    workspace?: RollbackWorkspace;
-    /** The error that failed the launch, for `launchFailed`. */
-    failure?: unknown;
-  }): Promise<{ stopUnconfirmed: boolean }> {
+  async function rollbackLaunch(rollback: LaunchRollback): Promise<{ stopUnconfirmed: boolean }> {
     const { own } = rollback;
     const unreadable = (error: unknown): string =>
       `the record of ${own.sessionId} could not be read (${shortErrorText(error)})`;
-    if (rollback.runtime && rollback.handle) {
+    if (rollback.runtime && rollback.handle && isLaunchEndUnproven(rollback.handle.runtimeName)) {
+      // Herdr fit-2 F-4: only a confirmed stop (a later RH-B) goes on below.
+      if (await keepUnprovenLaunch(rollback, rollback.runtime, rollback.handle)) {
+        return { stopUnconfirmed: true };
+      }
+    } else if (rollback.runtime && rollback.handle) {
       const handle = rollback.handle;
       const checked = own.checkOrUnknown();
       const keptBecause =
@@ -2284,15 +2686,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * stopped own runtime alone never allows the removal of a workspace that
    * another record may own, and an unknown stop keeps both). The record,
    * while it is still this launch, gets `launchFailed` (`ao status` shows
-   * it); the operator gets the outcome and the next action.
+   * it); the operator gets the outcome and the next action. Herdr fit-2: then
+   * it settles the launch's own claim (settleOwnClaim).
    */
   function keepUnconfirmedLaunch(
-    rollback: {
-      own: OwnLaunchRecord;
-      prepared?: PreparedAgentSession;
-      workspace?: RollbackWorkspace;
-      failure?: unknown;
-    },
+    rollback: LaunchRollback,
     handle: RuntimeHandle,
     stopped: UnconfirmedRuntimeStop,
   ): void {
@@ -2326,6 +2724,36 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     warnOperator(
       `ao: the failed launch of ${own.sessionId} was not rolled back: ${refusal.message}. ${refusal.hint}${unrecorded}`,
     );
+    // Herdr fit-2 (design r11 4.5): the kept launch no longer runs a launch
+    // of this process, so its own claim goes (compared by the identity of its
+    // last own write; another operation's claim stays).
+    const ownClaim = rollback.ownClaim ?? null;
+    if (ownClaim) {
+      try {
+        settleOwnClaim(own.sessionsDir, own.sessionId, own.identity(), ownClaim);
+      } catch (err) {
+        warnOperator(claimMayRemainWarning(own.sessionId, ownClaim, err));
+      }
+    }
+  }
+
+  /**
+   * Herdr fit-2 (design r11 4.4, 4.5): the `initial` of a launch's
+   * reservation. A create runtime in LAUNCH_END_UNPROVEN_RUNTIMES starts the
+   * record with the pending handle P, `launchFields` and the claim; any other
+   * runtime keeps today's record (the claim only, when the launch took one).
+   */
+  function reservationInitial(
+    runtimeName: string,
+    ownClaim: LaunchClaim | null,
+    launchFields: Record<string, string> = {},
+  ): Record<string, string> | null {
+    if (!isLaunchEndUnproven(runtimeName)) return ownClaim ? { ...ownClaim } : null;
+    return {
+      ...launchFields,
+      ...(ownClaim ?? {}),
+      runtimeHandle: JSON.stringify(pendingHandle(runtimeName)),
+    };
   }
 
   // Define methods as local functions so `this` is not needed
@@ -2388,13 +2816,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       validateAndStoreOrigin(config.configPath, project.path);
     }
 
-    // Determine session ID — atomically reserve to prevent concurrent collisions
-    const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
+    // Determine session ID — atomically reserve to prevent concurrent collisions.
+    // Herdr fit-2 (design r11 4.5): a launch whose create runtime is in
+    // LAUNCH_END_UNPROVEN_RUNTIMES takes the launch claim too, and its
+    // reservation holds the pending handle P (reservationInitial).
+    const unproven = isLaunchEndUnproven(plugins.runtime.name);
+    const ownClaim = plugins.agent.prepareAgentSession || unproven ? await readLaunchClaim() : null;
     const {
       sessionId,
       tmuxName,
       record: reservedRecord,
-    } = await reserveNextSessionIdentity(project, sessionsDir, launchClaim);
+    } = await reserveNextSessionIdentity(
+      project,
+      sessionsDir,
+      reservationInitial(plugins.runtime.name, ownClaim),
+    );
     // B-1 (round 4): every later write of this spawn goes only into its own record.
     const own = ownLaunchRecord(sessionsDir, sessionId, reservedRecord);
 
@@ -2553,7 +2989,45 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     };
 
     let prepared: PreparedAgentSession | undefined;
-    let preparedCreatedAt: string | undefined;
+    // The launch time of the write before `runtime.create` (a prepared launch,
+    // or a launch in LAUNCH_END_UNPROVEN_RUNTIMES), so that later writes keep it.
+    let preCreateAt: string | undefined;
+    // The launch fields that every write of this launch stores.
+    const launchFields = (createdAt: string) => ({
+      worktree: workspacePath,
+      branch,
+      status: "spawning",
+      tmuxName,
+      issue: spawnConfig.issueId,
+      project: spawnConfig.projectId,
+      agent: selection.agentName,
+      model: selection.model,
+      permissions: selection.permissions ?? "default",
+      createdAt,
+    });
+    // The agent metadata of this launch (the prepared or the reused agent session).
+    const launchMetadata = (): Record<string, string> =>
+      prepared
+        ? { ...prepared.metadata }
+        : { ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}) };
+    // Stored spawn identity: every worker persists its effective model
+    // (selection.model, which is the explicit --model when given) and its
+    // effective permission mode ("default" when the config object sets no
+    // mode — the YAML loader always sets one, its default is
+    // `permissionless` — so that a later config edit cannot add one).
+    // Later operations reuse both before the config. Only `ao spawn`
+    // supplies a model (batch-spawn has no --model flag); the mode comes
+    // from the config.
+    const launchedRecordFor = (launched: RuntimeHandle) => {
+      const launchCreatedAt = preCreateAt ?? new Date().toISOString();
+      return {
+        ...launchFields(launchCreatedAt),
+        [LAUNCH_TOKEN_KEY]: launchToken,
+        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
+        runtimeHandle: JSON.stringify(launched),
+        opencodeSessionId: launchMetadata()["opencodeSessionId"],
+      };
+    };
     let handle: RuntimeHandle;
     try {
       let launchCommand: string;
@@ -2579,22 +3053,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         });
         // Store the prepared values before the pane starts, so an `ao spawn`
         // that dies later leaves a record that names the agent session.
-        preparedCreatedAt = new Date().toISOString();
+        preCreateAt = new Date().toISOString();
         own.write(
-          {
-            worktree: workspacePath,
-            branch,
-            status: "spawning",
-            tmuxName,
-            issue: spawnConfig.issueId,
-            project: spawnConfig.projectId,
-            agent: selection.agentName,
-            model: selection.model,
-            permissions: selection.permissions ?? "default",
-            createdAt: preparedCreatedAt,
-            ...prepared.metadata,
-            [RESERVATION_KEY]: "",
-          },
+          { ...launchFields(preCreateAt), ...prepared.metadata, [RESERVATION_KEY]: "" },
           "the spawn prepared its agent session",
         );
         launchCommand = plugins.agent.getLaunchCommand(
@@ -2603,6 +3064,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       } else {
         launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
         environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+        // Herdr fit-2 (design r11 5.2.2): the launch fields go into the record
+        // before the create, as a prepared launch stores them, so a crashed
+        // launch leaves a record that names its worktree and agent. The
+        // write merges: P and the claim stay.
+        if (unproven) {
+          preCreateAt = new Date().toISOString();
+          own.write(
+            { ...launchFields(preCreateAt), [RESERVATION_KEY]: "" },
+            "the spawn stored its launch",
+          );
+        }
       }
 
       handle = await plugins.runtime.create({
@@ -2612,9 +3084,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment,
       });
     } catch (err) {
-      // Remove only an agent session that this spawn created (never a reused
-      // one), the workspace and the reserved ID.
-      await rollbackLaunch({ own, prepared, workspace: spawnWorkspace() });
+      if (isRuntimeCreatePartialError(err)) {
+        // Herdr fit-2 F-4: something of the session may exist in the runtime,
+        // so the record (with the partial handle), the workspace and the
+        // agent session stay (rollbackLaunch for a runtime in the set).
+        await rollbackLaunch({
+          own,
+          prepared,
+          workspace: spawnWorkspace(),
+          runtime: plugins.runtime,
+          handle: err.handle,
+          failure: err,
+          partialRecord: launchedRecordFor(err.handle),
+          ownClaim,
+        });
+      } else {
+        // Remove only an agent session that this spawn created (never a reused
+        // one), the workspace and the reserved ID.
+        await rollbackLaunch({ own, prepared, workspace: spawnWorkspace() });
+      }
       throw err;
     }
 
@@ -2632,42 +3120,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       agentInfo: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
-      metadata: prepared
-        ? { ...prepared.metadata }
-        : { ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}) },
+      metadata: launchMetadata(),
     };
 
     let confirmation: AgentLaunchConfirmation | undefined;
     try {
-      // Stored spawn identity: every worker persists its effective model
-      // (selection.model, which is the explicit --model when given) and its
-      // effective permission mode ("default" when the config object sets no
-      // mode — the YAML loader always sets one, its default is
-      // `permissionless` — so that a later config edit cannot add one).
-      // Later operations reuse both before the config. Only `ao spawn`
-      // supplies a model (batch-spawn has no --model flag); the mode comes
-      // from the config.
-      const launchCreatedAt = preparedCreatedAt ?? new Date().toISOString();
-      const launchedRecord = {
-        worktree: workspacePath,
-        branch,
-        status: "spawning",
-        tmuxName, // Store tmux name for mapping
-        issue: spawnConfig.issueId,
-        project: spawnConfig.projectId,
-        agent: selection.agentName, // Persist agent name for lifecycle manager
-        model: selection.model,
-        permissions: selection.permissions ?? "default",
-        createdAt: launchCreatedAt,
-        [LAUNCH_TOKEN_KEY]: launchToken,
-        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
-        runtimeHandle: JSON.stringify(handle),
-        opencodeSessionId: session.metadata["opencodeSessionId"],
-      };
       // B-1: a merge (into the own record only), so the launch keys stay
       // until `confirmLaunch` proves that the pane runs the agent on its
       // session. The reservation ID goes: the launch identity now names it.
-      own.write({ ...launchedRecord, [RESERVATION_KEY]: "" }, "the spawn started its runtime");
+      // Herdr fit-2 (design r11 4.5): for a runtime in the set the write is a
+      // publication (a write that threw or took no effect is decided by a
+      // strict read).
+      const launchedRecord = { ...launchedRecordFor(handle), [RESERVATION_KEY]: "" };
+      if (unproven) own.publish(launchedRecord, "the spawn started its runtime", handle);
+      else own.write(launchedRecord, "the spawn started its runtime");
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -2684,14 +3150,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
 
       if (prepared) {
-        // B-1: the launch is confirmed; from now on the pane rule applies.
-        own.write(
-          { ...session.metadata, ...CLEARED_LAUNCH_CLAIM },
-          "the spawn confirmed its launch",
-        );
+        own.write(session.metadata, "the spawn confirmed its launch");
       } else if (Object.keys(session.metadata || {}).length > 0) {
         own.write(session.metadata, "the spawn set up its agent");
       }
+      // B-1: the launch is confirmed; from now on the pane rule applies.
+      // Herdr fit-2 (design r11 4.5): only this launch's own claim goes,
+      // compared by the identity of its last own write.
+      settleOwnClaim(sessionsDir, sessionId, own.identity(), ownClaim);
     } catch (err) {
       // Clean up runtime and workspace on post-launch failure. The runtime
       // goes first, so no pane still uses the agent session that is removed.
@@ -2702,6 +3168,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         prepared,
         workspace: spawnWorkspace(),
         failure: err,
+        ownClaim,
       });
       throw err;
     }
@@ -2801,7 +3268,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     let workspacePath: string;
     // B-1 (round 4): the record that this start reserved; its writes go there only.
     let own: OwnLaunchRecord;
-    const launchClaim = plugins.agent.prepareAgentSession ? await readLaunchClaim() : null;
+    // Herdr fit-2 (design r11 4.4, 4.5): as for a worker spawn, a create
+    // runtime in LAUNCH_END_UNPROVEN_RUNTIMES takes the launch claim, and the
+    // reservation holds the pending handle P with the orchestrator role.
+    const unproven = isLaunchEndUnproven(plugins.runtime.name);
+    const ownClaim = plugins.agent.prepareAgentSession || unproven ? await readLaunchClaim() : null;
+    const reservation = reservationInitial(plugins.runtime.name, ownClaim, {
+      role: "orchestrator",
+    });
 
     /**
      * Same-ID R2a: stop a live orchestrator before this start replaces it.
@@ -2905,7 +3379,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       }
 
-      let reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+      let reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
       if (!reservedRecord) {
         const concurrentRaw = readMetadataRaw(sessionsDir, sessionId);
         if (concurrentRaw) await assertNoLiveLauncher(sessionId, concurrentRaw, "replace");
@@ -2932,10 +3406,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               orchestratorSessionStrategy === "reuse" || orchestratorSessionStrategy === "ignore",
               launchIdentity(concurrentRaw),
             );
-            reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+            reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
           }
         } else {
-          reservedRecord = reserveSessionRecord(sessionsDir, sessionId, launchClaim ?? undefined);
+          reservedRecord = reserveSessionRecord(sessionsDir, sessionId, reservation ?? undefined);
         }
         if (!reservedRecord) {
           throw new Error(`Session ${sessionId} already exists but is not in a reusable state`);
@@ -2945,7 +3419,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     } else {
       // Reserve a new unique orchestrator identity (e.g. {prefix}-orchestrator-1, -2, …).
       // Each isolated orchestrator gets its own numbered session and workspace.
-      const identity = reserveNextOrchestratorIdentity(project, sessionsDir, launchClaim);
+      const identity = reserveNextOrchestratorIdentity(project, sessionsDir, reservation);
       sessionId = identity.sessionId;
       tmuxName = identity.tmuxName;
       branch = `orchestrator/${sessionId}`;
@@ -2996,7 +3470,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Undo a failed start (see rollbackLaunch) and remove its prompt file.
     const rollbackOrchestratorLaunch = async (
       promptFile: string | undefined,
-      failed: { handle?: RuntimeHandle; prepared?: PreparedAgentSession; failure?: unknown } = {},
+      failed: {
+        handle?: RuntimeHandle;
+        prepared?: PreparedAgentSession;
+        failure?: unknown;
+        partialRecord?: Partial<Record<string, string>>;
+        ownClaim?: LaunchClaim | null;
+      } = {},
     ): Promise<void> => {
       const { stopUnconfirmed } = await rollbackLaunch({
         own,
@@ -3004,6 +3484,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         handle: failed.handle,
         prepared: failed.prepared,
         failure: failed.failure,
+        partialRecord: failed.partialRecord,
+        ownClaim: failed.ownClaim,
         workspace:
           orchestratorWorkspaceMode === "isolated" && workspacePlugin
             ? {
@@ -3130,7 +3612,37 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // so a refused orchestrator spawn leaves no worktree, reserved metadata or
     // prompt file behind.
     let prepared: PreparedAgentSession | undefined;
-    let preparedCreatedAt: string | undefined;
+    // The launch time of the write before `runtime.create` (a prepared launch,
+    // or a launch in LAUNCH_END_UNPROVEN_RUNTIMES), so that later writes keep it.
+    let preCreateAt: string | undefined;
+    // The launch fields that every write of this start stores.
+    const launchFields = (createdAt: string) => ({
+      worktree: workspacePath,
+      branch,
+      status: "working",
+      role: "orchestrator",
+      tmuxName,
+      project: orchestratorConfig.projectId,
+      agent: selection.agentName,
+      createdAt,
+    });
+    // The agent metadata of this start (the prepared or the reused agent session).
+    const launchMetadata = (): Record<string, string> =>
+      prepared
+        ? { ...prepared.metadata }
+        : {
+            ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
+          };
+    const launchedRecordFor = (launched: RuntimeHandle) => {
+      const launchCreatedAt = preCreateAt ?? new Date().toISOString();
+      return {
+        ...launchFields(launchCreatedAt),
+        [LAUNCH_TOKEN_KEY]: launchToken,
+        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
+        runtimeHandle: JSON.stringify(launched),
+        opencodeSessionId: launchMetadata()["opencodeSessionId"],
+      };
+    };
     let launchCommand: string;
     let environment: Record<string, string>;
     try {
@@ -3147,20 +3659,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           workspacePath,
           environment,
         });
-        preparedCreatedAt = new Date().toISOString();
+        preCreateAt = new Date().toISOString();
         own.write(
-          {
-            worktree: workspacePath,
-            branch,
-            status: "working",
-            role: "orchestrator",
-            tmuxName,
-            project: orchestratorConfig.projectId,
-            agent: selection.agentName,
-            createdAt: preparedCreatedAt,
-            ...prepared.metadata,
-            [RESERVATION_KEY]: "",
-          },
+          { ...launchFields(preCreateAt), ...prepared.metadata, [RESERVATION_KEY]: "" },
           "the start prepared its agent session",
         );
         launchCommand = plugins.agent.getLaunchCommand(
@@ -3169,6 +3670,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       } else {
         launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
         environment = paneEnvironment(plugins.agent.getEnvironment(agentLaunchConfig));
+        // Herdr fit-2 (design r11 5.2.2): the launch fields go into the record
+        // before the create; the write merges, so P and the claim stay.
+        if (unproven) {
+          preCreateAt = new Date().toISOString();
+          own.write(
+            { ...launchFields(preCreateAt), [RESERVATION_KEY]: "" },
+            "the start stored its launch",
+          );
+        }
       }
     } catch (err) {
       await rollbackOrchestratorLaunch(systemPromptFile, { prepared });
@@ -3184,7 +3694,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment,
       });
     } catch (err) {
-      await rollbackOrchestratorLaunch(systemPromptFile, { prepared });
+      // Herdr fit-2 F-4: a partial create keeps the record (with the partial
+      // handle), the workspace, the agent session and the prompt file.
+      await rollbackOrchestratorLaunch(
+        systemPromptFile,
+        isRuntimeCreatePartialError(err)
+          ? {
+              prepared,
+              handle: err.handle,
+              failure: err,
+              partialRecord: launchedRecordFor(err.handle),
+              ownClaim,
+            }
+          : { prepared },
+      );
       throw err;
     }
 
@@ -3202,32 +3725,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       agentInfo: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
-      metadata: prepared
-        ? { ...prepared.metadata }
-        : {
-            ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
-          },
+      metadata: launchMetadata(),
     };
 
     try {
-      const launchCreatedAt = preparedCreatedAt ?? new Date().toISOString();
-      const launchedRecord = {
-        worktree: workspacePath,
-        branch,
-        status: "working",
-        role: "orchestrator",
-        tmuxName,
-        project: orchestratorConfig.projectId,
-        agent: selection.agentName,
-        createdAt: launchCreatedAt,
-        [LAUNCH_TOKEN_KEY]: launchToken,
-        [LAUNCH_TOKEN_AT_KEY]: launchCreatedAt,
-        runtimeHandle: JSON.stringify(handle),
-        opencodeSessionId: session.metadata["opencodeSessionId"],
-      };
       // B-1: a merge (into the own record only), so the launch keys stay
-      // until the launch is confirmed.
-      own.write({ ...launchedRecord, [RESERVATION_KEY]: "" }, "the start started its runtime");
+      // until the launch is confirmed. Herdr fit-2 (design r11 4.5): for a
+      // runtime in the set the write is a publication.
+      const launchedRecord = { ...launchedRecordFor(handle), [RESERVATION_KEY]: "" };
+      if (unproven) own.publish(launchedRecord, "the start started its runtime", handle);
+      else own.write(launchedRecord, "the start started its runtime");
 
       if (plugins.agent.postLaunchSetup) {
         await plugins.agent.postLaunchSetup(session);
@@ -3247,18 +3754,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
 
       if (prepared) {
-        // B-1: the launch is confirmed; from now on the pane rule applies.
-        own.write(
-          { ...session.metadata, ...CLEARED_LAUNCH_CLAIM },
-          "the start confirmed its launch",
-        );
+        own.write(session.metadata, "the start confirmed its launch");
       } else if (Object.keys(session.metadata || {}).length > 0) {
         own.write(session.metadata, "the start set up its agent");
       }
+      // B-1: the launch is confirmed; from now on the pane rule applies.
+      // Herdr fit-2 (design r11 4.5): only this start's own claim goes.
+      settleOwnClaim(sessionsDir, sessionId, own.identity(), ownClaim);
     } catch (err) {
       // Clean up runtime on post-launch failure. The runtime goes first, so no
       // pane still uses the agent session that is removed.
-      await rollbackOrchestratorLaunch(systemPromptFile, { handle, prepared, failure: err });
+      await rollbackOrchestratorLaunch(systemPromptFile, {
+        handle,
+        prepared,
+        failure: err,
+        ownClaim,
+      });
       throw err;
     }
 
@@ -4739,6 +5250,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
 
+    // Herdr fit-2 (design r11 5.2.4): a create runtime in
+    // LAUNCH_END_UNPROVEN_RUNTIMES takes a launch claim (in the transition
+    // write 7a), and its handle writes follow the publication rule.
+    const unproven = isLaunchEndUnproven(plugins.runtime.name);
+    const ownClaim = unproven ? await readLaunchClaim() : null;
+
     // 6. Check the workspace. Review r1 (M-1): only checks here, no change.
     //    A refused restore changes nothing: the missing workspace is
     //    recreated in step 8, after the old runtime stop is confirmed.
@@ -4853,6 +5370,118 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
+    // 7a. Herdr fit-2 (design r11 5.2.4): the transition write. Before any
+    //     runtime of this restore exists, the record gets the pending handle
+    //     P, a new launch time and this process's claim, compared by the
+    //     launch identity and the claim values as read. `transition` keeps
+    //     what the write-back puts back.
+    let transition:
+      | {
+          before: { runtimeHandle: string; restoredAt: string };
+          publishedClaim: Readonly<Record<string, string>>;
+        }
+      | undefined;
+    if (unproven) {
+      const readClaim = {
+        [LAUNCH_PID_KEY]: owned[LAUNCH_PID_KEY] ?? "",
+        [LAUNCH_PID_START_KEY]: owned[LAUNCH_PID_START_KEY] ?? "",
+      };
+      const transitioned = updateMetadataIf(
+        sessionsDir,
+        sessionId,
+        { ...launchIdentity(owned), ...readClaim },
+        {
+          runtimeHandle: JSON.stringify(pendingHandle(plugins.runtime.name)),
+          restoredAt: new Date().toISOString(),
+          ...(ownClaim ?? {}),
+        },
+      );
+      if (!transitioned) {
+        throw recordChangedError(
+          sessionsDir,
+          sessionId,
+          "it was restored",
+          "its old runtime was stopped; no runtime was created",
+        );
+      }
+      transition = {
+        before: {
+          runtimeHandle: owned["runtimeHandle"] ?? "",
+          restoredAt: owned["restoredAt"] ?? "",
+        },
+        publishedClaim: ownClaim ?? readClaim,
+      };
+      owned = transitioned;
+    }
+    /**
+     * Herdr fit-2 (design r11 5.2.4): undo the transition write after a
+     * failure that left nothing in the runtime (step 8, a plain create
+     * error). It compares the exact claim state that 7a published and
+     * clears claim keys only when this restore took its own claim.
+     */
+    const writeBackTransition = (): void => {
+      if (!transition) return;
+      let failure = "";
+      try {
+        const written = updateMetadataIf(
+          sessionsDir,
+          sessionId,
+          { ...launchIdentity(owned), ...transition.publishedClaim },
+          {
+            runtimeHandle: transition.before.runtimeHandle,
+            restoredAt: transition.before.restoredAt,
+            ...(ownClaim ? CLEARED_LAUNCH_CLAIM : {}),
+          },
+        );
+        if (written) return;
+      } catch (err) {
+        failure = ` (${shortErrorText(err)})`;
+      }
+      warnOperator(
+        `ao: AO could not write back the record of ${sessionId}${failure}; it may keep the pending handle of this restore${ownClaim ? " and this process's launch claim" : ""}; check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").`,
+      );
+    };
+    /** The worktree and agent session of this restore, for the unwritable warning. */
+    const restoreResources = () => ({
+      worktree: workspacePath,
+      agentSession: session.metadata?.opencodeSessionId ?? "none recorded",
+    });
+    /**
+     * Herdr fit-2 (design r11 5.2.4 step 9): a partial create. Its handle and
+     * the cause go into the own record by the publication rule; then the
+     * claim is settled on the new identity. The runtime, the workspace and
+     * the agent session stay.
+     */
+    const keepPartialRestore = (err: RuntimeCreatePartialError): void => {
+      const published = publishOwnLaunch(sessionsDir, sessionId, owned, {
+        status: "spawning",
+        runtimeHandle: JSON.stringify(err.handle),
+        launchFailed: err.message.replace(/\s+/g, " ").trim().slice(0, 600),
+      });
+      if (published.outcome === "written") {
+        owned = published.record;
+        try {
+          settleOwnClaim(sessionsDir, sessionId, launchIdentity(owned), ownClaim);
+        } catch (settleErr) {
+          if (ownClaim) warnOperator(claimMayRemainWarning(sessionId, ownClaim, settleErr));
+        }
+      } else if (published.outcome === "not-own") {
+        const socket = err.handle.data?.["herdrSocket"];
+        err.message = `${err.message} The record of ${sessionId} changed during the restore: its runtime ${err.handle.id || "(no pane)"} at ${typeof socket === "string" ? socket : "an unknown socket"} was kept; check it by hand.`;
+      } else {
+        keepUnwritableLaunch({
+          sessionsDir,
+          sessionId,
+          error: published.error,
+          handle: err.handle,
+          before: published.before,
+          after: published.after,
+          ownClaim,
+          ...restoreResources(),
+        });
+      }
+    };
+
     // 8. Recreate a missing workspace, now that the old runtime is stopped.
     if (branchToRestore !== null && plugins.workspace?.restore) {
       try {
@@ -4871,6 +5500,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           await plugins.workspace.postCreate(wsInfo, project);
         }
       } catch (err) {
+        writeBackTransition();
         throw new WorkspaceMissingError(
           workspacePath,
           `restore failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -4891,22 +5521,34 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // 9. Create runtime (reuse tmuxName from metadata)
     const tmuxName = raw["tmuxName"];
-    const handle = await plugins.runtime.create({
-      sessionId: tmuxName ?? sessionId,
-      workspacePath,
-      launchCommand,
-      environment: {
-        ...environment,
-        AO_SESSION: sessionId,
-        AO_DATA_DIR: sessionsDir,
-        AO_SESSION_NAME: sessionId,
-        ...(tmuxName && { AO_TMUX_NAME: tmuxName }),
-        AO_CALLER_TYPE: "agent",
-        ...(projectId && { AO_PROJECT_ID: projectId }),
-        AO_CONFIG_PATH: config.configPath,
-        AO_STATE_ROOT: getStateRoot(),
-      },
-    });
+    let handle: RuntimeHandle;
+    try {
+      handle = await plugins.runtime.create({
+        sessionId: tmuxName ?? sessionId,
+        workspacePath,
+        launchCommand,
+        environment: {
+          ...environment,
+          AO_SESSION: sessionId,
+          AO_DATA_DIR: sessionsDir,
+          AO_SESSION_NAME: sessionId,
+          ...(tmuxName && { AO_TMUX_NAME: tmuxName }),
+          AO_CALLER_TYPE: "agent",
+          ...(projectId && { AO_PROJECT_ID: projectId }),
+          AO_CONFIG_PATH: config.configPath,
+          AO_STATE_ROOT: getStateRoot(),
+        },
+      });
+    } catch (err) {
+      if (!unproven) throw err;
+      if (!isRuntimeCreatePartialError(err)) {
+        // Herdr fit-2: a plain error left nothing in the runtime.
+        writeBackTransition();
+        throw err;
+      }
+      keepPartialRestore(err);
+      throw err;
+    }
 
     // 10. Update metadata — merge updates, preserving existing fields. B-1
     // (round 4): only into the version that this restore owns. When it was
@@ -4917,12 +5559,46 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // and create its own under the same name before this write, so "created
     // a moment ago" is no proof; a runtime that stays is named in the error.
     const now = new Date().toISOString();
-    const restoredRecord = updateMetadataIf(sessionsDir, sessionId, launchIdentity(owned), {
+    const restoredUpdates = {
       status: "spawning",
       runtimeHandle: JSON.stringify(handle),
       restoredAt: now,
       [RESERVATION_KEY]: "",
-    });
+    };
+    // Herdr fit-2 (design r11 5.2.4 step 10): for a runtime in the set the
+    // write is a publication; only its strict read proves "not own".
+    let restoredRecord: Record<string, string> | null;
+    if (unproven) {
+      const published = publishOwnLaunch(sessionsDir, sessionId, owned, restoredUpdates);
+      if (published.outcome === "unwritable") {
+        keepUnwritableLaunch({
+          sessionsDir,
+          sessionId,
+          error: published.error,
+          handle,
+          before: published.before,
+          after: published.after,
+          ownClaim,
+          ...restoreResources(),
+        });
+        const text = (key: string): string => {
+          const value = handle.data?.[key];
+          return typeof value === "string" && value ? value : "unknown";
+        };
+        throw new Error(
+          `the restore of ${sessionId} created herdr pane ${handle.id} (workspace ${text("workspaceId")}, socket ${text("herdrSocket")}); AO could not confirm that its record holds it: ${shortErrorText(published.error)}`,
+          { cause: published.error },
+        );
+      }
+      restoredRecord = published.outcome === "written" ? published.record : null;
+    } else {
+      restoredRecord = updateMetadataIf(
+        sessionsDir,
+        sessionId,
+        launchIdentity(owned),
+        restoredUpdates,
+      );
+    }
     if (!restoredRecord) {
       let mayOwn: boolean;
       try {
@@ -4981,6 +5657,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         }
       } catch {
         // Non-fatal — session is already running
+      }
+    }
+
+    // 12. Herdr fit-2 (design r11 4.5): only this restore's own claim goes,
+    //     compared by the identity that step 10 wrote or adopted.
+    if (ownClaim) {
+      try {
+        settleOwnClaim(sessionsDir, sessionId, launchIdentity(owned), ownClaim);
+      } catch (err) {
+        warnOperator(claimMayRemainWarning(sessionId, ownClaim, err));
       }
     }
 
@@ -5357,17 +6043,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       [LAUNCH_PID_KEY]: claim[LAUNCH_PID_KEY],
       [LAUNCH_PID_START_KEY]: claim[LAUNCH_PID_START_KEY],
     };
+    // The shared clear of an own claim (clearOwnLaunchClaimOnce, Herdr fit-2):
+    // the relaunch compares its claim pair only, and adds its end state.
     const settleOnce = (state: SessionRelaunchResult["agentState"]): "done" | "gone" | "retry" =>
-      withRecordLock(sessionsDir, sessionId, () => {
-        const current = readMetadataRaw(sessionsDir, sessionId);
-        if (!current || !holdsExpected(current, ownKeys)) return "gone";
-        const updates: Record<string, string> = { ...CLEARED_LAUNCH_CLAIM };
-        if (state === "running" && isRecoverableKillRecord(current)) {
-          updates["status"] = SESSION_STATUS.WORKING;
-        }
-        if (state === "absent" && current["restoredAt"] === claimedAt)
-          Object.assign(updates, before);
-        return updateMetadataIf(sessionsDir, sessionId, ownKeys, updates) ? "done" : "retry";
+      clearOwnLaunchClaimOnce(sessionsDir, sessionId, ownKeys, {
+        extra: (current) => {
+          const updates: Record<string, string> = {};
+          if (state === "running" && isRecoverableKillRecord(current)) {
+            updates["status"] = SESSION_STATUS.WORKING;
+          }
+          if (state === "absent" && current["restoredAt"] === claimedAt)
+            Object.assign(updates, before);
+          return updates;
+        },
       });
     const settle = (state: SessionRelaunchResult["agentState"]): void => {
       let tries = 0;

@@ -4,6 +4,7 @@ import type * as Fs from "node:fs";
 const mockExecFile = vi.fn();
 const mockExecFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
+const mockRmSync = vi.fn();
 
 vi.mock("node:child_process", () => ({
   execFile: (...args: any[]) => mockExecFile(...args),
@@ -18,10 +19,18 @@ vi.mock("node:util", () => ({
 }));
 
 // Herdr fit F-6: create() checks the herdr binary with the real fs (statSync,
-// accessSync); only the launch script is not written.
+// accessSync); only the launch script is not written (or removed: fit-2 F-4).
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof Fs>();
-  return { ...actual, writeFileSync: (...args: any[]) => mockWriteFileSync(...args) };
+  return {
+    ...actual,
+    writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
+    // Recorded, then done: the stand-in herdr directory is removed with it.
+    rmSync: (...args: any[]) => {
+      mockRmSync(...args);
+      return (actual.rmSync as (...a: any[]) => void)(...args);
+    },
+  };
 });
 
 vi.mock("node:timers/promises", () => ({
@@ -29,8 +38,18 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 const { manifest, create, detect } = await import("../index.js");
-const { herdrFixture, herdrRejection, standInHerdrOnPath } = await import("./herdr-fixtures.js");
-const { isRuntimeSendRefusedError } = await import("@aoagents/ao-core");
+const {
+  herdrCliFailure,
+  herdrFixture,
+  herdrFormsLogEntry,
+  herdrRejection,
+  herdrTimeout,
+  standInHerdrOnPath,
+  statusRunningAt,
+  STATUS_SOCKET,
+} = await import("./herdr-fixtures.js");
+const { isRuntimeSendRefusedError, isRuntimeCreatePartialError } =
+  await import("@aoagents/ao-core");
 
 /** herdr answers `{id, result}` on success and `{error}` on failure, both exit 0. */
 function ok(result: unknown) {
@@ -52,6 +71,7 @@ const STATUS_RUNNING = {
   stdout: JSON.stringify({
     status: "running",
     running: true,
+    compatible: true,
     version: "0.9.5",
     socket: "/tmp/aofit-herdr/herdr.sock",
   }),
@@ -62,6 +82,11 @@ const WORKSPACE_CREATED = {
   workspace: { workspace_id: "w7", label: "app-1" },
   root_pane: { pane_id: "w7:p1", terminal_id: "term_abc", workspace_id: "w7" },
 };
+
+/** Herdr fit-2 F-4: the post-run `pane get` answers the pane with its terminal. */
+const PANE_AFTER_RUN = ok({
+  pane: { pane_id: "w7:p1", terminal_id: "term_abc", workspace_id: "w7" },
+});
 
 const CREATE_CONFIG = {
   sessionId: "app-1",
@@ -129,11 +154,14 @@ describe("create()", () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValueOnce(PANE_AFTER_RUN);
 
     await create().create(CREATE_CONFIG);
 
     expect(argsOf(0)).toEqual(["status", "server", "--json"]);
+    expect(argsOf(3)).toEqual(["pane", "get", "w7:p1"]);
+    expect(mockExecFile).toHaveBeenCalledTimes(4);
     const args = argsOf(1);
     expect(args.slice(0, 2)).toEqual(["workspace", "create"]);
     expect(args).toContain("--cwd");
@@ -149,7 +177,8 @@ describe("create()", () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValueOnce(PANE_AFTER_RUN);
 
     await create().create(CREATE_CONFIG);
 
@@ -166,7 +195,8 @@ describe("create()", () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
-      .mockResolvedValueOnce(ok({}));
+      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValueOnce(PANE_AFTER_RUN);
 
     const handle = await create().create(CREATE_CONFIG);
 
@@ -176,33 +206,529 @@ describe("create()", () => {
     expect(handle.data.terminalId).toBe("term_abc");
   });
 
-  it("closes the workspace when the launch fails, leaving nothing in the shared server", async () => {
+  // Herdr fit-2 F-4 (design r11 5.2.7). Was: "closes the workspace when the
+  // launch fails, leaving nothing in the shared server" (`workspace close w7`
+  // as call 3).
+  it("keeps the workspace when the launch fails: a typed partial, no close, the script kept", async () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
       .mockRejectedValueOnce(new Error("spawn failed"))
       .mockResolvedValueOnce(ok({}));
 
-    await expect(create().create(CREATE_CONFIG)).rejects.toThrow(/Failed to launch agent/);
-    expect(argsOf(3)).toEqual(["workspace", "close", "w7"]);
+    const err = await create()
+      .create(CREATE_CONFIG)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/Failed to launch agent/);
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({
+      stage: "launch-unconfirmed",
+      closed: "nothing",
+      handle: {
+        id: "w7:p1",
+        runtimeName: "herdr",
+        data: {
+          workspaceId: "w7",
+          paneId: "w7:p1",
+          terminalId: "term_abc",
+          herdrBin: standIn.bin,
+          herdrSocket: "/tmp/aofit-herdr/herdr.sock",
+          createIncomplete: "launch-unconfirmed",
+        },
+      },
+    });
+    expect(mockExecFile).toHaveBeenCalledTimes(3);
+    const calls = mockExecFile.mock.calls.map((c) => (c[1] as string[]).slice(0, 2).join(" "));
+    expect(calls).not.toContain("workspace close");
+    expect(calls).not.toContain("pane close");
+    const scriptRemovals = mockRmSync.mock.calls.filter((c) =>
+      String(c[0]).includes("ao-herdr-launch-"),
+    );
+    expect(scriptRemovals).toEqual([]);
   });
 
+  // Was: rejects /workspace_create_failed.*no such dir/ (a plain error).
   it("surfaces a herdr error body even though the CLI exits 0", async () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(herdrError("workspace_create_failed", "no such dir"));
 
-    await expect(create().create(CREATE_CONFIG)).rejects.toThrow(
-      /workspace_create_failed.*no such dir/,
-    );
+    const err = await create()
+      .create(CREATE_CONFIG)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/workspace_create_failed.*no such dir/);
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({ stage: "workspace-unconfirmed", handle: { id: "" } });
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
   });
 
+  // Was: rejects /no usable pane/ (a plain error).
   it("throws when the response carries no usable pane", async () => {
     mockExecFile
       .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok({ workspace: { workspace_id: "w7" } }));
 
-    await expect(create().create(CREATE_CONFIG)).rejects.toThrow(/no usable pane/);
+    const err = await create()
+      .create(CREATE_CONFIG)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/no usable pane/);
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({
+      stage: "workspace-unconfirmed",
+      handle: { id: "", data: { workspaceId: "w7" } },
+    });
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Herdr fit-2 F-4 (design r11 5.2.1, T-4.1 and T-4.1b): every row of the
+// create steps. A plain error only when no request of the create reached the
+// server (rule Q); otherwise a typed partial with the handle of what may
+// exist. No row closes anything.
+describe("Herdr fit-2 F-4: a failed create keeps what it made (T-4.1, T-4.1b)", () => {
+  let standIn: ReturnType<typeof standInHerdrOnPath>;
+  beforeEach(() => {
+    standIn = standInHerdrOnPath();
+  });
+  afterEach(() => {
+    standIn.restore();
+  });
+
+  const SOCKET = "/tmp/aofit-herdr/herdr.sock";
+  const STALE_WS_SOCKET = "/tmp/aohd5/fake/r8_ws_create_stale_socket_file.sock";
+  const STALE_RUN_SOCKET = "/tmp/aohd5/fake/r8_pane_run_stale_socket_file.sock";
+  const r8 = (section: string) => herdrFormsLogEntry("r8_cli_forms_log.txt", section);
+  const r9 = (section: string) => herdrFormsLogEntry("r9_cli_forms_log.txt", section);
+
+  async function createError(): Promise<unknown> {
+    return create()
+      .create(CREATE_CONFIG)
+      .catch((e: unknown) => e);
+  }
+  function commands(): string[] {
+    return mockExecFile.mock.calls.map((c) => (c[1] as string[]).slice(0, 2).join(" "));
+  }
+  function expectNoClose(): void {
+    expect(commands()).not.toContain("workspace close");
+    expect(commands()).not.toContain("pane close");
+  }
+  function scriptPath(): string {
+    return mockWriteFileSync.mock.calls[0]?.[0] as string;
+  }
+  function scriptRemoved(): boolean {
+    return mockRmSync.mock.calls.some((c) => c[0] === scriptPath());
+  }
+  /** The pins and the session of every handle of CREATE_CONFIG. */
+  function launchData(stage: string) {
+    return {
+      sessionId: "app-1",
+      workspacePath: "/tmp/wt/app-1",
+      herdrBin: standIn.bin,
+      createIncomplete: stage,
+    };
+  }
+
+  describe("step 1: the endpoint", () => {
+    it("a status answer that cannot be read: a plain error, no workspace create", async () => {
+      mockExecFile.mockResolvedValueOnce(text("not json"));
+      const err = await createError();
+      expect(err).toBeInstanceOf(Error);
+      expect(isRuntimeCreatePartialError(err)).toBe(false);
+      expect(commands()).toEqual(["status server"]);
+    });
+
+    it("running false: the plain error of fit-1", async () => {
+      mockExecFile.mockResolvedValueOnce(
+        text(herdrFixture("noserver_never_status_server_json").stdout),
+      );
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(false);
+      expect((err as Error).message).toBe(
+        `no herdr server runs at ${STATUS_SOCKET}; start one: herdr server`,
+      );
+      expect(commands()).toEqual(["status server"]);
+    });
+
+    it("compatible false (T-4.8b's answer): a plain error with the version and protocol", async () => {
+      mockExecFile.mockResolvedValueOnce(text(r8("r8_status_json_ping_protocol_19").stdout));
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(false);
+      expect((err as Error).message).toBe(
+        "the herdr server at /tmp/aohd5/fake/r8_status_json_ping_protocol_19.sock is not compatible " +
+          "with this herdr client (version 0.8.0, protocol 19); restart it with this herdr",
+      );
+      expect(commands()).toEqual(["status server"]);
+    });
+
+    it("compatible missing or null: a plain error, no workspace create", async () => {
+      for (const compatible of [undefined, null]) {
+        mockExecFile.mockReset();
+        mockExecFile.mockResolvedValueOnce(
+          text(
+            JSON.stringify({
+              running: true,
+              socket: SOCKET,
+              version: "0.9.5",
+              protocol: 22,
+              compatible,
+            }),
+          ),
+        );
+        const err = await createError();
+        expect(isRuntimeCreatePartialError(err)).toBe(false);
+        expect((err as Error).message).toMatch(/is not compatible with this herdr client/);
+        expect(commands()).toEqual(["status server"]);
+      }
+    });
+  });
+
+  describe("step 2: workspace create", () => {
+    it("Q1, the CLI's no-server text for the pinned socket: the plain error with both codes", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(statusRunningAt(STALE_WS_SOCKET))
+        .mockRejectedValueOnce(herdrRejection(r8("r8_ws_create_stale_socket_file")));
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(false);
+      expect(err).toMatchObject({
+        herdrCode: "server_not_running",
+        code: "ERR_RUNTIME_NO_SERVER",
+      });
+      expect(commands()).toEqual(["status server", "workspace create"]);
+    });
+
+    it("Q2, the CLI's protocol refusal (newer and older): the plain error", async () => {
+      for (const section of ["r8_ws_create_ping_protocol_19", "r8_ws_create_ping_protocol_23"]) {
+        mockExecFile.mockReset();
+        mockExecFile
+          .mockResolvedValueOnce(STATUS_RUNNING)
+          .mockRejectedValueOnce(herdrRejection(r8(section)));
+        const err = await createError();
+        expect(isRuntimeCreatePartialError(err), section).toBe(false);
+        expect(err, section).toMatchObject({ herdrCode: "protocol_mismatch" });
+        expect((err as { code?: unknown }).code, section).not.toBe("ERR_RUNTIME_NO_SERVER");
+        expect(commands(), section).toEqual(["status server", "workspace create"]);
+      }
+    });
+
+    it("another F1 code: a partial workspace-unconfirmed with an empty ID", async () => {
+      const failure = herdrCliFailure(
+        "herdr workspace create",
+        "cli:workspace:create",
+        "zz_unknown_code",
+        "x",
+      );
+      mockExecFile.mockResolvedValueOnce(STATUS_RUNNING).mockRejectedValueOnce(failure);
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(true);
+      expect((err as Error).message).toBe(
+        "herdr workspace create did not confirm a workspace for session app-1 (zz_unknown_code: x); AO closed nothing",
+      );
+      expect(err).toMatchObject({
+        stage: "workspace-unconfirmed",
+        closed: "nothing",
+        handle: {
+          id: "",
+          runtimeName: "herdr",
+          data: { ...launchData("workspace-unconfirmed"), herdrSocket: SOCKET },
+        },
+      });
+      expect((err as { handle: { data: object } }).handle.data).not.toHaveProperty("workspaceId");
+      expect((err as Error).cause).toMatchObject({ herdrCode: "zz_unknown_code" });
+      expect(commands()).toEqual(["status server", "workspace create"]);
+    });
+
+    it("a timeout: a partial workspace-unconfirmed that names the transport failure", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockRejectedValueOnce(herdrTimeout("herdr workspace create --cwd /tmp/wt/app-1"));
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(true);
+      expect(err).toMatchObject({ stage: "workspace-unconfirmed", handle: { id: "" } });
+      expect((err as Error).message).toContain(
+        "(transport failure: Command failed: herdr workspace create --cwd /tmp/wt/app-1)",
+      );
+      expectNoClose();
+    });
+  });
+
+  describe("step 3: the answer of workspace create", () => {
+    const cases: Array<[string, unknown, Record<string, unknown>]> = [
+      [
+        "no workspace_id",
+        { root_pane: { pane_id: "w7:p1", terminal_id: "term_abc" } },
+        { paneId: "w7:p1", terminalId: "term_abc" },
+      ],
+      [
+        "a root pane ID outside the grammar",
+        {
+          workspace: { workspace_id: "w7" },
+          root_pane: { pane_id: "aohd-1", terminal_id: "term_abc" },
+        },
+        { workspaceId: "w7", terminalId: "term_abc" },
+      ],
+      [
+        "an empty terminal_id",
+        { workspace: { workspace_id: "w7" }, root_pane: { pane_id: "w7:p1", terminal_id: "" } },
+        { workspaceId: "w7", paneId: "w7:p1" },
+      ],
+    ];
+    for (const [label, result, parsed] of cases) {
+      it(`${label}: a partial workspace-unconfirmed with what parsed, no further call`, async () => {
+        mockExecFile.mockResolvedValueOnce(STATUS_RUNNING).mockResolvedValueOnce(ok(result));
+        const err = await createError();
+        expect(isRuntimeCreatePartialError(err)).toBe(true);
+        expect((err as Error).message).toBe(
+          'herdr workspace create returned no usable pane for session "app-1"; AO closed nothing',
+        );
+        const handle = (err as { handle: { id: string; data: Record<string, unknown> } }).handle;
+        expect(handle.id).toBe("");
+        expect(handle.data).toMatchObject({ ...parsed, ...launchData("workspace-unconfirmed") });
+        for (const key of ["workspaceId", "paneId", "terminalId"]) {
+          if (!(key in parsed)) expect(handle.data, key).not.toHaveProperty(key);
+        }
+        expect(commands()).toEqual(["status server", "workspace create"]);
+      });
+    }
+  });
+
+  describe("step 4: the launch script", () => {
+    it("a script that cannot be written: launch-not-submitted, the partial file removed, no run", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockResolvedValueOnce(ok(WORKSPACE_CREATED));
+      mockWriteFileSync.mockImplementationOnce(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(true);
+      expect((err as Error).message).toBe(
+        "Failed to launch agent in herdr pane w7:p1 (launch-not-submitted): the launch script could not be written: " +
+          "ENOSPC: no space left on device, write. Workspace w7, terminal term_abc, socket /tmp/aofit-herdr/herdr.sock. AO closed nothing.",
+      );
+      expect(err).toMatchObject({
+        stage: "launch-not-submitted",
+        handle: {
+          id: "w7:p1",
+          data: {
+            workspaceId: "w7",
+            paneId: "w7:p1",
+            terminalId: "term_abc",
+            ...launchData("launch-not-submitted"),
+          },
+        },
+      });
+      expect(scriptRemoved()).toBe(true);
+      expect(commands()).toEqual(["status server", "workspace create"]);
+    });
+  });
+
+  describe("step 5: pane run", () => {
+    it("Q1 (cli:request) for the pinned socket: launch-not-submitted, the script removed", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(statusRunningAt(STALE_RUN_SOCKET))
+        .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+        .mockRejectedValueOnce(herdrRejection(r8("r8_pane_run_stale_socket_file")));
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(true);
+      expect(err).toMatchObject({ stage: "launch-not-submitted", handle: { id: "w7:p1" } });
+      expect((err as Error).message).toContain("(launch-not-submitted): server_not_running: ");
+      expect(scriptRemoved()).toBe(true);
+      expect(commands()).toEqual(["status server", "workspace create", "pane run"]);
+    });
+
+    it("Q2 (newer and older): launch-not-submitted, the script removed", async () => {
+      for (const fixture of [
+        r8("r8_pane_run_ping_protocol_19"),
+        r9("r9_pane_run_ping_protocol_23"),
+      ]) {
+        mockExecFile.mockReset();
+        mockRmSync.mockClear();
+        mockWriteFileSync.mockClear();
+        mockExecFile
+          .mockResolvedValueOnce(STATUS_RUNNING)
+          .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+          .mockRejectedValueOnce(herdrRejection(fixture));
+        const err = await createError();
+        expect(err, fixture.command).toMatchObject({ stage: "launch-not-submitted" });
+        expect(scriptRemoved(), fixture.command).toBe(true);
+        expect(commands(), fixture.command).toEqual([
+          "status server",
+          "workspace create",
+          "pane run",
+        ]);
+      }
+    });
+
+    it("any other failure (a timeout): launch-unconfirmed, the script kept", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+        .mockRejectedValueOnce(herdrTimeout("herdr pane run w7:p1 bash /tmp/x.sh"));
+      const err = await createError();
+      expect(isRuntimeCreatePartialError(err)).toBe(true);
+      expect((err as Error).message).toBe(
+        "Failed to launch agent in herdr pane w7:p1 (launch-unconfirmed): transport failure: Command failed: " +
+          "herdr pane run w7:p1 bash /tmp/x.sh. Workspace w7, terminal term_abc, socket /tmp/aofit-herdr/herdr.sock. AO closed nothing.",
+      );
+      expect(err).toMatchObject({
+        stage: "launch-unconfirmed",
+        handle: { id: "w7:p1", data: launchData("launch-unconfirmed") },
+      });
+      expect(scriptRemoved()).toBe(false);
+      expect(commands()).toEqual(["status server", "workspace create", "pane run"]);
+    });
+  });
+
+  describe("step 6: the pane after the run", () => {
+    function runThenGet(get: { resolve?: unknown; reject?: unknown }): void {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+        .mockResolvedValueOnce(ok({}));
+      if (get.reject) mockExecFile.mockRejectedValueOnce(get.reject);
+      else mockExecFile.mockResolvedValueOnce(get.resolve);
+    }
+
+    it("pane_not_found: launch-unconfirmed, the script kept", async () => {
+      runThenGet({
+        reject: herdrCliFailure(
+          "herdr pane get w7:p1",
+          "cli:pane:get",
+          "pane_not_found",
+          "pane w7:p1 not found",
+        ),
+      });
+      const err = await createError();
+      expect(err).toMatchObject({ stage: "launch-unconfirmed", handle: { id: "w7:p1" } });
+      expect((err as Error).message).toContain(
+        "(launch-unconfirmed): after the run, herdr pane get w7:p1 answered pane_not_found.",
+      );
+      expect(scriptRemoved()).toBe(false);
+      expect(commands()).toEqual(["status server", "workspace create", "pane run", "pane get"]);
+    });
+
+    it("another terminal: launch-unconfirmed with terminalAfterRun", async () => {
+      runThenGet({ resolve: ok({ pane: { pane_id: "w7:p1", terminal_id: "term_other" } }) });
+      const err = await createError();
+      expect(err).toMatchObject({
+        stage: "launch-unconfirmed",
+        handle: {
+          id: "w7:p1",
+          data: {
+            terminalId: "term_abc",
+            terminalAfterRun: "term_other",
+            createIncomplete: "launch-unconfirmed",
+          },
+        },
+      });
+      expect((err as Error).message).toContain(
+        "after the run, herdr pane get w7:p1 answered terminal term_other, not term_abc",
+      );
+    });
+
+    it("a get that cannot answer: launch-unconfirmed", async () => {
+      runThenGet({ reject: herdrTimeout("herdr pane get w7:p1") });
+      const err = await createError();
+      expect(err).toMatchObject({ stage: "launch-unconfirmed", handle: { id: "w7:p1" } });
+      expect((err as { handle: { data: object } }).handle.data).not.toHaveProperty(
+        "terminalAfterRun",
+      );
+      expect((err as Error).message).toContain(
+        "after the run, herdr pane get w7:p1 could not answer",
+      );
+    });
+
+    it("the pane with its terminal: the handle, with no createIncomplete", async () => {
+      runThenGet({ resolve: PANE_AFTER_RUN });
+      const handle = await create().create(CREATE_CONFIG);
+      expect(handle.id).toBe("w7:p1");
+      expect(handle.data).not.toHaveProperty("createIncomplete");
+      expect(handle.data).toMatchObject({
+        terminalId: "term_abc",
+        herdrBin: standIn.bin,
+        herdrSocket: SOCKET,
+      });
+      expect(commands()).toEqual(["status server", "workspace create", "pane run", "pane get"]);
+    });
+  });
+
+  describe("T-4.1b: the near misses of rule Q are partials", () => {
+    it("server_not_running with the CLI's text for another socket", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockRejectedValueOnce(herdrRejection(r8("r8_ws_create_stale_socket_file")));
+      expect(await createError()).toMatchObject({
+        stage: "workspace-unconfirmed",
+        handle: { id: "" },
+      });
+    });
+
+    it("server_not_running with the session-form suffix", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(
+          statusRunningAt("/tmp/aohd/xdg/config/herdr/sessions/aohd-1/herdr.sock"),
+        )
+        .mockRejectedValueOnce(herdrRejection(herdrFixture("noserver_never_workspace_create")));
+      expect(await createError()).toMatchObject({ stage: "workspace-unconfirmed" });
+    });
+
+    it("server_not_running with no suffix, also for its own socket", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(statusRunningAt("/tmp/aohd5/fake/elsewhere.sock"))
+        .mockRejectedValueOnce(herdrRejection(r8("r8_ws_create_server_sends_cli_no_server_text")));
+      expect(await createError()).toMatchObject({ stage: "workspace-unconfirmed" });
+    });
+
+    it("protocol_mismatch with another text", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockRejectedValueOnce(
+          herdrCliFailure(
+            "herdr workspace create",
+            "cli:workspace:create",
+            "protocol_mismatch",
+            "the server protocol differs",
+          ),
+        );
+      expect(await createError()).toMatchObject({ stage: "workspace-unconfirmed" });
+    });
+
+    it("the 0.8.0 envelope at exit 0, even with the exact Q1 text", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockResolvedValueOnce(
+          herdrError(
+            "server_not_running",
+            `no herdr server is running at ${SOCKET}; run \`herdr\` to start or attach it`,
+          ),
+        );
+      const err = await createError();
+      expect(err).toMatchObject({ stage: "workspace-unconfirmed" });
+      expect((err as Error).message).toContain("server_not_running");
+    });
+
+    it("the Q1 text on pane run for a socket other than the endpoint's", async () => {
+      mockExecFile
+        .mockResolvedValueOnce(STATUS_RUNNING)
+        .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+        .mockRejectedValueOnce(herdrRejection(r8("r8_pane_run_stale_socket_file")));
+      expect(await createError()).toMatchObject({ stage: "launch-unconfirmed" });
+      expect(scriptRemoved()).toBe(false);
+    });
+
+    afterEach(() => {
+      expectNoClose();
+    });
+  });
+
+  afterEach(() => {
+    expectNoClose();
   });
 });
 

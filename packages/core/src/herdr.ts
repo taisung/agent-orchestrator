@@ -186,6 +186,16 @@ export interface HerdrEndpoint {
   bin: string;
   socket: string;
   running: boolean;
+  /**
+   * Herdr fit-2: true only when the server answered `compatible: true` (a
+   * server whose protocol this client speaks); `null` and a missing field are
+   * false.
+   */
+  compatible: boolean;
+  /** The server's `version`, when it is text; else null. */
+  version: string | null;
+  /** The server's `protocol`, when it is a number; else null. */
+  protocol: number | null;
 }
 
 /** `code` of HerdrPinError. */
@@ -287,7 +297,9 @@ function firstLineOf(err: unknown): string {
  * binary as resolveHerdrBinary finds it, then `<bin> status server --json`
  * with `env`: exit 0 and a JSON object with a boolean `running` and a
  * `socket` that is an absolute path without a control character. Anything
- * else rejects. A path pin is not a content pin (the file can change) and not
+ * else rejects. Herdr fit-2: it also reads `compatible`, `version` and
+ * `protocol`, and never rejects on them (a caller that creates checks
+ * `compatible`). A path pin is not a content pin (the file can change) and not
  * a server identity (another server can listen at the path later): it only
  * removes the dependence on the caller's PATH and herdr environment.
  */
@@ -321,7 +333,14 @@ export async function resolveHerdrEndpoint(options: {
       `herdr status server answered a socket that is not an absolute path without control characters (${JSON.stringify(parsed.socket) ?? "absent"})`,
     );
   }
-  return { bin, socket: parsed.socket, running: parsed.running };
+  return {
+    bin,
+    socket: parsed.socket,
+    running: parsed.running,
+    compatible: parsed.compatible === true,
+    version: typeof parsed.version === "string" ? parsed.version : null,
+    protocol: typeof parsed.protocol === "number" ? parsed.protocol : null,
+  };
 }
 
 /**

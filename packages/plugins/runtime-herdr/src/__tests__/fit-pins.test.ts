@@ -35,6 +35,7 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 const { create } = await import("../index.js");
+const { isRuntimeCreatePartialError } = await import("@aoagents/ao-core");
 const { chmodSync, mkdirSync } = await import("node:fs");
 const { join } = await import("node:path");
 const { herdrFixture, herdrRejection, standInHerdrOnPath, statusRunning, STATUS_SOCKET } =
@@ -87,12 +88,13 @@ afterEach(() => {
   }
 });
 
-/** A create that succeeds: status, workspace create, pane run. */
+/** A create that succeeds: status, workspace create, pane run, pane get (fit-2 F-4). */
 async function pinnedHandle() {
   mockExecFile
     .mockResolvedValueOnce(statusRunning())
     .mockResolvedValueOnce(WORKSPACE_CREATED)
-    .mockResolvedValueOnce({ stdout: "{}", stderr: "" });
+    .mockResolvedValueOnce({ stdout: "{}", stderr: "" })
+    .mockResolvedValueOnce(PANE);
   const handle = await create().create(CREATE_CONFIG);
   mockExecFile.mockReset();
   return handle;
@@ -103,7 +105,8 @@ describe("Herdr fit F-6: create pins the binary and the socket", () => {
     mockExecFile
       .mockResolvedValueOnce(statusRunning())
       .mockResolvedValueOnce(WORKSPACE_CREATED)
-      .mockResolvedValueOnce({ stdout: "{}", stderr: "" });
+      .mockResolvedValueOnce({ stdout: "{}", stderr: "" })
+      .mockResolvedValueOnce(PANE);
 
     const handle = await create().create(CREATE_CONFIG);
 
@@ -119,21 +122,35 @@ describe("Herdr fit F-6: create pins the binary and the socket", () => {
       ["status", "server"],
       ["workspace", "create"],
       ["pane", "run"],
+      ["pane", "get"],
     ]);
   });
 
-  it("closes a workspace of a failed launch with the pins (the cleanup of today, until fit-2 F-4)", async () => {
+  // Herdr fit-2 F-4 (design r11 5.2.7). Was: "closes a workspace of a failed
+  // launch with the pins (the cleanup of today, until fit-2 F-4)", with
+  // `workspace close w7` as call 3.
+  it("keeps a workspace of a failed launch: a typed partial with the pins and no close", async () => {
     mockExecFile
       .mockResolvedValueOnce(statusRunning())
       .mockResolvedValueOnce(WORKSPACE_CREATED)
       .mockRejectedValueOnce(new Error("spawn failed"))
       .mockResolvedValueOnce({ stdout: "{}", stderr: "" });
 
-    await expect(create().create(CREATE_CONFIG)).rejects.toThrow(/Failed to launch agent/);
+    const err = await create()
+      .create(CREATE_CONFIG)
+      .catch((e: unknown) => e);
 
-    expect(mockExecFile.mock.calls[3][1]).toEqual(["workspace", "close", "w7"]);
-    expect(mockExecFile.mock.calls[3][0]).toBe(standIn.bin);
-    expect(mockExecFile.mock.calls[3][2].env.HERDR_SOCKET_PATH).toBe(STATUS_SOCKET);
+    expect((err as Error).message).toMatch(/Failed to launch agent/);
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({
+      stage: "launch-unconfirmed",
+      closed: "nothing",
+      handle: { data: { herdrBin: standIn.bin, herdrSocket: STATUS_SOCKET } },
+    });
+    expect(mockExecFile).toHaveBeenCalledTimes(3);
+    const calls = mockExecFile.mock.calls.map((c) => (c[1] as string[]).slice(0, 2).join(" "));
+    expect(calls).not.toContain("workspace close");
+    expect(calls).not.toContain("pane close");
   });
 
   it("T-6.2: a PATH changed after the create does not change the binary of later calls", async () => {

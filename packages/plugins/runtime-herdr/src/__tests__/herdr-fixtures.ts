@@ -89,3 +89,63 @@ export function standInHerdrOnPath(): { dir: string; bin: string; restore: () =>
     },
   };
 }
+
+/**
+ * Herdr fit-2: one section of a forms log of the live check
+ * (`r8_cli_forms_log.txt`, `r9_cli_forms_log.txt`): the line `<section>:
+ * <command>`, then the indented fields `exit=<n>`, `stdout=<repr>` and
+ * `stderr=<repr>`, each text as a Python string literal in single quotes.
+ * (The same reader as core's test fixture of the same name.)
+ */
+export function herdrFormsLogEntry(file: string, section: string): HerdrFixture {
+  const lines = readFileSync(`${FIXTURES}${file}`, "utf-8").split("\n");
+  const start = lines.findIndex((line) => line.startsWith(`${section}: `));
+  if (start < 0) throw new Error(`${file} has no section ${section}`);
+  const field = (key: string): string => {
+    for (let i = start + 1; i < lines.length && lines[i].startsWith("  "); i++) {
+      if (lines[i].startsWith(`  ${key}=`)) return lines[i].slice(key.length + 3);
+    }
+    throw new Error(`section ${section} of ${file} has no ${key} field`);
+  };
+  const text = (key: string): string => {
+    const repr = field(key);
+    if (repr.length < 2 || !repr.startsWith("'") || !repr.endsWith("'")) {
+      throw new Error(`section ${section} of ${file} has a malformed ${key} field`);
+    }
+    return repr.slice(1, -1).replace(/\\(\\|n|')/g, (_, c: string) => (c === "n" ? "\n" : c));
+  };
+  return {
+    command: lines[start].slice(section.length + 2),
+    exit: Number(field("exit")),
+    stdout: text("stdout"),
+    stderr: text("stderr"),
+  };
+}
+
+/** The answer of `herdr status server --json` of statusRunning(), with another socket. */
+export function statusRunningAt(socket: string): { stdout: string; stderr: string } {
+  const status = JSON.parse(statusRunning().stdout) as Record<string, unknown>;
+  return { stdout: JSON.stringify({ ...status, socket }), stderr: "" };
+}
+
+/** A herdr 0.9.5 failure (exit 1, empty stdout, one stderr line) of a call. */
+export function herdrCliFailure(command: string, id: string, code: string, message: string): Error {
+  return herdrRejection({
+    command,
+    exit: 1,
+    stdout: "",
+    stderr: `${JSON.stringify({ id, error: { code, message } })}\n`,
+  });
+}
+
+/** The rejection of a call that `execFile` stopped at its timeout (no herdr answer). */
+export function herdrTimeout(command: string): Error {
+  return Object.assign(new Error(`Command failed: ${command}\n`), {
+    code: null,
+    signal: "SIGTERM",
+    killed: true,
+    cmd: command,
+    stdout: "",
+    stderr: "",
+  });
+}

@@ -3,8 +3,11 @@
  *
  * Every command goes through the `herdr` CLI, which speaks to a long-running server
  * over a unix socket and answers in JSON. The server is shared: it may already be
- * running with the user's own workspaces in it, so this plugin creates and destroys
- * only the workspaces it owns and never stops the server.
+ * running with the user's own workspaces in it, so this plugin creates workspaces,
+ * closes none and never stops the server. herdr reuses pane and workspace IDs, so a
+ * close by ID could reach another terminal: a failed create keeps what it made and
+ * says so (`RuntimeCreatePartialError`, Herdr fit-2 F-4), and `destroy` refuses
+ * (fit F-5).
  *
  * Behaviour here is grounded in the measured spike recorded in
  * `development/0003_herdr_assessment_and_the_runtime_plugin_option.md` §8. The
@@ -26,23 +29,27 @@ import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   HERDR_CLI_IDS,
   RUNTIME_NO_SERVER_ERROR_CODE,
+  RuntimeCreatePartialError,
   RuntimeSendRefusedError,
   herdrExecOptions,
   herdrInvocationFor,
+  herdrPreRequestRefusal,
   isHerdrNoServer,
   isHerdrPaneId,
   readHerdrCliFailure,
   resolveHerdrEndpoint,
+  type HerdrCliFailure,
   type HerdrInvocation,
   type PluginModule,
   type Runtime,
   type RuntimeCreateConfig,
+  type RuntimeCreateStage,
   type RuntimeHandle,
   type RuntimeMetrics,
   type RuntimeSendAdmission,
@@ -208,6 +215,45 @@ function herdrCallError(args: readonly string[], err: unknown): unknown {
   );
 }
 
+/**
+ * Herdr fit-2: the 0.9.5 failure form of a failed call (readHerdrCliFailure).
+ * For the wrapper of herdrCallError (an error with `herdrCode`) it reads the
+ * wrapped rejection, so the reader checks the exit code, the empty stdout, the
+ * one stderr line and the command ID itself. The 0.8.0 envelope at exit 0 has
+ * no such form: null.
+ */
+function cliFailureOf(err: unknown, args: readonly string[]): HerdrCliFailure | null {
+  const wrapped = typeof (err as { herdrCode?: unknown } | null)?.herdrCode === "string";
+  return readHerdrCliFailure(wrapped ? (err as { cause?: unknown }).cause : err, cliIdOf(args));
+}
+
+/** The first line of a failure, for a message: its stderr, else its message. */
+function firstLineOf(err: unknown): string {
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  const text =
+    typeof stderr === "string" && stderr.trim()
+      ? stderr
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  return text.trim().split("\n")[0] ?? "";
+}
+
+/**
+ * Herdr fit-2: the cause of a failed create call, for its message: the F1
+ * code and text, the 0.8.0 error envelope, or "transport failure: <the first
+ * stderr line>" (a timeout, a signal, another exit, text that is not herdr's
+ * form).
+ */
+function createCauseOf(err: unknown, args: readonly string[]): string {
+  const failure = cliFailureOf(err, args);
+  if (failure) return `${failure.code}: ${failure.message}`;
+  if (typeof (err as { herdrCode?: unknown } | null)?.herdrCode === "string") {
+    return err instanceof Error ? err.message : String(err);
+  }
+  return `transport failure: ${firstLineOf(err)}`;
+}
+
 /** Herdr fit F-2: the refusal of a pane call for an ID outside herdr's grammar. */
 function notAPaneId(operation: string, id: unknown): Error {
   return new Error(
@@ -243,8 +289,23 @@ function toPane(value: unknown): HerdrPane | null {
 function writeLaunchScript(command: string): string {
   const scriptPath = join(tmpdir(), `ao-herdr-launch-${randomUUID()}.sh`);
   const content = `#!/usr/bin/env bash\nrm -- "$0" 2>/dev/null || true\n${command}\n`;
-  writeFileSync(scriptPath, content, { encoding: "utf-8", mode: 0o700 });
+  try {
+    writeFileSync(scriptPath, content, { encoding: "utf-8", mode: 0o700 });
+  } catch (err) {
+    // Herdr fit-2: no partial script stays (no run can have read it).
+    removeLaunchScript(scriptPath);
+    throw err;
+  }
   return scriptPath;
+}
+
+/** Remove a launch script that no `pane run` received, best effort. */
+function removeLaunchScript(scriptPath: string): void {
+  try {
+    rmSync(scriptPath, { force: true });
+  } catch {
+    // Best effort: a script that stays names no session and runs nothing.
+  }
 }
 
 export function create(config?: Record<string, unknown>): Runtime {
@@ -441,81 +502,193 @@ export function create(config?: Record<string, unknown>): Runtime {
     async create(createConfig: RuntimeCreateConfig): Promise<RuntimeHandle> {
       assertValidSessionId(createConfig.sessionId);
 
-      // Herdr fit F-6: pin the binary and the server endpoint first, and make
-      // every call of this launch with them; the handle stores them for every
-      // later call (herdrInvocationFor).
+      // Herdr fit-2 F-4 (design r11 5.2.1): a failed create closes nothing.
+      // It throws a plain error only when no request of this create reached
+      // the server (rule Q: step 1, and the CLI's own refusals of steps 2 and
+      // 5); otherwise it throws RuntimeCreatePartialError with the handle of
+      // what may exist, and core keeps the record, the worktree and the agent
+      // session (a kept failed launch).
+      const { sessionId, workspacePath } = createConfig;
+
+      // Step 1 (Q0). Herdr fit F-6: pin the binary and the server endpoint
+      // first, and make every call of this launch with them; the handle
+      // stores them for every later call (herdrInvocationFor).
       const endpoint = await resolveHerdrEndpoint({ binPath: bin, env: process.env });
-      if (!endpoint.running) {
+      if (endpoint.running !== true) {
         throw new Error(`no herdr server runs at ${endpoint.socket}; start one: herdr server`);
+      }
+      if (endpoint.compatible !== true) {
+        throw new Error(
+          `the herdr server at ${endpoint.socket} is not compatible with this herdr client ` +
+            `(version ${endpoint.version ?? "unknown"}, protocol ${endpoint.protocol ?? "unknown"}); restart it with this herdr`,
+        );
       }
       const pinned: HerdrInvocation = {
         bin: endpoint.bin,
         env: { ...process.env, HERDR_SOCKET_PATH: endpoint.socket },
       };
+      const createdAt = Date.now();
+      /** The handle data of this launch: the parsed IDs, the session and the pins. */
+      const launchData = (ids: {
+        workspaceId?: string;
+        paneId?: string;
+        terminalId?: string;
+      }): Record<string, unknown> => ({
+        ...ids,
+        sessionId,
+        workspacePath,
+        createdAt,
+        herdrBin: endpoint.bin,
+        herdrSocket: endpoint.socket,
+      });
+      /** Rule Q: a failure of the CLI that sent no request to the pinned server. */
+      const refusedBeforeRequest = (err: unknown, args: readonly string[]): boolean =>
+        herdrPreRequestRefusal(cliFailureOf(err, args), endpoint.socket) !== null;
 
+      // Step 2: the workspace.
       const envArgs: string[] = [];
       for (const [key, value] of Object.entries(createConfig.environment ?? {})) {
         envArgs.push("--env", `${key}=${value}`);
       }
-
-      const result = await herdr(
-        pinned,
+      const createArgs = [
         "workspace",
         "create",
         "--cwd",
-        createConfig.workspacePath,
+        workspacePath,
         "--label",
-        createConfig.sessionId,
+        sessionId,
         ...envArgs,
         "--no-focus",
-      );
-
-      const workspace = asRecord(result.workspace);
-      const rootPane = toPane(result.root_pane);
-      const workspaceId = typeof workspace?.workspace_id === "string" ? workspace.workspace_id : "";
-      // Herdr fit F-2: a root pane ID outside herdr's grammar is no usable pane;
-      // no call is made with it.
-      if (!rootPane || !workspaceId || !isHerdrPaneId(rootPane.pane_id)) {
-        throw new Error(
-          `herdr workspace create returned no usable pane for session "${createConfig.sessionId}"`,
+      ];
+      const workspaceUnconfirmed = (
+        message: string,
+        ids: { workspaceId?: string; paneId?: string; terminalId?: string },
+        cause?: unknown,
+      ): RuntimeCreatePartialError =>
+        new RuntimeCreatePartialError(message, {
+          handle: {
+            id: "",
+            runtimeName: "herdr",
+            data: { ...launchData(ids), createIncomplete: "workspace-unconfirmed" },
+          },
+          stage: "workspace-unconfirmed",
+          cause,
+        });
+      let result: Record<string, unknown>;
+      try {
+        result = await herdr(pinned, ...createArgs);
+      } catch (err: unknown) {
+        // Q1 and Q2: the plain error of the wrapper, with its herdrCode (and
+        // the no-server code for Q1).
+        if (refusedBeforeRequest(err, createArgs)) throw err;
+        throw workspaceUnconfirmed(
+          `herdr workspace create did not confirm a workspace for session ${sessionId} (${createCauseOf(err, createArgs)}); AO closed nothing`,
+          {},
+          err,
         );
       }
 
-      // Launch the agent. Tear the workspace down on failure so a half-created
-      // session never lingers in the shared server.
+      // Step 3: the answer. Herdr fit F-2: a root pane ID outside herdr's
+      // grammar is no usable pane; no call is made with it.
+      const workspace = asRecord(result.workspace);
+      const rootPane = toPane(result.root_pane);
+      const workspaceId = typeof workspace?.workspace_id === "string" ? workspace.workspace_id : "";
+      const paneId = rootPane && isHerdrPaneId(rootPane.pane_id) ? rootPane.pane_id : "";
+      const terminalId = rootPane?.terminal_id ?? "";
+      if (!workspaceId || !paneId || !terminalId) {
+        throw workspaceUnconfirmed(
+          `herdr workspace create returned no usable pane for session "${sessionId}"; AO closed nothing`,
+          {
+            ...(workspaceId ? { workspaceId } : {}),
+            ...(paneId ? { paneId } : {}),
+            ...(terminalId ? { terminalId } : {}),
+          },
+        );
+      }
+      const ids = { workspaceId, paneId, terminalId };
+      const launchFailed = (
+        stage: Exclude<RuntimeCreateStage, "workspace-unconfirmed">,
+        cause: string,
+        err?: unknown,
+        extra: Record<string, unknown> = {},
+      ): RuntimeCreatePartialError =>
+        new RuntimeCreatePartialError(
+          `Failed to launch agent in herdr pane ${paneId} (${stage}): ${cause}. ` +
+            `Workspace ${workspaceId}, terminal ${terminalId}, socket ${endpoint.socket}. AO closed nothing.`,
+          {
+            handle: {
+              id: paneId,
+              runtimeName: "herdr",
+              data: { ...launchData(ids), createIncomplete: stage, ...extra },
+            },
+            stage,
+            cause: err,
+          },
+        );
+
+      // Step 4: the launch script.
+      let scriptPath: string;
       try {
-        const scriptPath = writeLaunchScript(createConfig.launchCommand);
-        await herdr(pinned, "pane", "run", rootPane.pane_id, "bash", scriptPath);
+        scriptPath = writeLaunchScript(createConfig.launchCommand);
       } catch (err: unknown) {
-        try {
-          await herdr(pinned, "workspace", "close", workspaceId);
-        } catch {
-          // Best-effort cleanup.
+        throw launchFailed(
+          "launch-not-submitted",
+          `the launch script could not be written: ${firstLineOf(err)}`,
+          err,
+        );
+      }
+
+      // Step 5: the launch. A refusal of the CLI (rule Q) sent nothing, so
+      // the script goes; after any other failure the server may run it, so it
+      // stays.
+      const runArgs = ["pane", "run", paneId, "bash", scriptPath];
+      try {
+        await herdr(pinned, ...runArgs);
+      } catch (err: unknown) {
+        if (refusedBeforeRequest(err, runArgs)) {
+          removeLaunchScript(scriptPath);
+          throw launchFailed("launch-not-submitted", createCauseOf(err, runArgs), err);
         }
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`Failed to launch agent in herdr pane "${rootPane.pane_id}": ${msg}`, {
-          cause: err,
-        });
+        throw launchFailed("launch-unconfirmed", createCauseOf(err, runArgs), err);
+      }
+
+      // Step 6: the pane still has the terminal of step 3. A check, not a
+      // binding: it shows a server restart between the create and the run,
+      // not one after it.
+      let paneAfterRun: HerdrPane | null;
+      try {
+        paneAfterRun = await getPaneStrict(pinned, paneId);
+      } catch (err: unknown) {
+        throw launchFailed(
+          "launch-unconfirmed",
+          `after the run, ${(err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim()}`,
+          err,
+        );
+      }
+      if (!paneAfterRun) {
+        throw launchFailed(
+          "launch-unconfirmed",
+          `after the run, herdr pane get ${paneId} answered pane_not_found`,
+        );
+      }
+      if (paneAfterRun.terminal_id !== terminalId) {
+        throw launchFailed(
+          "launch-unconfirmed",
+          `after the run, herdr pane get ${paneId} answered terminal ${paneAfterRun.terminal_id ?? "none"}, not ${terminalId}`,
+          undefined,
+          paneAfterRun.terminal_id ? { terminalAfterRun: paneAfterRun.terminal_id } : {},
+        );
       }
 
       return {
         // Agents are addressable by pane id only — a pane's display label is not a
         // valid agent target — so the pane id is the handle identity.
-        id: rootPane.pane_id,
+        id: paneId,
         runtimeName: "herdr",
-        data: {
-          workspaceId,
-          paneId: rootPane.pane_id,
-          // Pane ids are positional (`w3:p1`) and can be reused after a workspace is
-          // closed. terminal_id is unique per terminal, so it is kept to detect a
-          // recycled pane id in isAlive().
-          terminalId: rootPane.terminal_id ?? "",
-          sessionId: createConfig.sessionId,
-          workspacePath: createConfig.workspacePath,
-          createdAt: Date.now(),
-          herdrBin: endpoint.bin,
-          herdrSocket: endpoint.socket,
-        },
+        // Pane ids are positional (`w3:p1`) and can be reused after a workspace is
+        // closed. terminal_id is unique per terminal, so it is kept to detect a
+        // recycled pane id in isAlive().
+        data: launchData(ids),
       };
     },
 

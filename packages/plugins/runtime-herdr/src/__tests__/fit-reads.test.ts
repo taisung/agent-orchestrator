@@ -34,8 +34,9 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 const { create } = await import("../index.js");
-const { RUNTIME_NO_SERVER_ERROR_CODE } = await import("@aoagents/ao-core");
-const { herdrFixture, herdrRejection, standInHerdrOnPath, statusRunning } =
+const { RUNTIME_NO_SERVER_ERROR_CODE, isRuntimeCreatePartialError } =
+  await import("@aoagents/ao-core");
+const { herdrFixture, herdrRejection, standInHerdrOnPath, statusRunning, STATUS_SOCKET } =
   await import("./herdr-fixtures.js");
 
 const HANDLE = {
@@ -204,6 +205,10 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
     await expect(create().isAlive(HANDLE)).resolves.toBe(true);
   });
 
+  // Herdr fit-2 F-4 (design r11 5.2.7). Was: the plain error with
+  // `herdrCode` server_not_running and the no-server `code`. The session-form
+  // text ("run `herdr session attach aohd-1`") is not rule Q1, so the server
+  // may have taken the request: a partial `workspace-unconfirmed`.
   it("reads the failure form of every call with its own command ID (workspace create)", async () => {
     mockExecFile
       .mockResolvedValueOnce(statusRunning())
@@ -216,6 +221,36 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
         environment: { AOHD_X: "1" },
       })
       .catch((e: unknown) => e);
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({ stage: "workspace-unconfirmed", handle: { id: "" } });
+    expect((err as Error).cause).toMatchObject({
+      herdrCode: "server_not_running",
+      code: RUNTIME_NO_SERVER_ERROR_CODE,
+    });
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("the exact rule-Q1 text of the pinned socket gives the plain error with both codes", async () => {
+    const q1 =
+      `{"id":"cli:workspace:create","error":{"code":"server_not_running","message":"no herdr server is running at ` +
+      `${STATUS_SOCKET}; run \`herdr\` to start or attach it"}}`;
+    mockExecFile.mockResolvedValueOnce(statusRunning()).mockRejectedValueOnce(
+      herdrRejection({
+        command: "herdr workspace create --cwd /tmp/aohd/repo --label nsx --no-focus",
+        exit: 1,
+        stdout: "",
+        stderr: `${q1}\n`,
+      }),
+    );
+    const err = await create()
+      .create({
+        sessionId: "nsx",
+        workspacePath: "/tmp/aohd/repo",
+        launchCommand: "true",
+        environment: {},
+      })
+      .catch((e: unknown) => e);
+    expect(isRuntimeCreatePartialError(err)).toBe(false);
     expect(err).toMatchObject({
       herdrCode: "server_not_running",
       code: RUNTIME_NO_SERVER_ERROR_CODE,
@@ -223,8 +258,9 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
     expect(mockExecFile).toHaveBeenCalledTimes(2);
   });
 
+  // Herdr fit-2 F-4 (design r11 5.2.7). Was: the `workspace close` (W-5a) and
+  // a plain error whose cause has `herdrCode` pane_not_found.
   it("reads the pane run failure with the command ID cli:request", async () => {
-    // The launch cleanup (`workspace close`, W-5a) stays until fit-2 (F-4).
     mockExecFile
       .mockResolvedValueOnce(statusRunning())
       .mockResolvedValueOnce({
@@ -248,9 +284,14 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
       })
       .catch((e: unknown) => e);
     expect((err as Error).message).toMatch(
-      /Failed to launch agent in herdr pane "w3:p1": herdr error pane_not_found/,
+      /^Failed to launch agent in herdr pane w3:p1 \(launch-unconfirmed\): pane_not_found: /,
     );
+    expect(isRuntimeCreatePartialError(err)).toBe(true);
+    expect(err).toMatchObject({ stage: "launch-unconfirmed", handle: { id: "w3:p1" } });
     expect((err as Error).cause).toMatchObject({ herdrCode: "pane_not_found" });
+    expect(mockExecFile).toHaveBeenCalledTimes(3);
+    const calls = mockExecFile.mock.calls.map((c) => (c[1] as string[]).slice(0, 2).join(" "));
+    expect(calls).not.toContain("workspace close");
   });
 });
 
