@@ -112,3 +112,17 @@ or in a separate docs-only edit.
 
 **Done on 2026-10-23** (owner request), after the fit-1 build: doc 0004 §1, §5a (now "What AO reads", with
 the forms before and since fit-1) and §8 describe the live build.
+
+## 9. Update 2026-10-23 16:15 EDT: fit-1 and fit-2a are live
+
+- The live `ao` is the build of 2026-10-23 16:09 of `b2064068` (`main` and `origin/main`; CI 4 of 4 success). It
+  holds relaunch, fit-1 (since the 10:23 build of `e43db964`) and fit-2a (landed 15:14 as `a95608c1..5eda626c`;
+  reviews `reviews/herdr_fit2a_code_review_r1_sol61.md`, `_r1_muse13.md` and `_r2_sol61.md`, the last one
+  LAND-SAFE). The lifecycle workers 3539803 (agent-orchestrator) and 3540453 (agent-skills) run it; the Nexus
+  worker 140323 stays on the build of `9846cf6a` (owner's choice; Nexus uses tmux).
+- The four items of section 6 "Until fit-2a" are done: a blocked Herdr agent gets no prompt and no raw input
+  (also when the pane names no agent); a failed create closes nothing and keeps the record, the worktree, the
+  agent session and the script; the probes and stops of an old record go through its handle's runtime; restore
+  refuses a damaged handle. Doc 0004 §1, §3, §5 and §5a describe the new build.
+- The items "Until fit-2b" and "With no round planned" of section 6 are unchanged, and so is the
+  recommendation of section 7: real work stays on tmux until fit-2b; a one-project trial is reasonable now.

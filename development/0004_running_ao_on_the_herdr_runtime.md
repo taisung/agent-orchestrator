@@ -32,15 +32,17 @@ Launching `herdr` (or `herdr server` for headless) starts one. The server is **s
 operator is doing in it by hand; the plugin creates only its own workspaces and never stops the server.
 Since same-ID R2a, **the stop of a Herdr session closes nothing**: `ao session kill`, cleanup and restore get
 the stop answer `unknown` and keep the record and the worktree, and the operator closes the workspace by hand
-after a check (the "Next" line of the refusal). One older close path of the plugin still exists (read from the
-code): when the agent launch fails during a create, the plugin closes the workspace that it just created, by
-its ID and without a check. Before fit-1 the plugin's `destroy` also closed the recorded workspace (no core
-caller uses it, because core calls `stop`). Since fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md),
-F-5; on `main` as `6a5bd6a7`, live since the build of 2026-10-23) `destroy` refuses: it closes nothing and makes
-no herdr call. fit-2a ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md) §8.1, in progress)
-removes the create cleanup close: a failed create then keeps the workspace, the worktree, the agent session
-and the record, with `launchFailed`, for the operator. The optional round RH ([RH design
-r6](reviews/rh_design_r6_opus.md), not built) would add a bound close.
+after a check (the "Next" line of the refusal). **No close path of the plugin is left.** Two older ones are
+gone. Before fit-1 the plugin's `destroy` closed the recorded workspace (no core caller uses it, because core
+calls `stop`). Since fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md), F-5; on `main` as
+`6a5bd6a7`, live since the build of 2026-10-23 10:23) `destroy` refuses: it closes nothing and makes no herdr
+call. Before fit-2a, when the agent launch failed during a create, the plugin closed the workspace that it just
+created, by its ID and without a check. Since fit-2a ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md)
+§8.1, F-4; on `main` as `a95608c1..5eda626c`, live since the build of 2026-10-23 16:09) a failed create closes
+nothing. AO keeps the workspace, the worktree, the agent session and the record (with the partial handle and
+`launchFailed`) for the operator; `docs/DEVELOPMENT.md`, "Herdr fit-2a (interim, until fit-2b)", note 2, gives
+the check and the retirement by hand. The optional round RH ([RH design r6](reviews/rh_design_r6_opus.md), not
+built) would add a bound close.
 
 **0.9.5: which server AO reaches.** AO runs plain `herdr`, so the caller's environment picks the server. The
 CLI's order (measured, RH design r5 §2.1): `--session <name>` (AO never passes it), then `HERDR_SOCKET_PATH`,
@@ -112,9 +114,13 @@ The runtime slot sits below everything operators actually interact with, so most
   through `sessionManager.send()` → the plugin's `sendMessage`, instead of pasting into tmux. Two 0.9.5
   limits (measured with a stand-in claude, step 1 §3.4):
   - **A `blocked` agent** (a permission dialog): herdr refuses `agent prompt` with `agent_blocked` before it
-    sends any input. AO's settle gate accepts `blocked`, so `ao send` then exits 1 with a stack trace and a
-    wrong reason ("session needed to be restarted before delivery ... not in a terminal state"). No text
-    reaches the dialog. Answer the dialog in herdr first.
+    sends any input. Before fit-2a, AO's settle gate accepted `blocked`, so `ao send` exited 1 with a stack
+    trace and a wrong reason ("session needed to be restarted before delivery ... not in a terminal state").
+    **Since fit-2a (F-3, live since 2026-10-23 16:09)** AO refuses at once when `pane get` shows `blocked`
+    (with or without an agent name): no prompt, no raw text and no key. `ao send` prints one line on stderr
+    (`ao send: <id>: not sent: the agent in herdr pane <pane> is blocked and waits for input (agent_blocked).
+    ...`) and exits 1 (`docs/DEVELOPMENT.md`, "Herdr fit-2a", note 1). Answer the dialog in herdr first, then
+    send again.
   - **A very short turn can be delivered more than once.** From `done`, only `working` counts as delivery
     evidence. A 0.15 s turn was not visible as `working` in 4 of 6 tries, so AO sent the message again: one
     `ao send` delivered it 3 times. A real `/clear` or another instant command can do this; how often is not
@@ -177,7 +183,9 @@ against a 15 s timeout.
 
 `sendMessage` therefore **sends and verifies**:
 
-1. Wait for a settled agent (`idle`, `done`, `blocked`) — up to `settleTimeoutMs`. This only decides *when to try*.
+1. Wait for a settled agent (`idle`, `done`) — up to `settleTimeoutMs`. This only decides *when to try*. Before
+   fit-2a `blocked` also counted as settled. Since fit-2a a `blocked` agent stops the send at this wait, or at the
+   settle wait after an attempt: AO refuses and sends nothing more, also no raw text in step 4 (§3).
 2. Send the prompt, then poll `pane get` for evidence it was consumed: the agent departing its pre-send state
    toward `working`, within `deliveryTimeoutMs`.
 3. No evidence → let it settle again and re-send, up to `sendAttempts`.
@@ -274,7 +282,8 @@ and 9). AO reads stdout through `execFile`, which rejects on exit 1. **Before fi
 
 fit-2 ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md)) does the rest, in two rounds (owner
 decision OQ-F12 (b)): fit-2a (a blocked send, a failed create, the claims, the dispatch by the handle's
-runtime, the restore refusal; in progress) and fit-2b (the startup admission, which replaces the interim
+runtime, the restore refusal; on `main` as `a95608c1..5eda626c`, live since the build of 2026-10-23 16:09) and
+fit-2b (the startup admission, which replaces the interim
 guard, and the owner's retire action; designed, not built). They replace the fit section of RH design r6.
 
 **`pane read --source recent-unwrapped`.** **0.8.0:** empty for a pane with no detected agent, so `getOutput`
