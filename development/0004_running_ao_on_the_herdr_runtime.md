@@ -35,9 +35,12 @@ the stop answer `unknown` and keep the record and the worktree, and the operator
 after a check (the "Next" line of the refusal). Two older close paths of the plugin still exist (read from the
 code): when the agent launch fails during a create, the plugin closes the workspace that it just created, by
 its ID and without a check; and the plugin's `destroy` closes the recorded workspace (no core caller uses it,
-because core calls `stop`). The "Herdr 0.9.5 fit" round ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md),
-not built) would remove both: a failed create would then keep the workspace, the worktree, the agent session
-and the record, with `launchFailed`, for the operator. The optional round RH ([RH design
+because core calls `stop`). The "Herdr 0.9.5 fit" round, split in two by the owner on 2026-10-22, would
+remove both: fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md), in implementation, not
+landed at this writing) makes `destroy` refuse, and fit-2 ([Herdr fit-2 design
+r8](reviews/herdr_fit2_design_r8_opus.md), not built) removes the create cleanup close: a failed create
+would then keep the workspace, the worktree, the agent session and the record, with `launchFailed`, for the
+operator. The optional round RH ([RH design
 r6](reviews/rh_design_r6_opus.md), not built) would add a bound close.
 
 **0.9.5: which server AO reaches.** AO runs plain `herdr`, so the caller's environment picks the server. The
@@ -47,12 +50,15 @@ then `HERDR_SESSION` (`$XDG_CONFIG_HOME/herdr/sessions/<name>/herdr.sock`), then
 measured (r5, r6) had `HERDR_SOCKET_PATH` and `HERDR_SESSION` in its environment, so an `ao` command that runs
 inside a herdr pane talks to that pane's server, and an `ao` command in a plain terminal talks to the default
 socket. Run every `ao` command of a Herdr project with the same herdr environment. AO records no socket per
-session yet (the "Herdr 0.9.5 fit" round, Herdr fit design r7, would pin it).
+session yet (fit-1 of the "Herdr 0.9.5 fit" round, Herdr fit design r7, would pin it).
 
 **0.9.5: `herdr status server`.** With a server: `status: running`, then `version`, `endpoint_compatible`,
 `private_protocol: 22`, `private_protocol_compatible` and `socket` lines. With no server: exit 0 and
 `status: not running`. AO's check `/status:\s*running/` reads both right. `herdr status server --json` names
-the `socket` with and without a server. `herdr server` now also prints "did you mean to open the Herdr TUI?".
+the `socket` with and without a server. Against a server of another protocol it still exits 0 with
+`"running":true`, but with `"compatible":false` (a fake server with protocol 19 and 23, fit-2 design r8
+§3.1); a 0.9.5 server gives `"compatible":true`, no server `null`. `herdr server` now also prints "did you
+mean to open the Herdr TUI?".
 
 tmux is still required if any project remains on the tmux runtime. `ao spawn`'s preflight already gates its
 tmux check on the resolved runtime, so a herdr-only project does not need tmux installed.
@@ -222,7 +228,10 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
   ("no herdr server is running at <socket>; ..."), exit 1.
 - Each measured pane operation of the CLI first sent a `ping` on its own connection and then the request on a
   second one. A call whose `ping` fails sends no request, and `status server --json` is itself a `ping`. A
-  server with another protocol gives the CLI's own `protocol_mismatch`, exit 1.
+  server with another protocol gives the CLI's own `protocol_mismatch`, exit 1. `workspace create` and
+  `pane run` behave the same (fit-2 design r8 §3.1): on `protocol_mismatch` and on the CLI's own
+  `server_not_running` they send no `workspace.create` or `pane.send_input` request. A server can also answer
+  a request with `server_not_running` itself, so the code alone does not show that no request was sent.
 - `EACCES` on the socket, a partial or non-JSON answer, and a closed connection give Rust debug text on
   stderr (`Error: Os { code: 13, ... }`, `Error: Custom { ... }`), not JSON.
 - The CLI has no timeout of its own: a server that never answers keeps the CLI waiting. AO's per-call limit
@@ -242,8 +251,11 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
   lifecycle calls `pane process-info --pane <session name>`. herdr answers `pane_not_found` for any malformed
   ID.
 
-The fix is the "Herdr 0.9.5 fit" round of [Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md) (not
-built). It replaces the fit section of RH design r6.
+The fix is the "Herdr 0.9.5 fit" round, in two parts: fit-1 ([Herdr fit design
+r7](reviews/herdr_fit_design_r7_opus.md): the reads, the pins and the `destroy` refusal; in implementation)
+and fit-2 ([Herdr fit-2 design r8](reviews/herdr_fit2_design_r8_opus.md): a blocked send, a failed create,
+the startup admission and the owner's retire action; not built). Neither has landed at this writing. They
+replace the fit section of RH design r6.
 
 **`pane read --source recent-unwrapped`.** **0.8.0:** empty for a pane with no detected agent, so `getOutput`
 fell back to `visible`. **0.9.5:** it returned the shell text of such a pane in the measured case, so the
