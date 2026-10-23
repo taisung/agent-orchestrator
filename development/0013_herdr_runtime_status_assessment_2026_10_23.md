@@ -1,6 +1,6 @@
 # 0013 — Running `ao` on Herdr: status assessment on 2026-10-23
 
-**Date**: 2026-10-23, about 10:30 EDT
+**Date**: 2026-10-23, about 10:15 EDT
 **Context**: the owner asked for an assessment of the current state of AO on the Herdr runtime, during
 the Herdr 0.9.5 fit work (fit-1 landed on `main` today; fit-2a is in progress).
 **Status**: assessment only. No source, test or config file changed. Each fact names its source: a file,
