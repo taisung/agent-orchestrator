@@ -330,11 +330,12 @@ delete land/session-relaunch".
   (CI `39968748496`, Integration Tests, Onboarding, Security).
 - Owner "build and restart after CI is green": no dependency or `WRAPPER_VERSION` change since `9846cf6a`.
   `pnpm build` 10:23:28 to 10:23:35, rc 0. Lifecycle workers restarted by exact PID (see "Lifecycle workers").
-  The Nexus worker 140323 is not restarted (owner to decide).
+  The Nexus worker 140323 is not restarted: the owner chose to leave it on the old build.
 - ao-73 (fit-2a) still names 4027448 and 4027591 in its do-not-touch list; its rule "kill only a PID that you
   started" covers the new PIDs.
 - Doc `development/0013_herdr_runtime_status_assessment_2026_10_23.md` (`32e1e12e`) is the Herdr status at
-  10:15, before the build. Its section 8 (correct doc 0004 once the fit-1 build is live) is now due.
+  10:15, before the build. Its section 8 is done: doc 0004 §1, §5a and §8 now describe the fit-1 build
+  (owner request "correct the doc 0004 description").
 
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
@@ -386,8 +387,8 @@ fix). First polls: 1 of 1 success each, 0 failures, health `ok`
 `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. `ao start` keeps a running worker
 ("already running"). **The Nexus worker 140323** (`6513108c38cb-Nexus`, config `/Data1/NgFEP/Nexus/agent-orchestrator.yaml`,
-17 active sessions) started 2026-10-22 18:20 and still runs the build of `9846cf6a`: not restarted, owner to
-decide. The workers of VSF and the Nexus config of this fork do not run until their orchestrators run
+17 active sessions) started 2026-10-22 18:20 and runs the build of `9846cf6a`: owner 2026-10-23 "leave the
+worker 140323 on the old build". The workers of VSF and the Nexus config of this fork do not run until their orchestrators run
 `ao start`. The global OpenCode service does not run.
 
 **Watchers**: one runs since 2026-10-22 16:00:02: PID 2750995, state `~/.cache/fleet_watch/aofork-2026-10-22b`,

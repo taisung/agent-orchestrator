@@ -109,3 +109,6 @@ fit-1 (design `reviews/herdr_fit_design_r7_opus.md`; notes 2 and 3; merge check
 Doc 0004 §1 and §5a still say that fit-1 is "not on `main` at this writing", and §5a "What AO reads today"
 describes the live build of section 4. Correct both when the fit-1 build is live, in the fit-2a docs commit
 or in a separate docs-only edit.
+
+**Done on 2026-10-23** (owner request), after the fit-1 build: doc 0004 §1, §5a (now "What AO reads", with
+the forms before and since fit-1) and §8 describe the live build.

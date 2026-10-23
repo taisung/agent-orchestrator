@@ -11,8 +11,8 @@ with a stand-in claude: [the live check](reviews/herdr_live_check_095_opus.md) (
 [RH design r5](reviews/rh_design_r5_opus.md) section 7 and [RH design r6](reviews/rh_design_r6_opus.md)
 section 9, fixtures in `artifacts/herdr_095_live_check/` (`r5_*`, `r6_*`). The configuration, the command surface, the per-project switch and the
 send-and-verify path hold on 0.9.5. What changed is marked **0.9.5** below; the older facts are kept and
-marked **0.8.0**. The largest change: a failed CLI call now exits 1 with its error on stderr (§5a), which AO's
-reads do not see yet (§5a, "What AO reads today").
+marked **0.8.0**. The largest change: a failed CLI call now exits 1 with its error on stderr (§5a). AO reads
+that form since fit-1 (on `main` as `6a5bd6a7`, live since the build of 2026-10-23; §5a, "What AO reads").
 
 Everything marked **verified** below was executed against a live herdr server; everything else is read from
 source and labelled as such.
@@ -32,15 +32,14 @@ Launching `herdr` (or `herdr server` for headless) starts one. The server is **s
 operator is doing in it by hand; the plugin creates only its own workspaces and never stops the server.
 Since same-ID R2a, **the stop of a Herdr session closes nothing**: `ao session kill`, cleanup and restore get
 the stop answer `unknown` and keep the record and the worktree, and the operator closes the workspace by hand
-after a check (the "Next" line of the refusal). Two older close paths of the plugin still exist (read from the
+after a check (the "Next" line of the refusal). One older close path of the plugin still exists (read from the
 code): when the agent launch fails during a create, the plugin closes the workspace that it just created, by
-its ID and without a check; and the plugin's `destroy` closes the recorded workspace (no core caller uses it,
-because core calls `stop`). The "Herdr 0.9.5 fit" round, split in two by the owner on 2026-10-22, would
-remove both: fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md), implemented on a branch
-(`60da85ee`, with notes 2 and 3), not on `main` at this writing) makes `destroy` refuse, and fit-2 ([Herdr fit-2 design
-r11](reviews/herdr_fit2_design_r11_opus.md), not built) removes the create cleanup close: a failed create
-would then keep the workspace, the worktree, the agent session and the record, with `launchFailed`, for the
-operator. The optional round RH ([RH design
+its ID and without a check. Before fit-1 the plugin's `destroy` also closed the recorded workspace (no core
+caller uses it, because core calls `stop`). Since fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md),
+F-5; on `main` as `6a5bd6a7`, live since the build of 2026-10-23) `destroy` refuses: it closes nothing and makes
+no herdr call. fit-2a ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md) §8.1, in progress)
+removes the create cleanup close: a failed create then keeps the workspace, the worktree, the agent session
+and the record, with `launchFailed`, for the operator. The optional round RH ([RH design
 r6](reviews/rh_design_r6_opus.md), not built) would add a bound close.
 
 **0.9.5: which server AO reaches.** AO runs plain `herdr`, so the caller's environment picks the server. The
@@ -49,8 +48,13 @@ then `HERDR_SESSION` (`$XDG_CONFIG_HOME/herdr/sessions/<name>/herdr.sock`), then
 `$XDG_CONFIG_HOME/herdr/herdr.sock`, then `$HOME/.config/herdr/herdr.sock`. Every pane shell that was
 measured (r5, r6) had `HERDR_SOCKET_PATH` and `HERDR_SESSION` in its environment, so an `ao` command that runs
 inside a herdr pane talks to that pane's server, and an `ao` command in a plain terminal talks to the default
-socket. Run every `ao` command of a Herdr project with the same herdr environment. AO records no socket per
-session yet on `main` (fit-1 of the "Herdr 0.9.5 fit" round, Herdr fit design r7, pins it on its branch).
+socket. **Since fit-1 (F-6) each new handle pins its server.** `create` runs `herdr status server --json` with
+the caller's environment and refuses when no server runs (`no herdr server runs at <socket>; start one: herdr
+server`). It stores the absolute binary path (`herdrBin`) and the socket (`herdrSocket`) in the handle. Every
+later call for that handle runs `herdrBin` with `HERDR_SOCKET_PATH` set to `herdrSocket`, whatever the caller's
+environment. The caller's environment still picks the server for `ao spawn` (the create), and for every call
+on a handle without pins (a session made before the fit-1 build). So run `ao spawn` of a Herdr project, and
+every command on an older Herdr session, with the same herdr environment.
 
 **0.9.5: `herdr status server`.** With a server: `status: running`, then `version`, `endpoint_compatible`,
 `private_protocol: 22`, `private_protocol_compatible` and `socket` lines. With no server: exit 0 and
@@ -239,25 +243,39 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
   (`commandTimeoutMs`, 10 s) still applies.
 - The raw socket API did not change: the error is still an envelope in the answer line.
 
-**What AO reads today** (step 1 §4.2, §10). AO reads stdout through `execFile`, which rejects on exit 1, so on
-0.9.5:
+**What AO reads** (step 1 §4.2, §10; `docs/DEVELOPMENT.md`, the table "Absence forms of the R4 reads", rows 8
+and 9). AO reads stdout through `execFile`, which rejects on exit 1. **Before fit-1** (the builds up to
+2026-10-22) this gave on 0.9.5:
 
-- `isAlive` rejects (unknown) for a closed pane or a closed workspace, where 0.8.0 gave `false`. It still
-  answers `false` for the same pane ID with another terminal (after a restart).
-- The agents' process check on a Herdr pane (core `herdr.ts`) rejects for a closed pane, where 0.8.0 gave
+- `isAlive` rejected (unknown) for a closed pane or a closed workspace, where 0.8.0 gave `false`.
+- The agents' process check on a Herdr pane (core `herdr.ts`) rejected for a closed pane, where 0.8.0 gave
   "no process".
-- With no server, both reject without AO's "no server" code. So the lifecycle keeps a session whose
-  workspace was closed, and `ao start` reads its orchestrator as `unknown` and stops.
-- A record without a runtime handle (during a spawn) gets a handle made from the session name, so the
-  lifecycle calls `pane process-info --pane <session name>`. herdr answers `pane_not_found` for any malformed
-  ID.
+- With no server, both rejected without AO's "no server" code. So the lifecycle kept a session whose
+  workspace was closed, and `ao start` read its orchestrator as `unknown` and stopped.
+- A record without a runtime handle (during a spawn) got a handle made from the session name, so the
+  lifecycle called `pane process-info --pane <session name>`, and herdr answered `pane_not_found`.
 
-The fix is the "Herdr 0.9.5 fit" round, in two parts: fit-1 ([Herdr fit design
-r7](reviews/herdr_fit_design_r7_opus.md): the reads, the pins and the `destroy` refusal; implemented on a
-branch, `60da85ee`, with notes 2 and 3) and fit-2 ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md): a blocked send,
-a failed create, the startup admission and the owner's retire action; not built). Neither is on `main` at
-this writing. They
-replace the fit section of RH design r6.
+**Since fit-1** ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md), F-1 and F-2, with notes 2 and 3; on
+`main` as `6a5bd6a7`, live since the build of 2026-10-23):
+
+- `isAlive` answers `false`, and the process check answers "no process", for `pane_not_found` in the exact
+  0.9.5 form (exit 1, empty stdout, one stderr line of JSON with the command's ID) and in the 0.8.0 form. The
+  lifecycle then writes `killed` at the second such poll. `isAlive` still answers `false` for the same pane ID
+  with another terminal (after a restart).
+- With no server (`server_not_running` with the message `no herdr server is running at ...`), both reject with
+  AO's no-server code (`RUNTIME_NO_SERVER_ERROR_CODE`). The lifecycle keeps the status until the session
+  answered "no server" in consecutive polls for 5 minutes (`NO_SERVER_BOUND_MS`), then writes `killed`.
+- Every other failure (another error code, Rust debug text, a timeout) still rejects (unknown).
+- A non-empty pane ID outside herdr's grammar, such as a handle made from a session name, rejects with no
+  herdr call.
+- At startup no Herdr answer retires an old orchestrator (fit-1's interim guard, owner decision OQ-F1 (b)).
+  `ao start` refuses when it can reuse no other record, and the owner retires the record by hand (the
+  recovery in `docs/DEVELOPMENT.md`).
+
+fit-2 ([Herdr fit-2 design r11](reviews/herdr_fit2_design_r11_opus.md)) does the rest, in two rounds (owner
+decision OQ-F12 (b)): fit-2a (a blocked send, a failed create, the claims, the dispatch by the handle's
+runtime, the restore refusal; in progress) and fit-2b (the startup admission, which replaces the interim
+guard, and the owner's retire action; designed, not built). They replace the fit section of RH design r6.
 
 **`pane read --source recent-unwrapped`.** **0.8.0:** empty for a pane with no detected agent, so `getOutput`
 fell back to `visible`. **0.9.5:** it returned the shell text of such a pane in the measured case, so the
@@ -372,10 +390,11 @@ once.
 - **0.9.5: what a pane close ends.** `pane close` sends `SIGHUP`, then `SIGTERM`, then `SIGKILL` (about 0.27 s
   apart) to the processes of the pane shell's session, also to a background job that ignores `HUP` and
   `TERM`. A process that left the session (`setsid`) gets no signal and keeps running (r6, `r6_i_*`).
-- **0.9.5: errors on stderr** (§5a): AO's liveness and process reads do not see `pane_not_found` or
-  `server_not_running` yet.
+- **0.9.5: errors on stderr** (§5a): closed by fit-1 (live since 2026-10-23). AO's liveness and process reads
+  see `pane_not_found` and `server_not_running` in the 0.9.5 form. Every other failure still answers unknown.
 - **0.9.5: a live handoff** changes every terminal ID, and AO then reads every running session as gone (§5a).
-- **The server depends on the caller's environment** (§1): AO records no socket per session yet.
+- **The server depends on the caller's environment** (§1) for `ao spawn` and for a handle without pins. Since
+  fit-1 (F-6) a new handle pins its binary and socket.
 - herdr is young; `worktree create` has open correctness bugs upstream
   ([issue #729](https://github.com/ogulcancelik/herdr/issues/729)). AO does not use `herdr worktree` — the
   `workspace-worktree` plugin still creates worktrees, and the runtime only opens a workspace at that path —
