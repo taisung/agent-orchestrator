@@ -238,6 +238,22 @@
   branches at `5f38ffd4`, watcher 347765 (state `aofork-2026-10-22n`). Commit both reviews to main together.
 - Idle and done: ao-65, ao-77, ao-78 (ao-77 keeps for the note 2 check), ao-76 (waits for round 5).
 
+**Update 2026-10-23 07:30 EDT.**
+- Results since 23:45, all on main: relaunch round 5 check by ao-76 (`b9ba8768`) LAND-WITH-CHANGES 0 B 0 M 1 m
+  (two equal non-UUID tokens pass the lookup) plus a test gap (a non-ENOENT mark read error); fit-2 r9 reviews
+  (`5c464d53`): ao-79 sol NOT-SOUND 0 B 1 M 4 m (M-1 a thrown success or partial publication of restore keeps
+  its live claim), ao-80 Muse SOUND-WITH-CHANGES 4 m; both agree with OQ-F4 to OQ-F12; fit-1 note 2 check by
+  ao-77 (`2e41ccc8`) LAND-WITH-CHANGES 0 B 0 M 3 m (archive mkdir in the recipe, conditional refusal wording,
+  `merged` is repaired before startup), r1 M-1 closed, recovery the same on pre-fit main.
+- Owner (2026-10-23) "start the Herdr work": ao-73 does fit-1 note 3, docs-only (`.agent_note_3.md`, copy
+  `note-ao-73-fit1-docs.md`, marker `/tmp/aofit1n3-marker`); the orchestrator checks the diff, no new review.
+  ao-65 does fit-2 design r10, narrow (`.agent_task_fit2_r10.md`, copy `brief-aofork-herdr-fit2-r10.md`,
+  scratch `/tmp/aohd7`, fixtures `r10_`); base fit-1 `ee3534d7`, relaunch `9f20ce29`; then ao-79 and ao-80
+  check it. ao-65's branch fast-forwarded to `a6d7c4b0` (its r9 copies, identical to main, backed up in
+  `backup-ao-65-r9/`). Watchers 2303560 (ao-73) and 530444 (ao-63, ao-65).
+- Still open for the owner: decision 9 (relaunch round 6 or land), 11 (OQ-F4 to OQ-F12), 13 (landing order:
+  relaunch first, then ao-73 merges main into fit-1 and ao-77 checks), 14 (close ao-78).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
