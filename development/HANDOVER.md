@@ -402,6 +402,19 @@ delete land/session-relaunch".
 - Router row open (author, opus-5-5). Watcher `aofork-2026-10-22j` (loop 2303560) reads its report.
 - Next: two blind code reviews (Codex gpt-6.1-sol and Muse 1.3), as for fit-2a, after the owner's word.
 
+**Update 2026-10-23 19:16 EDT: fit-2b written by ao-73 (not reviewed, not landed).**
+- `done|13f982c2`: 4 commits on `c6d80383` (`256b29f0` admission, `960dab87` CLI start and spawn, `3b740805`
+  F-9 and status, `13f982c2` docs); exactly the 12 product files of §8.2 plus `CLAUDE.md` and `docs/DEVELOPMENT.md`;
+  product +1473 -424 (estimate 920). Tests: core 1869+1, runtime-herdr 327, cli 489, others as G0; 141 of 163 new
+  tests fail on the base (22 controls); each D2 mutant fails its tests, D2-a and D2-b as the design says; red set
+  = G0 (21); lint 5 known; gitleaks clean (checked again here).
+- Orchestrator checks: straight line, no remote contains it, `/tmp/aofit2b` gone, no aofit2b process, `~/.ao/bin`
+  unchanged, the 3 real workers run; `git merge-tree --merge-base c6d80383 main 13f982c2` clean.
+- 29 deviations, 4 open questions (the `AUTHORITATIVE_RUNTIMES` agent sentences are wrong against `CLAUDE.md`;
+  R8 before R7 for an isolated record; the F-9 line does not shell-quote the ID and token; doc 0004 after
+  landing). Report saved as `reports/ao-73_herdr_fit2b_impl.report.md`. Router row closed (in-review).
+- Next: the owner decides the code reviews.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
