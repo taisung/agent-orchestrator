@@ -1075,6 +1075,49 @@ describe("sendMessage(): a blocked agent is a refusal (fit-2 F-3)", () => {
     expect(rawInput()).toEqual([]);
   });
 
+  // Review r2 (ao-83 m-1): herdr's PaneInfo allows `agent: null`; a blocked
+  // pane with no agent name is a refusal too, never a raw send.
+  const noAgentName = [
+    ["agent null", { pane_id: "w7:p1", agent: null, agent_status: "blocked" }],
+    ["no agent field", { pane_id: "w7:p1", agent_status: "blocked" }],
+  ] as const;
+  for (const [label, pane] of noAgentName) {
+    it(`r2 m-1 (${label}): the first settle poll answers blocked with no agent name: refusal none`, async () => {
+      mockExecFile.mockResolvedValue(ok({ pane }));
+
+      const err = await create({ settleTimeoutMs: 0, deliveryTimeoutMs: 0 })
+        .sendMessage(HANDLE, "go")
+        .catch((e: unknown) => e);
+
+      expect(rawInput()).toEqual([]);
+      expect(calls("agent", "prompt")).toEqual([]);
+      expect(isRuntimeSendRefusedError(err)).toBe(true);
+      expect(err).toMatchObject({ admitted: "none", stage: "first settle wait", target: "w7:p1" });
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("r2 m-1: the settle wait after attempt 1 answers blocked with no agent name: earlier-attempt-unconfirmed", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // agent prompt
+      .mockResolvedValueOnce(at("idle")) // consumption poll: not consumed
+      .mockResolvedValue(at("blocked", null)); // settle wait after attempt 1
+
+    const err = await create({ settleTimeoutMs: 0, deliveryTimeoutMs: 0 })
+      .sendMessage(HANDLE, "go")
+      .catch((e: unknown) => e);
+
+    expect(rawInput()).toEqual([]);
+    expect(calls("agent", "prompt")).toHaveLength(1);
+    expect(isRuntimeSendRefusedError(err)).toBe(true);
+    expect(err).toMatchObject({
+      admitted: "earlier-attempt-unconfirmed",
+      stage: "settle wait after attempt 1",
+    });
+  });
+
   it("T-3.5: control: from idle, the consumption poll shows blocked: delivered, one prompt", async () => {
     mockExecFile
       .mockResolvedValueOnce(at("idle")) // settled

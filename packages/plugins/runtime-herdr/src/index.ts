@@ -440,7 +440,8 @@ export function create(config?: Record<string, unknown>): Runtime {
   /**
    * Block until herdr reports an agent in the pane, in a state that accepts input.
    * Returns the observed state, or null on timeout. Herdr fit-2 F-3: it stops
-   * at the first poll that shows the agent `blocked`, and returns that state.
+   * at the first poll that shows `blocked`, and returns that state, also when
+   * herdr names no agent (its PaneInfo allows `agent: null`; review r2 m-1).
    *
    * NOTE: this is necessary but NOT sufficient for delivery. herdr reports
    * `idle` as soon as it recognises the agent's prompt box, which happens
@@ -456,7 +457,7 @@ export function create(config?: Record<string, unknown>): Runtime {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const pane = await getPane(invocation, paneId);
-      if (pane?.agent && pane.agent_status === BLOCKED_STATE) return BLOCKED_STATE;
+      if (pane?.agent_status === BLOCKED_STATE) return BLOCKED_STATE;
       if (pane?.agent && pane.agent_status && SETTLED_STATES.has(pane.agent_status)) {
         return pane.agent_status;
       }
