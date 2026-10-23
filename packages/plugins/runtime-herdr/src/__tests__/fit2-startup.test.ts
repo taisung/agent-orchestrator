@@ -312,6 +312,27 @@ describe("T-7.8a: the start probes an old Herdr record through herdr (fit-1's in
       expect(h.dir()).toEqual(entries);
     });
   }
+
+  it("(3) herdr loaded, its pane alive; strategy delete: the stop goes through herdr and refuses", async () => {
+    const h = setup({ selects: "tmux", herdrLoaded: true, strategy: "delete" });
+    herdr.paneGet = {
+      pane: { pane_id: "w3:p2", terminal_id: "term_a", agent: "stand-in", agent_status: "idle" },
+    };
+    writeRecord(h, "app-orchestrator", JSON.stringify(HERDR_HANDLE), "working");
+    const before = h.file("app-orchestrator");
+    const entries = h.dir();
+    const err = await h.sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RuntimeStopUnconfirmedError);
+    expect((err as Error).message).toMatch(
+      /^runtime stop unconfirmed \(unknown\): the Herdr close cannot yet check the terminal .*; its record kept; no second orchestrator was started$/,
+    );
+    // The probe, and no herdr call for the stop (it closes nothing).
+    expect(herdr.calls).toEqual([["pane", "get", "w3:p2"]]);
+    expect(h.tmuxCalls).toEqual([]);
+    expect(h.workspaceCalls).toEqual([]);
+    expect(h.file("app-orchestrator")).toBe(before);
+    expect(h.dir()).toEqual(entries);
+  });
 });
 
 describe("T-7.8c: restore of a Herdr record while the project selects tmux", () => {
