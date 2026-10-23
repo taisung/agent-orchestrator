@@ -1846,3 +1846,136 @@ describe("Herdr fit-2 F-4: the ordinary settlement after an uncertain null (r11 
     expect(warnings).toEqual([]);
   });
 });
+
+/**
+ * Review r2 (ao-82 M-1 to M-3): each identity compare of the claim, publication
+ * and write-back rules guards a replacement that keeps this process's claim
+ * pair. The process pair is shared by every operation of this process, so it
+ * does not prove that the record is still this launch; only the launch
+ * identity does.
+ */
+describe("Herdr fit-2 F-4: replacements with this process's claim pair (review r2 M-1 to M-3)", () => {
+  const REPLACED_AT = "2099-01-01T00:00:00.000Z";
+  const WRITE_BACK_OWN =
+    "ao: AO could not write back the record of app-1; it may keep the pending handle of this restore and this process's launch claim; " +
+    'check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+
+  /** Copy the record of `id` with `changes`, as another process writes it; answers the copy and the new text. */
+  function replaceRecord(
+    h: Harness,
+    id: string,
+    changes: Record<string, string>,
+  ): { copied: Record<string, string>; text: string } {
+    const copied = h.record(id);
+    if (!copied) throw new Error(`no record of ${id} to replace`);
+    return { copied, text: writeRecord(h, id, { ...copied, ...changes }) };
+  }
+
+  it("r2 M-1: postLaunchSetup writes another restoredAt with the same claim pair; step 12 clears no claim", async () => {
+    let replaced: { copied: Record<string, string>; text: string } | undefined;
+    const late: { h?: Harness } = {};
+    const { h } = await residentRestore({
+      postLaunchSetup: async () => {
+        if (late.h) replaced = replaceRecord(late.h, ORCH, { restoredAt: REPLACED_AT });
+      },
+    });
+    late.h = h;
+    const restored = await h.sm.restore(ORCH);
+    expect(restored.runtimeHandle?.id).toBe("w7:p1");
+    if (!replaced) throw new Error("postLaunchSetup did not run");
+    // The replacement held the published handle and this process's claim.
+    expect(handleOf(replaced.copied)).toEqual(restored.runtimeHandle);
+    expect(ownClaimOf(replaced.copied)).toBe(true);
+    expect(h.file(ORCH)).toBe(replaced.text);
+    const record = h.record(ORCH);
+    expect({
+      launchPid: record?.["launchPid"],
+      launchPidStart: record?.["launchPidStart"],
+    }).toEqual({
+      launchPid: replaced.copied["launchPid"],
+      launchPidStart: replaced.copied["launchPidStart"],
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  // The keys of core's LAUNCH_IDENTITY_KEYS (metadata.ts), each with a new value.
+  const identityChanges: Record<string, string> = {
+    reservationId: "res_other",
+    runtimeHandle: JSON.stringify({ id: "w9:p1", runtimeName: "herdr", data: {} }),
+    tmuxName: "app-other",
+    createdAt: REPLACED_AT,
+    restoredAt: REPLACED_AT,
+  };
+  for (const [key, value] of Object.entries(identityChanges)) {
+    it(`r2 M-2 (${key}): a replacement of the pending record before the publication; no publication`, async () => {
+      const h = await setup();
+      h.watch("app-1");
+      let replaced: { copied: Record<string, string>; text: string } | undefined;
+      afterCreate(() => {
+        replaced = replaceRecord(h, "app-1", { [key]: value });
+      });
+      const err = await spawnError(h);
+      if (!replaced) throw new Error("the create did not finish");
+      // P and this process's claim were in the copy; only `key` changed.
+      expect(replaced.copied["runtimeHandle"]).toBe(PENDING);
+      expect(ownClaimOf(replaced.copied)).toBe(true);
+      expect(replaced.copied[key] ?? "").not.toBe(value);
+      expect((err as Error).message).toMatch(
+        /^Session app-1 changed while the spawn started its runtime/,
+      );
+      expect(h.file("app-1")).toBe(replaced.text);
+      expect(existsSync(join(h.worktreeDir, "my-app", "app-1"))).toBe(true);
+      expect(h.destroys).toEqual([]);
+      expectNoClose();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("its record was replaced");
+    });
+  }
+
+  it("r2 M-3 (step 8): the workspace restore writes another restoredAt with the same claim pair; no write-back", async () => {
+    let replaced: { copied: Record<string, string>; text: string } | undefined;
+    const late: { h?: Harness } = {};
+    const h = await setup({
+      workspace: {
+        restore: async () => {
+          if (!late.h) throw new Error("no harness");
+          replaced = replaceRecord(late.h, "app-1", { restoredAt: REPLACED_AT });
+          throw new Error("git worktree add failed");
+        },
+      },
+    });
+    late.h = h;
+    handlelessRecord(h, "app-1", { worktree: false });
+    const err = await h.sm.restore("app-1").catch((e: unknown) => e);
+    expect((err as Error).name).toBe("WorkspaceMissingError");
+    if (!replaced) throw new Error("the workspace restore did not run");
+    expect(replaced.copied["runtimeHandle"]).toBe(PENDING);
+    expect(ownClaimOf(replaced.copied)).toBe(true);
+    expect(h.file("app-1")).toBe(replaced.text);
+    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
+      WRITE_BACK_OWN,
+    ]);
+    expect(herdr.calls).toEqual([]);
+  });
+
+  it("r2 M-3 (step 9): the create writes another restoredAt with the same claim pair, then answers Q1; no write-back", async () => {
+    const h = await setup();
+    handlelessRecord(h, "app-1", { worktree: true });
+    let replaced: { copied: Record<string, string>; text: string } | undefined;
+    herdr.on["workspace create"] = async () => {
+      replaced = replaceRecord(h, "app-1", { restoredAt: REPLACED_AT });
+      throw q1(SOCKET, "cli:workspace:create");
+    };
+    const err = await h.sm.restore("app-1").catch((e: unknown) => e);
+    expect(err).toMatchObject({ herdrCode: "server_not_running" });
+    expect(isRuntimeCreatePartialError(err)).toBe(false);
+    if (!replaced) throw new Error("the create did not run");
+    expect(replaced.copied["runtimeHandle"]).toBe(PENDING);
+    expect(ownClaimOf(replaced.copied)).toBe(true);
+    expect(h.file("app-1")).toBe(replaced.text);
+    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
+      WRITE_BACK_OWN,
+    ]);
+    expect(herdr.workspaces.size).toBe(0);
+  });
+});
