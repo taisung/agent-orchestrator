@@ -205,27 +205,43 @@ describe("create()", () => {
   });
 });
 
+// Herdr fit F-5 (W-5b): destroy refuses and makes no herdr call. Before the
+// fit it closed the recorded workspace (or pane) by its ID with no check and
+// swallowed every error (the three old oracles: `workspace close w7`, `pane
+// close w7:p1`, resolves).
 describe("destroy()", () => {
-  it("closes the owned workspace, never the server", async () => {
-    mockExecFile.mockResolvedValueOnce(ok({}));
+  const REFUSAL =
+    "runtime-herdr destroy closes nothing: herdr reuses pane and workspace IDs, so a close by ID " +
+    "could reach another terminal (same-ID R2a). Use the stop; close the workspace by hand after you check it.";
 
-    await create().destroy(HANDLE);
-
-    expect(argsOf(0)).toEqual(["workspace", "close", "w7"]);
-    expect(mockExecFile.mock.calls.some((c) => c[1]?.includes("server"))).toBe(false);
+  it("refuses for the owned workspace and makes no call (was: closes the owned workspace)", async () => {
+    await expect(create().destroy(HANDLE)).rejects.toThrow(REFUSAL);
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
-  it("falls back to closing the pane when no workspace id was recorded", async () => {
-    mockExecFile.mockResolvedValueOnce(ok({}));
-
-    await create().destroy({ ...HANDLE, data: { ...HANDLE.data, workspaceId: "" } });
-
-    expect(argsOf(0)).toEqual(["pane", "close", "w7:p1"]);
+  it("refuses when no workspace id was recorded and makes no call (was: closes the pane)", async () => {
+    await expect(
+      create().destroy({ ...HANDLE, data: { ...HANDLE.data, workspaceId: "" } }),
+    ).rejects.toThrow(REFUSAL);
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 
-  it("swallows errors when the workspace is already gone", async () => {
+  it("refuses when the workspace is already gone and makes no call (was: swallows the error)", async () => {
     mockExecFile.mockRejectedValueOnce(new Error("not found"));
-    await expect(create().destroy(HANDLE)).resolves.toBeUndefined();
+    await expect(create().destroy(HANDLE)).rejects.toThrow(REFUSAL);
+    expect(mockExecFile).not.toHaveBeenCalled();
+    mockExecFile.mockReset();
+  });
+
+  it("T-5.1: refuses for a pane ID only and for an empty handle, with no call", async () => {
+    await expect(create().destroy({ id: "w7:p1", runtimeName: "herdr", data: {} })).rejects.toThrow(
+      REFUSAL,
+    );
+    await expect(create().destroy({ id: "", runtimeName: "herdr", data: {} })).rejects.toThrow(
+      REFUSAL,
+    );
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 });
 

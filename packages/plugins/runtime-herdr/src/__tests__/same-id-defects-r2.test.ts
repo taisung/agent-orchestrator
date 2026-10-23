@@ -16,6 +16,8 @@
  * tests are controls that pass on c516cead and must stay green.
  * Marking as in design r1 section 8.1: `defect(...)` is `it.fails`, and
  * `SAME_ID_DEFECTS=red` makes it a plain test.
+ * Herdr fit F-5 (fit-1, 2026-10-22) fixed N-1, the last defect test of this
+ * file: it is a plain test now, so the file has no `defect` helper.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -42,11 +44,6 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 const { create } = await import("../index.js");
-
-const RED = process.env["SAME_ID_DEFECTS"] === "red";
-function defect(name: string, fn: () => Promise<void>): void {
-  (RED ? it : it.fails)(name, fn);
-}
 
 const HANDLE = {
   id: "w7:p1",
@@ -104,25 +101,23 @@ describe("[same-id R4] B-7 item 3: runtime-herdr isAlive reads a failure answer 
   });
 });
 
+// Herdr fit F-5 fixed N-1: destroy refuses and closes nothing, so the defect
+// test is a plain test now, and the control that pinned the old close is a
+// refusal test.
 describe("[same-id R2] N-1: runtime-herdr destroy closes a reused pane ID", () => {
-  defect(
-    "destroy does not close the workspace or pane when the pane ID now names another terminal",
-    async () => {
-      const calls = herdrWith(() => paneOf("term_someone_else"));
-      await create()
-        .destroy(HANDLE)
-        .catch(() => undefined);
-      // Measured in code (runtime-herdr/src/index.ts:321-333): destroy runs
-      // `workspace close w7` with no check of the terminal.
-      expect(calls.filter((args) => args.includes("close"))).toEqual([]);
-    },
-  );
+  it("destroy does not close the workspace or pane when the pane ID now names another terminal", async () => {
+    const calls = herdrWith(() => paneOf("term_someone_else"));
+    await create()
+      .destroy(HANDLE)
+      .catch(() => undefined);
+    // Measured in code before the fit (runtime-herdr/src/index.ts:321-333):
+    // destroy ran `workspace close w7` with no check of the terminal.
+    expect(calls.filter((args) => args.includes("close"))).toEqual([]);
+  });
 
-  it("control: destroy closes the recorded workspace while its pane has the recorded terminal", async () => {
+  it("control: destroy refuses and closes nothing, also with the recorded terminal", async () => {
     const calls = herdrWith(() => paneOf("term_abc"));
-    await create().destroy(HANDLE);
-    expect(
-      calls.some((args) => args[0] === "workspace" && args[1] === "close" && args[2] === "w7"),
-    ).toBe(true);
+    await expect(create().destroy(HANDLE)).rejects.toThrow(/runtime-herdr destroy closes nothing/);
+    expect(calls.filter((args) => args.includes("close"))).toEqual([]);
   });
 });

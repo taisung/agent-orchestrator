@@ -506,19 +506,18 @@ export function create(config?: Record<string, unknown>): Runtime {
       };
     },
 
-    async destroy(handle: RuntimeHandle): Promise<void> {
-      const workspaceId =
-        typeof handle.data.workspaceId === "string" ? handle.data.workspaceId : "";
-      try {
-        const invocation = invocationFor(handle);
-        if (workspaceId) {
-          await herdr(invocation, "workspace", "close", workspaceId);
-        } else {
-          await herdr(invocation, "pane", "close", handle.id);
-        }
-      } catch {
-        // Already gone — that's fine.
-      }
+    /**
+     * Herdr fit F-5 (W-5b): destroy closes nothing and makes no herdr call.
+     * It closed the recorded workspace (or pane) by its ID with no check and
+     * swallowed every error, but herdr reuses pane and workspace IDs, so a
+     * close by ID could reach another terminal (same-ID R2a, N-1). Core never
+     * calls it (`stopRuntime` uses `stop`); a direct caller gets this refusal.
+     */
+    async destroy(_handle: RuntimeHandle): Promise<void> {
+      throw new Error(
+        "runtime-herdr destroy closes nothing: herdr reuses pane and workspace IDs, so a close by ID " +
+          "could reach another terminal (same-ID R2a). Use the stop; close the workspace by hand after you check it.",
+      );
     },
 
     /**
