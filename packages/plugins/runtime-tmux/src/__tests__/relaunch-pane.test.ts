@@ -292,6 +292,32 @@ describe("runtime.runInPane()", () => {
   });
 });
 
+describe("getOutput and sendMessage: the agent's pane (review r2 M-1)", () => {
+  const bound: RuntimeHandle = { ...makeHandle("app-1"), data: { agentPane: "%5" } };
+
+  it("captures the agent's pane when the handle names one, else the current pane", async () => {
+    mockTmuxSuccess("agent screen");
+    mockTmuxSuccess("current screen");
+
+    expect(await create().getOutput(bound, 10)).toBe("agent screen");
+    expect(await create().getOutput(makeHandle("app-1"), 10)).toBe("current screen");
+    expect(mockExecFileCustom.mock.calls.map((call) => call[1])).toEqual([
+      ["capture-pane", "-t", "%5", "-p", "-S", "-10"],
+      ["capture-pane", "-t", "=app-1:", "-p", "-S", "-10"],
+    ]);
+  });
+
+  it("sends a message to the agent's pane when the handle names one", async () => {
+    mockExecFileCustom.mockResolvedValue({ stdout: "", stderr: "" });
+
+    await create().sendMessage(bound, "hello");
+
+    const targets = mockExecFileCustom.mock.calls.map((call) => call[1][2]);
+    expect(targets.length).toBeGreaterThan(0);
+    expect(new Set(targets)).toEqual(new Set(["%5"]));
+  });
+});
+
 describe("freshPromptProblem: the evidence of a fresh, empty input line (review r2 M-2)", () => {
   it("accepts a new prompt line below the echo of the second C-c", () => {
     expect(freshPromptProblem(snap(AFTER_FIRST), snap(AFTER_SECOND))).toBeNull();

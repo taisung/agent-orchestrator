@@ -282,6 +282,37 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     });
   });
 
+  it("keeps the later clear when the hook of the earlier startup is slow inside its write (the lock; review r2 M-3)", async () => {
+    // The earlier hook holds its write 1 s (in mv, within its 2 s budget):
+    // without the lock the later hook would write in between and lose.
+    writeFileSync(
+      join(fakeBin, "mv"),
+      `#!/bin/bash\nif [ -n "\${MV_DELAY:-}" ]; then sleep "$MV_DELAY"; fi\nexec ${shq(
+        execFileSync("bash", ["-c", "command -v mv"], { encoding: "utf-8" }).trim(),
+      )} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const twoEvents = join(dir, "two-events-lock");
+    mkdirSync(twoEvents);
+    writeFileSync(
+      join(twoEvents, "claude"),
+      [
+        "#!/bin/bash",
+        'event() { printf \'{"session_id":"%s","source":"%s","transcript_path":"/t/%s.jsonl"}\' "$1" "$2" "$1"; }',
+        'MV_DELAY=1 bash "$1" <<< "$(event "$2" startup)" > /dev/null 2>&1 &',
+        "sleep 0.3",
+        'bash "$1" <<< "$(event "$3" clear)" > /dev/null 2>&1',
+        "wait",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    await runDetached([join(twoEvents, "claude"), hook, OUTER, OTHER].map(shq).join(" "), paneTty);
+
+    expect(recorded()).toMatchObject({ conversationId: OTHER, source: "clear" });
+  });
+
   it("records nothing without flock, which keeps the newest event (review r2 M-3)", async () => {
     const tools = join(dir, "tools");
     mkdirSync(tools);
