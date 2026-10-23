@@ -37,8 +37,8 @@ code): when the agent launch fails during a create, the plugin closes the worksp
 its ID and without a check; and the plugin's `destroy` closes the recorded workspace (no core caller uses it,
 because core calls `stop`). The "Herdr 0.9.5 fit" round, split in two by the owner on 2026-10-22, would
 remove both: fit-1 ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md), implemented on a branch
-(`9d51982b`), not on `main` at this writing) makes `destroy` refuse, and fit-2 ([Herdr fit-2 design
-r9](reviews/herdr_fit2_design_r9_opus.md), not built) removes the create cleanup close: a failed create
+(`ee3534d7`, with note 2), not on `main` at this writing) makes `destroy` refuse, and fit-2 ([Herdr fit-2 design
+r10](reviews/herdr_fit2_design_r10_opus.md), not built) removes the create cleanup close: a failed create
 would then keep the workspace, the worktree, the agent session and the record, with `launchFailed`, for the
 operator. The optional round RH ([RH design
 r6](reviews/rh_design_r6_opus.md), not built) would add a bound close.
@@ -254,7 +254,7 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
 
 The fix is the "Herdr 0.9.5 fit" round, in two parts: fit-1 ([Herdr fit design
 r7](reviews/herdr_fit_design_r7_opus.md): the reads, the pins and the `destroy` refusal; implemented on a
-branch, `9d51982b`) and fit-2 ([Herdr fit-2 design r9](reviews/herdr_fit2_design_r9_opus.md): a blocked send,
+branch, `ee3534d7`, with note 2) and fit-2 ([Herdr fit-2 design r10](reviews/herdr_fit2_design_r10_opus.md): a blocked send,
 a failed create, the startup admission and the owner's retire action; not built). Neither is on `main` at
 this writing. They
 replace the fit section of RH design r6.
