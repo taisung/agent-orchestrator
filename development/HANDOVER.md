@@ -275,7 +275,7 @@
   stopped. Kept: ao-63 (round 6), ao-65 and ao-79 (the next fit-2 step), ao-73 and ao-77 (the fit-1 merge).
 - Open for the owner: the fit-2 step after the r10 checks.
 
-**Update 2026-10-23 09:20 EDT: relaunch landed on main (not built, not restarted).**
+**Update 2026-10-23 09:10 EDT: relaunch landed on main and pushed (`origin/main` `1de0a7df`; not built, not restarted).**
 - Relaunch round 6 by ao-63 (`b08e8141`): explicit UUID check of the context token, `EISDIR` mark test;
   orchestrator check passed. A real merge of main conflicts in 3 paths (the branch sits on `3e366a01`, the old
   defect A/B branch; main holds copies of its 16 commits plus `a8bda7ff`, `fa6fd1ad`, `133e2bcf`), so the
