@@ -254,6 +254,27 @@
 - Still open for the owner: decision 9 (relaunch round 6 or land), 11 (OQ-F4 to OQ-F12), 13 (landing order:
   relaunch first, then ao-73 merges main into fit-1 and ao-77 checks), 14 (close ao-78).
 
+**Update 2026-10-23 08:05 EDT** (the 07:30 header above was written at 07:16).
+- fit-1 note 3 by ao-73: `60da85ee`, docs-only (archive `mkdir -p` in the recipe, conditional refusal text,
+  `merged` removed from the unprobed limit); orchestrator check: `start.ts` code tokens equal (parse-aware
+  walk without JSDoc), docs diff in scope; merge into main clean, 4 paths conflict with relaunch. fit-1 is
+  ready to land.
+- fit-2 design r10 by ao-65 on main (`0d5c6c67`). Checks on main (`0166bad3`): ao-80 Muse SOUND-WITH-CHANGES
+  0 M 2 m; ao-79 sol NOT-SOUND 0 B 2 M 3 m (M-1 the rollback takes missing identity keys such as
+  `restoredAt` from the current record and can adopt a replacement; M-2 a retry that commits and then throws
+  keeps the own claim and warns of a replacement; m-1 T-7.9b zero-probe oracle vs list enrichment; m-2 the
+  killed variants of the interim describe are not-reused; m-3 the OQ-F13 premise is wrong).
+- Owner (about 07:55) "11 accept, 9 (1), 14 close ao-78 and other inactive agents, 13 as suggested":
+  OQ-F4 to OQ-F13 accepted as recommended (TODO D-9). ao-63 does relaunch round 6
+  (`.agent_task_relaunch_r6.md`, copy `brief-aofork-session-relaunch-r6.md`, scratch `/tmp/aorl6`: an explicit
+  UUID check of the context token, the EISDIR mark test); the orchestrator checks its gates. Landing order:
+  relaunch first (ao-63 merges main into its branch, then the orchestrator fast-forwards main), then ao-73
+  merges main into fit-1 and ao-77 checks, then a second fast-forward. Build, restart of 4027448 and
+  4027591, and push each need the owner's word.
+- Closed: ao-76, ao-78, ao-80 (their files are on main or in `backup-closed-sessions/`); watcher 3574080
+  stopped. Kept: ao-63 (round 6), ao-65 and ao-79 (the next fit-2 step), ao-73 and ao-77 (the fit-1 merge).
+- Open for the owner: the fit-2 step after the r10 checks.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").

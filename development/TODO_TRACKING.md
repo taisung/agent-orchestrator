@@ -577,6 +577,25 @@ the allows of the three core r5 race tests with a `processScope` that only the t
 stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
 `same_id_design_review_r{1..4}_astra6.md`.
 
+**D-9 — Herdr 0.9.5 fit decisions** (owner 2026-10-22 and 2026-10-23; designs
+`development/reviews/herdr_fit_design_r7_opus.md` (fit-1) and `herdr_fit2_design_r10_opus.md` (fit-2)).
+OQ-F3 (b): two rounds, fit-1 (F-1, F-2, F-5, F-6 without `Runtime.preflight()`, and an interim startup
+guard) and fit-2 (F-3, F-4, F-7 with `Runtime.preflight()`, F-9, the rest of F-8). OQ-F1 (b): before RH-A
+no Herdr answer retires an old orchestrator at startup. OQ-F2 (a): F-9 is `ao session kill <id>
+--confirm-runtime-closed`, with the safeguards of review r7. After design r10 and its two checks (answer
+"11: accept the recommendations for OQ-F4 to OQ-F13", 2026-10-23 about 07:55 EDT): OQ-F4 (a) a live Herdr
+orchestrator blocks the start while the project selects another runtime; OQ-F5 (a) no special `ao send`
+policy for a kept failed launch, documented and tested; OQ-F6 (a) a Herdr orchestrator start or restore
+refuses on a platform without the abstract-socket lock (macOS); OQ-F7 (a) the rule Q cases Q0, Q1 and Q2
+are qualified, and the residual R-Q is accepted; OQ-F8 (a) the F-9 token is required; OQ-F9 (a) the
+admission subject is the real path of the nearest existing ancestor plus the missing suffix; OQ-F10 (a)
+no new launch next to a record that AO cannot judge; OQ-F11 (b) fit-2 builds on fit-1 and does not wait
+for relaunch, and the round that lands second adapts; OQ-F12 (b) two rounds, fit-2a (design commits 1 to
+4) and fit-2b (commits 5 to 8), each with its own review; OQ-F13 (a) G reuses a project-mode Herdr record
+whose pane runs while its agent shows exited (fit-1 note 2 refuses it). The r10 sol check (m-3) found the
+premise of the OQ-F13 text wrong (codex, gemini and opencode reject a Herdr check error, they do not
+answer false); the decision stands, and the design text needs that correction.
+
 ## Known Issues
 
 - **`ao start` reuses a dead orchestrator when no tmux server runs, and `ao stop` in the orchestrator's own
