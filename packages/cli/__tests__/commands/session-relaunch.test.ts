@@ -261,8 +261,24 @@ describe("session relaunch", () => {
     );
     expect(text).toContain("exits 0 only when the agent process runs within 15 s");
     expect(text).toContain("it types only when a second C-c shows a fresh, empty prompt line");
-    expect(text).toContain("Then any half-typed text in the pane is dropped (C-c), never run.");
-    expect(text).toContain("A shell that ignores or traps SIGINT shows no such line");
-    expect(text).toContain("a restore or kill that started before the relaunch is not excluded");
+    expect(text).toContain(
+      "A shell without a SIGINT trap drops any half-typed text on C-c, so none of it runs.",
+    );
+    expect(text).toContain(
+      "A shell that ignores SIGINT (trap '' INT), or a SIGINT trap that reads input without printing a prompt, shows no such line",
+    );
+    // The accepted limits (review r3 M-1, the residual of r3 M-2, r1 M-6).
+    expect(text).toContain(
+      "Limit: a SIGINT trap in the pane's shell that prints the prompt and reads input (for example read -e -i) passes the fresh-prompt check; prefilled text can run, or the launch line can be consumed. Relaunch only into a shell without such a trap",
+    );
+    expect(text).toContain(
+      "when a hook of that launch could not record an event (no flock, no bash 5, a failed read or write, a stop by SIGTERM, SIGHUP or SIGINT)",
+    );
+    expect(text).toContain(
+      "Limit: the hook orders events by its own start time from the wall clock; a delay before the hook body starts, or a clock step back, can leave the older conversation as current.",
+    );
+    expect(text).toContain(
+      "Limit: a restore or kill of the same session already in flight is not excluded; do not relaunch while one runs",
+    );
   });
 });

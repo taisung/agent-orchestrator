@@ -457,9 +457,16 @@ runtime other than tmux. Linux only: the checks read /proc.
 From another shell, it types the launch line into the shell of the agent's pane
 (by its pane ID) and exits 0 only when the agent process runs within 15 s. The
 pane's shell must wait for input. It sends C-c, and it types only when a second
-C-c shows a fresh, empty prompt line. Then any half-typed text in the pane is
-dropped (C-c), never run. A shell that ignores or traps SIGINT shows no such
-line: then nothing is typed and the command fails (clear the line by hand).
+C-c shows a fresh, empty prompt line. A shell without a SIGINT trap drops any
+half-typed text on C-c, so none of it runs. A shell that ignores SIGINT
+(trap '' INT), or a SIGINT trap that reads input without printing a prompt,
+shows no such line: then nothing is typed and the command fails (clear the line
+by hand).
+
+Limit: a SIGINT trap in the pane's shell that prints the prompt and reads input
+(for example read -e -i) passes the fresh-prompt check; prefilled text can run,
+or the launch line can be consumed. Relaunch only into a shell without such a
+trap (trap -p INT in that shell prints the trap).
 
 In the session's own pane (as the foreground job, not with &), the agent runs
 as a child of this command on the same terminal (the launch script execs it),
@@ -467,12 +474,22 @@ and the command ends with the agent's exit code.
 
 --continue resumes the conversation that the agent of the session's last
 launch recorded (Claude Code: a SessionStart hook, bound to that launch's token
-and pane). It refuses when that ID is not known, also after a restore. Without
---continue, the agent starts a new conversation.
+and pane). It refuses when that ID is not known, also after a restore, and when
+a hook of that launch could not record an event (no flock, no bash 5, a failed
+read or write, a stop by SIGTERM, SIGHUP or SIGINT). Without --continue, the
+agent starts a new conversation.
 
-Do not run it while a restore or a kill of the same session runs (also a
-lifecycle reaction that restores it): a restore or kill that started before the
-relaunch is not excluded.`,
+Limit: the hook orders events by its own start time from the wall clock; a
+delay before the hook body starts, or a clock step back, can leave the older
+conversation as current. It can happen when two events of the agent (start,
+resume, /clear, compact) come within seconds of each other, or when the clock
+stepped back during the agent's run. Then relaunch without --continue and pick
+the conversation in the agent (Claude Code: /resume). The command prints the ID
+that it resumes, but it does not stop for a wrong one.
+
+Limit: a restore or kill of the same session already in flight is not
+excluded; do not relaunch while one runs (also a lifecycle reaction that
+restores it, or a restore or kill in another shell).`,
     )
     .action(async (sessionName: string, opts: { continue?: boolean }) => {
       const config = loadConfig();
