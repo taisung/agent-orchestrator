@@ -58,6 +58,11 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     // The real target helpers: the tests check the targets that they build.
     exactSessionTarget: actual.exactSessionTarget,
     exactPaneTarget: actual.exactPaneTarget,
+    // The real agent-pane helpers of a relaunched session (review r3).
+    AGENT_PANE_FORMAT: actual.AGENT_PANE_FORMAT,
+    agentPaneOf: actual.agentPaneOf,
+    agentPaneTty: actual.agentPaneTty,
+    isTmuxPaneGone: actual.isTmuxPaneGone,
     loadConfig: () => {
       if (!mockConfigRef.current) {
         throw new Error("no config");
@@ -364,6 +369,146 @@ describe("send command", () => {
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Message sent and processing"),
       );
+    });
+
+    describe("a relaunched session: the agent's pane that its last relaunch bound (review r3)", () => {
+      function relaunchedSession(): Record<string, unknown> {
+        return {
+          id: "app-1",
+          projectId: "my-app",
+          status: "working",
+          activity: "idle",
+          branch: null,
+          issueId: null,
+          pr: null,
+          workspacePath: null,
+          // sm.get names the bound pane in memory (review r2 M-1).
+          runtimeHandle: { id: "tmux-target-1", runtimeName: "tmux", data: { agentPane: "%5" } },
+          agentInfo: null,
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+          metadata: { agent: "claude-code" },
+        };
+      }
+
+      /** tmux answers list-panes for the window of %5 with `panes`, or fails with `stderr`. */
+      function paneAnswer(answer: { panes: string } | { stderr: string }): void {
+        mockExec.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args[0] !== "list-panes") return { stdout: "", stderr: "" };
+          if ("stderr" in answer) {
+            throw Object.assign(new Error(`Command failed: tmux list-panes\n${answer.stderr}`), {
+              code: 1,
+              killed: false,
+              signal: null,
+              stderr: answer.stderr,
+            });
+          }
+          return { stdout: answer.panes, stderr: "" };
+        });
+      }
+
+      beforeEach(() => {
+        mockConfigRef.current = makeConfig();
+        mockSessionManager.get.mockResolvedValue(relaunchedSession());
+        mockTmux.mockImplementation(async (...args: string[]) => {
+          if (args[0] === "has-session") return "";
+          if (args[0] === "capture-pane") return "❯ ";
+          return "";
+        });
+      });
+
+      it("reads and types only into the bound pane, though another pane of the session is selected", async () => {
+        // %3 is an idle shell in the selected window; %5 is the agent's pane.
+        paneAnswer({ panes: "%5 tmux-target-1 /dev/pts/5\n%3 tmux-target-1 /dev/pts/3" });
+        mockDetectActivity.mockReturnValueOnce("idle").mockReturnValueOnce("active");
+
+        await program.parseAsync(["node", "test", "send", "app-1", "hello"]);
+
+        const keys = mockExec.mock.calls.filter((call) =>
+          ["send-keys", "paste-buffer"].includes(call[1][0]),
+        );
+        expect(keys.map((call) => call[1])).toEqual([
+          ["send-keys", "-t", "%5", "C-u"],
+          ["send-keys", "-t", "%5", "-l", "hello"],
+          ["send-keys", "-t", "%5", "Enter"],
+        ]);
+        const reads = mockTmux.mock.calls.filter((call) => call[0] === "capture-pane");
+        expect(reads.length).toBeGreaterThan(0);
+        expect(new Set(reads.map((call) => call[2]))).toEqual(new Set(["%5"]));
+        // The pane check ran before the wait and before the first key and the Enter.
+        expect(mockExec.mock.calls.filter((call) => call[1][0] === "list-panes")).toHaveLength(3);
+        expect(mockSessionManager.send).not.toHaveBeenCalled();
+      });
+
+      it("sends nothing and exits 1 when the bound pane now belongs to another tmux session", async () => {
+        paneAnswer({ panes: "%5 other-session /dev/pts/5" });
+
+        await expect(
+          program.parseAsync(["node", "test", "send", "app-1", "hello"]),
+        ).rejects.toThrow("process.exit(1)");
+
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Message not sent to app-1: its agent's tmux pane %5 (bound by its last relaunch) now belongs to another tmux session",
+          ),
+        );
+        expect(mockExec.mock.calls.filter((call) => call[1][0] !== "list-panes")).toEqual([]);
+        expect(mockTmux.mock.calls.filter((call) => call[0] === "capture-pane")).toEqual([]);
+      });
+
+      it("presses no Enter and exits 1 when the bound pane moved to another session after the text", async () => {
+        let checks = 0;
+        mockExec.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args[0] !== "list-panes") return { stdout: "", stderr: "" };
+          checks += 1;
+          return {
+            stdout: checks < 3 ? "%5 tmux-target-1 /dev/pts/5" : "%5 other-session /dev/pts/5",
+            stderr: "",
+          };
+        });
+        mockDetectActivity.mockReturnValueOnce("idle");
+
+        await expect(
+          program.parseAsync(["node", "test", "send", "app-1", "hello"]),
+        ).rejects.toThrow("process.exit(1)");
+
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Message typed into app-1 but not submitted (no Enter): its agent's tmux pane %5 (bound by its last relaunch) now belongs to another tmux session",
+          ),
+        );
+        expect(
+          mockExec.mock.calls.filter((call) => call[1][0] === "send-keys").map((call) => call[1]),
+        ).toEqual([
+          ["send-keys", "-t", "%5", "C-u"],
+          ["send-keys", "-t", "%5", "-l", "hello"],
+        ]);
+      });
+
+      it("sends nothing and exits 1 when the bound pane is gone or tmux cannot tell", async () => {
+        paneAnswer({ stderr: "can't find pane: %5\n" });
+        await expect(
+          program.parseAsync(["node", "test", "send", "app-1", "hello"]),
+        ).rejects.toThrow("process.exit(1)");
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "its agent's tmux pane %5 (bound by its last relaunch) no longer exists",
+          ),
+        );
+
+        paneAnswer({ stderr: "warning: server connection failed\ncan't find pane: %5\n" });
+        await expect(
+          program.parseAsync(["node", "test", "send", "app-1", "hello"]),
+        ).rejects.toThrow("process.exit(1)");
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "tmux could not tell whether pane %5 still belongs to tmux session tmux-target-1",
+          ),
+        );
+        expect(
+          mockExec.mock.calls.filter((call) => ["send-keys", "paste-buffer"].includes(call[1][0])),
+        ).toEqual([]);
+      });
     });
 
     describe("a recorded session whose tmux session is gone while a longer name lives", () => {
