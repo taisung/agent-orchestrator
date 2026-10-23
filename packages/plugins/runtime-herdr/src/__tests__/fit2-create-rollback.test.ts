@@ -12,7 +12,9 @@
  * prepared agent session) and an OpenCode shape (prepareAgentSession,
  * confirmLaunch, getRestoreCommand, postLaunchSetup; it records its discards
  * and starts no agent). The assertions that need fit-2b come with it (design
- * 8.1): the start blocks of the startup admission (T-4.16, T-4.20c, T-4.20d).
+ * 8.1): the start blocks of the startup admission (T-4.16, T-4.20c, T-4.20d),
+ * and the owner's retirement F-9 (5.4): T-4.11's hint, T-4.12's token,
+ * T-4.17's F-9 line and the T-9 cases that need the real plugin.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
@@ -247,6 +249,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -265,6 +268,7 @@ import {
   getWorktreesDir,
   isOrchestratorStartBlockedError,
   isRuntimeCreatePartialError,
+  launchIdentityToken,
   readMetadataRaw,
   updateMetadata,
   type Agent,
@@ -1044,6 +1048,10 @@ describe("Herdr fit-2 F-4: the consumers of a kept failed launch (T-4.11 to T-4.
       expect((err as Error).message, id).toMatch(
         /^runtime stop unconfirmed \(unknown\): .*; record and worktree kept$/,
       );
+      // fit-2b (design 5.4.2): the hint names F-9 with the identity token.
+      expect((err as RuntimeStopUnconfirmedError).hint, id).toContain(
+        `\nAfter you check and close it, retire the record: ao session kill ${id} --confirm-runtime-closed ${launchIdentityToken(h.record(id) ?? {})}`,
+      );
       expect(h.file(id), id).toBe(before);
       expect(existsSync(worktree), id).toBe(true);
     }
@@ -1066,6 +1074,15 @@ describe("Herdr fit-2 F-4: the consumers of a kept failed launch (T-4.11 to T-4.
     const listed = await h.sm.list("my-app");
     expect(listed.map((session) => session.id).sort()).toEqual(["app-1", "app-2"]);
     expect([h.file("app-1"), h.file("app-2")]).toEqual(files);
+    // fit-2b (design 5.5): ao status computes the identity token of its line
+    // "launch failed: <text> (identity token <t>)" from the session's raw
+    // record, which get and list keep (the line itself: CLI status.test.ts).
+    for (const session of [one, two, ...listed]) {
+      expect(launchIdentityToken(session?.metadata ?? {}), session?.id).toBe(
+        launchIdentityToken(h.record(session?.id ?? "") ?? {}),
+      );
+      expect(session?.metadata["launchFailed"], session?.id).toMatch(/^Failed to launch agent/);
+    }
     // The empty ID makes no call; the grammar pane is probed.
     expect(herdr.calls.every((args) => args[2] === "w7:p1")).toBe(true);
   });
@@ -1258,6 +1275,19 @@ describe("Herdr fit-2 F-4: kept post-create failures settle the claim (T-4.17, T
       expect(record).not.toHaveProperty("launchPidStart");
       const kill = await killError(h, id);
       expect(kill).toBeInstanceOf(RuntimeStopUnconfirmedError);
+      // fit-2b (design 5.4): F-9 is not refused as in progress (no claim
+      // remains); its pane runs, so step 7 refuses and changes nothing.
+      const token = launchIdentityToken(record ?? {});
+      expect((kill as RuntimeStopUnconfirmedError).hint).toContain(
+        `retire the record: ao session kill ${id} --confirm-runtime-closed ${token}`,
+      );
+      const file = h.file(id);
+      const retire = await h.sm.kill(id, { confirmRuntimeClosed: token }).catch((e: unknown) => e);
+      expect(retire).not.toBeInstanceOf(SessionLaunchInProgressError);
+      expect((retire as Error).message).toBe(
+        `Session ${id} was not retired: herdr shows pane w7:p1 with its terminal at ${SOCKET}: the session runs; close it first. Nothing was changed.`,
+      );
+      expect(h.file(id)).toBe(file);
       expect(h.discards).toEqual([]);
       expect(h.destroys).toEqual([]);
       expectNoClose();
@@ -1382,9 +1412,13 @@ describe("Herdr fit-2 F-4: a send to a kept failed launch (T-4.14)", () => {
 const LATER_CLAIM = { launchPid: "2147483001", launchPidStart: "stat:23456" };
 
 describe("Herdr fit-2 F-4: a claimless restore writes its transition back (T-4.19a to T-4.19d)", () => {
-  const WRITE_BACK =
+  // Was (fit-2a): "... then retire it by hand (docs/DEVELOPMENT.md, "Retire
+  // a Herdr record by hand")." fit-2b commit 7: the F-9 line with the
+  // identity token of the transition write (no identity change since it).
+  const writeBack = (token: string): string =>
     "ao: AO could not write back the record of app-1; it may keep the pending handle of this restore; " +
-    'check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+    "check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it with F-9. " +
+    `Check the runtime by hand (design 5.4.3), then retire the record: ao session kill app-1 --confirm-runtime-closed ${token}.`;
 
   async function claimless(options: {
     worktree: boolean;
@@ -1458,7 +1492,9 @@ describe("Herdr fit-2 F-4: a claimless restore writes its transition back (T-4.1
     expect(h.file("app-1")).toBe(later);
     expect(h.record("app-1")?.["runtimeHandle"]).toBe(PENDING);
     expect(h.record("app-1")).toMatchObject(LATER_CLAIM);
-    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([WRITE_BACK]);
+    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
+      writeBack(launchIdentityToken(h.record("app-1") ?? {})),
+    ]);
   });
 
   it("T-4.19d: a later claim during the create, then Q1; no write-back, one warning", async () => {
@@ -1473,7 +1509,9 @@ describe("Herdr fit-2 F-4: a claimless restore writes its transition back (T-4.1
     expect(err).toMatchObject({ herdrCode: "server_not_running" });
     expect(h.file("app-1")).toBe(later);
     expect(h.record("app-1")?.["runtimeHandle"]).toBe(PENDING);
-    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([WRITE_BACK]);
+    expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
+      writeBack(launchIdentityToken(h.record("app-1") ?? {})),
+    ]);
   });
 });
 
@@ -1510,8 +1548,11 @@ function renamesLogged(): string[] {
   return fsFault.log.filter((entry) => entry.startsWith("rename"));
 }
 
-const BY_HAND =
-  'Check the runtime by hand (design 5.4.3), then retire the record by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+// Was (fit-2a) BY_HAND: "Check the runtime by hand (design 5.4.3), then retire
+// the record by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand")."
+// fit-2b commit 7: the F-9 line.
+const retireLine = (id: string, token: string): string =>
+  `Check the runtime by hand (design 5.4.3), then retire the record: ao session kill ${id} --confirm-runtime-closed ${token}.`;
 
 describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T-4.20e)", () => {
   it("T-4.20a: one write throws before its effect; the strict read, one retry, then success", async () => {
@@ -1557,6 +1598,9 @@ describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T
     expect(ownClaimOf(record)).toBe(true);
     expect(warnings).toHaveLength(1);
     const warning = warnings[0];
+    const afterToken = /and ([0-9a-f]{16}) while it holds the handle above/.exec(
+      warning ?? "",
+    )?.[1];
     expect(warning).toBe(
       `ao: the record of ${ORCH} could not be read or written (EIO: i/o error, rename '${recordFile}'), so AO removed nothing: ` +
         "no runtime stop, no agent-session discard, no workspace removal and no record removal. " +
@@ -1564,9 +1608,13 @@ describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T
         `record file ${recordFile}; worktree ${worktree}; agent session ${AGENT_SESSION}. ` +
         `The launch claim of ao process ${process.pid} (start ${record?.["launchPidStart"]}) may remain in the record, ` +
         "and the record may hold the pending handle or the handle above. While that process runs, AO treats the launch " +
-        `as in progress, and ao start and kill refuse it. Check runtimeHandle, restoredAt, launchPid and launchPidStart in ${recordFile} ` +
-        `before you retire the record. ${BY_HAND}`,
+        `as in progress, and ao start, kill and F-9 refuse it. Check runtimeHandle, restoredAt, launchPid and launchPidStart in ${recordFile} ` +
+        `before you retire the record. ${retireLine(ORCH, "<identity token>")} ` +
+        `The identity token is ${launchIdentityToken(record ?? {})} while the record holds this launch's state before the write, ` +
+        `and ${afterToken} while it holds the handle above; ao status shows it.`,
     );
+    expect(afterToken).toMatch(/^[0-9a-f]{16}$/);
+    expect(afterToken).not.toBe(launchIdentityToken(record ?? {}));
     expect(warning).not.toMatch(/another launch/);
     expect(await killError(h, ORCH)).toBeInstanceOf(SessionLaunchInProgressError);
     // fit-2b (design 8.1): a start in the same process is blocked by the
@@ -1590,7 +1638,7 @@ describe("Herdr fit-2 F-4: the publication rule at restore step 10 (T-4.20a to T
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(
       "AO cleared its launch claim while the record held this launch's state before the write (the pending handle). " +
-        `The handle above is not recorded. ${BY_HAND}`,
+        `The handle above is not recorded. ${retireLine(ORCH, launchIdentityToken(record ?? {}))}`,
     );
     expect(warnings[0]).toContain(`record file ${recordFile}`);
     expect(renamesLogged()).toEqual(["rename:before", "rename:before", "rename"]);
@@ -1799,7 +1847,7 @@ describe("Herdr fit-2 F-4: undecided attempts and their strict reads (T-4.21a to
     expect(record).not.toHaveProperty("launchPid");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(
-      `The record holds the handle above: the write took effect although it threw. AO cleared its launch claim. ${BY_HAND}`,
+      `The record holds the handle above: the write took effect although it threw. AO cleared its launch claim. ${retireLine(ORCH, launchIdentityToken(record ?? {}))}`,
     );
     expect(renamesLogged()).toEqual(["rename:before", "rename:after", "rename"]);
     expect(existsSync(worktree)).toBe(true);
@@ -1881,9 +1929,13 @@ describe("Herdr fit-2 F-4: the ordinary settlement after an uncertain null (r11 
  */
 describe("Herdr fit-2 F-4: replacements with this process's claim pair (review r2 M-1 to M-3)", () => {
   const REPLACED_AT = "2099-01-01T00:00:00.000Z";
-  const WRITE_BACK_OWN =
+  // Was (fit-2a): "... then retire it by hand (...)". fit-2b commit 7: the
+  // F-9 line with the token of the transition write (the copied record);
+  // F-9 refuses it for the replacement and prints the replacement's token.
+  const writeBackOwn = (token: string): string =>
     "ao: AO could not write back the record of app-1; it may keep the pending handle of this restore and this process's launch claim; " +
-    'check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+    "check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it with F-9. " +
+    `Check the runtime by hand (design 5.4.3), then retire the record: ao session kill app-1 --confirm-runtime-closed ${token}.`;
 
   /** Copy the record of `id` with `changes`, as another process writes it; answers the copy and the new text. */
   function replaceRecord(
@@ -1978,8 +2030,11 @@ describe("Herdr fit-2 F-4: replacements with this process's claim pair (review r
     expect(ownClaimOf(replaced.copied)).toBe(true);
     expect(h.file("app-1")).toBe(replaced.text);
     expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
-      WRITE_BACK_OWN,
+      writeBackOwn(launchIdentityToken(replaced.copied)),
     ]);
+    expect(launchIdentityToken(replaced.copied)).not.toBe(
+      launchIdentityToken(h.record("app-1") ?? {}),
+    );
     expect(herdr.calls).toEqual([]);
   });
 
@@ -1999,8 +2054,366 @@ describe("Herdr fit-2 F-4: replacements with this process's claim pair (review r
     expect(ownClaimOf(replaced.copied)).toBe(true);
     expect(h.file("app-1")).toBe(replaced.text);
     expect(warnings.filter((line) => line.includes("could not write back"))).toEqual([
-      WRITE_BACK_OWN,
+      writeBackOwn(launchIdentityToken(replaced.copied)),
     ]);
+    expect(launchIdentityToken(replaced.copied)).not.toBe(
+      launchIdentityToken(h.record("app-1") ?? {}),
+    );
     expect(herdr.workspaces.size).toBe(0);
+  });
+});
+
+/** The latest archived record of `id` (sessions/archive/<id>_<time>), or null. */
+function archivedRecord(h: Harness, id: string): Record<string, string> | null {
+  const dir = join(h.sessionsDir, "archive");
+  if (!existsSync(dir)) return null;
+  const names = readdirSync(dir)
+    .filter((name) => name.startsWith(`${id}_`))
+    .sort();
+  const last = names.at(-1);
+  return last ? parseRecord(readFileSync(join(dir, last), "utf-8")) : null;
+}
+
+/** The launch claim of this process in the record's form (a live launcher). */
+function thisProcessClaim(): Record<string, string> {
+  const stat = readFileSync("/proc/self/stat", "utf-8");
+  const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  return { launchPid: String(process.pid), launchPidStart: `stat:${start}` };
+}
+
+/** A token that names no launch (16 hex characters). */
+const NO_LAUNCH_TOKEN = "0".repeat(16);
+
+/**
+ * Herdr fit-2 F-9 (design r11 5.4): `kill(id, { confirmRuntimeClosed })`
+ * retires a Herdr record on the owner's word, through the real plugin and
+ * the real worktree plugin. The OpenCode cases (T-9.8c, T-9.10) are in core
+ * `session-manager/retire-herdr.test.ts`; the CLI option (T-9.13) is in CLI
+ * `session.test.ts`.
+ */
+describe("Herdr fit-2 F-9: the owner retires a Herdr record (T-9.1 to T-9.12)", () => {
+  async function retire(h: Harness, id: string, token: string): Promise<unknown> {
+    return h.sm.kill(id, { confirmRuntimeClosed: token }).then(
+      () => "retired",
+      (e: unknown) => e,
+    );
+  }
+
+  /** A refusal that changed nothing: the record byte-equal, the worktree there, no archive. */
+  function expectUnchanged(h: Harness, id: string, file: string, worktree?: string): void {
+    expect(h.file(id)).toBe(file);
+    if (worktree) expect(existsSync(worktree)).toBe(true);
+    expect(archivedRecord(h, id)).toBeNull();
+    expect(h.destroys).toEqual([]);
+  }
+
+  /**
+   * The archived record with the retire keys of `token`; its evidence is the
+   * answer of step 7 (with the first line of a failure), at most 200 characters.
+   */
+  function expectRetired(h: Harness, id: string, token: string, evidence: string | RegExp): void {
+    expect(h.record(id)).toBeNull();
+    const archived = archivedRecord(h, id);
+    expect(archived).toMatchObject({ retiredBy: "owner", retiredIdentityToken: token });
+    if (typeof evidence === "string") expect(archived?.["retireEvidence"]).toBe(evidence);
+    else expect(archived?.["retireEvidence"]).toMatch(evidence);
+    expect(archived?.["retireEvidence"]?.length).toBeLessThanOrEqual(200);
+    expect(Date.parse(archived?.["retiredAt"] ?? "")).not.toBeNaN();
+  }
+
+  it("T-9.1: isAlive true; refused; the record and the worktree byte-equal", async () => {
+    const h = await setup();
+    const worktree = keptRecord(h, "app-1", { data: pinnedData("launch-unconfirmed") });
+    herdr.workspaces.set("w7", { pane: "w7:p1", terminal: "term_w7" });
+    const file = h.file("app-1");
+    const err = await retire(h, "app-1", launchIdentityToken(h.record("app-1") ?? {}));
+    expect((err as Error).message).toBe(
+      `Session app-1 was not retired: herdr shows pane w7:p1 with its terminal at ${SOCKET}: the session runs; close it first. Nothing was changed.`,
+    );
+    expectUnchanged(h, "app-1", file, worktree);
+    expectNoClose();
+  });
+
+  it("T-9.2: isAlive false with the right token; archived, worktree removed, agent session kept, no close", async () => {
+    const h = await setup({ shape: "oc" });
+    const worktree = keptRecord(
+      h,
+      "app-1",
+      { data: pinnedData("launch-unconfirmed") },
+      { opencodeSessionId: AGENT_SESSION },
+    );
+    const token = launchIdentityToken(h.record("app-1") ?? {});
+    expect(await retire(h, "app-1", token)).toBe("retired");
+    expectRetired(
+      h,
+      "app-1",
+      token,
+      "herdr answered that the pane does not exist or that it has another terminal",
+    );
+    expect(existsSync(worktree)).toBe(false);
+    expect(h.destroys).toEqual([worktree]);
+    expect(h.discards).toEqual([]);
+    expect(archivedRecord(h, "app-1")?.["opencodeSessionId"]).toBe(AGENT_SESSION);
+    // The one read of step 7 is the only herdr request.
+    expect(commands()).toEqual(["pane get"]);
+    expectNoClose();
+  });
+
+  it("T-9.3: the pin answers no-server; archived, retireEvidence names it", async () => {
+    const h = await setup();
+    keptRecord(h, "app-1", { data: pinnedData("launch-unconfirmed") });
+    herdr.on["pane get"] = async () => {
+      throw q1(SOCKET, "cli:pane:get");
+    };
+    const token = launchIdentityToken(h.record("app-1") ?? {});
+    expect(await retire(h, "app-1", token)).toBe("retired");
+    expectRetired(
+      h,
+      "app-1",
+      token,
+      /^no herdr server answers at the socket: herdr pane get w7:p1 could not answer: herdr error server_not_running/,
+    );
+  });
+
+  it("T-9.4: an empty-ID partial, P with a dead claim and malformed pins; archived, zero herdr calls", async () => {
+    const h = await setup();
+    keptRecord(h, "app-1", {
+      id: "",
+      data: { ...pinnedData("workspace-unconfirmed"), paneId: undefined },
+    });
+    const pendingWorktree = makeWorktree(h, "app-2");
+    writeRecord(h, "app-2", {
+      worktree: pendingWorktree,
+      branch: "session/app-2",
+      status: "spawning",
+      project: "my-app",
+      agent: h.agentName,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      runtimeHandle: PENDING,
+      ...OTHER_CLAIM,
+    });
+    keptRecord(h, "app-3", {
+      data: { ...pinnedData("launch-unconfirmed"), herdrSocket: "relative.sock" },
+    });
+    for (const id of ["app-1", "app-2", "app-3"]) {
+      const token = launchIdentityToken(h.record(id) ?? {});
+      expect(await retire(h, id, token), id).toBe("retired");
+      expect(h.record(id), id).toBeNull();
+      expect(archivedRecord(h, id), id).toMatchObject({
+        retiredBy: "owner",
+        retiredIdentityToken: token,
+      });
+    }
+    expect(archivedRecord(h, "app-3")?.["retireEvidence"]).toMatch(
+      /^its herdr pins are malformed: the herdr pins of this record are malformed: herdrSocket "relative\.sock"/,
+    );
+    expect(herdr.calls).toEqual([]);
+  });
+
+  it("T-9.5: a tmux record, a record without a handle, an unparseable handle; refused, nothing changed", async () => {
+    const h = await setup();
+    const tmuxTree = keptRecord(h, "app-1", { id: "app-1", runtimeName: "tmux", data: {} });
+    const noHandle = keptRecord(h, "app-2", { data: {} });
+    writeRecord(
+      h,
+      "app-2",
+      Object.fromEntries(
+        Object.entries(h.record("app-2") ?? {}).filter(([key]) => key !== "runtimeHandle"),
+      ),
+    );
+    const unparseable = keptRecord(h, "app-3", { data: {} });
+    writeRecord(h, "app-3", { ...(h.record("app-3") ?? {}), runtimeHandle: "{not json" });
+    const cases: Array<[string, string, RegExp]> = [
+      [
+        "app-1",
+        tmuxTree,
+        /^Session app-1 is a tmux record: the tmux stop confirms itself, so --confirm-runtime-closed does not apply; run ao session kill app-1\. Nothing was changed\.$/,
+      ],
+      [
+        "app-2",
+        noHandle,
+        /^Session app-2 has no runtime handle, so --confirm-runtime-closed names no launch of it; retire it by hand \(docs\/DEVELOPMENT\.md, "Retire a Herdr record by hand"\); nothing was changed$/,
+      ],
+      [
+        "app-3",
+        unparseable,
+        /^The runtime handle of app-3 cannot be read \(\{not json\); retire it by hand/,
+      ],
+    ];
+    for (const [id, worktree, message] of cases) {
+      const file = h.file(id);
+      const err = await retire(h, id, launchIdentityToken(h.record(id) ?? {}));
+      expect((err as Error).message, id).toMatch(message);
+      expectUnchanged(h, id, file, worktree);
+    }
+    expect(herdr.calls).toEqual([]);
+  });
+
+  it("T-9.6: a wrong token, and a restore between the token and the command; refused with the new token", async () => {
+    const h = await setup();
+    const worktree = keptRecord(h, "app-1", { data: pinnedData("launch-unconfirmed") });
+    const checked = launchIdentityToken(h.record("app-1") ?? {});
+    const file = h.file("app-1");
+    const wrong = await retire(h, "app-1", NO_LAUNCH_TOKEN);
+    expect((wrong as Error).message).toBe(
+      `Session app-1: the record now names another launch (identity token ${checked}); check it again before you retire it. Nothing was changed.`,
+    );
+    expectUnchanged(h, "app-1", file, worktree);
+    // A restore writes a new restoredAt (and handle) after the owner's check.
+    writeRecord(h, "app-1", {
+      ...(h.record("app-1") ?? {}),
+      restoredAt: "2026-10-03T00:00:00.000Z",
+    });
+    const restored = h.file("app-1");
+    const now = launchIdentityToken(h.record("app-1") ?? {});
+    expect(now).not.toBe(checked);
+    const stale = await retire(h, "app-1", checked);
+    expect((stale as Error).message).toContain(`(identity token ${now})`);
+    expectUnchanged(h, "app-1", restored, worktree);
+    expect(herdr.calls).toEqual([]);
+  });
+
+  it("T-9.7: a live launcher; refused", async () => {
+    const h = await setup();
+    const worktree = keptRecord(
+      h,
+      "app-1",
+      { data: pinnedData("launch-unconfirmed") },
+      thisProcessClaim(),
+    );
+    const file = h.file("app-1");
+    const err = await retire(h, "app-1", launchIdentityToken(h.record("app-1") ?? {}));
+    expect(err).toBeInstanceOf(SessionLaunchInProgressError);
+    expectUnchanged(h, "app-1", file, worktree);
+    expect(herdr.calls).toEqual([]);
+  });
+
+  it("T-9.8a: a replacement during step 7; the retire write fails, nothing written or removed", async () => {
+    const h = await setup();
+    const worktree = keptRecord(h, "app-1", { data: pinnedData("launch-unconfirmed") });
+    const token = launchIdentityToken(h.record("app-1") ?? {});
+    let replaced = "";
+    herdr.on["pane get"] = async (_args, answer) => {
+      replaced = writeRecord(h, "app-1", {
+        ...(h.record("app-1") ?? {}),
+        restoredAt: "2026-10-03T00:00:00.000Z",
+      });
+      return answer();
+    };
+    const err = await retire(h, "app-1", token);
+    expect((err as Error).message).toMatch(
+      /^Session app-1 changed while it was retired.*it was not retired: nothing was written or removed/,
+    );
+    expect(h.file("app-1")).toBe(replaced);
+    expect(h.record("app-1")).not.toHaveProperty("retiredBy");
+    expect(h.record("app-1")).not.toHaveProperty("retiredIdentityToken");
+    expectUnchanged(h, "app-1", replaced, worktree);
+  });
+
+  it("T-9.8b: a replacement in the workspace removal after the retire write; no removal, no archive", async () => {
+    const late: { h?: Harness } = {};
+    let replaced = "";
+    const h = await setup({
+      shape: "oc",
+      workspace: {
+        destroy: async (_path, stillOwned) => {
+          if (!late.h) throw new Error("no harness");
+          replaced = writeRecord(late.h, "app-1", {
+            ...(late.h.record("app-1") ?? {}),
+            restoredAt: "2026-10-03T00:00:00.000Z",
+          });
+          if (stillOwned?.() !== false) throw new Error("stillOwned did not refuse");
+        },
+      },
+    });
+    late.h = h;
+    const worktree = keptRecord(
+      h,
+      "app-1",
+      { data: pinnedData("launch-unconfirmed") },
+      { opencodeSessionId: AGENT_SESSION },
+    );
+    const token = launchIdentityToken(h.record("app-1") ?? {});
+    const err = await retire(h, "app-1", token);
+    expect((err as Error).message).toMatch(
+      /^Session app-1 changed while it was killed.*its worktree, agent session and record were kept/,
+    );
+    expect(h.file("app-1")).toBe(replaced);
+    // The retire keys stay in the version that step 8 wrote; their token
+    // no longer names the record.
+    expect(h.record("app-1")).toMatchObject({ retiredBy: "owner", retiredIdentityToken: token });
+    expect(launchIdentityToken(h.record("app-1") ?? {})).not.toBe(token);
+    expect(existsSync(worktree)).toBe(true);
+    expect(archivedRecord(h, "app-1")).toBeNull();
+    expect(h.discards).toEqual([]);
+  });
+
+  it("T-9.9: project mode (app-orchestrator); archived, the project directory unchanged", async () => {
+    const h = await setup({ mode: "project" });
+    writeRecord(h, "app-orchestrator", {
+      worktree: h.projectPath,
+      branch: "main",
+      status: "spawning",
+      role: "orchestrator",
+      project: "my-app",
+      agent: h.agentName,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      runtimeHandle: JSON.stringify({ id: "w7:p1", runtimeName: "herdr", data: pinnedData() }),
+      launchFailed: "Failed to launch agent in herdr pane w7:p1: postLaunchSetup failed",
+    });
+    const before = readdirSync(h.projectPath).sort();
+    const token = launchIdentityToken(h.record("app-orchestrator") ?? {});
+    expect(await retire(h, "app-orchestrator", token)).toBe("retired");
+    expectRetired(
+      h,
+      "app-orchestrator",
+      token,
+      "herdr answered that the pane does not exist or that it has another terminal",
+    );
+    expect(readdirSync(h.projectPath).sort()).toEqual(before);
+    expect(readFileSync(join(h.projectPath, "README.md"), "utf-8")).toBe("fit-2\n");
+    expect(h.destroys).toEqual([]);
+  });
+
+  it("T-9.11: without the option; today's refusal plus the hint line with the identity token", async () => {
+    const h = await setup();
+    const worktree = keptRecord(h, "app-1", { data: pinnedData("launch-unconfirmed") });
+    const file = h.file("app-1");
+    const err = (await killError(h, "app-1")) as RuntimeStopUnconfirmedError;
+    expect(err).toBeInstanceOf(RuntimeStopUnconfirmedError);
+    expect(err.message).toMatch(
+      /^runtime stop unconfirmed \(unknown\): the Herdr close cannot yet check the terminal at close time .*; record and worktree kept$/,
+    );
+    const [first, hint, ...rest] = err.hint.split("\n");
+    expect(first).toMatch(
+      /^Close herdr workspace w7 by hand after you check that it belongs to this session\./,
+    );
+    expect(hint).toBe(
+      `After you check and close it, retire the record: ao session kill app-1 --confirm-runtime-closed ${launchIdentityToken(h.record("app-1") ?? {})}`,
+    );
+    expect(rest).toEqual([]);
+    expectUnchanged(h, "app-1", file, worktree);
+  });
+
+  it("T-9.12: cleanup over a Herdr worker partial refuses as before; it never passes the option", async () => {
+    const h = await setup({ scm: { getPRState: async () => "merged" } });
+    keptRecord(
+      h,
+      "app-1",
+      { data: pinnedData("launch-unconfirmed") },
+      { pr: "https://github.com/org/my-app/pull/7" },
+    );
+    const file = h.file("app-1");
+    const kill = vi.spyOn(h.sm, "kill");
+    const result = await h.sm.cleanup("my-app");
+    expect(result.killed).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.error).toMatch(/^kept: runtime stop unconfirmed \(unknown\)/);
+    expect(result.errors[0]?.error).not.toContain("--confirm-runtime-closed");
+    expect(h.file("app-1")).toBe(file);
+    expect(h.record("app-1")).not.toHaveProperty("retiredBy");
+    expect(
+      kill.mock.calls.filter(([, options]) => options?.confirmRuntimeClosed !== undefined),
+    ).toEqual([]);
   });
 });

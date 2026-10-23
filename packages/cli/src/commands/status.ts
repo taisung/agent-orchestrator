@@ -10,7 +10,10 @@ import {
   type ActivityState,
   type Tracker,
   type ProjectConfig,
+  isLaunchEndUnproven,
   isOrchestratorSession,
+  isWellFormedHandle,
+  launchIdentityToken,
   loadConfig,
 } from "@aoagents/ao-core";
 import { git, getTmuxSessions, getTmuxActivity } from "../lib/shell.js";
@@ -44,6 +47,38 @@ interface SessionInfo {
   activity: ActivityState | null;
   /** Same-ID R2a: a launch that failed and whose runtime stop was not confirmed. */
   launchFailed: string | null;
+  /**
+   * Herdr fit-2 (design r11 5.5): the identity token of the launch, for a
+   * record whose runtime handle names a runtime in
+   * LAUNCH_END_UNPROVEN_RUNTIMES; else null. The owner's retirement names it.
+   */
+  identityToken: string | null;
+  /** The create stage of such a record whose create did not end (`createIncomplete`); else null. */
+  createIncomplete: string | null;
+}
+
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Herdr fit-2 (design r11 5.5): the identity token and the create stage of a set-runtime record. */
+function unprovenLaunchOf(metadata: Readonly<Record<string, string>>): {
+  identityToken: string | null;
+  createIncomplete: string | null;
+} {
+  const handle = parsedJson(metadata["runtimeHandle"] ?? "");
+  if (!isWellFormedHandle(handle) || !isLaunchEndUnproven(handle.runtimeName)) {
+    return { identityToken: null, createIncomplete: null };
+  }
+  const stage = handle.data["createIncomplete"];
+  return {
+    identityToken: launchIdentityToken(metadata),
+    createIncomplete: typeof stage === "string" && stage !== "" ? stage : null,
+  };
 }
 
 interface StatusOptions {
@@ -76,7 +111,8 @@ async function gatherSessionInfo(
   scm: SCM,
   projectConfig: ReturnType<typeof loadConfig>,
 ): Promise<SessionInfo> {
-  const sessionPrefix = projectConfig.projects[session.projectId]?.sessionPrefix ?? session.projectId;
+  const sessionPrefix =
+    projectConfig.projects[session.projectId]?.sessionPrefix ?? session.projectId;
   const allSessionPrefixes = Object.entries(projectConfig.projects).map(
     ([id, p]) => p.sessionPrefix ?? id,
   );
@@ -151,7 +187,9 @@ async function gatherSessionInfo(
 
   return {
     name: session.id,
-    role: isOrchestratorSession(session, sessionPrefix, allSessionPrefixes) ? "orchestrator" : "worker",
+    role: isOrchestratorSession(session, sessionPrefix, allSessionPrefixes)
+      ? "orchestrator"
+      : "worker",
     branch,
     status,
     summary,
@@ -166,6 +204,7 @@ async function gatherSessionInfo(
     pendingThreads,
     activity,
     launchFailed,
+    ...unprovenLaunchOf(session.metadata),
   };
 }
 
@@ -225,10 +264,19 @@ function printSessionRow(info: SessionInfo): void {
   printLaunchFailed(info, `  ${" ".repeat(COL.session)}`);
 }
 
-/** Same-ID R2a: the kept record of a failed launch says why it stays. */
+/**
+ * Same-ID R2a: the kept record of a failed launch says why it stays. Herdr
+ * fit-2 (design r11 5.5): a set-runtime record adds its identity token, and
+ * one whose create did not end (a crashed launch) names its stage.
+ */
 function printLaunchFailed(info: SessionInfo, indent: string): void {
+  const token = info.identityToken ? ` (identity token ${info.identityToken})` : "";
   if (info.launchFailed) {
-    console.log(`${indent}${chalk.red(`launch failed: ${info.launchFailed}`)}`);
+    console.log(`${indent}${chalk.red(`launch failed: ${info.launchFailed}${token}`)}`);
+  } else if (info.identityToken && info.createIncomplete) {
+    console.log(
+      `${indent}${chalk.red(`launch incomplete (${info.createIncomplete}; identity token ${info.identityToken})`)}`,
+    );
   }
 }
 
@@ -298,9 +346,7 @@ export function registerStatus(program: Command): void {
           console.log(banner("AGENT ORCHESTRATOR STATUS"));
           if (opts.watch) {
             console.log(
-              chalk.dim(
-                `Refreshing every ${watchIntervalSeconds}s. Press Ctrl+C to exit.`,
-              ),
+              chalk.dim(`Refreshing every ${watchIntervalSeconds}s. Press Ctrl+C to exit.`),
             );
             console.log();
           } else {

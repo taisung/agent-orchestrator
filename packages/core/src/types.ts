@@ -1877,7 +1877,14 @@ export interface SessionManager {
   restore(sessionId: SessionId): Promise<Session>;
   list(projectId?: string): Promise<Session[]>;
   get(sessionId: SessionId): Promise<Session | null>;
-  kill(sessionId: SessionId, options?: { purgeOpenCode?: boolean }): Promise<void>;
+  /**
+   * Herdr fit-2 F-9 (design r11 5.4): `confirmRuntimeClosed` is the owner's
+   * word that the runtime of a Herdr record is closed, with the identity
+   * token of the launch that the owner checked. Only `ao session kill`
+   * passes it; cleanup, restore, the lifecycle, `ao start` and the send path
+   * never do.
+   */
+  kill(sessionId: SessionId, options?: SessionKillOptions): Promise<void>;
   cleanup(
     projectId?: string,
     options?: { dryRun?: boolean; purgeOpenCode?: boolean },
@@ -1897,6 +1904,18 @@ export interface SessionManager {
    * throws `SessionRelaunchRefusedError` and changes nothing.
    */
   relaunch?(sessionId: SessionId, options?: SessionRelaunchOptions): Promise<SessionRelaunchResult>;
+}
+
+/** Options of `SessionManager.kill`. */
+export interface SessionKillOptions {
+  /** Delete the mapped OpenCode session too. */
+  purgeOpenCode?: boolean;
+  /**
+   * Herdr fit-2 F-9: retire a Herdr record whose stop cannot confirm, on the
+   * owner's word that its runtime is closed; the identity token of the
+   * record (`launchIdentityToken`) that the owner checked.
+   */
+  confirmRuntimeClosed?: string;
 }
 
 /** Options of `SessionManager.relaunch` (session relaunch, 2026-10-22). */

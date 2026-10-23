@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  launchIdentityToken,
   type Session,
   type SessionManager,
   type ActivityState,
@@ -288,7 +289,11 @@ beforeEach(() => {
   mockSessionManager.send.mockReset();
   mockGetPluginRegistry.mockReset();
   // Default registry: no tracker
-  mockGetPluginRegistry.mockResolvedValue({ get: vi.fn().mockReturnValue(null), list: vi.fn(), register: vi.fn() });
+  mockGetPluginRegistry.mockResolvedValue({
+    get: vi.fn().mockReturnValue(null),
+    list: vi.fn(),
+    register: vi.fn(),
+  });
 
   // Default: list reads from sessionsDir
   mockSessionManager.list.mockImplementation(async () => {
@@ -609,6 +614,131 @@ describe("status command", () => {
     expect(parsed[0].launchFailed).toContain("runtime stop unconfirmed (unknown)");
   });
 
+  // Herdr fit-2 (design r11 5.5): a set-runtime record names its identity
+  // token (the owner's retirement F-9 takes it), computed from the raw record.
+  describe("the identity token of a Herdr launch (design r11 5.5)", () => {
+    const HERDR_KEPT = JSON.stringify({
+      id: "w7:p1",
+      runtimeName: "herdr",
+      data: { workspaceId: "w7", paneId: "w7:p1", terminalId: "term_w7" },
+    });
+    const PENDING = JSON.stringify({
+      id: "",
+      runtimeName: "herdr",
+      data: { createIncomplete: "create-pending" },
+    });
+
+    function writeRecord(id: string, lines: Record<string, string>): Record<string, string> {
+      writeFileSync(
+        join(sessionsDir, id),
+        Object.entries(lines)
+          .map(([key, value]) => `${key}=${value}`)
+          .join("\n") + "\n",
+      );
+      return lines;
+    }
+
+    async function statusOutput(): Promise<string> {
+      consoleSpy.mockClear();
+      await program.parseAsync(["node", "test", "status"]);
+      return consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    }
+
+    async function statusJson(): Promise<Array<Record<string, unknown>>> {
+      consoleSpy.mockClear();
+      await program.parseAsync(["node", "test", "status", "--json"]);
+      return JSON.parse(consoleSpy.mock.calls.map((c) => c[0]).join("")) as Array<
+        Record<string, unknown>
+      >;
+    }
+
+    beforeEach(() => {
+      mockTmux.mockResolvedValue(null);
+      mockGit.mockResolvedValue("session/app-1");
+    });
+
+    it("a Herdr kept failed launch: launch failed with the identity token", async () => {
+      const record = writeRecord("app-1", {
+        worktree: "/tmp/wt/app-1",
+        branch: "session/app-1",
+        status: "spawning",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        runtimeHandle: HERDR_KEPT,
+        launchFailed: "postLaunchSetup failed; then runtime stop unconfirmed (unknown)",
+      });
+      const token = launchIdentityToken(record);
+      expect(await statusOutput()).toContain(
+        `launch failed: postLaunchSetup failed; then runtime stop unconfirmed (unknown) (identity token ${token})`,
+      );
+      const [info] = await statusJson();
+      expect(info).toMatchObject({
+        identityToken: token,
+        createIncomplete: null,
+        launchFailed: "postLaunchSetup failed; then runtime stop unconfirmed (unknown)",
+      });
+    });
+
+    it("P with a dead claim (a crashed launch): launch incomplete with the stage and the token", async () => {
+      const record = writeRecord("app-1", {
+        worktree: "/tmp/wt/app-1",
+        branch: "session/app-1",
+        status: "spawning",
+        runtimeHandle: PENDING,
+        launchPid: "2147483000",
+        launchPidStart: "stat:12345",
+      });
+      const token = launchIdentityToken(record);
+      const output = await statusOutput();
+      expect(output).toContain(`launch incomplete (create-pending; identity token ${token})`);
+      expect(output).not.toContain("launch failed");
+      const [info] = await statusJson();
+      expect(info).toMatchObject({
+        identityToken: token,
+        createIncomplete: "create-pending",
+        launchFailed: null,
+      });
+    });
+
+    it("a tmux kept failed launch: today's line, no token; JSON null for both keys", async () => {
+      writeRecord("app-1", {
+        worktree: "/tmp/wt/app-1",
+        branch: "session/app-1",
+        status: "spawning",
+        runtimeHandle: JSON.stringify({ id: "hash-app-1", runtimeName: "tmux", data: {} }),
+        launchFailed: "post-launch setup failed; record kept",
+      });
+      const output = await statusOutput();
+      expect(output).toContain("launch failed: post-launch setup failed; record kept");
+      expect(output).not.toContain("identity token");
+      const [info] = await statusJson();
+      expect(info).toMatchObject({ identityToken: null, createIncomplete: null });
+      // The keys of today stay.
+      expect(info).toHaveProperty("launchFailed", "post-launch setup failed; record kept");
+      expect(Object.keys(info ?? {})).toEqual(
+        expect.arrayContaining(["name", "status", "activity", "launchFailed"]),
+      );
+    });
+
+    it("the token changes after a restore write and not after a status write", async () => {
+      const record = writeRecord("app-1", {
+        worktree: "/tmp/wt/app-1",
+        branch: "session/app-1",
+        status: "spawning",
+        runtimeHandle: HERDR_KEPT,
+        restoredAt: "2026-10-02T00:00:00.000Z",
+        launchFailed: "postLaunchSetup failed",
+      });
+      const [first] = await statusJson();
+      expect(first?.["identityToken"]).toBe(launchIdentityToken(record));
+      writeRecord("app-1", { ...record, status: "killed" });
+      const [afterStatus] = await statusJson();
+      expect(afterStatus?.["identityToken"]).toBe(first?.["identityToken"]);
+      writeRecord("app-1", { ...record, restoredAt: "2026-10-03T00:00:00.000Z" });
+      const [afterRestore] = await statusJson();
+      expect(afterRestore?.["identityToken"]).not.toBe(first?.["identityToken"]);
+    });
+  });
+
   it("shows no launchFailed line for a session without it", async () => {
     writeFileSync(
       join(sessionsDir, "app-1"),
@@ -624,9 +754,9 @@ describe("status command", () => {
   });
 
   it("rejects --watch with --json", async () => {
-    await expect(program.parseAsync(["node", "test", "status", "--watch", "--json"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(
+      program.parseAsync(["node", "test", "status", "--watch", "--json"]),
+    ).rejects.toThrow("process.exit(1)");
 
     const errors = vi
       .mocked(console.error)
@@ -636,9 +766,9 @@ describe("status command", () => {
   });
 
   it("rejects non-positive watch intervals", async () => {
-    await expect(program.parseAsync(["node", "test", "status", "--watch", "--interval", "0"])).rejects.toThrow(
-      "process.exit(1)",
-    );
+    await expect(
+      program.parseAsync(["node", "test", "status", "--watch", "--interval", "0"]),
+    ).rejects.toThrow("process.exit(1)");
 
     const errors = vi
       .mocked(console.error)
@@ -1128,9 +1258,7 @@ describe("status command", () => {
       capturedCallback = fn as () => void;
       return 77 as never;
     });
-    clearIntervalSpy = vi
-      .spyOn(globalThis, "clearInterval")
-      .mockImplementation(() => undefined);
+    clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined);
     processOnceSpy = vi.spyOn(process, "once").mockImplementation((_e, _l) => process);
 
     await program.parseAsync(["node", "test", "status", "--watch", "--interval", "5"]);
@@ -1174,9 +1302,7 @@ describe("status command", () => {
       capturedCallback = fn as () => void;
       return 55 as never;
     });
-    clearIntervalSpy = vi
-      .spyOn(globalThis, "clearInterval")
-      .mockImplementation(() => undefined);
+    clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined);
     processOnceSpy = vi.spyOn(process, "once").mockImplementation((_e, _l) => process);
 
     const originalIsTTY = process.stdout.isTTY;

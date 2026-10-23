@@ -257,25 +257,45 @@ export function registerSession(program: Command): void {
     .description("Kill a session and remove its worktree")
     .argument("<session>", "Session name to kill")
     .option("--purge-session", "Delete mapped OpenCode session during kill")
-    .action(async (sessionName: string, opts: { purgeSession?: boolean }) => {
-      const config = loadConfig();
-      const sm = await getSessionManager(config);
+    .option(
+      "--confirm-runtime-closed <identity-token>",
+      "Retire a Herdr record whose stop cannot confirm: you checked that its runtime is closed (the identity token of ao status)",
+    )
+    .action(
+      async (
+        sessionName: string,
+        opts: { purgeSession?: boolean; confirmRuntimeClosed?: string },
+      ) => {
+        const config = loadConfig();
+        const sm = await getSessionManager(config);
 
-      try {
-        await sm.kill(sessionName, { purgeOpenCode: opts.purgeSession === true });
-        console.log(chalk.green(`\nSession ${sessionName} killed.`));
-      } catch (err) {
-        // Same-ID R2a: a runtime stop that was not confirmed keeps the record
-        // and the worktree; print the outcome and the next action.
-        if (isRuntimeStopUnconfirmedError(err)) {
-          console.error(chalk.red(`Failed to kill session ${sessionName}: ${err.message}`));
-          console.error(chalk.yellow(`Next: ${err.hint}`));
+        try {
+          // Herdr fit-2 F-9 (design r11 5.4.1): only this command passes the
+          // owner's word to core.
+          await sm.kill(sessionName, {
+            purgeOpenCode: opts.purgeSession === true,
+            ...(opts.confirmRuntimeClosed !== undefined
+              ? { confirmRuntimeClosed: opts.confirmRuntimeClosed }
+              : {}),
+          });
+          console.log(
+            chalk.green(
+              `\nSession ${sessionName} ${opts.confirmRuntimeClosed !== undefined ? "retired" : "killed"}.`,
+            ),
+          );
+        } catch (err) {
+          // Same-ID R2a: a runtime stop that was not confirmed keeps the record
+          // and the worktree; print the outcome and the next action.
+          if (isRuntimeStopUnconfirmedError(err)) {
+            console.error(chalk.red(`Failed to kill session ${sessionName}: ${err.message}`));
+            console.error(chalk.yellow(`Next: ${err.hint}`));
+            process.exit(1);
+          }
+          console.error(chalk.red(`Failed to kill session ${sessionName}: ${err}`));
           process.exit(1);
         }
-        console.error(chalk.red(`Failed to kill session ${sessionName}: ${err}`));
-        process.exit(1);
-      }
-    });
+      },
+    );
 
   session
     .command("cleanup")

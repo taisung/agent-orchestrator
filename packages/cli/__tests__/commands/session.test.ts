@@ -534,6 +534,112 @@ describe("session kill", () => {
     const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(output).toContain("Session app-1 killed.");
   });
+
+  // Herdr fit-2 F-9 (design r11 5.4, T-9.13): the owner's word reaches core.
+  describe("--confirm-runtime-closed (F-9, T-9.13)", () => {
+    // Built, not a literal: gitleaks reads a hex literal after TOKEN = as a key.
+    const CHECKED_TOKEN = "ab".repeat(8);
+    const CURRENT_TOKEN = "cd".repeat(8);
+
+    it("passes the identity token to core and exits 0 with the retirement", async () => {
+      mockSessionManager.kill.mockResolvedValue(undefined);
+
+      await program.parseAsync([
+        "node",
+        "test",
+        "session",
+        "kill",
+        "app-1",
+        "--confirm-runtime-closed",
+        CHECKED_TOKEN,
+      ]);
+
+      expect(mockSessionManager.kill).toHaveBeenCalledWith("app-1", {
+        purgeOpenCode: false,
+        confirmRuntimeClosed: CHECKED_TOKEN,
+      });
+      expect(process.exit).not.toHaveBeenCalled();
+      const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(output).toContain("Session app-1 retired.");
+    });
+
+    it("passes it with --purge-session", async () => {
+      mockSessionManager.kill.mockResolvedValue(undefined);
+
+      await program.parseAsync([
+        "node",
+        "test",
+        "session",
+        "kill",
+        "app-1",
+        "--purge-session",
+        "--confirm-runtime-closed",
+        CHECKED_TOKEN,
+      ]);
+
+      expect(mockSessionManager.kill).toHaveBeenCalledWith("app-1", {
+        purgeOpenCode: true,
+        confirmRuntimeClosed: CHECKED_TOKEN,
+      });
+    });
+
+    it("exits 1 with core's refusal", async () => {
+      mockSessionManager.kill.mockRejectedValue(
+        new Error(
+          `Session app-1: the record now names another launch (identity token ${CURRENT_TOKEN}); check it again before you retire it. Nothing was changed.`,
+        ),
+      );
+
+      await expect(
+        program.parseAsync([
+          "node",
+          "test",
+          "session",
+          "kill",
+          "app-1",
+          "--confirm-runtime-closed",
+          CHECKED_TOKEN,
+        ]),
+      ).rejects.toThrow("process.exit(1)");
+
+      const errors = vi
+        .mocked(console.error)
+        .mock.calls.map((c) => String(c[0]))
+        .join("\n");
+      expect(errors).toContain(
+        `Failed to kill session app-1: Error: Session app-1: the record now names another launch (identity token ${CURRENT_TOKEN})`,
+      );
+      const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(output).not.toContain("retired");
+    });
+
+    it("a missing token value is a commander error with no core call", async () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await expect(
+          program.parseAsync([
+            "node",
+            "test",
+            "session",
+            "kill",
+            "app-1",
+            "--confirm-runtime-closed",
+          ]),
+        ).rejects.toMatchObject({ code: "commander.optionMissingArgument" });
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(mockSessionManager.kill).not.toHaveBeenCalled();
+    });
+
+    it("without the option core gets no confirmRuntimeClosed key", async () => {
+      mockSessionManager.kill.mockResolvedValue(undefined);
+
+      await program.parseAsync(["node", "test", "session", "kill", "app-1"]);
+
+      expect(mockSessionManager.kill.mock.calls[0]?.[1]).not.toHaveProperty("confirmRuntimeClosed");
+    });
+  });
 });
 
 describe("session restore", () => {

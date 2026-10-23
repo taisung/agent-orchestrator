@@ -77,6 +77,7 @@ import {
   type SessionStatus,
   type RuntimePaneState,
   type RuntimeStopOutcome,
+  type SessionKillOptions,
   PR_STATE,
 } from "./types.js";
 import {
@@ -863,9 +864,13 @@ function describeHandleInMemory(handle: RuntimeHandle): string {
   return `${handle.runtimeName} pane ${handle.id || "unknown"} (terminal ${text("terminalId")}, workspace ${text("workspaceId")}, socket ${text("herdrSocket")})`;
 }
 
-/** The fit-2a end of every text that points to a retirement (design r11 8.1, note 7). */
-const RETIRE_BY_HAND =
-  'Check the runtime by hand (design 5.4.3), then retire the record by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").';
+/**
+ * The end of every text that points to a retirement (design r11 4.5): the
+ * owner's check, then F-9 with the identity token of the launch.
+ */
+function retireLine(sessionId: SessionId, token: string): string {
+  return `Check the runtime by hand (design 5.4.3), then retire the record: ao session kill ${sessionId} --confirm-runtime-closed ${token}.`;
+}
 
 /**
  * Herdr fit-2 (design r11 4.5, the unwritable path): the record of a launch
@@ -912,8 +917,18 @@ function keepUnwritableLaunch(context: {
       ? "the pending handle"
       : `the handle of pane ${beforeHandle?.id || "unknown"}`;
   const claimText = ownClaim
-    ? `The launch claim of ao process ${ownClaim[LAUNCH_PID_KEY]} (start ${ownClaim[LAUNCH_PID_START_KEY]}) may remain in the record, and the record may hold the pending handle or the handle above. While that process runs, AO treats the launch as in progress, and ao start and kill refuse it.`
+    ? `The launch claim of ao process ${ownClaim[LAUNCH_PID_KEY]} (start ${ownClaim[LAUNCH_PID_START_KEY]}) may remain in the record, and the record may hold the pending handle or the handle above. While that process runs, AO treats the launch as in progress, and ao start, kill and F-9 refuse it.`
     : "The record may hold the pending handle or the handle above.";
+  // Not settled: the record may hold either fixed identity; F-9 refuses
+  // a token that no longer names the record and prints the current one.
+  const beforeToken = launchIdentityToken(context.before);
+  const afterToken = context.after ? launchIdentityToken(context.after) : null;
+  const retire =
+    settled === "before"
+      ? retireLine(sessionId, beforeToken)
+      : settled === "after" && afterToken
+        ? retireLine(sessionId, afterToken)
+        : `${retireLine(sessionId, "<identity token>")} The identity token is ${beforeToken} while the record holds this launch's state before the write${afterToken ? `, and ${afterToken} while it holds the handle above` : ""}; ao status shows it.`;
   const variant =
     settled === "before"
       ? `AO cleared its launch claim while the record held this launch's state before the write (${beforeText}). The handle above is not recorded.`
@@ -923,7 +938,7 @@ function keepUnwritableLaunch(context: {
   warnOperator(
     `ao: the record of ${sessionId} could not be read or written (${shortErrorText(context.error)}), so AO removed nothing: no runtime stop, no agent-session discard, no workspace removal and no record removal. ` +
       `The handle of this launch: ${describeHandleInMemory(context.handle)}; record file ${recordFile}; worktree ${context.worktree}; agent session ${context.agentSession}. ` +
-      `${variant} ${RETIRE_BY_HAND}`,
+      `${variant} ${retire}`,
   );
 }
 
@@ -4645,8 +4660,72 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return null;
   }
 
-  async function kill(sessionId: SessionId, options?: { purgeOpenCode?: boolean }): Promise<void> {
+  async function kill(sessionId: SessionId, options?: SessionKillOptions): Promise<void> {
     return killRecord(sessionId, options);
+  }
+
+  /**
+   * Herdr fit-2 F-9 (design r11 5.4.2 steps 2 and 3): the handle of a record
+   * that the owner may retire with `confirmRuntimeClosed`, or a refusal that
+   * changes nothing. Only a handle of a runtime in
+   * LAUNCH_END_UNPROVEN_RUNTIMES (any status, a kept failed launch, P, an
+   * empty ID, malformed pins) with the identity token of the record.
+   */
+  function retirableHandle(
+    sessionId: SessionId,
+    raw: Record<string, string>,
+    token: string,
+  ): RuntimeHandle {
+    const text = raw["runtimeHandle"];
+    const byHand =
+      'retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand"); nothing was changed';
+    if (!text) {
+      throw new Error(
+        `Session ${sessionId} has no runtime handle, so --confirm-runtime-closed names no launch of it; ${byHand}`,
+      );
+    }
+    const parsed = safeJsonParse<unknown>(text);
+    if (!isWellFormedHandle(parsed)) {
+      throw new Error(
+        `The runtime handle of ${sessionId} cannot be read (${text.slice(0, 80)}); ${byHand}`,
+      );
+    }
+    if (!isLaunchEndUnproven(parsed.runtimeName)) {
+      throw new Error(
+        `Session ${sessionId} is a ${parsed.runtimeName} record: the ${parsed.runtimeName} stop confirms itself, so --confirm-runtime-closed does not apply; run ao session kill ${sessionId}. Nothing was changed.`,
+      );
+    }
+    const current = launchIdentityToken(raw);
+    if (token !== current) {
+      throw new Error(
+        `Session ${sessionId}: the record now names another launch (identity token ${current}); check it again before you retire it. Nothing was changed.`,
+      );
+    }
+    return parsed;
+  }
+
+  /**
+   * Herdr fit-2 F-9 (design r11 5.4.2 step 7): after a stop that cannot
+   * confirm, one `isAlive` of the handle with its pins and the core bound.
+   * A pane that runs refuses; any other answer is the evidence that the
+   * owner's word stands on.
+   */
+  async function retireEvidence(
+    sessionId: SessionId,
+    runtime: Runtime,
+    handle: RuntimeHandle,
+  ): Promise<string> {
+    const liveness = await classifyOrchestratorLiveness(runtime, handle, admission.probeTimeoutMs);
+    if (liveness.state === "alive") {
+      const socket =
+        typeof handle.data["herdrSocket"] === "string" ? handle.data["herdrSocket"] : "";
+      throw new Error(
+        `Session ${sessionId} was not retired: herdr shows pane ${handle.id} with its terminal${socket ? ` at ${socket}` : ""}: the session runs; close it first. Nothing was changed.`,
+      );
+    }
+    const cause =
+      liveness.state === "unknown" && liveness.cause ? `: ${firstErrorLine(liveness.cause)}` : "";
+    return `${liveness.reason}${cause}`.slice(0, 200);
   }
 
   /**
@@ -4682,7 +4761,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    */
   async function killRecord(
     sessionId: SessionId,
-    options?: { purgeOpenCode?: boolean },
+    options?: SessionKillOptions,
     decidedFrom?: Readonly<Record<string, string>>,
   ): Promise<void> {
     const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
@@ -4695,6 +4774,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "it was not killed",
       );
     }
+    // Herdr fit-2 F-9 (design r11 5.4.2): the owner's word that the runtime
+    // is closed, for the launch that the identity token names. A direct
+    // kill only; each refusal changes nothing.
+    const retireToken = decidedFrom ? undefined : options?.confirmRuntimeClosed;
+    if (retireToken !== undefined) retirableHandle(sessionId, raw, retireToken);
     // B-2: the launcher does not watch for a kill; it would go on and write
     // the record again, maybe with an agent session that this kill removed.
     await assertNoLiveLauncher(sessionId, raw, "kill");
@@ -4747,14 +4831,54 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           // kill remove the worktree and archive the record. Anything else
           // keeps both: the session may still run in them.
           const stopped = await stopRuntime(runtimePlugin, handle);
-          if (!isRuntimeStopConfirmed(stopped)) {
-            throw new RuntimeStopUnconfirmedError({
+          if (!isRuntimeStopConfirmed(stopped) && retireToken === undefined) {
+            const retry = decidedFrom ? "ao session cleanup" : `ao session kill ${sessionId}`;
+            const refusal = new RuntimeStopUnconfirmedError({
               sessionId,
               handle,
               stop: stopped,
               kept: "record and worktree kept",
-              retry: decidedFrom ? "ao session cleanup" : `ao session kill ${sessionId}`,
+              retry,
             });
+            // Herdr fit-2 F-9 (design r11 5.4.2): the hint of a Herdr kill
+            // refusal names the owner's retirement.
+            if (
+              decidedFrom ||
+              stopped.outcome !== "unknown" ||
+              !isLaunchEndUnproven(handle.runtimeName)
+            ) {
+              throw refusal;
+            }
+            throw new RuntimeStopUnconfirmedError({
+              sessionId,
+              handle,
+              stop: {
+                ...stopped,
+                next: `${refusal.hint}\nAfter you check and close it, retire the record: ao session kill ${sessionId} --confirm-runtime-closed ${launchIdentityToken(raw)}`,
+              },
+              kept: "record and worktree kept",
+              retry,
+            });
+          }
+          if (!isRuntimeStopConfirmed(stopped)) {
+            // F-9 steps 7 and 8: the evidence, then one conditional write of
+            // the retire keys on the launch identity. They are not identity
+            // keys, so the checks below still compare the launch read here.
+            const evidence = await retireEvidence(sessionId, runtimePlugin, handle);
+            const retired = updateMetadataIf(sessionsDir, sessionId, launchIdentity(raw), {
+              retiredBy: "owner",
+              retiredAt: new Date().toISOString(),
+              retireEvidence: evidence,
+              retiredIdentityToken: retireToken ?? "",
+            });
+            if (!retired) {
+              throw recordChangedError(
+                sessionsDir,
+                sessionId,
+                "it was retired",
+                "it was not retired: nothing was written or removed",
+              );
+            }
           }
         }
       }
@@ -6301,7 +6425,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         failure = ` (${shortErrorText(err)})`;
       }
       warnOperator(
-        `ao: AO could not write back the record of ${sessionId}${failure}; it may keep the pending handle of this restore${ownClaim ? " and this process's launch claim" : ""}; check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it by hand (docs/DEVELOPMENT.md, "Retire a Herdr record by hand").`,
+        `ao: AO could not write back the record of ${sessionId}${failure}; it may keep the pending handle of this restore${ownClaim ? " and this process's launch claim" : ""}; check runtimeHandle, restoredAt, launchPid and launchPidStart, then retire it with F-9. ${retireLine(sessionId, launchIdentityToken(owned))}`,
       );
     };
     /** The worktree and agent session of this restore, for the unwritable warning. */
