@@ -293,6 +293,24 @@
 - `land/session-relaunch` (`804d1347`, patch-equal copies of the relaunch commits) and its scratch worktree can
   go; ask the owner before the branch delete. ao-81 is done (watcher 1832900).
 
+**Update 2026-10-23 10:00 EDT: fit-1 landed on main (not pushed, not built).**
+- fit-2 design r11 by ao-65 on main (`6b31b760`); ao-79 checked it alone (`herdr_fit2_design_review_r11_sol61.md`):
+  SOUND-WITH-CHANGES, all 7 r10 findings closed, 0 B 0 M 2 m (m-1 section 6 still says one unwritable
+  settlement attempt, 4.5 needs before then after; m-2 no test of an uncertain null in the ordinary claim
+  settlement); the fit-2a scope of 8.1 is complete (9 product files, M).
+- fit-1 merge: ao-73 merged main `80ce3a89` into fit-1 (`6a5bd6a7`, parents `60da85ee` and `80ce3a89`; 2 one-hunk
+  conflicts, a `session-manager.ts` import and the DEVELOPMENT.md R4 table). ao-77 checked it
+  (`herdr_fit1_merge_check_sol61.md`): LAND-SAFE 0/0/0, its own redo gives the exact tree, gates 4027 + 1 xfail +
+  29 skipped, red R1 0 R2 15 R3 6 R4 0 (F-5 fixes runtime-herdr N-1). main fast-forwarded to `6a5bd6a7`.
+- Test push (owner "yes, do a test push"): pushed the 2 waiting docs commits, `origin/main` `80ce3a89`. All 4
+  workflows started in 20 s, so a push starts CI again (pushes at 01:08 and 01:24 UTC started none). CI run
+  `39964135618` fails: the `afterAll` of relaunch's `relaunch-pane-shell.test.ts:111` races `tmux kill-server`
+  (`ENOTEMPTY`); all 116 runtime-tmux tests pass. ao-63 fixes the cleanup (`.agent_note_ci.md`, scratch
+  `/tmp/aorl9`); the orchestrator cherry-picks it onto main; its push needs the owner's word.
+- Open for the owner: 17 (fit-2a code now with the 2 r11 minors in the brief, or r12 first), 18 (the fit-2a
+  author), 19 (close ao-65 and ao-79), build and restart after CI is green, delete `land/session-relaunch`,
+  the push of fit-1 and the CI fix.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
