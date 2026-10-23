@@ -354,6 +354,17 @@ delete land/session-relaunch".
   `aofork-2026-10-23a` (parent 1239456, child 1239466) watches ao-82 and ao-83; watcher 2303560 still watches
   ao-73, which stays for the review fixes.
 
+**Update 2026-10-23 14:38 EDT: fit-2a reviews in, fix round r2 running.**
+- ao-82 (Codex): LAND-WITH-CHANGES, 0 B 3 M 0 m (coverage: the settlement identity, the publication `before`
+  identity, the restore write-back identity; current code passes ao-82's 3 probes). ao-83 (Muse): LAND-SAFE,
+  0 B 0 M 5 m (m-1: a `blocked` pane without an agent name falls through to a raw send). Both on main
+  (`1eecc5ff`).
+- Owner 22 (1): ao-73 fixes M-1 to M-3 (tests), Muse m-1 (refuse `blocked` without an agent name) and m-3
+  (`runtimeForHandle` in `keepUnprovenLaunch` step 3) on top of `a999a78f` (note `.agent_note_fit2a_r2.md`, copy
+  `note-ao-73-fit2a-r2.md`, scratch `/tmp/aofit2a2`); then ao-82 checks alone; then a cherry-pick onto main.
+  The send waited 14:21 to 14:36 for an attached client of ao-73 (`tmux a` on `/dev/pts/21`) to be idle 10 min.
+- Owner 23: ao-83 closed. Watcher `aofork-2026-10-23a` keeps watching ao-82.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
