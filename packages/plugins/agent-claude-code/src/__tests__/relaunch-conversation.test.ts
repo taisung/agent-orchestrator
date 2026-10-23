@@ -59,6 +59,8 @@ function treeEnv(overrides: Record<string, string> = {}): Record<string, string>
     AO_LAUNCH_TOKEN: THIS_LAUNCH,
     TMUX_PANE: "%1",
     HOOK_OUT_DIR: dir,
+    HOOK_SOURCE: "startup",
+    HOOK_TRANSCRIPT_DIR: "/t",
     ...overrides,
   };
 }
@@ -103,6 +105,32 @@ function recorded(): Record<string, string> | null {
   );
 }
 
+/** The mark of a hook of the launch's agent that could not record its event (review r3 M-2). */
+function markFile(): string {
+  return join(sessionsDir, ".agent-conversations", ".app-1.unusable");
+}
+
+function marked(): Record<string, string> | null {
+  if (!existsSync(markFile())) return null;
+  return Object.fromEntries(
+    readFileSync(markFile(), "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+  );
+}
+
+/** A directory of links to `tools`, for a PATH that lacks every other tool. */
+function toolsDir(name: string, tools: string[]): string {
+  const tools_ = join(dir, name);
+  mkdirSync(tools_);
+  for (const tool of tools) {
+    const path = execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).trim();
+    symlinkSync(path, join(tools_, tool));
+  }
+  return tools_;
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "ao-relaunch-conv-"));
   sessionsDir = join(dir, "sessions");
@@ -121,14 +149,15 @@ beforeEach(() => {
     { mode: 0o755 },
   );
   // Runs the hook as Claude Code runs a SessionStart hook (the JSON on its
-  // stdin, its stdout kept); with a third argument it starts a nested claude,
+  // stdin, its stdout kept; the source and the transcript folder from
+  // HOOK_SOURCE and HOOK_TRANSCRIPT_DIR); with a third argument it starts a nested claude,
   // as the agent's Bash tool would start `claude -p` (it inherits the
   // environment of the agent, also its launch token and TMUX_PANE).
   writeFileSync(
     join(fakeBin, "claude"),
     [
       "#!/bin/bash",
-      'json=$(printf \'{"session_id":"%s","source":"startup","transcript_path":"/t/%s.jsonl"}\' "$2" "$2")',
+      'json=$(printf \'{"session_id":"%s","source":"%s","transcript_path":"%s/%s.jsonl"}\' "$2" "$HOOK_SOURCE" "$HOOK_TRANSCRIPT_DIR" "$2")',
       'bash "$1" <<< "$json" > "$HOOK_OUT_DIR/$2.out" 2>&1',
       'if [ "$#" -ge 3 ]; then "$0" "$1" "$3" < "$4"; fi',
       "",
@@ -209,18 +238,21 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ AO_LAUNCH_TOKEN: "" }));
 
     expect(recorded()).toBeNull();
+    expect(marked()).toBeNull();
   });
 
   it("does not record a claude whose launch token is not a UUID", async () => {
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ AO_LAUNCH_TOKEN: "x; touch y" }));
 
     expect(recorded()).toBeNull();
+    expect(marked()).toBeNull();
   });
 
   it("does not let a nested claude -p (stdin not the pane terminal) change the record", async () => {
     await runDetached(claudeTree(OUTER, { id: NESTED }), paneTty);
 
     expect(recorded()?.["conversationId"]).toBe(OUTER);
+    expect(marked()).toBeNull();
     expect(existsSync(join(dir, `${NESTED}.out`))).toBe(true);
   });
 
@@ -228,6 +260,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER, { id: NESTED, stdin: paneTty }), paneTty);
 
     expect(recorded()?.["conversationId"]).toBe(OUTER);
+    expect(marked()).toBeNull();
     expect(existsSync(join(dir, `${NESTED}.out`))).toBe(true);
   });
 
@@ -235,15 +268,21 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     await runDetached(claudeTree(OUTER), otherTty);
 
     expect(recorded()).toBeNull();
+    expect(marked()).toBeNull();
   });
 
-  it("does not record when no claude process runs above the hook", async () => {
+  it("does not record, and marks the launch's record unusable, when no claude process runs above the hook (review r3 M-2)", async () => {
     const input = join(dir, "input.json");
     writeFileSync(input, JSON.stringify({ session_id: OUTER, source: "startup" }));
 
     await runDetached(`bash ${shq(hook)}`, input);
 
     expect(recorded()).toBeNull();
+    expect(marked()).toEqual({
+      launchToken: THIS_LAUNCH,
+      reason: "no claude process above the hook",
+      paneId: "%1",
+    });
   });
 
   it("does not record without a valid AO_SESSION", async () => {
@@ -254,9 +293,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
   });
 
   it("records the same without jq and without timeout (the fallback paths)", async () => {
-    const tools = join(dir, "tools");
-    mkdirSync(tools);
-    for (const tool of [
+    const tools = toolsDir("tools", [
       "bash",
       "cat",
       "readlink",
@@ -268,10 +305,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       "cut",
       "touch",
       "flock",
-    ]) {
-      const path = execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).trim();
-      symlinkSync(path, join(tools, tool));
-    }
+    ]);
 
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ PATH: `${fakeBin}:${tools}` }));
 
@@ -313,10 +347,8 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
     expect(recorded()).toMatchObject({ conversationId: OTHER, source: "clear" });
   });
 
-  it("records nothing without flock, which keeps the newest event (review r2 M-3)", async () => {
-    const tools = join(dir, "tools");
-    mkdirSync(tools);
-    for (const tool of [
+  it("records nothing without flock, and marks the launch's record unusable (review r2 M-3, review r3 M-2)", async () => {
+    const tools = toolsDir("tools", [
       "bash",
       "cat",
       "readlink",
@@ -327,14 +359,110 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
       "head",
       "cut",
       "touch",
-    ]) {
-      const path = execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).trim();
-      symlinkSync(path, join(tools, tool));
-    }
+    ]);
 
     await runDetached(claudeTree(OUTER), paneTty, treeEnv({ PATH: `${fakeBin}:${tools}` }));
 
     expect(recorded()).toBeNull();
+    expect(marked()).toEqual({ launchToken: THIS_LAUNCH, reason: "no flock", paneId: "%1" });
+  });
+
+  it("makes the earlier record of the same launch unusable when the hook of a later clear cannot record it (no flock; review r3 M-2)", async () => {
+    writeFileSync(join(dir, `${OUTER}.jsonl`), "{}\n");
+    writeFileSync(join(dir, `${OTHER}.jsonl`), "{}\n");
+    const lookup = () =>
+      create().getOwnConversationId!(sessionOf(join(dir, "ws")), {
+        dataDir: sessionsDir,
+        launchToken: THIS_LAUNCH,
+        pane: { id: "%1", tty: paneTty },
+      });
+    // A/startup is recorded.
+    await runDetached(claudeTree(OUTER), paneTty, treeEnv({ HOOK_TRANSCRIPT_DIR: dir }));
+    expect(recorded()).toMatchObject({ conversationId: OUTER, source: "startup" });
+    expect((await lookup()).id).toBe(OUTER);
+
+    // B/clear of the same agent (same launch token and pane), on a PATH without flock.
+    const tools = toolsDir("tools-no-flock", [
+      "bash",
+      "cat",
+      "readlink",
+      "mkdir",
+      "mv",
+      "rm",
+      "grep",
+      "head",
+      "cut",
+      "jq",
+      "timeout",
+      "touch",
+    ]);
+    await runDetached(
+      claudeTree(OTHER),
+      paneTty,
+      treeEnv({ PATH: `${fakeBin}:${tools}`, HOOK_SOURCE: "clear", HOOK_TRANSCRIPT_DIR: dir }),
+    );
+
+    expect(recorded()).toMatchObject({ conversationId: OUTER, source: "startup" });
+    expect(marked()).toEqual({ launchToken: THIS_LAUNCH, reason: "no flock", paneId: "%1" });
+    expect(await lookup()).toEqual({
+      id: null,
+      reason: expect.stringContaining(
+        `a SessionStart event of the session's last launch could not be recorded (no flock; see ${markFile()})`,
+      ),
+    });
+  }, 15_000);
+
+  it("marks the launch's record unusable without EPOCHREALTIME (bash 5; review r3 M-2)", async () => {
+    // A stand-in claude whose bash has no EPOCHREALTIME, as bash 4 has none.
+    const noEpoch = join(dir, "no-epoch");
+    mkdirSync(noEpoch);
+    writeFileSync(
+      join(noEpoch, "claude"),
+      [
+        "#!/bin/bash",
+        'json=$(printf \'{"session_id":"%s","source":"startup"}\' "$2")',
+        'bash -c \'unset EPOCHREALTIME; . "$0"\' "$1" <<< "$json" > /dev/null 2>&1',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    await runDetached([join(noEpoch, "claude"), hook, OUTER].map(shq).join(" "), paneTty);
+
+    expect(recorded()).toBeNull();
+    expect(marked()).toMatchObject({ reason: "no EPOCHREALTIME (bash 5 is needed)" });
+  });
+
+  it("marks the launch's record unusable when SIGTERM stops the hook (review r3 M-2)", async () => {
+    // The hook waits 1 s in its tmux step; the stand-in claude stops it with SIGTERM.
+    writeFileSync(
+      join(fakeBin, "tmux"),
+      `#!/bin/bash\nsleep 1\nif [ "$1" = display-message ] && [ "$4" = "%1" ]; then echo ${shq(paneTty)}; exit 0; fi\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    const stopped = join(dir, "stopped");
+    mkdirSync(stopped);
+    writeFileSync(
+      join(stopped, "claude"),
+      [
+        "#!/bin/bash",
+        'json=$(printf \'{"session_id":"%s","source":"startup"}\' "$2")',
+        'bash "$1" <<< "$json" > /dev/null 2>&1 &',
+        "sleep 0.3",
+        "kill -TERM $!",
+        "wait",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    await runDetached([join(stopped, "claude"), hook, OUTER].map(shq).join(" "), paneTty);
+
+    expect(recorded()).toBeNull();
+    expect(marked()).toMatchObject({
+      launchToken: THIS_LAUNCH,
+      reason: "the hook was stopped by a signal",
+    });
   });
 
   it("ends within its budget when tmux does not answer (review r1 m-1)", async () => {
@@ -345,6 +473,7 @@ describe("SessionStart hook: records only the agent of an AO launch", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(recorded()).toBeNull();
+    expect(marked()).toMatchObject({ reason: "tmux did not answer the terminal of pane %1" });
   }, 15_000);
 
   it("ends within its budget when its stdin stays open (review r1 m-1)", async () => {
@@ -613,6 +742,34 @@ describe("getOwnConversationId: only the ID that the agent of the last launch re
 
     expect(other.id).toBeNull();
     expect(malformed.id).toBeNull();
+  });
+
+  it("refuses every record of the last launch that a hook of the same launch marked unusable (review r3 M-2)", async () => {
+    const own = writeTranscript(OUTER, 1_000);
+    writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own });
+    writeFileSync(markFile(), `launchToken=${THIS_LAUNCH}\nreason=no flock\npaneId=%1\n`);
+
+    const lookup = await agent.getOwnConversationId!(sessionOf(workspace), context());
+
+    expect(lookup).toEqual({
+      id: null,
+      reason: `a SessionStart event of the session's last launch could not be recorded (no flock; see ${markFile()}), so ${recordFile()} can hold an earlier conversation than its agent's current one`,
+    });
+  });
+
+  it("ignores the mark of an earlier launch, and refuses on a mark without a valid launch token (review r3 M-2)", async () => {
+    const own = writeTranscript(OUTER, 1_000);
+    writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own });
+    writeFileSync(markFile(), `launchToken=${EARLIER_LAUNCH}\nreason=no flock\n`);
+    const earlier = await agent.getOwnConversationId!(sessionOf(workspace), context());
+    writeFileSync(markFile(), "reason=no flock\n");
+    const tokenless = await agent.getOwnConversationId!(sessionOf(workspace), context());
+
+    expect(earlier.id).toBe(OUTER);
+    expect(tokenless).toEqual({
+      id: null,
+      reason: expect.stringContaining("could not be recorded (no flock;"),
+    });
   });
 
   it("refuses when the recorded conversation has no transcript", async () => {

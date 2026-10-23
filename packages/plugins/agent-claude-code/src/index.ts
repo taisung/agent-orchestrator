@@ -313,8 +313,21 @@ const CONVERSATION_ID =
  * hook takes the time of its event first (`EPOCHREALTIME`, the wall clock)
  * and, under `flock` on a lock file next to the record, replaces the record
  * only when it holds no later event. An earlier event (startup) whose hook
- * ends after the hook of a later one (clear) then changes nothing. Without
- * `flock` or `EPOCHREALTIME` (bash 5) it records nothing.
+ * ends after the hook of a later one (clear) then changes nothing. The order
+ * is the order in which the hooks start, by the wall clock: a hook that
+ * starts late, or a step of the clock back, can still leave the earlier
+ * conversation recorded (a documented limit).
+ *
+ * A hook of the agent that cannot record its event (no `EPOCHREALTIME` of
+ * bash 5, no `flock`, a lock that stays busy, a failed read of its input,
+ * of /proc or of tmux, a failed write, or a stop by SIGTERM, SIGHUP or
+ * SIGINT) marks the record of its launch unusable (review r3 M-2): it writes
+ * `.<session>.unusable` next to the record with the launch token and the
+ * reason, and `getOwnConversationId` refuses every record of that launch.
+ * The mark stays until the next launch (a new token). A claude that is not
+ * the pane's agent (no token, a claude above it, another terminal) exits
+ * without a mark. A hook that is killed with SIGKILL, or that cannot write
+ * the mark either, leaves the record as it is.
  *
  * Every external step has a budget of 2 s (review r1 m-1: `timeout` around
  * cat, jq, grep, tmux, readlink, mkdir, mv and rm; `flock -w 2`); without
@@ -336,7 +349,6 @@ exec >/dev/null
 # (clear) of the same agent: only the newest event may stay recorded.
 event_at=\${EPOCHREALTIME:-}
 event_at=\${event_at//[!0-9]/}
-[[ "$event_at" =~ ^[0-9]{7,}$ ]] || exit 0
 
 # Every external step has a budget, so a slow tmux or an open stdin cannot
 # hold the hook. Without timeout(1) the steps run without one.
@@ -347,6 +359,7 @@ bounded() {
 }
 
 input=$(bounded 2 cat)
+input_status=$?
 
 uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 [[ -n "\${AO_SESSION:-}" && -n "\${AO_DATA_DIR:-}" && -d "\${AO_DATA_DIR:-}" ]] || exit 0
@@ -355,18 +368,25 @@ uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 [[ "\${AO_LAUNCH_TOKEN:-}" =~ $uuid_re ]] || exit 0
 [[ "\${TMUX_PANE:-}" =~ ^%[0-9]+$ ]] || exit 0
 
-if command -v jq &>/dev/null; then
-  session_id=$(printf '%s' "$input" | bounded 2 jq -r '.session_id // empty' 2>/dev/null)
-  source=$(printf '%s' "$input" | bounded 2 jq -r '.source // empty' 2>/dev/null)
-  transcript=$(printf '%s' "$input" | bounded 2 jq -r '.transcript_path // empty' 2>/dev/null)
-else
-  session_id=$(printf '%s' "$input" | bounded 2 grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  source=$(printf '%s' "$input" | bounded 2 grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  transcript=$(printf '%s' "$input" | bounded 2 grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-fi
-[[ "$session_id" =~ $uuid_re ]] || exit 0
-[[ "$source" =~ ^[a-z_]{1,32}$ ]] || source=unknown
-[[ "$transcript" == /* && "$transcript" != *$'\\n'* ]] || transcript=""
+dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
+record="$dir/$AO_SESSION"
+
+# From here on, a hook of the launch's agent that cannot record its event
+# marks the record of this launch unusable (review r3 M-2), so that
+# --continue refuses instead of taking an earlier conversation. A claude
+# that is not the pane's agent exits below without a mark.
+unusable() {
+  trap - TERM HUP INT
+  bounded 2 mkdir -p "$dir" 2>/dev/null
+  local tmp="$dir/.$AO_SESSION.unusable.$$.tmp"
+  if printf 'launchToken=%s\\nreason=%s\\npaneId=%s\\n' "$AO_LAUNCH_TOKEN" "$1" "$TMUX_PANE" > "$tmp" 2>/dev/null; then
+    bounded 2 mv -f "$tmp" "$dir/.$AO_SESSION.unusable" 2>/dev/null || bounded 2 rm -f "$tmp" 2>/dev/null
+  else
+    bounded 2 rm -f "$tmp" 2>/dev/null
+  fi
+  exit 0
+}
+trap 'unusable "the hook was stopped by a signal"' TERM HUP INT
 
 claude_re='(^|/)claude( |$)'
 is_claude() {
@@ -390,46 +410,65 @@ pid=$PPID
 for (( step = 0; step < 64; step++ )); do
   [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || break
   if is_claude "$pid"; then agent=$pid; break; fi
-  pid=$(parent_of "$pid") || exit 0
+  pid=$(parent_of "$pid") || unusable "cannot read the process tree in /proc"
 done
-[[ -n "$agent" ]] || exit 0
+[[ -n "$agent" ]] || unusable "no claude process above the hook"
 
 # Not the pane's agent when a claude process runs above it.
-pid=$(parent_of "$agent") || exit 0
+pid=$(parent_of "$agent") || unusable "cannot read the process tree in /proc"
 for (( step = 0; step < 64; step++ )); do
   [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || break
   is_claude "$pid" && exit 0
-  pid=$(parent_of "$pid") || exit 0
+  pid=$(parent_of "$pid") || unusable "cannot read the process tree in /proc"
 done
 
 # Not the pane's agent unless its stdin is the terminal of this tmux pane.
-pane_tty=$(bounded 2 tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || exit 0
-agent_tty=$(bounded 2 readlink "/proc/$agent/fd/0" 2>/dev/null) || exit 0
-[[ -n "$pane_tty" && "$agent_tty" == "$pane_tty" ]] || exit 0
+pane_tty=$(bounded 2 tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) ||
+  unusable "tmux did not answer the terminal of pane $TMUX_PANE"
+[[ -n "$pane_tty" ]] || unusable "tmux did not answer the terminal of pane $TMUX_PANE"
+agent_tty=$(bounded 2 readlink "/proc/$agent/fd/0" 2>/dev/null) ||
+  unusable "cannot read the terminal of the claude process"
+[[ "$agent_tty" == "$pane_tty" ]] || exit 0
 
-dir="$AO_DATA_DIR/${CONVERSATIONS_DIR_NAME}"
-bounded 2 mkdir -p "$dir" 2>/dev/null || exit 0
-command -v flock &>/dev/null || exit 0
-record="$dir/$AO_SESSION"
-{
-  # One writer at a time: read, compare and replace under the lock, so the
-  # record keeps the newest event of the session (review r2 M-3).
-  flock -w 2 9 || exit 0
-  if [[ -f "$record" ]]; then
-    recorded_at=""
-    while IFS='=' read -r key value; do
-      [[ "$key" == eventAt ]] && recorded_at=$value
-    done < "$record"
-    [[ "$recorded_at" =~ ^[0-9]+$ ]] && (( recorded_at > event_at )) && exit 0
-  fi
-  tmp="$dir/.$AO_SESSION.$$.tmp"
-  if printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\nlaunchToken=%s\\npaneId=%s\\npaneTty=%s\\neventAt=%s\\n' \\
-    "$session_id" "$source" "$transcript" "$agent" "$AO_LAUNCH_TOKEN" "$TMUX_PANE" "$pane_tty" "$event_at" > "$tmp"; then
-    bounded 2 mv -f "$tmp" "$record" || bounded 2 rm -f "$tmp"
-  else
-    bounded 2 rm -f "$tmp"
-  fi
-} 9>>"$dir/.$AO_SESSION.lock" 2>/dev/null
+[[ "$event_at" =~ ^[0-9]{7,}$ ]] || unusable "no EPOCHREALTIME (bash 5 is needed)"
+(( input_status == 0 )) || unusable "cannot read the hook input"
+if command -v jq &>/dev/null; then
+  session_id=$(printf '%s' "$input" | bounded 2 jq -r '.session_id // empty' 2>/dev/null)
+  source=$(printf '%s' "$input" | bounded 2 jq -r '.source // empty' 2>/dev/null)
+  transcript=$(printf '%s' "$input" | bounded 2 jq -r '.transcript_path // empty' 2>/dev/null)
+else
+  session_id=$(printf '%s' "$input" | bounded 2 grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  source=$(printf '%s' "$input" | bounded 2 grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  transcript=$(printf '%s' "$input" | bounded 2 grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+fi
+[[ "$session_id" =~ $uuid_re ]] || unusable "the hook input names no conversation ID"
+[[ "$source" =~ ^[a-z_]{1,32}$ ]] || source=unknown
+[[ "$transcript" == /* && "$transcript" != *$'\\n'* ]] || transcript=""
+
+bounded 2 mkdir -p "$dir" 2>/dev/null || unusable "cannot create the record directory"
+command -v flock &>/dev/null || unusable "no flock"
+{ exec 9>>"$dir/.$AO_SESSION.lock"; } 2>/dev/null || unusable "cannot open the record lock"
+# One writer at a time: read, compare and replace under the lock, so the
+# record keeps the newest event of the session (review r2 M-3).
+flock -w 2 9 2>/dev/null || unusable "the record lock stayed busy for 2 s"
+if [[ -f "$record" ]]; then
+  recorded_at=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == eventAt ]] && recorded_at=$value
+  done < "$record"
+  [[ "$recorded_at" =~ ^[0-9]+$ ]] && (( recorded_at > event_at )) && exit 0
+fi
+tmp="$dir/.$AO_SESSION.$$.tmp"
+if ! printf 'agent=claude-code\\nconversationId=%s\\nsource=%s\\ntranscriptPath=%s\\nagentPid=%s\\nlaunchToken=%s\\npaneId=%s\\npaneTty=%s\\neventAt=%s\\n' \\
+  "$session_id" "$source" "$transcript" "$agent" "$AO_LAUNCH_TOKEN" "$TMUX_PANE" "$pane_tty" "$event_at" > "$tmp" 2>/dev/null; then
+  bounded 2 rm -f "$tmp" 2>/dev/null
+  unusable "cannot write the record"
+fi
+if ! bounded 2 mv -f "$tmp" "$record" 2>/dev/null; then
+  bounded 2 rm -f "$tmp" 2>/dev/null
+  unusable "cannot replace the record"
+fi
+trap - TERM HUP INT
 exit 0
 `;
 
@@ -1406,6 +1445,29 @@ function createClaudeCodeAgent(): Agent {
       context: AgentConversationContext,
     ): Promise<AgentConversationLookup> {
       const file = join(context.dataDir, CONVERSATIONS_DIR_NAME, session.id);
+      // Review r3 M-2: a hook of the launch's agent that could not record its
+      // event marked every record of that launch unusable.
+      const mark = join(context.dataDir, CONVERSATIONS_DIR_NAME, `.${session.id}.unusable`);
+      let markContent: string | null = null;
+      try {
+        markContent = await readFile(mark, "utf-8");
+      } catch (err: unknown) {
+        if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) {
+          throw new Error(`claude-code: cannot read ${mark}`, { cause: err });
+        }
+      }
+      if (markContent !== null) {
+        const marked = parseConversationRecord(markContent);
+        const markToken = marked["launchToken"] ?? "";
+        // A mark of an earlier launch (another valid token) does not count;
+        // a mark without a valid token counts for every launch.
+        if (!CONVERSATION_ID.test(markToken) || markToken === context.launchToken) {
+          return {
+            id: null,
+            reason: `a SessionStart event of the session's last launch could not be recorded (${marked["reason"] || "no reason given"}; see ${mark}), so ${file} can hold an earlier conversation than its agent's current one`,
+          };
+        }
+      }
       let content: string;
       let writtenAt: number;
       try {
