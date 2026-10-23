@@ -1442,8 +1442,9 @@ function createClaudeCodeAgent(): Agent {
      * hook recorded for the agent of the session's last launch
      * (SESSION_START_SCRIPT). Never the newest transcript of the workspace,
      * and never by a time window (review r1 M-4). The ID counts only when the
-     * record is a claude-code record with a conversation UUID, it holds the
-     * exact launch token of the session's last launch (a record of an
+     * token of the session's last launch is a UUID (the form that AO writes;
+     * review r5 m-1), the record is a claude-code record with a conversation
+     * UUID, it holds the exact launch token of that launch (a record of an
      * earlier launch, or of an earlier session with the same ID, has another
      * token; a claude without the token never writes one), it was recorded
      * in the session's pane, and the transcript of that conversation exists
@@ -1454,33 +1455,39 @@ function createClaudeCodeAgent(): Agent {
       context: AgentConversationContext,
     ): Promise<AgentConversationLookup> {
       const file = join(context.dataDir, CONVERSATIONS_DIR_NAME, session.id);
+      // Review r5 m-1: AO writes only UUID launch tokens, and the hook
+      // records nothing for another token. A token in another form (a record
+      // edited by hand) is refused here, before any file is read: an equal
+      // token in a record that the hook did not write proves nothing.
+      if (!CONVERSATION_ID.test(context.launchToken)) {
+        return {
+          id: null,
+          reason: `the launch token of the session's last launch is not a UUID (AO writes only UUID tokens, and its SessionStart hook records nothing for another token), so no record of ${file} can belong to the agent of that launch`,
+        };
+      }
       // Review r3 M-2, r4 M-1: a hook of the last launch's agent that could
       // not record its event marked the records of that launch unusable, in
       // a mark of that launch alone. Only that mark is read: the marks of
-      // earlier launches do not count, and they cannot replace this one. A
-      // token that is not a UUID names no mark (the hook writes only UUID
-      // tokens); the token check below refuses its record.
-      if (context.launchToken && CONVERSATION_ID.test(context.launchToken)) {
-        const mark = join(
-          context.dataDir,
-          CONVERSATIONS_DIR_NAME,
-          `.${session.id}.${context.launchToken}.unusable`,
-        );
-        let markContent: string | null = null;
-        try {
-          markContent = await readFile(mark, "utf-8");
-        } catch (err: unknown) {
-          if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) {
-            throw new Error(`claude-code: cannot read ${mark}`, { cause: err });
-          }
+      // earlier launches do not count, and they cannot replace this one.
+      const mark = join(
+        context.dataDir,
+        CONVERSATIONS_DIR_NAME,
+        `.${session.id}.${context.launchToken}.unusable`,
+      );
+      let markContent: string | null = null;
+      try {
+        markContent = await readFile(mark, "utf-8");
+      } catch (err: unknown) {
+        if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) {
+          throw new Error(`claude-code: cannot read ${mark}`, { cause: err });
         }
-        if (markContent !== null) {
-          const reason = parseConversationRecord(markContent)["reason"] || "no reason given";
-          return {
-            id: null,
-            reason: `a SessionStart event of the session's last launch could not be recorded (${reason}; see ${mark}), so ${file} can hold an earlier conversation than its agent's current one`,
-          };
-        }
+      }
+      if (markContent !== null) {
+        const reason = parseConversationRecord(markContent)["reason"] || "no reason given";
+        return {
+          id: null,
+          reason: `a SessionStart event of the session's last launch could not be recorded (${reason}; see ${mark}), so ${file} can hold an earlier conversation than its agent's current one`,
+        };
       }
       let content: string;
       let writtenAt: number;
@@ -1501,7 +1508,7 @@ function createClaudeCodeAgent(): Agent {
       if (record["agent"] !== "claude-code" || !CONVERSATION_ID.test(id)) {
         return { id: null, reason: `${file} holds no Claude Code conversation ID` };
       }
-      if (!context.launchToken || record["launchToken"] !== context.launchToken) {
+      if (record["launchToken"] !== context.launchToken) {
         return {
           id: null,
           reason: `${file} was recorded by another launch than the session's last one (its launch token differs), so its conversation can belong to an earlier agent`,

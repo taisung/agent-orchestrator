@@ -830,6 +830,35 @@ describe("getOwnConversationId: only the ID that the agent of the last launch re
     expect(lookup.id).toBeNull();
   });
 
+  it("refuses a last-launch token that is not a UUID, also when the record holds the same token (review r5 m-1)", async () => {
+    const own = writeTranscript(OUTER, 1_000);
+    const malformedToken = "not-a-uuid";
+    // A record that the hook did not write (the hook records nothing for a
+    // token that is not a UUID), with the session's pane and a transcript.
+    writeRecord({
+      agent: "claude-code",
+      conversationId: OUTER,
+      transcriptPath: own,
+      launchToken: malformedToken,
+    });
+    const sameToken = await agent.getOwnConversationId!(sessionOf(workspace), {
+      ...context(),
+      launchToken: malformedToken,
+    });
+    writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own });
+    const validRecord = await agent.getOwnConversationId!(sessionOf(workspace), {
+      ...context(),
+      launchToken: malformedToken,
+    });
+
+    const refusal = {
+      id: null,
+      reason: `the launch token of the session's last launch is not a UUID (AO writes only UUID tokens, and its SessionStart hook records nothing for another token), so no record of ${recordFile()} can belong to the agent of that launch`,
+    };
+    expect(sameToken).toEqual(refusal);
+    expect(validRecord).toEqual(refusal);
+  });
+
   it("refuses a record from another tmux pane", async () => {
     const own = writeTranscript(OUTER, 1_000);
     writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own, paneId: "%9" });
@@ -880,6 +909,23 @@ describe("getOwnConversationId: only the ID that the agent of the last launch re
       id: null,
       reason: expect.stringContaining(`could not be recorded (no flock; see ${markFile()})`),
     });
+  });
+
+  it("rejects, with the read error as cause, when the mark of the last launch cannot be read (review r5)", async () => {
+    const own = writeTranscript(OUTER, 1_000);
+    writeRecord({ agent: "claude-code", conversationId: OUTER, transcriptPath: own });
+    // The mark path is a directory: a read error other than ENOENT. The
+    // lookup must not take it as "no mark" and return the record's ID.
+    mkdirSync(markFile());
+
+    const failure = await agent.getOwnConversationId!(sessionOf(workspace), context()).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(`claude-code: cannot read ${markFile()}`);
+    expect((failure as Error).cause).toMatchObject({ code: "EISDIR" });
   });
 
   it("refuses when the recorded conversation has no transcript", async () => {
