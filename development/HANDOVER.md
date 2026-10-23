@@ -199,6 +199,24 @@
   `brief-review-session-relaunch-r4-sol61.md`, review file `development/reviews/session_relaunch_review_r4_sol61.md`,
   watcher 3574080 state `aofork-2026-10-22l`).
 
+**Update 2026-10-22 23:05 EDT.**
+- Owner (22:45): "1 (a), 2 (a), 3 r9, 4 close both, 5 (c)". ao-74 and ao-75 killed 22:46 (watcher 2712612
+  stopped first). CI: wait (no run on main since `541becfb`).
+- fit-1 note 1 by ao-73: `9d51982b` restores the base formatting of five agent files; the orchestrator
+  checked that each file is token-equal across the commit (whitespace, line breaks, trailing commas). The
+  fit-1 tip is `9d51982b` (branch `feat/fit1-impl-read-agent-task-md-in-your-worktree-once-it-exists`).
+  The orchestrator sent note 1 while an owner tmux client was attached to ao-73 and active about 35 s
+  before (`tmux a`, pid 2596026): the box held only a dim suggestion and the transcript shows no owner
+  input; later sends gate on `client_activity`.
+- fit-1 code review r1, two blind lenses: ao-77 (Codex `gpt-6.1-sol` xhigh, review file
+  `development/reviews/herdr_fit1_code_review_r1_sol61.md`) and ao-78 (OpenCode Muse 1.3, review file
+  `..._muse13.md`), branches `review/fit1-code-r1-{sol,muse}` at `9d51982b`, briefs
+  `brief-review-herdr-fit1-code-{sol61,muse13}.md`, watcher 3857091 (state `aofork-2026-10-22m`).
+- ao-65 writes Herdr fit-2 design r9 since 22:55 (compacted while idle before; brief `.agent_task_fit2_r9.md`,
+  copy `brief-aofork-herdr-fit2-r9.md`, deliverable `development/reviews/herdr_fit2_design_r9_opus.md`,
+  scratch `/tmp/aohd6`; r8 copies in `backup/ao-65-herdr-r8/`).
+- ao-76 does the relaunch landing review r4 (since 22:35).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
