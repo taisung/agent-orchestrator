@@ -218,7 +218,7 @@ describe("runtime.runInPane()", () => {
     mockExecFileCustom.mockResolvedValue({ stdout: ignored + "\n", stderr: "" });
 
     await expect(create().runInPane!(makeHandle("app-1"), "%7", "true")).rejects.toThrow(
-      /did not show a fresh, empty prompt line after C-c \(the second C-c changed nothing .*\), so nothing was typed/,
+      /^Clear the input line of tmux pane %7 by hand, then try again .*: after C-c its shell showed no fresh, empty prompt line \(the second C-c changed nothing .*\), so nothing was typed/,
     );
     const typed = mockExecFileCustom.mock.calls.filter((call) => call[1].includes("-l"));
     expect(typed).toEqual([]);
@@ -234,7 +234,7 @@ describe("runtime.runInPane()", () => {
     mockExecFileCustom.mockResolvedValue({ stdout: reading + "\n", stderr: "" });
 
     await expect(create().runInPane!(makeHandle("app-1"), "%7", "true")).rejects.toThrow(
-      /\(after the first C-c: no prompt before the cursor\), so nothing was typed/,
+      /^Clear the input line of tmux pane %7 by hand, then try again .*\(after the first C-c: no prompt before the cursor\), so nothing was typed/,
     );
     const keys = mockExecFileCustom.mock.calls.filter((call) => call[1][0] === "send-keys");
     expect(keys).toEqual([["tmux", ["send-keys", "-t", "%7", "C-c"], expectedTmuxOptions]]);

@@ -569,9 +569,11 @@ export function create(): Runtime {
           await sleep(RUN_IN_PANE_POLL_MS);
         }
       };
+      // The recovery comes first: a caller may cut the message (core shows
+      // the first 200 characters of the cause of a failed relaunch).
       const refuse = (problem: string): never => {
         throw new Error(
-          `The shell of tmux pane ${paneId} did not show a fresh, empty prompt line after C-c (${problem}), so nothing was typed. It may ignore or trap SIGINT. Clear its input line by hand, or start the program there by hand`,
+          `Clear the input line of tmux pane ${paneId} by hand, then try again (or start the program there by hand): after C-c its shell showed no fresh, empty prompt line (${problem}), so nothing was typed. It may ignore or trap SIGINT`,
         );
       };
       const keys = async (...args: string[]): Promise<void> => {

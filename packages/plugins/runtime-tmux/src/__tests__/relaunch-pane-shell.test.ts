@@ -203,7 +203,7 @@ describe.skipIf(!supported)(
         await testCase.owner(paneId, mark);
 
         await expect(create().runInPane!(handle, paneId, `touch ${launched}`)).rejects.toThrow(
-          /did not show a fresh, empty prompt line after C-c \(.*\), so nothing was typed/,
+          /^Clear the input line of tmux pane %\d+ by hand, then try again .*: after C-c its shell showed no fresh, empty prompt line \(.*\), so nothing was typed/,
         );
         await new Promise((resolve) => setTimeout(resolve, 500));
 
