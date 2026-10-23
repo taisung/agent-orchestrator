@@ -237,6 +237,7 @@ export default { manifest, create, detect } satisfies PluginModule<Runtime>;
 - All I/O methods return `Promise<T>` (async-first)
 - Plugins are loosely coupled — communicate through Session object and Lifecycle Manager, never call other plugins directly
 - Implement `destroy()` / cleanup with best-effort semantics
+- A runtime may implement the optional `preflight()`: it rejects when the runtime cannot take a launch now (for runtime-herdr: its own binary is missing, or the endpoint that a create uses has no running, compatible server). `ao start` and `ao spawn` ask the selected runtime's `preflight()` before a new launch (tmux keeps `checkTmux`); it caches nothing
 
 ### Core Utilities Available to Plugins
 
@@ -429,7 +430,7 @@ if (fallback) return fallback;
 
 - Resolve liveness through the session's persisted tmux or Herdr runtime evidence
 - Match BOTH the node wrapper name AND the actual binary name (some agents install as `.agentname` with a dot prefix — the regex must handle this)
-- Return `false` only when the check ran and found no agent process (or the runtime answered that the pane does not exist). Reject, with the failure as `cause`, when the check cannot run (`tmux` or `ps` fails, a timeout); never answer `false` or `null` for an error. Callers treat a rejection as unknown, never as exited (claude-code, codex, gemini and opencode follow this, also on a Herdr pane, where the core Herdr helper rejects when herdr cannot answer or answers a malformed entry; codex, gemini and opencode also reject a malformed answer of a `tmux` or `ps` call that succeeds; runtime-herdr `isAlive` likewise answers false only for the `pane_not_found` code of herdr's error envelope, on stdout at exit 0 (0.8.0) or in the exact stderr form at exit 1 with the command's ID (0.9.5), for a pane ID in herdr's grammar, or the requested pane with another terminal; at startup no Herdr answer retires an old orchestrator (the fit round's guard); the table "Absence forms of the R4 reads" in `docs/DEVELOPMENT.md` gives the exact accepted forms)
+- Return `false` only when the check ran and found no agent process (or the runtime answered that the pane does not exist). Reject, with the failure as `cause`, when the check cannot run (`tmux` or `ps` fails, a timeout); never answer `false` or `null` for an error. Callers treat a rejection as unknown, never as exited (claude-code, codex, gemini and opencode follow this, also on a Herdr pane, where the core Herdr helper rejects when herdr cannot answer or answers a malformed entry; codex, gemini and opencode also reject a malformed answer of a `tmux` or `ps` call that succeeds; runtime-herdr `isAlive` likewise answers false only for the `pane_not_found` code of herdr's error envelope, on stdout at exit 0 (0.8.0) or in the exact stderr form at exit 1 with the command's ID (0.9.5), for a pane ID in herdr's grammar, or the requested pane with another terminal; at startup, core admits no second Herdr orchestrator launch next to an earlier Herdr orchestrator record and takes no Herdr answer as proof that a launch ended; the table "Absence forms of the R4 reads" in `docs/DEVELOPMENT.md` gives the exact accepted forms)
 
 ## Constraints
 
