@@ -15,6 +15,7 @@ import {
   type AttachInfo,
   shellEscape,
   exactPaneTarget,
+  agentPaneTarget,
   exactSessionTarget,
   RUNTIME_NO_SERVER_ERROR_CODE,
 } from "@aoagents/ao-core";
@@ -104,6 +105,131 @@ const PANE_LIST_FORMAT = "#{pane_id} #{pane_tty} #{pane_pid} #{pane_current_comm
 
 /** How long `runInPane` waits after C-c, so the shell shows its new prompt first. */
 const RUN_IN_PANE_CLEAR_MS = 300;
+
+/** How long `runInPane` waits in all for the evidence of an empty prompt after a C-c. */
+const RUN_IN_PANE_EVIDENCE_MS = 1_500;
+
+/** How often `runInPane` reads the pane again while it waits for that evidence. */
+const RUN_IN_PANE_POLL_MS = 100;
+
+/** The cursor and screen fields of a pane snapshot, before the screen rows. */
+const SNAPSHOT_FORMAT =
+  "#{cursor_x} #{cursor_y} #{history_size} #{history_limit} #{pane_height} #{pane_in_mode} #{alternate_on}";
+
+/** One read of a pane: its cursor, its history counters and its visible rows. */
+export interface PaneSnapshot {
+  cursorX: number;
+  cursorY: number;
+  historySize: number;
+  historyLimit: number;
+  /** Not in copy mode or another mode, and not on the alternate screen. */
+  plain: boolean;
+  /** The visible rows, exactly `pane_height` of them, trailing spaces removed. */
+  rows: string[];
+}
+
+/**
+ * The answer of `display-message -p SNAPSHOT_FORMAT ; capture-pane -p` for
+ * one pane (one tmux call, so the cursor and the rows are of one moment),
+ * or null when it is not one.
+ */
+export function parsePaneSnapshot(answer: string): PaneSnapshot | null {
+  const [head = "", ...screen] = answer.split("\n");
+  const match = /^(\d+) (\d+) (\d+) (\d+) ([1-9]\d*) ([01]) ([01])$/.exec(head);
+  if (!match) return null;
+  const [, x, y, size, limit, height, inMode, alternate] = match.map(Number);
+  if (y >= height || screen.length > height) return null;
+  const rows = Array.from({ length: height }, (_, i) => (screen[i] ?? "").trimEnd());
+  return {
+    cursorX: x,
+    cursorY: y,
+    historySize: size,
+    historyLimit: limit,
+    plain: inMode === 0 && alternate === 0,
+    rows,
+  };
+}
+
+/** The text of a row up to the cursor column (the row padded with spaces). */
+function textBeforeCursor(row: string, cursorX: number): string {
+  return row.padEnd(cursorX).slice(0, cursorX);
+}
+
+/**
+ * Why `snap` is not an empty prompt line, or null when it is one: the text
+ * before the cursor is not blank (the prompt), nothing follows the cursor
+ * on its row, and the rows below the cursor are empty.
+ */
+export function emptyPromptProblem(snap: PaneSnapshot): string | null {
+  if (!snap.plain) return "the pane is in a mode or on the alternate screen";
+  const row = snap.rows[snap.cursorY] ?? "";
+  if (!textBeforeCursor(row, snap.cursorX).trim()) return "no prompt before the cursor";
+  if (row.slice(snap.cursorX).trim()) return "text after the cursor";
+  if (snap.rows.slice(snap.cursorY + 1).some((r) => r.trim())) return "text below the cursor";
+  return null;
+}
+
+/**
+ * Review r2 M-2: the evidence that a C-c gave the shell a fresh, empty input
+ * line. `a` is the pane after a first C-c (an empty prompt line), `b` after
+ * a second one. A shell that discards its input on C-c echoes `^C` (unless
+ * `echo-control-characters` is off) at the end of the prompt of `a` and
+ * shows the same prompt on a later row, with nothing after the cursor. A
+ * shell that ignores SIGINT leaves the screen as it is; a SIGINT trap that
+ * reads input shows no prompt. Returns null for that evidence, else what is
+ * missing. The rows that `a` had above its cursor must be the rows above
+ * that prompt in `b`, scrolled by the lines that the history gained; when
+ * the history is full (its size stays at its limit) every scroll that keeps
+ * those rows equal is tried, and exactly one must give the evidence.
+ */
+export function freshPromptProblem(a: PaneSnapshot, b: PaneSnapshot): string | null {
+  const before = emptyPromptProblem(a);
+  if (before) return `after the first C-c: ${before}`;
+  const after = emptyPromptProblem(b);
+  if (after) return `after the second C-c: ${after}`;
+  if (b.rows.length !== a.rows.length) return "the pane changed its size";
+  const unchanged =
+    a.cursorX === b.cursorX &&
+    a.cursorY === b.cursorY &&
+    a.historySize === b.historySize &&
+    a.rows.every((row, i) => row === b.rows[i]);
+  if (unchanged) return "the second C-c changed nothing (the shell may ignore SIGINT)";
+  if (b.historySize < a.historySize) return "the history of the pane was cleared";
+  const prompt = textBeforeCursor(a.rows[a.cursorY] ?? "", a.cursorX);
+  const minShift = b.historySize - a.historySize;
+  const maxShift = b.historySize < b.historyLimit ? minShift : a.cursorY;
+  let passing = 0;
+  for (let shift = minShift; shift <= maxShift; shift++) {
+    const echoRow = a.cursorY - shift;
+    if (echoRow < 0) break;
+    // The rows above the prompt of `a`, scrolled by `shift`.
+    let same = true;
+    for (let i = 0; i < echoRow && same; i++) same = b.rows[i] === a.rows[i + shift];
+    if (!same || b.cursorY <= echoRow) continue;
+    // The prompt of `a` with the echo of the second C-c, or without it.
+    const echo = (b.rows[echoRow] ?? "").trimEnd();
+    if (echo !== `${prompt}^C`.trimEnd() && echo !== prompt.trimEnd()) continue;
+    // The upper lines of a prompt of several lines repeat those of `a`.
+    const upper = b.cursorY - echoRow - 1;
+    if (upper > a.cursorY) continue;
+    let repeated = true;
+    for (let j = 0; j < upper && repeated; j++) {
+      repeated = b.rows[echoRow + 1 + j] === a.rows[a.cursorY - upper + j];
+    }
+    if (!repeated) continue;
+    if (
+      b.cursorX !== a.cursorX ||
+      textBeforeCursor(b.rows[b.cursorY] ?? "", b.cursorX) !== prompt
+    ) {
+      continue;
+    }
+    passing++;
+  }
+  if (passing === 1) return null;
+  return passing === 0
+    ? "no new prompt line after the second C-c"
+    : "more than one way to read the scrolled screen";
+}
 
 interface ParsedPane {
   paneId: string;
@@ -247,7 +373,9 @@ export function create(): Runtime {
     },
 
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
-      const pane = exactPaneTarget(handle.id);
+      // The agent's pane when core names it (review r2 M-1), else the
+      // session's current pane.
+      const pane = agentPaneTarget(handle);
       // Clear any partial input
       await tmux("send-keys", "-t", pane, "C-u");
 
@@ -288,14 +416,7 @@ export function create(): Runtime {
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {
       try {
-        return await tmux(
-          "capture-pane",
-          "-t",
-          exactPaneTarget(handle.id),
-          "-p",
-          "-S",
-          `-${lines}`,
-        );
+        return await tmux("capture-pane", "-t", agentPaneTarget(handle), "-p", "-S", `-${lines}`);
       } catch {
         return "";
       }
@@ -405,16 +526,75 @@ export function create(): Runtime {
       if (shellWaitsForInput(Number(pid)) !== true) {
         throw new Error(`The shell of tmux pane ${paneId} does not wait for input now`);
       }
+      // Review r2 M-2: C-c clears the input line only in a shell that does
+      // not ignore or trap SIGINT, and the foreground check above does not
+      // show that. So a second C-c must show a fresh prompt line (see
+      // freshPromptProblem) before any text is typed; else nothing is typed.
+      const snapshot = async (): Promise<PaneSnapshot> => {
+        let answer: string;
+        try {
+          answer = await tmux(
+            "display-message",
+            "-p",
+            "-t",
+            paneId,
+            SNAPSHOT_FORMAT,
+            ";",
+            "capture-pane",
+            "-p",
+            "-t",
+            paneId,
+          );
+        } catch (err: unknown) {
+          throw new Error(`Failed to read tmux pane ${paneId}`, { cause: err });
+        }
+        const snap = parsePaneSnapshot(answer);
+        if (!snap) {
+          throw new Error(
+            `tmux answered ${JSON.stringify(answer.slice(0, 80))} for pane ${paneId}, not a cursor and a screen`,
+          );
+        }
+        return snap;
+      };
+      /** Read the pane until `problem` gives none, or the evidence time ends. */
+      const settled = async (
+        problem: (snap: PaneSnapshot) => string | null,
+      ): Promise<{ snap: PaneSnapshot; problem: string | null }> => {
+        const end = Date.now() + RUN_IN_PANE_EVIDENCE_MS;
+        await sleep(RUN_IN_PANE_CLEAR_MS);
+        for (;;) {
+          const snap = await snapshot();
+          const found = problem(snap);
+          if (!found || Date.now() >= end) return { snap, problem: found };
+          await sleep(RUN_IN_PANE_POLL_MS);
+        }
+      };
+      const refuse = (problem: string): never => {
+        throw new Error(
+          `The shell of tmux pane ${paneId} did not show a fresh, empty prompt line after C-c (${problem}), so nothing was typed. It may ignore or trap SIGINT. Clear its input line by hand, or start the program there by hand`,
+        );
+      };
+      const keys = async (...args: string[]): Promise<void> => {
+        try {
+          await tmux("send-keys", "-t", paneId, ...args);
+        } catch (err: unknown) {
+          throw new Error(`Failed to type the command into tmux pane ${paneId}`, { cause: err });
+        }
+      };
       try {
         await tmux("copy-mode", "-q", "-t", paneId);
-        await tmux("send-keys", "-t", paneId, "C-c");
-        await sleep(RUN_IN_PANE_CLEAR_MS);
-        await tmux("send-keys", "-t", paneId, "-l", command);
-        await sleep(300);
-        await tmux("send-keys", "-t", paneId, "Enter");
       } catch (err: unknown) {
         throw new Error(`Failed to type the command into tmux pane ${paneId}`, { cause: err });
       }
+      await keys("C-c");
+      const first = await settled(emptyPromptProblem);
+      if (first.problem) refuse(`after the first C-c: ${first.problem}`);
+      await keys("C-c");
+      const second = await settled((snap) => freshPromptProblem(first.snap, snap));
+      if (second.problem) refuse(second.problem);
+      await keys("-l", command);
+      await sleep(300);
+      await keys("Enter");
     },
   };
 }

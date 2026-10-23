@@ -50,7 +50,61 @@ function makeHandle(id: string): RuntimeHandle {
  */
 let procStat: Record<number, [number, number] | undefined>;
 
-import { create, TmuxProbeError } from "../index.js";
+import {
+  create,
+  emptyPromptProblem,
+  freshPromptProblem,
+  parsePaneSnapshot,
+  TmuxProbeError,
+  type PaneSnapshot,
+} from "../index.js";
+
+const SNAPSHOT_FORMAT =
+  "#{cursor_x} #{cursor_y} #{history_size} #{history_limit} #{pane_height} #{pane_in_mode} #{alternate_on}";
+
+/** The tmux arguments of one pane snapshot (the cursor, then the screen, in one call). */
+function snapshotArgs(paneId: string): string[] {
+  return [
+    "display-message",
+    "-p",
+    "-t",
+    paneId,
+    SNAPSHOT_FORMAT,
+    ";",
+    "capture-pane",
+    "-p",
+    "-t",
+    paneId,
+  ];
+}
+
+/** A snapshot answer: the cursor fields, then the visible rows. */
+function screen(
+  cursor: { x: number; y: number; size?: number; limit?: number; mode?: 0 | 1 },
+  rows: string[],
+  height = 6,
+): string {
+  const head = `${cursor.x} ${cursor.y} ${cursor.size ?? 0} ${cursor.limit ?? 2000} ${height} ${cursor.mode ?? 0} 0`;
+  return [head, ...rows].join("\n");
+}
+
+function snap(answer: string): PaneSnapshot {
+  const parsed = parsePaneSnapshot(answer);
+  if (!parsed) throw new Error(`not a snapshot: ${answer}`);
+  return parsed;
+}
+
+/** The pane after the first C-c of a normal bash: the owner's line, then a fresh prompt. */
+const AFTER_FIRST = screen({ x: 10, y: 1 }, [
+  "bash-5.2$ ^Cuch owner-1; touch owner-2",
+  "bash-5.2$",
+]);
+/** The same pane after the second C-c: the echo, then another fresh prompt. */
+const AFTER_SECOND = screen({ x: 10, y: 2 }, [
+  "bash-5.2$ ^Cuch owner-1; touch owner-2",
+  "bash-5.2$ ^C",
+  "bash-5.2$",
+]);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -123,11 +177,14 @@ describe("runtime.listPanes()", () => {
 });
 
 describe("runtime.runInPane()", () => {
-  it("targets the pane ID in every call: checks it, ends its mode, sends C-c, types the command literally, then Enter", async () => {
+  it("targets the pane ID in every call: checks it, ends its mode, sends C-c twice with a read after each, types the command literally, then Enter", async () => {
     procStat = { 4242: [4242, 4242] };
     mockTmuxSuccess("app-1 4242");
     mockTmuxSuccess();
     mockTmuxSuccess();
+    mockTmuxSuccess(AFTER_FIRST);
+    mockTmuxSuccess();
+    mockTmuxSuccess(AFTER_SECOND);
     mockTmuxSuccess();
     mockTmuxSuccess();
 
@@ -141,9 +198,46 @@ describe("runtime.runInPane()", () => {
       ],
       ["tmux", ["copy-mode", "-q", "-t", "%7"], expectedTmuxOptions],
       ["tmux", ["send-keys", "-t", "%7", "C-c"], expectedTmuxOptions],
+      ["tmux", snapshotArgs("%7"), expectedTmuxOptions],
+      ["tmux", ["send-keys", "-t", "%7", "C-c"], expectedTmuxOptions],
+      ["tmux", snapshotArgs("%7"), expectedTmuxOptions],
       ["tmux", ["send-keys", "-t", "%7", "-l", "bash '/tmp/ao-launch-1.sh'"], expectedTmuxOptions],
       ["tmux", ["send-keys", "-t", "%7", "Enter"], expectedTmuxOptions],
     ]);
+  });
+
+  it("types nothing when the second C-c changes nothing (a shell that ignores SIGINT; review r2 M-2)", async () => {
+    procStat = { 4242: [4242, 4242] };
+    // The owner's text stays before the cursor: it looks like a prompt line.
+    const ignored = screen({ x: 22, y: 0 }, ["bash-5.2$ touch owner"]);
+    mockTmuxSuccess("app-1 4242");
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+    mockTmuxSuccess(ignored);
+    mockTmuxSuccess();
+    mockExecFileCustom.mockResolvedValue({ stdout: ignored + "\n", stderr: "" });
+
+    await expect(create().runInPane!(makeHandle("app-1"), "%7", "true")).rejects.toThrow(
+      /did not show a fresh, empty prompt line after C-c \(the second C-c changed nothing .*\), so nothing was typed/,
+    );
+    const typed = mockExecFileCustom.mock.calls.filter((call) => call[1].includes("-l"));
+    expect(typed).toEqual([]);
+    expect(mockExecFileCustom.mock.calls.filter((call) => call[1].includes("Enter"))).toEqual([]);
+  });
+
+  it("types nothing and sends no second C-c when the first C-c leaves no prompt (a SIGINT trap that reads; review r2 M-2)", async () => {
+    procStat = { 4242: [4242, 4242] };
+    const reading = screen({ x: 0, y: 0 }, ["bash-5.2$ ^Cuch owner"]);
+    mockTmuxSuccess("app-1 4242");
+    mockTmuxSuccess();
+    mockTmuxSuccess();
+    mockExecFileCustom.mockResolvedValue({ stdout: reading + "\n", stderr: "" });
+
+    await expect(create().runInPane!(makeHandle("app-1"), "%7", "true")).rejects.toThrow(
+      /\(after the first C-c: no prompt before the cursor\), so nothing was typed/,
+    );
+    const keys = mockExecFileCustom.mock.calls.filter((call) => call[1][0] === "send-keys");
+    expect(keys).toEqual([["tmux", ["send-keys", "-t", "%7", "C-c"], expectedTmuxOptions]]);
   });
 
   it("sends no key to a pane of another session", async () => {
@@ -181,6 +275,9 @@ describe("runtime.runInPane()", () => {
     mockTmuxSuccess("app-1 4242");
     mockTmuxSuccess();
     mockTmuxSuccess();
+    mockTmuxSuccess(AFTER_FIRST);
+    mockTmuxSuccess();
+    mockTmuxSuccess(AFTER_SECOND);
     mockTmuxFailure("send-keys", "can't find pane: %7\n");
 
     const err = await create().runInPane!(
@@ -191,6 +288,94 @@ describe("runtime.runInPane()", () => {
 
     expect((err as Error).message).toBe("Failed to type the command into tmux pane %7");
     expect((err as Error).cause).toBeInstanceOf(Error);
-    expect(mockExecFileCustom).toHaveBeenCalledTimes(4);
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(7);
+  });
+});
+
+describe("freshPromptProblem: the evidence of a fresh, empty input line (review r2 M-2)", () => {
+  it("accepts a new prompt line below the echo of the second C-c", () => {
+    expect(freshPromptProblem(snap(AFTER_FIRST), snap(AFTER_SECOND))).toBeNull();
+  });
+
+  it("accepts the new prompt at the bottom row, scrolled by the line that the history gained", () => {
+    const a = screen(
+      { x: 10, y: 3, size: 7 },
+      ["line7", "line8", "bash-5.2$ ^Cho tail", "bash-5.2$"],
+      4,
+    );
+    const b = screen(
+      { x: 10, y: 3, size: 8 },
+      ["line8", "bash-5.2$ ^Cho tail", "bash-5.2$ ^C", "bash-5.2$"],
+      4,
+    );
+    expect(freshPromptProblem(snap(a), snap(b))).toBeNull();
+  });
+
+  it("accepts a scroll when the history is full (its size stays at its limit)", () => {
+    const a = screen(
+      { x: 10, y: 3, size: 3, limit: 3 },
+      ["line7", "line8", "bash-5.2$ ^Cho tail", "bash-5.2$"],
+      4,
+    );
+    const b = screen(
+      { x: 10, y: 3, size: 3, limit: 3 },
+      ["line8", "bash-5.2$ ^Cho tail", "bash-5.2$ ^C", "bash-5.2$"],
+      4,
+    );
+    expect(freshPromptProblem(snap(a), snap(b))).toBeNull();
+  });
+
+  it("accepts a prompt of two lines and a shell that does not echo ^C", () => {
+    const a = screen({ x: 2, y: 2 }, ["$ ^Cowner", "~/repo", "$"]);
+    const b = screen({ x: 2, y: 4 }, ["$ ^Cowner", "~/repo", "$", "~/repo", "$"]);
+    expect(freshPromptProblem(snap(a), snap(b))).toBeNull();
+  });
+
+  it("refuses when the second C-c changed nothing (SIGINT ignored, text before the cursor)", () => {
+    const a = screen({ x: 21, y: 0 }, ["bash-5.2$ touch owner"]);
+    expect(freshPromptProblem(snap(a), snap(a))).toMatch(/changed nothing/);
+  });
+
+  it("refuses text after the cursor, a row without a prompt, and a mode", () => {
+    expect(emptyPromptProblem(snap(screen({ x: 10, y: 0 }, ["bash-5.2$ ; touch owner"])))).toBe(
+      "text after the cursor",
+    );
+    expect(emptyPromptProblem(snap(screen({ x: 0, y: 1 }, ["bash-5.2$ ^Cuch owner", ""])))).toBe(
+      "no prompt before the cursor",
+    );
+    expect(emptyPromptProblem(snap(screen({ x: 10, y: 0, mode: 1 }, ["bash-5.2$"])))).toMatch(
+      /mode/,
+    );
+  });
+
+  it("refuses a later row whose text before the cursor is not the same prompt", () => {
+    const b = screen({ x: 10, y: 2 }, [
+      "bash-5.2$ ^Cuch owner-1; touch owner-2",
+      "bash-5.2$ ^C",
+      "other> xx",
+    ]);
+    expect(freshPromptProblem(snap(AFTER_FIRST), snap(b))).toMatch(/no new prompt line/);
+  });
+
+  it("refuses when a full history allows more than one reading of the scrolled screen", () => {
+    // Every row above the cursor is the same, so no scroll and a scroll of
+    // one line (with a prompt of two lines) both fit.
+    const echo = "bash-5.2$ ^C";
+    const a = screen({ x: 10, y: 2, size: 3, limit: 3 }, [echo, echo, "bash-5.2$"], 4);
+    const b = screen({ x: 10, y: 3, size: 3, limit: 3 }, [echo, echo, echo, "bash-5.2$"], 4);
+    expect(freshPromptProblem(snap(a), snap(b))).toMatch(/more than one way/);
+  });
+
+  it("parses only a cursor line and at most pane_height rows", () => {
+    expect(parsePaneSnapshot("10 1 0 2000 2 0 0\nbash-5.2$\n\nextra")).toBeNull();
+    expect(parsePaneSnapshot("10 x 0 2000 2 0 0\nbash-5.2$")).toBeNull();
+    expect(parsePaneSnapshot("10 1 0 2000 2 0 0\na\nb")).toEqual({
+      cursorX: 10,
+      cursorY: 1,
+      historySize: 0,
+      historyLimit: 2000,
+      plain: true,
+      rows: ["a", "b"],
+    });
   });
 });

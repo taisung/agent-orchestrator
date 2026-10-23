@@ -1,8 +1,9 @@
 /**
- * Session relaunch (2026-10-22), review r1 M-5 and M-1: `runInPane` and
- * `listPanes` against a real bash in a real tmux pane. The owner's
- * half-typed text must never run, wherever the cursor is, also at a
- * continuation prompt (PS2).
+ * Session relaunch (2026-10-22), review r1 M-5 and M-1, review r2 M-2:
+ * `runInPane` and `listPanes` against a real bash in a real tmux pane. The
+ * owner's half-typed text must never run, wherever the cursor is, also at a
+ * continuation prompt (PS2), and also in a shell that ignores or traps
+ * SIGINT: there `runInPane` types nothing and says so.
  *
  * Every tmux call goes to a private server of this test file: a `tmux`
  * wrapper first on PATH adds `-S <test directory>/tmux.sock` and removes
@@ -47,6 +48,23 @@ async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return check();
+}
+
+/** Run a line in the pane's shell and wait for its next prompt. */
+async function runLine(paneId: string, line: string): Promise<void> {
+  const before = tmux("capture-pane", "-p", "-t", paneId)
+    .split("\n")
+    .filter((r) => r).length;
+  typeText(paneId, line);
+  typeKeys(paneId, "Enter");
+  await waitFor(
+    () =>
+      tmux("capture-pane", "-p", "-t", paneId)
+        .split("\n")
+        .filter((r) => r).length > before,
+    5_000,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
 }
 
 /** A new tmux session with an idle bash; its handle and its first pane ID. */
@@ -144,6 +162,97 @@ describe.skipIf(!supported)(
         expect(existsSync(launched), "the launch line did not run").toBe(true);
       }, 20_000);
     }
+
+    const refusals: Array<{
+      name: string;
+      shell: (paneId: string, mark: string) => Promise<void>;
+      owner: (paneId: string, mark: string) => Promise<void>;
+    }> = [
+      {
+        name: "SIGINT is ignored (trap '' INT) and the owner's text is before the cursor",
+        shell: (paneId) => runLine(paneId, "trap '' INT"),
+        owner: async (paneId, mark) => {
+          typeText(paneId, `touch ${mark}-1; touch ${mark}-2`);
+        },
+      },
+      {
+        name: "SIGINT is ignored (trap '' INT) and the cursor is at the start of the owner's line",
+        shell: (paneId) => runLine(paneId, "trap '' INT"),
+        owner: async (paneId, mark) => {
+          typeText(paneId, `; touch ${mark}-1; touch ${mark}-2`);
+          typeKeys(paneId, "C-a");
+        },
+      },
+      {
+        name: "a SIGINT trap reads the next input line (trap 'read -r x' INT)",
+        shell: (paneId, mark) =>
+          runLine(paneId, `trap 'read -r x; printf "%s" "$x" > ${mark}-trap-input' INT`),
+        owner: async (paneId, mark) => {
+          typeText(paneId, `touch ${mark}-1; touch ${mark}-2`);
+          typeKeys(paneId, "C-a");
+        },
+      },
+    ];
+
+    for (const [index, testCase] of refusals.entries()) {
+      it(`types nothing and says so when ${testCase.name} (review r2 M-2)`, async () => {
+        const { handle, paneId } = await newShellSession();
+        const mark = join(dir, `refusal-${index}`);
+        const launched = join(dir, `refusal-launched-${index}`);
+        await testCase.shell(paneId, mark);
+        await testCase.owner(paneId, mark);
+
+        await expect(create().runInPane!(handle, paneId, `touch ${launched}`)).rejects.toThrow(
+          /did not show a fresh, empty prompt line after C-c \(.*\), so nothing was typed/,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        expect(existsSync(`${mark}-1`), "the owner's text before the cursor ran").toBe(false);
+        expect(existsSync(`${mark}-2`), "the owner's text after the cursor ran").toBe(false);
+        expect(existsSync(launched), "the launch line ran").toBe(false);
+        expect(existsSync(`${mark}-trap-input`), "a trap read typed text").toBe(false);
+        expect(tmux("capture-pane", "-p", "-t", paneId)).not.toContain(launched);
+      }, 20_000);
+    }
+
+    it("runs only the launch line at the bottom row of a pane whose history is full", async () => {
+      tmux("set-option", "-g", "history-limit", "3");
+      const { handle, paneId } = await newShellSession();
+      tmux("set-option", "-g", "history-limit", "2000");
+      const mark = join(dir, "owner-full");
+      const launched = join(dir, "launched-full");
+      await runLine(paneId, "for i in $(seq 80); do echo line$i; done");
+      typeText(paneId, `touch ${mark}-1; touch ${mark}-2`);
+      typeKeys(paneId, "C-a");
+      expect(tmux("display-message", "-p", "-t", paneId, "#{history_size} #{history_limit}")).toBe(
+        "3 3",
+      );
+
+      await create().runInPane!(handle, paneId, `touch ${launched}`);
+      await waitFor(() => existsSync(launched), 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(existsSync(`${mark}-1`)).toBe(false);
+      expect(existsSync(`${mark}-2`)).toBe(false);
+      expect(existsSync(launched)).toBe(true);
+    }, 20_000);
+
+    it("runs only the launch line under a prompt of two lines", async () => {
+      const { handle, paneId } = await newShellSession();
+      const mark = join(dir, "owner-two-lines");
+      const launched = join(dir, "launched-two-lines");
+      await runLine(paneId, "PS1='ao test \\w\\n\\$ '");
+      typeText(paneId, `touch ${mark}-1; touch ${mark}-2`);
+      typeKeys(paneId, "C-a", "Right", "Right");
+
+      await create().runInPane!(handle, paneId, `touch ${launched}`);
+      await waitFor(() => existsSync(launched), 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(existsSync(`${mark}-1`)).toBe(false);
+      expect(existsSync(`${mark}-2`)).toBe(false);
+      expect(existsSync(launched)).toBe(true);
+    }, 20_000);
 
     it("lists the panes of every window, and tells an idle shell from a job in the foreground", async () => {
       const { handle, paneId } = await newShellSession();
