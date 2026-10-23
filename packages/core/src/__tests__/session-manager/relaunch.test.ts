@@ -1112,6 +1112,22 @@ describe("Review r2 M-1: every reader of the agent uses the pane that the record
     expect((await sm.get("app-1"))?.runtimeHandle?.data["agentPane"]).toBe(AGENT_PANE);
   });
 
+  it("confirms the first relaunch of a one-pane session in that pane, though the owner selects a new window meanwhile", async () => {
+    // No binding yet: the session's only pane (%3) is the agent's pane. The
+    // owner opens a new window during the relaunch, so a read of the selected
+    // window (a handle without the pane) no longer sees the agent.
+    writeRecord("app-1", { status: "killed", killedReason: "agent-exited" });
+    extraPanes = [];
+    vi.mocked(plugins.agent.isProcessRunning).mockImplementation(
+      async (handle) => agentRunning && handle?.data["agentPane"] === PANE,
+    );
+
+    const result = await sm.relaunch!("app-1");
+
+    expect(result).toMatchObject({ running: true, agentState: "running" });
+    expect(recordOf("app-1")).toMatchObject({ status: "working", launchPane: PANE });
+  });
+
   it("names the pane in the session only while the binding counts", async () => {
     writeRecord("app-1");
     expect((await sm.get("app-1"))?.runtimeHandle?.data).not.toHaveProperty("agentPane");
