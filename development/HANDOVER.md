@@ -98,6 +98,17 @@
 - ao-67, ao-68 and ao-69 are done and idle; close them only on the owner's word. Watcher 932326
   (ao-68, ao-69) and 386227 (ao-67) still run.
 
+**Update 2026-10-22 20:05 EDT.**
+- Owner (19:57): "1, close all three, push". Pushed `9846cf6a..541becfb` (12 docs-only commits, gitleaks
+  clean). ao-67, ao-68 and ao-69 killed 19:58 (archives `ao-6{7,8,9}_2026-10-22T23-58-5*`); watchers
+  932326 and 386227 stopped with TERM before the kills; the kill of ao-67 detached an owner tmux client
+  (`tmux a`, pid 525939, active a minute before). Watcher 530444 watches ao-63 and ao-65.
+- RH: the fit round is split out. ao-65 writes the Herdr fit design r7 since 20:01 (brief
+  `.agent_task_fit_r7.md`, copy `brief-aofork-herdr-fit-r7.md`, deliverable
+  `development/reviews/herdr_fit_design_r7_opus.md`, scratch `/tmp/aohd4`; branch at `541becfb`; r6 copies
+  in `backup/ao-65-herdr-r6/`). RH-A and RH-B stay design-only (r6 B-1, B-2, M-3 open); a Herdr stop
+  keeps answering `unknown`. Next: a new sol reviewer reviews r7, then a worker implements the fit round.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
