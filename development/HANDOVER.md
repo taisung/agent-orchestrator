@@ -369,6 +369,16 @@ delete land/session-relaunch".
   ao-82 fast-forwarded to `1b407dbd` and checks it alone (note `.agent_note_fit2a_r2_check.md`, copy
   `note-ao-82-fit2a-r2-check.md`, file `development/reviews/herdr_fit2a_code_review_r2_sol61.md`, scratch `/tmp/aof2as2`).
 
+**Update 2026-10-23 15:15 EDT: fit-2a landed on main (not pushed, not built).**
+- ao-82's r2 check (`development/reviews/herdr_fit2a_code_review_r2_sol61.md`, `e1cefb3b`): LAND-SAFE, 0 B 0 M 0 m;
+  r1 M-1 to M-3 and Muse m-1 and m-3 closed; gates pass; red 21 = base; merge-tree with main clean.
+- LANDED 15:14 by clean cherry-pick of `36caf8a9..1b407dbd` (9 commits) as `a95608c1..5eda626c`. Outside
+  `development/` the tree differs from `1b407dbd` only by the relaunch CI fix (the diff equals `7328d710..b695d933`);
+  `git cherry` 9 of 9 `-`; gitleaks on the landed range: no leaks.
+- Open: push, build and restart need the owner's word. Doc 0004 (§1, §5a, §8) and doc 0013 describe fit-2a as
+  "in progress": correct them when the fit-2a build is live. ao-73 (watcher 2303560) and ao-82 (watcher
+  `aofork-2026-10-23a`) are idle. Next Herdr work: fit-2b (design r11 §8.2).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
