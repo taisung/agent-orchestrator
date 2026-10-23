@@ -15,8 +15,10 @@ import {
   agentPaneTty,
   exactPaneTarget,
   exactSessionTarget,
+  isRuntimeSendRefusedError,
   isTmuxPaneGone,
   loadConfig,
+  type RuntimeSendRefusedError,
 } from "@aoagents/ao-core";
 import { readCodexScreen, type CodexComposer } from "@aoagents/ao-plugin-agent-codex";
 import { exec, tmux } from "../lib/shell.js";
@@ -79,8 +81,7 @@ function hasUnsubmittedCodexInput(terminalOutput: string): boolean {
   // says "tab to queue message". This is not "delivered" yet; one extra Enter is
   // the safe recovery.
   return (
-    /tab to queue message/i.test(tail) &&
-    /(?:^|\n)\s*[›❯]\s+(?:\[Pasted Content\b|\S)/.test(tail)
+    /tab to queue message/i.test(tail) && /(?:^|\n)\s*[›❯]\s+(?:\[Pasted Content\b|\S)/.test(tail)
   );
 }
 
@@ -210,6 +211,22 @@ function pendingInputLine(delivery: AgentMessageDelivery): string | null {
   ];
   if (names.length === 0) return null;
   return `The message waits behind a pending ${names.join(" and a pending ")}: it runs after a human answers.`;
+}
+
+/**
+ * Herdr fit-2 F-3: the one stderr line of a send that the runtime refused
+ * because the agent is blocked and waits for input. Nothing more was sent;
+ * the operator answers the agent in its pane.
+ */
+function blockedSendLine(sessionName: string, refusal: RuntimeSendRefusedError): string {
+  const earlier =
+    refusal.admitted === "earlier-attempt-unconfirmed"
+      ? " An earlier prompt of this send may have been delivered; check the pane before you send again."
+      : "";
+  return (
+    `ao send: ${sessionName}: not sent: the agent in herdr pane ${refusal.target} is blocked and waits for input (agent_blocked). ` +
+    `Answer it in the pane (ao session attach ${sessionName}), then send again.${earlier}`
+  );
 }
 
 /**
@@ -425,7 +442,16 @@ export function registerSend(program: Command): void {
         // reports land in Codex's input box until a human presses Return.
         // Keep lifecycle delegation only for non-tmux runtimes.
         if ((!canUseTmux || !tmuxSessionAlive) && existingSession && sessionManager) {
-          await sessionManager.send(session, message);
+          try {
+            await sessionManager.send(session, message);
+          } catch (err) {
+            // Herdr fit-2 F-3: a blocked agent is a refusal, not a failure to report with a stack.
+            if (isRuntimeSendRefusedError(err)) {
+              console.error(blockedSendLine(session, err));
+              process.exit(1);
+            }
+            throw err;
+          }
           console.log(chalk.green("Message sent and processing"));
           return;
         }

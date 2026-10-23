@@ -127,6 +127,7 @@ import {
   type OpenCodeApiSession,
 } from "./opencode-api.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
+import { isRuntimeSendRefusedError } from "./runtime-errors.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
 import { isSafeBranchName } from "./utils/branch-name.js";
@@ -4359,6 +4360,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     try {
       await sendWithConfirmation(prepared);
     } catch (err) {
+      // Herdr fit-2 F-3: the agent is blocked and waits for input. A restore
+      // would not answer it (and refuses for Herdr); the operator answers it in
+      // the pane, so the refusal goes to the caller unchanged.
+      if (isRuntimeSendRefusedError(err)) throw err;
       const shouldRetryWithRestore =
         prepared.restoredAt === undefined && !NON_RESTORABLE_STATUSES.has(prepared.status);
 

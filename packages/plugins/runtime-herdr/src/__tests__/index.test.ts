@@ -29,7 +29,8 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 const { manifest, create, detect } = await import("../index.js");
-const { standInHerdrOnPath } = await import("./herdr-fixtures.js");
+const { herdrFixture, herdrRejection, standInHerdrOnPath } = await import("./herdr-fixtures.js");
+const { isRuntimeSendRefusedError } = await import("@aoagents/ao-core");
 
 /** herdr answers `{id, result}` on success and `{error}` on failure, both exit 0. */
 function ok(result: unknown) {
@@ -328,6 +329,13 @@ describe("sendMessage()", () => {
       .filter((a) => a?.[0] === "agent" && a?.[1] === "prompt");
   }
 
+  /** Every raw input invocation (`pane send-text`, `pane send-keys`), in order. */
+  function rawInputCalls(): string[][] {
+    return mockExecFile.mock.calls
+      .map((c) => c[1] as string[])
+      .filter((a) => a?.[0] === "pane" && (a?.[1] === "send-text" || a?.[1] === "send-keys"));
+  }
+
   // Regression guard for 0003 §8.2: prompting before the agent settles is
   // silently dropped — the text never arrives and no error is raised.
   it("waits for a settled agent before prompting", async () => {
@@ -360,16 +368,22 @@ describe("sendMessage()", () => {
     expect(promptCalls()).toHaveLength(1);
   });
 
-  it("treats blocked as settled — a prompt is how you answer a blocked agent", async () => {
+  // Herdr fit-2 F-3: a prompt or raw text could answer the blocked agent's
+  // own question, so the send refuses (was: treats blocked as settled, and
+  // a prompt is how you answer a blocked agent).
+  it("refuses a blocked agent: no prompt and no raw input (was: treats blocked as settled)", async () => {
     mockExecFile
-      .mockResolvedValueOnce(at("blocked")) // settled
-      .mockResolvedValueOnce(at("blocked")) // pre-send state
-      .mockResolvedValueOnce(ok({}))
+      .mockResolvedValueOnce(at("blocked")) // first settle poll
       .mockResolvedValue(at("working"));
 
-    await create().sendMessage(HANDLE, "yes");
+    const err = await create()
+      .sendMessage(HANDLE, "yes")
+      .catch((e: unknown) => e);
 
-    expect(argsOf(2)).toEqual(["agent", "prompt", "w7:p1", "yes"]);
+    expect(isRuntimeSendRefusedError(err)).toBe(true);
+    expect(err).toMatchObject({ admitted: "none", reason: "agent_blocked", target: "w7:p1" });
+    expect(promptCalls()).toEqual([]);
+    expect(rawInputCalls()).toEqual([]);
   });
 
   // The multi-worker campaign finding (0004 §5): herdr reports `idle` the moment
@@ -447,6 +461,121 @@ describe("sendMessage()", () => {
     await create().sendMessage(HANDLE, "hi");
 
     expect(mockExecFile.mock.calls.every((c) => !c[1]?.includes("--wait"))).toBe(true);
+  });
+});
+
+// Herdr fit-2 F-3 (design r11 5.1): T-3.1 to T-3.5.
+describe("sendMessage(): a blocked agent is a refusal (fit-2 F-3)", () => {
+  const at = (agent_status: string, agent: string | null = "claude") =>
+    ok({ pane: { pane_id: "w7:p1", agent, agent_status } });
+  const calls = (first: string, second: string) =>
+    mockExecFile.mock.calls
+      .map((c) => c[1] as string[])
+      .filter((a) => a?.[0] === first && a?.[1] === second);
+  const rawInput = () => [...calls("pane", "send-text"), ...calls("pane", "send-keys")];
+  /** herdr 0.9.5's answer to `agent prompt` for a blocked agent (exit 1, stderr). */
+  const blockedPrompt = () => herdrRejection(herdrFixture("blocked_herdr_agent_prompt"));
+
+  async function refusalOf(promise: Promise<void>) {
+    const err = await promise.catch((e: unknown) => e);
+    expect(isRuntimeSendRefusedError(err)).toBe(true);
+    return err as { admitted: string; stage: string; target: string; message: string };
+  }
+
+  it("T-3.1: the first settle poll answers blocked: refusal none, no prompt, no raw input", async () => {
+    mockExecFile.mockResolvedValueOnce(at("blocked")).mockResolvedValue(at("idle"));
+
+    const err = await refusalOf(create().sendMessage(HANDLE, "go"));
+
+    expect(err).toMatchObject({ admitted: "none", stage: "first settle wait", target: "w7:p1" });
+    expect(err.message).toContain("is blocked and waits for input (agent_blocked)");
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    expect(calls("agent", "prompt")).toEqual([]);
+    expect(rawInput()).toEqual([]);
+  });
+
+  it("T-3.2: attempt 1 answers agent_blocked (the recorded 0.9.5 line): refusal none, one prompt", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockRejectedValueOnce(blockedPrompt()) // agent prompt
+      .mockResolvedValue(at("working"));
+
+    const err = await refusalOf(create().sendMessage(HANDLE, "go"));
+
+    expect(err).toMatchObject({ admitted: "none", stage: "agent prompt, attempt 1" });
+    expect(calls("agent", "prompt")).toHaveLength(1);
+    expect(rawInput()).toEqual([]);
+  });
+
+  it("T-3.3: no consumption seen, then the settle wait answers blocked: earlier-attempt-unconfirmed", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // agent prompt
+      .mockResolvedValueOnce(at("idle")) // consumption poll: not consumed
+      .mockResolvedValueOnce(at("blocked")) // settle wait after attempt 1
+      .mockResolvedValue(at("idle"));
+
+    const err = await refusalOf(create({ deliveryTimeoutMs: 0 }).sendMessage(HANDLE, "go"));
+
+    expect(err).toMatchObject({
+      admitted: "earlier-attempt-unconfirmed",
+      stage: "settle wait after attempt 1",
+    });
+    expect(err.message).toContain("an earlier prompt of this send may have been delivered");
+    expect(calls("agent", "prompt")).toHaveLength(1);
+    expect(rawInput()).toEqual([]);
+  });
+
+  it("T-3.4: attempt 2 answers agent_blocked: earlier-attempt-unconfirmed, two prompts", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // prompt #1
+      .mockResolvedValueOnce(at("idle")) // not consumed
+      .mockResolvedValueOnce(at("idle")) // re-settle
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockRejectedValueOnce(blockedPrompt()) // prompt #2
+      .mockResolvedValue(at("idle"));
+
+    const err = await refusalOf(create({ deliveryTimeoutMs: 0 }).sendMessage(HANDLE, "go"));
+
+    expect(err).toMatchObject({
+      admitted: "earlier-attempt-unconfirmed",
+      stage: "agent prompt, attempt 2",
+    });
+    expect(calls("agent", "prompt")).toHaveLength(2);
+    expect(rawInput()).toEqual([]);
+  });
+
+  it("T-3.5: control: from idle, the consumption poll shows blocked: delivered, one prompt", async () => {
+    mockExecFile
+      .mockResolvedValueOnce(at("idle")) // settled
+      .mockResolvedValueOnce(at("idle")) // pre-send state
+      .mockResolvedValueOnce(ok({})) // agent prompt
+      .mockResolvedValue(at("blocked")); // the prompt started a turn that asks a question
+
+    await expect(create().sendMessage(HANDLE, "go")).resolves.toBeUndefined();
+
+    expect(calls("agent", "prompt")).toHaveLength(1);
+    expect(rawInput()).toEqual([]);
+  });
+
+  it("control: another prompt failure is not a refusal and is thrown as it is", async () => {
+    const failure = herdrRejection(herdrFixture("closedpane_agent_prompt"));
+    mockExecFile
+      .mockResolvedValueOnce(at("idle"))
+      .mockResolvedValueOnce(at("idle"))
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(at("idle"));
+
+    const err = await create()
+      .sendMessage(HANDLE, "go")
+      .catch((e: unknown) => e);
+
+    expect(isRuntimeSendRefusedError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
   });
 });
 

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import {
   HERDR_CLI_IDS,
   RUNTIME_NO_SERVER_ERROR_CODE,
+  RuntimeSendRefusedError,
   herdrExecOptions,
   herdrInvocationFor,
   isHerdrNoServer,
@@ -44,6 +45,7 @@ import {
   type RuntimeCreateConfig,
   type RuntimeHandle,
   type RuntimeMetrics,
+  type RuntimeSendAdmission,
   type RuntimeStopOutcome,
   type AttachInfo,
 } from "@aoagents/ao-core";
@@ -67,8 +69,16 @@ const DELIVERY_POLL_INTERVAL_MS = 400;
 /** How many times to re-send a prompt that produced no evidence of delivery. */
 const DEFAULT_SEND_ATTEMPTS = 3;
 
-/** States in which herdr considers an agent able to accept a prompt. */
-const SETTLED_STATES = new Set(["idle", "done", "blocked"]);
+/**
+ * States in which herdr considers an agent able to accept a prompt. Herdr
+ * fit-2 F-3: `blocked` is not one of them. A blocked agent waits for an
+ * answer to its own question (a permission prompt); a prompt or raw text
+ * could answer that question, so `sendMessage` refuses instead.
+ */
+const SETTLED_STATES = new Set(["idle", "done"]);
+
+/** The agent state in which `sendMessage` refuses (F-3). */
+const BLOCKED_STATE = "blocked";
 
 /** Only allow safe characters in session IDs — they become workspace labels. */
 const SAFE_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
@@ -368,7 +378,8 @@ export function create(config?: Record<string, unknown>): Runtime {
 
   /**
    * Block until herdr reports an agent in the pane, in a state that accepts input.
-   * Returns the observed state, or null on timeout.
+   * Returns the observed state, or null on timeout. Herdr fit-2 F-3: it stops
+   * at the first poll that shows the agent `blocked`, and returns that state.
    *
    * NOTE: this is necessary but NOT sufficient for delivery. herdr reports
    * `idle` as soon as it recognises the agent's prompt box, which happens
@@ -384,6 +395,7 @@ export function create(config?: Record<string, unknown>): Runtime {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const pane = await getPane(invocation, paneId);
+      if (pane?.agent && pane.agent_status === BLOCKED_STATE) return BLOCKED_STATE;
       if (pane?.agent && pane.agent_status && SETTLED_STATES.has(pane.agent_status)) {
         return pane.agent_status;
       }
@@ -400,8 +412,9 @@ export function create(config?: Record<string, unknown>): Runtime {
    * a dropped prompt left claude at `idle` with 0 tokens for 12s straight,
    * while a delivered one reached `working` within ~1.5s.
    *
-   * Starting from `idle`, any departure from `idle` is evidence. Starting from
-   * a state a previous turn left behind (`done`/`blocked`), only `working`
+   * Starting from `idle`, any departure from `idle` is evidence (also
+   * `blocked`: the prompt started a turn that now asks a question). Starting
+   * from a state a previous turn left behind (`done`), only `working`
    * distinguishes a new turn from the old one.
    */
   async function promptWasConsumed(
@@ -562,16 +575,44 @@ export function create(config?: Record<string, unknown>): Runtime {
       // Herdr fit F-2: no prompt, read or raw input for an ID outside the grammar.
       if (!isHerdrPaneId(handle.id)) throw notAPaneId("send", handle.id);
       const invocation = invocationFor(handle);
+      // Herdr fit-2 F-3: a blocked agent waits for an answer to its own
+      // question. AO sends it nothing more: no prompt, no raw text and no key
+      // (any of them could answer the question), and the caller gets a typed
+      // refusal. `admitted` says whether an earlier prompt of this send may
+      // have reached the agent.
+      const refuse = (admitted: RuntimeSendAdmission, stage: string, cause?: unknown): never => {
+        throw new RuntimeSendRefusedError(
+          `herdr agent in pane ${handle.id} is blocked and waits for input (agent_blocked); ` +
+            `nothing more was sent (${stage})` +
+            (admitted === "none" ? "" : "; an earlier prompt of this send may have been delivered"),
+          { admitted, target: handle.id, stage, cause },
+        );
+      };
       const settledState = await waitForSettledAgent(invocation, handle.id, settleTimeoutMs);
+      if (settledState === BLOCKED_STATE) refuse("none", "first settle wait");
 
       if (settledState) {
         for (let attempt = 1; attempt <= sendAttempts; attempt++) {
           const before = (await getPane(invocation, handle.id))?.agent_status ?? settledState;
-          await herdr(invocation, "agent", "prompt", handle.id, message);
+          try {
+            await herdr(invocation, "agent", "prompt", handle.id, message);
+          } catch (err) {
+            if ((err as { herdrCode?: unknown } | null)?.herdrCode === "agent_blocked") {
+              refuse(
+                attempt === 1 ? "none" : "earlier-attempt-unconfirmed",
+                `agent prompt, attempt ${attempt}`,
+                err,
+              );
+            }
+            throw err;
+          }
           if (await promptWasConsumed(invocation, handle.id, before, deliveryTimeoutMs)) return;
           // No evidence it landed. The agent is almost certainly still warming
           // up, so let it settle again before retrying rather than hammering.
-          await waitForSettledAgent(invocation, handle.id, settleTimeoutMs);
+          const settledAgain = await waitForSettledAgent(invocation, handle.id, settleTimeoutMs);
+          if (settledAgain === BLOCKED_STATE) {
+            refuse("earlier-attempt-unconfirmed", `settle wait after attempt ${attempt}`);
+          }
         }
       }
 

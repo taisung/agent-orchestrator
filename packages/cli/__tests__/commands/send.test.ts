@@ -63,6 +63,8 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     agentPaneOf: actual.agentPaneOf,
     agentPaneTty: actual.agentPaneTty,
     isTmuxPaneGone: actual.isTmuxPaneGone,
+    // The real guard of a refused send (herdr fit-2 F-3).
+    isRuntimeSendRefusedError: actual.isRuntimeSendRefusedError,
     loadConfig: () => {
       if (!mockConfigRef.current) {
         throw new Error("no config");
@@ -352,9 +354,7 @@ describe("send command", () => {
         if (args[0] === "capture-pane") return "Working\nesc to interrupt";
         return "";
       });
-      mockDetectActivity
-        .mockReturnValueOnce("idle")
-        .mockReturnValueOnce("active");
+      mockDetectActivity.mockReturnValueOnce("idle").mockReturnValueOnce("active");
 
       await program.parseAsync(["node", "test", "send", "app-1", "hello", "opencode"]);
 
@@ -674,9 +674,7 @@ describe("send command", () => {
         if (args[0] === "capture-pane") return "Working\nesc to interrupt";
         return "";
       });
-      mockDetectActivity
-        .mockReturnValueOnce("idle")
-        .mockReturnValueOnce("active");
+      mockDetectActivity.mockReturnValueOnce("idle").mockReturnValueOnce("active");
 
       const filePath = join(tmpdir(), `ao-send-message-${Date.now()}.txt`);
       writeFileSync(filePath, "from file");
@@ -945,5 +943,103 @@ describe("send through the OpenCode API (I-5)", () => {
     expect(help).toContain(
       "--timeout <seconds> Max seconds to wait for idle (no effect for an OpenCode session with a stored session ID)",
     );
+  });
+});
+
+// Herdr fit-2 F-3 (design r11 5.1, T-3.7): a send that the runtime refused
+// because the agent is blocked prints one stderr line and exits 1.
+describe("send to a blocked herdr agent (fit-2 F-3, T-3.7)", () => {
+  function herdrConfig(): Record<string, unknown> {
+    return {
+      configPath: "/tmp/agent-orchestrator.yaml",
+      defaults: { runtime: "herdr", agent: "claude-code", workspace: "worktree", notifiers: [] },
+      projects: {
+        "my-app": {
+          name: "My App",
+          sessionPrefix: "app",
+          path: "/tmp/my-app",
+          defaultBranch: "main",
+          repo: "org/my-app",
+          agent: "claude-code",
+          runtime: "herdr",
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    };
+  }
+
+  /** The refusal as another copy of core makes it: the guard reads its code and shape. */
+  function refusal(admitted: "none" | "earlier-attempt-unconfirmed"): Error {
+    return Object.assign(new Error("herdr agent in pane w7:p1 is blocked and waits for input"), {
+      code: "ERR_RUNTIME_SEND_REFUSED",
+      reason: "agent_blocked",
+      admitted,
+      target: "w7:p1",
+      stage: "first settle wait",
+    });
+  }
+
+  beforeEach(() => {
+    mockConfigRef.current = herdrConfig();
+    mockSessionManager.get.mockResolvedValue({
+      id: "app-1",
+      projectId: "my-app",
+      status: "working",
+      activity: "idle",
+      branch: null,
+      issueId: null,
+      pr: null,
+      workspacePath: null,
+      runtimeHandle: { id: "w7:p1", runtimeName: "herdr", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: { agent: "claude-code" },
+    });
+  });
+
+  const LINE =
+    "ao send: app-1: not sent: the agent in herdr pane w7:p1 is blocked and waits for input (agent_blocked). " +
+    "Answer it in the pane (ao session attach app-1), then send again.";
+
+  it("admitted none: exit 1, exactly the refusal line on stderr, nothing on stdout", async () => {
+    mockSessionManager.send.mockRejectedValue(refusal("none"));
+
+    await expect(program.parseAsync(["node", "test", "send", "app-1", "hello"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(consoleErrorSpy.mock.calls).toEqual([[LINE]]);
+    expect(consoleSpy).not.toHaveBeenCalled();
+    expect(mockTmux).not.toHaveBeenCalled();
+  });
+
+  it("admitted earlier-attempt-unconfirmed: the line says that an earlier prompt may have been delivered", async () => {
+    mockSessionManager.send.mockRejectedValue(refusal("earlier-attempt-unconfirmed"));
+
+    await expect(program.parseAsync(["node", "test", "send", "app-1", "hello"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    expect(consoleErrorSpy.mock.calls).toEqual([
+      [
+        `${LINE} An earlier prompt of this send may have been delivered; check the pane before you send again.`,
+      ],
+    ]);
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it("control: another send error is thrown as before, with no refusal line", async () => {
+    const other = new Error("Cannot send to session app-1: runtime is not alive");
+    mockSessionManager.send.mockRejectedValue(other);
+
+    await expect(program.parseAsync(["node", "test", "send", "app-1", "hello"])).rejects.toBe(
+      other,
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 });
