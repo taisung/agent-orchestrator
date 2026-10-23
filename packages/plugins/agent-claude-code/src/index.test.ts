@@ -66,13 +66,7 @@ vi.mock("node:os", () => ({
   homedir: mockHomedir,
 }));
 
-import {
-  create,
-  manifest,
-  default as defaultExport,
-  resetPsCache,
-  METADATA_UPDATER_SCRIPT,
-} from "./index.js";
+import { create, manifest, default as defaultExport, resetPsCache, METADATA_UPDATER_SCRIPT } from "./index.js";
 import IDLE_BYPASS_307 from "./__fixtures__/claude-2.1.307-idle-bypass.txt?raw";
 import IDLE_PASTE_HINT_307 from "./__fixtures__/claude-2.1.307-idle-paste-hint.txt?raw";
 import RUNNING_01_306 from "./__fixtures__/claude-2.1.306-running-01.txt?raw";
@@ -1191,8 +1185,12 @@ describe("METADATA_UPDATER_SCRIPT content", () => {
   it("does NOT use ^-anchored regexes directly on $command for gh/git detection", () => {
     // The old buggy patterns matched $command with ^ anchor.
     // After the fix, ^ is still used but on $clean_command (which has cd stripped).
-    expect(METADATA_UPDATER_SCRIPT).not.toMatch(/"\$command"\s*=~\s*\^gh/);
-    expect(METADATA_UPDATER_SCRIPT).not.toMatch(/"\$command"\s*=~\s*\^git/);
+    expect(METADATA_UPDATER_SCRIPT).not.toMatch(
+      /"\$command"\s*=~\s*\^gh/,
+    );
+    expect(METADATA_UPDATER_SCRIPT).not.toMatch(
+      /"\$command"\s*=~\s*\^git/,
+    );
   });
 
   it("strips cd prefixes with both && and ; delimiters", () => {
@@ -1204,15 +1202,21 @@ describe("METADATA_UPDATER_SCRIPT content", () => {
   });
 
   it("detects gh pr create on clean_command", () => {
-    expect(METADATA_UPDATER_SCRIPT).toMatch(/"\$clean_command"\s*=~\s*\^gh\[/);
+    expect(METADATA_UPDATER_SCRIPT).toMatch(
+      /"\$clean_command"\s*=~\s*\^gh\[/,
+    );
   });
 
   it("detects git checkout -b on clean_command", () => {
-    expect(METADATA_UPDATER_SCRIPT).toMatch(/"\$clean_command"\s*=~\s*\^git\[.*checkout/);
+    expect(METADATA_UPDATER_SCRIPT).toMatch(
+      /"\$clean_command"\s*=~\s*\^git\[.*checkout/,
+    );
   });
 
   it("detects gh pr merge on clean_command", () => {
-    expect(METADATA_UPDATER_SCRIPT).toMatch(/"\$clean_command"\s*=~\s*\^gh\[.*merge/);
+    expect(METADATA_UPDATER_SCRIPT).toMatch(
+      /"\$clean_command"\s*=~\s*\^gh\[.*merge/,
+    );
   });
 
   it("limits update_metadata_key to the keys the hook writes (m-10)", () => {

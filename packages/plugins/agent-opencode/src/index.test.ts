@@ -86,10 +86,8 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     appendActivityEntry: mockAppendActivityEntry,
     readLastActivityEntry: mockReadLastActivityEntry,
     recordTerminalActivity: mockRecordTerminalActivity,
-    getOpenCodeSession: (...args: unknown[]) =>
-      (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
-    callOpenCodeApi: (...args: unknown[]) =>
-      (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
+    getOpenCodeSession: (...args: unknown[]) => (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
+    callOpenCodeApi: (...args: unknown[]) => (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
     // The I-3 session calls of prepareAgentSession, discard and confirmLaunch.
     createOpenCodeSession: mockCreateOpenCodeSession,
     listOpenCodeModels: mockListOpenCodeModels,
@@ -1022,13 +1020,10 @@ describe("getRestoreCommand", () => {
   });
 
   it("refuses the restore when no session ID is stored, and names remap (no title search)", async () => {
-    const restore = agent.getRestoreCommand!(makeSession({ metadata: {} }), {
-      name: "proj",
-      repo: "o/r",
-      path: "/p",
-      defaultBranch: "main",
-      sessionPrefix: "p",
-    });
+    const restore = agent.getRestoreCommand!(
+      makeSession({ metadata: {} }),
+      { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
+    );
     await expect(restore).rejects.toBeInstanceOf(SessionNotRestorableError);
     await expect(restore).rejects.toThrow(
       "no stored OpenCode session ID for test-1; run `ao session remap test-1`",
@@ -1051,17 +1046,12 @@ describe("getRestoreCommand", () => {
   });
 
   it("does not restore when session.get fails for another reason", async () => {
-    mockGetOpenCodeSession.mockRejectedValue(
-      new Error("opencode api session.get failed: HTTP 500"),
-    );
+    mockGetOpenCodeSession.mockRejectedValue(new Error("opencode api session.get failed: HTTP 500"));
     await expect(
-      agent.getRestoreCommand!(makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }), {
-        name: "proj",
-        repo: "o/r",
-        path: "/p",
-        defaultBranch: "main",
-        sessionPrefix: "p",
-      }),
+      agent.getRestoreCommand!(
+        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
+        { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
+      ),
     ).rejects.toThrow("HTTP 500");
   });
 });
@@ -1195,7 +1185,9 @@ describe("getActivityState with activity JSONL", () => {
       modifiedAt: new Date(),
     });
 
-    const result = await agent.getActivityState(makeSession({ runtimeHandle: makeTmuxHandle() }));
+    const result = await agent.getActivityState(
+      makeSession({ runtimeHandle: makeTmuxHandle() }),
+    );
     expect(result?.state).toBe("waiting_input");
   });
 
@@ -1206,7 +1198,9 @@ describe("getActivityState with activity JSONL", () => {
       modifiedAt: new Date(),
     });
 
-    const result = await agent.getActivityState(makeSession({ runtimeHandle: makeTmuxHandle() }));
+    const result = await agent.getActivityState(
+      makeSession({ runtimeHandle: makeTmuxHandle() }),
+    );
     expect(result?.state).toBe("blocked");
   });
 
@@ -1219,10 +1213,7 @@ describe("getActivityState with activity JSONL", () => {
     });
 
     const result = await agent.getActivityState(
-      makeSession({
-        runtimeHandle: makeTmuxHandle(),
-        metadata: { opencodeSessionId: "ses_abc123" },
-      }),
+      makeSession({ runtimeHandle: makeTmuxHandle(), metadata: { opencodeSessionId: "ses_abc123" } }),
       60_000,
     );
     expect(result?.state).toBe("active");
@@ -1246,11 +1237,7 @@ describe("getActivityState with activity JSONL", () => {
   it("falls back to JSONL entry with age decay — old entry becomes idle", async () => {
     mockTmuxWithProcess("opencode");
     mockReadLastActivityEntry.mockResolvedValueOnce({
-      entry: {
-        ts: new Date(Date.now() - 120_000).toISOString(),
-        state: "active",
-        source: "terminal",
-      },
+      entry: { ts: new Date(Date.now() - 120_000).toISOString(), state: "active", source: "terminal" },
       modifiedAt: new Date(Date.now() - 120_000),
     });
     mockGetOpenCodeSession.mockResolvedValue(null);
@@ -1708,12 +1695,13 @@ describe("restore commands against the OpenCode 2.x CLI", () => {
       getExit: 1,
     });
 
-    expectSettings(run.store[existingId], { model, agent: existing.agent });
-    expect(run.status).toBe(1);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain("opencode api session.get exited with status 1");
-    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
-  });
+      expectSettings(run.store[existingId], { model, agent: existing.agent });
+      expect(run.status).toBe(1);
+      expect(run.tuiCalls).toHaveLength(0);
+      expect(run.stderr).toContain("opencode api session.get exited with status 1");
+      expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
+    },
+  );
 
   it("restore stops with status 1 before any API call when the model has no provider", async () => {
     const providerless = "glm-5.3";
@@ -1721,11 +1709,12 @@ describe("restore commands against the OpenCode 2.x CLI", () => {
       list: [existing],
     });
 
-    expect(run.status).toBe(1);
-    expect(run.apiCalls).toHaveLength(0);
-    expect(run.tuiCalls).toHaveLength(0);
-    expect(run.stderr).toContain(providerless);
-  });
+      expect(run.status).toBe(1);
+      expect(run.apiCalls).toHaveLength(0);
+      expect(run.tuiCalls).toHaveLength(0);
+      expect(run.stderr).toContain(providerless);
+    },
+  );
 
   it("restore applies the project model through the API, with no TUI model flag", async () => {
     const run = runAgainstFakeCli(await restoreCommand(model), { list: [existing] });
