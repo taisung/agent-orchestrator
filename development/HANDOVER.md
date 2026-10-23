@@ -139,6 +139,160 @@
   `development/reviews/session_relaunch_review_r3_sol61.md`, watcher 2157657, state
   `~/.cache/fleet_watch/aofork-2026-10-22i`). ao-63 and ao-65 are idle; watcher 530444 still watches them.
 
+**Update 2026-10-22 21:15 EDT.**
+- Owner (21:07): "1 (b), 2 yes, 3 (a), push, close both": OQ-F3 (b) two rounds, OQ-F1 (b), OQ-F2 (a)
+  F-9 with the r7 review safeguards. Pushed `541becfb..389b8dfe` (7 commits incl. the lint fix
+  `133e2bcf`); CI on `389b8dfe`: no run registered at 21:13, check again. ao-70 and ao-71 killed 21:08
+  (archives `ao-70_2026-10-23T01-08-51-741Z`, `ao-71_2026-10-23T01-08-52-111Z`); watchers 1353610 and
+  1732201 stopped with TERM first.
+- ao-73 (Claude Code Opus 5.5) implements Herdr fit-1 on `389b8dfe` (brief `brief-aofork-herdr-fit1-impl.md`,
+  scratch `/tmp/aofit1`, watcher 2303560 state `aofork-2026-10-22j`): F-1, F-2, F-6 without
+  `preflight()`, F-5, docs, plus an orchestrator-added interim startup guard (for a Herdr record neither
+  the no-server code nor `isAlive` false is "gone" in `isOrchestratorRuntimeAlive` and
+  `checkOrchestratorLiveness`), because F-1 alone would bring back r5 M-4 (the design defers it to F-7).
+  Note: `feat/session-relaunch` also changes claude-code, codex and gemini `isProcessRunning`; the
+  second branch to land needs a merge by a worker.
+- ao-65 writes Herdr fit-2 design r8 since 21:12 (brief `.agent_task_fit2_r8.md`, copy
+  `brief-aofork-herdr-fit2-r8.md`, deliverable `development/reviews/herdr_fit2_design_r8_opus.md`, scratch
+  `/tmp/aohd5`, no script fixtures; r7 copies in `backup/ao-65-herdr-r7/`).
+
+**Update 2026-10-22 21:45 EDT.**
+- Pushed `389b8dfe..b789579f` (owner) because GitHub registered no CI run for `389b8dfe`; a Monitor task
+  waits for the `b789579f` runs.
+- Relaunch review r3 by ao-72 (`b4b18bf6`): NOT-LAND-SAFE, 0 B 3 new M (M-1 a reading SIGINT trap with
+  prefilled input passes the fresh-prompt check; M-2 the hook's wall-clock start time is not the event
+  order, and a failed or skipped hook leaves the old pointer; M-3 output and sends follow a bound pane
+  moved to another session); gates pass. ao-72 killed 21:38 (archive `ao-72_2026-10-23T01-38-32-679Z`).
+- **Owner decision 21:37 (relaunch option 1):** a narrow round 4, then land with documented limits. Fix
+  r3 M-3, the direct `ao send` gap (`send.ts:349-363`) and the failed-hook part of M-2; accept as
+  documented limits r3 M-1, the M-2 dispatch-delay and clock residual, and r1 M-6 (until same-ID R3).
+  Then one more review, then the landing. ao-63 works on round 4 since 21:40 (brief
+  `.agent_task_relaunch_r4.md`, copy `brief-aofork-session-relaunch-r4.md`, scratch `/tmp/aorl4`).
+- Herdr fit-2 design r8 by ao-65 on main (`0488d24d`, with doc 0004 facts and 5 `r8_` text fixtures):
+  admission lock A over G and the reservation, Herdr reservations with a pending handle and a launch
+  claim (also for agents without `prepareAgentSession`), rule Q (ordinary rollback only for Q0, Q1, Q2),
+  `runtimeForHandle`; 14 product files, size L; OQ-F4..F8. ao-65 idle, done.
+- **Owner (21:37): the fit-2 r8 review gets two lenses**: ao-74 (Codex `gpt-6.1-sol` xhigh, review file
+  `development/reviews/herdr_fit2_design_review_r8_sol61.md`) and ao-75 (OpenCode Muse Spark 1.3, review
+  file `development/reviews/herdr_fit2_design_review_r8_muse13.md`), blind to each other; briefs
+  `brief-review-herdr-fit2-r8-{sol61,muse13}.md`; watcher 2712612 (state `aofork-2026-10-22k`).
+  Owner question (21:30): why no OpenCode workers today: the routing gives HIGH work Opus authors and a
+  sol reviewer; OpenCode Muse is the L0/LOW author (ao-70) and a cheap extra lens, not a HIGH reviewer.
+
+**Update 2026-10-22 22:35 EDT.**
+- CI: still no run on `main` after `541becfb` (pushes `389b8dfe` 21:08 and `b789579f` 21:24); GitHub
+  incident "Project updates delayed" (monitoring) lists Actions. Owner decision on CI open.
+- fit-2 r8 reviews on main (`4766e6b7`): ao-74 sol NOT-SOUND 0 B 3 M 5 m (lock A name changes across the
+  first mkdir under a symlinked parent; CLI reuse skips the live-launch rule; a successful restore never
+  releases its claim); ao-75 Muse 1.3 SOUND-WITH-CHANGES 0 M 6 m (2 shared minors; missed all 3 majors;
+  $0.05, about 6 min). Owner decision on r9 open; ao-74 and ao-75 idle (close on the owner's word).
+- Herdr fit-1 by ao-73 done at `e322e338` (`389b8dfe..e322e338`, 4 commits, 31 files): F-1, F-2 with the
+  interim startup guard (also probes Herdr records that `sm.list` shows killed/exited), F-6 pins without
+  preflight, F-5, docs; core 1695+1, runtime-herdr 143, cli 409; red 22 -> 21 (N-1 left). Commit 1 ran
+  without the pre-commit hook (no `.husky/_` in the new worktree); gitleaks on the range is clean.
+  Format-only hunks in 5 agent files (owner decision open: revert commit or keep). Code review not
+  started yet (owner decision open: sol plus Muse, or sol only).
+- Relaunch round 4 by ao-63 done at `7a20242f` (`9e501603..7a20242f`, 5 commits, 15 files; 3825/1/29;
+  red 0/16/6/0): bound-pane ownership in getOutput, sendMessage and `ao send`, the unusable mark for a
+  failed hook, the three accepted limits in help and DEVELOPMENT.md. ao-76 (Codex `gpt-6.1-sol` xhigh)
+  does the landing review r4 (branch `review/session-relaunch-r4` at `7a20242f`, brief
+  `brief-review-session-relaunch-r4-sol61.md`, review file `development/reviews/session_relaunch_review_r4_sol61.md`,
+  watcher 3574080 state `aofork-2026-10-22l`).
+
+**Update 2026-10-22 23:05 EDT.**
+- Owner (22:45): "1 (a), 2 (a), 3 r9, 4 close both, 5 (c)". ao-74 and ao-75 killed 22:46 (watcher 2712612
+  stopped first). CI: wait (no run on main since `541becfb`).
+- fit-1 note 1 by ao-73: `9d51982b` restores the base formatting of five agent files; the orchestrator
+  checked that each file is token-equal across the commit (whitespace, line breaks, trailing commas). The
+  fit-1 tip is `9d51982b` (branch `feat/fit1-impl-read-agent-task-md-in-your-worktree-once-it-exists`).
+  The orchestrator sent note 1 while an owner tmux client was attached to ao-73 and active about 35 s
+  before (`tmux a`, pid 2596026): the box held only a dim suggestion and the transcript shows no owner
+  input; later sends gate on `client_activity`.
+- fit-1 code review r1, two blind lenses: ao-77 (Codex `gpt-6.1-sol` xhigh, review file
+  `development/reviews/herdr_fit1_code_review_r1_sol61.md`) and ao-78 (OpenCode Muse 1.3, review file
+  `..._muse13.md`), branches `review/fit1-code-r1-{sol,muse}` at `9d51982b`, briefs
+  `brief-review-herdr-fit1-code-{sol61,muse13}.md`, watcher 3857091 (state `aofork-2026-10-22m`).
+- ao-65 writes Herdr fit-2 design r9 since 22:55 (compacted while idle before; brief `.agent_task_fit2_r9.md`,
+  copy `brief-aofork-herdr-fit2-r9.md`, deliverable `development/reviews/herdr_fit2_design_r9_opus.md`,
+  scratch `/tmp/aohd6`; r8 copies in `backup/ao-65-herdr-r8/`).
+- ao-76 does the relaunch landing review r4 (since 22:35).
+
+**Update 2026-10-22 23:45 EDT.**
+- Relaunch: review r4 by ao-76 on main (`05bb30b6`): NOT-LAND-SAFE 0 B 2 M (M-1 an old launch's failed hook
+  replaces the current launch's per-session mark; M-2 an unwritable conversation directory fails both
+  writes, so the stale ID resumes); gates pass, merge into main clean. Owner (23:10) "6 option 1, ao-76
+  checks": ao-63 does round 5 (per-launch marks for M-1, M-2 as limit 4 with the unstarted and SIGKILL
+  hooks, help text corrected; brief `brief-aofork-session-relaunch-r5.md`, `.agent_task_relaunch_r5.md`,
+  scratch `/tmp/aorl5`); then ao-76 checks. The review copy on main has two scratch UUIDs replaced by
+  placeholders (gitleaks).
+- fit-1 code review r1 on main (`7f044478`): ao-77 sol NOT-LAND-SAFE 0 B 2 M 1 m (M-1 a held Herdr record whose
+  pane answers alive is passed over, so isolated `ao start` starts a second orchestrator; M-2 direct isolated
+  core start reaches no guard; m-1 no two-LF test); ao-78 Muse LAND-SAFE 6 m (m-4/m-5 = sol M-1 rated minor).
+  Merge: clean into main; 4 conflicting paths with `feat/session-relaunch` (`docs/DEVELOPMENT.md`, `start.ts`,
+  `start.test.ts`, `session-manager.ts`). Owner (23:35) "7 option 1": ao-73 does note 2 (`.agent_note_2.md`,
+  copy `note-ao-73-fit1-guard.md`): refuse the alive pass-over in both modes, document the `done` record,
+  direct-core and handleless gaps until fit-2 G, two tests, the recovery for each refusal; then ao-77 checks.
+- fit-2 design r9 by ao-65 on main (`258d85bf`): 17 product files, L; new OQ-F9 to OQ-F12 (split recommended).
+  Owner (23:35) "8 option 1": two blind reviews, ao-79 (Codex `gpt-6.1-sol` xhigh, `herdr_fit2_design_review_r9_sol61.md`)
+  and ao-80 (OpenCode Muse 1.3, `..._muse13.md`), briefs `brief-review-herdr-fit2-r9-{sol61,muse13}.md`,
+  branches at `5f38ffd4`, watcher 347765 (state `aofork-2026-10-22n`). Commit both reviews to main together.
+- Idle and done: ao-65, ao-77, ao-78 (ao-77 keeps for the note 2 check), ao-76 (waits for round 5).
+
+**Update 2026-10-23 07:30 EDT.**
+- Results since 23:45, all on main: relaunch round 5 check by ao-76 (`b9ba8768`) LAND-WITH-CHANGES 0 B 0 M 1 m
+  (two equal non-UUID tokens pass the lookup) plus a test gap (a non-ENOENT mark read error); fit-2 r9 reviews
+  (`5c464d53`): ao-79 sol NOT-SOUND 0 B 1 M 4 m (M-1 a thrown success or partial publication of restore keeps
+  its live claim), ao-80 Muse SOUND-WITH-CHANGES 4 m; both agree with OQ-F4 to OQ-F12; fit-1 note 2 check by
+  ao-77 (`2e41ccc8`) LAND-WITH-CHANGES 0 B 0 M 3 m (archive mkdir in the recipe, conditional refusal wording,
+  `merged` is repaired before startup), r1 M-1 closed, recovery the same on pre-fit main.
+- Owner (2026-10-23) "start the Herdr work": ao-73 does fit-1 note 3, docs-only (`.agent_note_3.md`, copy
+  `note-ao-73-fit1-docs.md`, marker `/tmp/aofit1n3-marker`); the orchestrator checks the diff, no new review.
+  ao-65 does fit-2 design r10, narrow (`.agent_task_fit2_r10.md`, copy `brief-aofork-herdr-fit2-r10.md`,
+  scratch `/tmp/aohd7`, fixtures `r10_`); base fit-1 `ee3534d7`, relaunch `9f20ce29`; then ao-79 and ao-80
+  check it. ao-65's branch fast-forwarded to `a6d7c4b0` (its r9 copies, identical to main, backed up in
+  `backup-ao-65-r9/`). Watchers 2303560 (ao-73) and 530444 (ao-63, ao-65).
+- Still open for the owner: decision 9 (relaunch round 6 or land), 11 (OQ-F4 to OQ-F12), 13 (landing order:
+  relaunch first, then ao-73 merges main into fit-1 and ao-77 checks), 14 (close ao-78).
+
+**Update 2026-10-23 08:05 EDT** (the 07:30 header above was written at 07:16).
+- fit-1 note 3 by ao-73: `60da85ee`, docs-only (archive `mkdir -p` in the recipe, conditional refusal text,
+  `merged` removed from the unprobed limit); orchestrator check: `start.ts` code tokens equal (parse-aware
+  walk without JSDoc), docs diff in scope; merge into main clean, 4 paths conflict with relaunch. fit-1 is
+  ready to land.
+- fit-2 design r10 by ao-65 on main (`0d5c6c67`). Checks on main (`0166bad3`): ao-80 Muse SOUND-WITH-CHANGES
+  0 M 2 m; ao-79 sol NOT-SOUND 0 B 2 M 3 m (M-1 the rollback takes missing identity keys such as
+  `restoredAt` from the current record and can adopt a replacement; M-2 a retry that commits and then throws
+  keeps the own claim and warns of a replacement; m-1 T-7.9b zero-probe oracle vs list enrichment; m-2 the
+  killed variants of the interim describe are not-reused; m-3 the OQ-F13 premise is wrong).
+- Owner (about 07:55) "11 accept, 9 (1), 14 close ao-78 and other inactive agents, 13 as suggested":
+  OQ-F4 to OQ-F13 accepted as recommended (TODO D-9). ao-63 does relaunch round 6
+  (`.agent_task_relaunch_r6.md`, copy `brief-aofork-session-relaunch-r6.md`, scratch `/tmp/aorl6`: an explicit
+  UUID check of the context token, the EISDIR mark test); the orchestrator checks its gates. Landing order:
+  relaunch first (ao-63 merges main into its branch, then the orchestrator fast-forwards main), then ao-73
+  merges main into fit-1 and ao-77 checks, then a second fast-forward. Build, restart of 4027448 and
+  4027591, and push each need the owner's word.
+- Closed: ao-76, ao-78, ao-80 (their files are on main or in `backup-closed-sessions/`); watcher 3574080
+  stopped. Kept: ao-63 (round 6), ao-65 and ao-79 (the next fit-2 step), ao-73 and ao-77 (the fit-1 merge).
+- Open for the owner: the fit-2 step after the r10 checks.
+
+**Update 2026-10-23 09:10 EDT: relaunch landed on main and pushed (`origin/main` `1de0a7df`; not built, not restarted).**
+- Relaunch round 6 by ao-63 (`b08e8141`): explicit UUID check of the context token, `EISDIR` mark test;
+  orchestrator check passed. A real merge of main conflicts in 3 paths (the branch sits on `3e366a01`, the old
+  defect A/B branch; main holds copies of its 16 commits plus `a8bda7ff`, `fa6fd1ad`, `133e2bcf`), so the
+  "clean merge" of decision 13 was wrong. A clean cherry-pick candidate (`land/session-relaunch`, `804d1347`,
+  local branch, scratch worktree under the orchestrator scratchpad) passed the full gates (3834/1/29, red
+  R1 0 R2 16 R3 6 R4 0). Owner "16b, 15 (1), then push": ao-63 merged main `d3e2ed8c` into its branch
+  (`7328d710`, 12 hunks, each main's side, tree equal to the cherry-pick oracle); new reviewer ao-81 (Codex sol,
+  `session_relaunch_merge_check_sol61.md`) LAND-SAFE 0/0/0; main fast-forwarded to `7328d710`. The live `ao`
+  and the lifecycle workers 4027448 and 4027591 still run the old build: build and restart need the owner's word.
+- fit-2 design r11 by ao-65 runs (`.agent_task_fit2_r11.md`, copy `brief-aofork-herdr-fit2-r11.md`, scratch
+  `/tmp/aohd8`): sol M-1 fixed adoption identity, M-2 retry after effect, 3 sol and 2 Muse minors, OQ-F4 to
+  OQ-F13 decided, the fit-2a scope; then ao-79 checks it alone.
+- Next for fit-1 (decision 13): ao-73 merges the new main into fit-1 (`60da85ee`; 4 paths conflict with relaunch),
+  ao-77 checks, then a second fast-forward.
+- `land/session-relaunch` (`804d1347`, patch-equal copies of the relaunch commits) and its scratch worktree can
+  go; ask the owner before the branch delete. ao-81 is done (watcher 1832900).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").

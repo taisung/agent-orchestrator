@@ -1,0 +1,119 @@
+# r9: does `herdr pane run` send its request when the server's ping answers a newer protocol (23)?
+# r8 measured `pane run` only against protocol 19 (sol r8 review, fixture note). A fake server at
+# HERDR_SOCKET_PATH logs every connection. No real herdr server runs. Every herdr call runs under
+# strace (network calls only). The protocol-19 case repeats r8 as the control of this run.
+import json, os, socket, subprocess, threading
+
+ROOT = "/tmp/aohd6"
+PONG = {"type": "pong", "version": "0.9.5", "protocol": 22, "capabilities": {"live_handoff": True,
+        "detached_server_daemon": False, "endpoint_protocol_generation": 1, "surface_interest": True,
+        "health_check": True, "ssh_agent_registration": True}}
+
+
+def line(o):
+    return (json.dumps(o) + "\n").encode()
+
+
+def rid(req):
+    try:
+        return json.loads(req).get("id")
+    except Exception:
+        return None
+
+
+class FakeServer:
+    def __init__(self, path, handler):
+        self.path, self.handler, self.log = path, handler, []
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        self.sock.listen(8)
+        self.sock.settimeout(0.2)
+        self.stop = False
+        self.t = threading.Thread(target=self.loop, daemon=True)
+        self.t.start()
+
+    def loop(self):
+        while not self.stop:
+            try:
+                c, _ = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            c.settimeout(5)
+            buf = b""
+            try:
+                while b"\n" not in buf:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+            except socket.timeout:
+                pass
+            req = buf.decode(errors="replace").strip()
+            self.log.append(req)
+            out = self.handler(req)
+            try:
+                if out:
+                    c.sendall(out)
+            finally:
+                c.close()
+
+    def close(self):
+        self.stop = True
+        self.t.join(2)
+        self.sock.close()
+        os.unlink(self.path)
+
+
+def env_for(sock_path):
+    return {
+        "HOME": f"{ROOT}/home", "TMPDIR": f"{ROOT}/tmp", "PATH": f"{ROOT}/bin",
+        "XDG_CONFIG_HOME": f"{ROOT}/home/.config", "XDG_STATE_HOME": f"{ROOT}/state",
+        "XDG_DATA_HOME": f"{ROOT}/data", "XDG_CACHE_HOME": f"{ROOT}/cache",
+        "XDG_RUNTIME_DIR": f"{ROOT}/run", "HERDR_SOCKET_PATH": sock_path,
+    }
+
+
+log = []
+
+
+def run(name, args, request_answer, ping_answer):
+    path = f"{ROOT}/fake/{name}.sock"
+
+    def handler(req):
+        try:
+            is_ping = json.loads(req).get("method") == "ping"
+        except Exception:
+            is_ping = False
+        return ping_answer(req) if is_ping else request_answer(req)
+
+    fs = FakeServer(path, handler)
+    trace = f"{ROOT}/out/{name}.strace"
+    try:
+        p = subprocess.run(["strace", "-f", "-e", "trace=network", "-o", trace, "herdr"] + args,
+                           env=env_for(path), capture_output=True, timeout=20)
+        code, out, err = p.returncode, p.stdout.decode(), p.stderr.decode()
+    except subprocess.TimeoutExpired:
+        code, out, err = "timeout after 20 s", "", ""
+    reqs = list(fs.log)
+    fs.close()
+    connects = [l.strip() for l in open(trace) if "connect(" in l]
+    families = sorted({c.split("sa_family=")[1].split(",")[0] for c in connects if "sa_family=" in c})
+    entry = [f"{name}: herdr {' '.join(args)}", f"  exit={code}", f"  stdout={out!r}", f"  stderr={err!r}",
+             f"  connections that reached the fake server: {len(reqs)}"]
+    entry += [f"  connection {j}: {r}" for j, r in enumerate(reqs, 1)]
+    entry.append(f"  strace connect() calls: {len(connects)}, address families: {families}")
+    log.append("\n".join(entry))
+    print(log[-1][:1500])
+
+
+open(f"{ROOT}/tmp/x.sh", "w").write("exit 0\n")
+RUN = ["pane", "run", "w1:p1", "bash", f"{ROOT}/tmp/x.sh"]
+okrun = lambda req: line({"id": rid(req), "result": {"type": "ok"}})
+p19 = lambda req: line({"id": rid(req), "result": {**PONG, "version": "0.8.0", "protocol": 19}})
+p23 = lambda req: line({"id": rid(req), "result": {**PONG, "version": "0.9.9", "protocol": 23}})
+
+run("r9_pane_run_ping_protocol_23", RUN, okrun, p23)
+run("r9_pane_run_ping_protocol_19_control", RUN, okrun, p19)
+open(f"{ROOT}/out/r9_cli_forms_log.txt", "w").write("\n".join(log) + "\n")

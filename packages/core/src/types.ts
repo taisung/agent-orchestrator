@@ -350,6 +350,39 @@ export interface Runtime {
 
   /** Get info needed to attach a human to this session (for Terminal plugin) */
   getAttachInfo?(handle: RuntimeHandle): Promise<AttachInfo>;
+
+  /**
+   * Optional (session relaunch, 2026-10-22): every pane of the session, in
+   * every window. Resolves null only when the runtime answers that the
+   * session does not exist; rejects when it cannot tell. Without it, core
+   * does not relaunch an agent in a pane.
+   */
+  listPanes?(handle: RuntimeHandle): Promise<RuntimePaneState[] | null>;
+
+  /**
+   * Optional (session relaunch, 2026-10-22): put the shell of pane `paneId`
+   * (an ID from `listPanes`) into an empty input state, then type `command`
+   * and Enter into it. Every call targets that pane ID, never the active
+   * pane. Core calls it only after `listPanes` showed the pane's own shell
+   * in the foreground (`shellIdle`).
+   */
+  runInPane?(handle: RuntimeHandle, paneId: string, command: string): Promise<void>;
+}
+
+/** One pane of `Runtime.listPanes` (session relaunch, 2026-10-22). */
+export interface RuntimePaneState {
+  /** The runtime's ID of the pane, for example tmux `%4`. */
+  paneId: string;
+  /** The pane's terminal device, for example `/dev/pts/4`. */
+  tty: string;
+  /** The name of the pane's foreground process, for example `bash` or `claude`. */
+  foregroundCommand: string;
+  /**
+   * True when the pane's own shell is the foreground process group of the
+   * pane's terminal (no job runs, the shell reads input); false when another
+   * process group is in the foreground; null when the runtime cannot tell.
+   */
+  shellIdle: boolean | null;
 }
 
 /**
@@ -589,7 +622,43 @@ export interface Agent {
    * `getActivityState` already reads richer data from the agent's own session files.
    */
   recordActivity?(session: Session, terminalOutput: string): Promise<void>;
+
+  /**
+   * Optional (session relaunch, 2026-10-22): the ID of the agent conversation
+   * that this session ran last, for `ao session relaunch --continue`. It never
+   * guesses (for example the newest conversation of the workspace, which can
+   * belong to another session): when it does not know the ID for sure, it
+   * resolves `{ id: null, reason }`. An agent without it cannot continue a
+   * conversation on a relaunch.
+   */
+  getOwnConversationId?(
+    session: Session,
+    context: AgentConversationContext,
+  ): Promise<AgentConversationLookup>;
 }
+
+/** What core gives `Agent.getOwnConversationId` (session relaunch, 2026-10-22). */
+export interface AgentConversationContext {
+  /** The session's data directory: the `AO_DATA_DIR` of its pane. */
+  dataDir: string;
+  /**
+   * The launch token of the session's last launch (`AgentLaunchConfig.launchToken`,
+   * kept in the record). Only a conversation that the agent of that launch
+   * recorded counts.
+   */
+  launchToken: string;
+  /** The pane of that launch: its runtime pane ID and its terminal. */
+  pane: { id: string; tty: string };
+}
+
+/** The answer of `Agent.getOwnConversationId`. */
+export type AgentConversationLookup =
+  | {
+      id: string;
+      /** Where the ID comes from, for the operator. */
+      source: string;
+    }
+  | { id: null; reason: string };
 
 export interface AgentLaunchConfig {
   sessionId: SessionId;
@@ -625,6 +694,21 @@ export interface AgentLaunchConfig {
    * Use --subagent flag to select the subagent.
    */
   subagent?: string;
+  /**
+   * Session relaunch (2026-10-22): the agent conversation to continue, as
+   * `Agent.getOwnConversationId` found it. Claude Code: `--resume <id>`.
+   * Core sets it only for an agent that has `getOwnConversationId`.
+   */
+  continueConversationId?: string;
+  /**
+   * Session relaunch (2026-10-22): a random token of this launch, which core
+   * keeps in the record. An agent that records its conversation for
+   * `getOwnConversationId` gives it to the agent process only (Claude Code:
+   * `env AO_LAUNCH_TOKEN=<token> claude ...` in the launch command), never to
+   * the runtime environment, so a process in another pane of the session
+   * does not have it.
+   */
+  launchToken?: string;
 }
 
 /** What `Agent.prepareAgentSession` gets besides the launch config. */
@@ -1740,6 +1824,94 @@ export interface SessionManager {
    */
   deliver?(sessionId: SessionId, message: string): Promise<SessionMessageDelivery>;
   claimPR(sessionId: SessionId, prRef: string, options?: ClaimPROptions): Promise<ClaimPRResult>;
+  /**
+   * Optional (session relaunch, 2026-10-22): start the agent of a session
+   * again in its existing pane, after its agent process ended (for example
+   * after `/exit`), with the launch command that AO builds now. A refusal
+   * throws `SessionRelaunchRefusedError` and changes nothing.
+   */
+  relaunch?(sessionId: SessionId, options?: SessionRelaunchOptions): Promise<SessionRelaunchResult>;
+}
+
+/** Options of `SessionManager.relaunch` (session relaunch, 2026-10-22). */
+export interface SessionRelaunchOptions {
+  /** Continue the session's own agent conversation (`--continue`). */
+  continueConversation?: boolean;
+  /**
+   * The caller's terminal device (for example `/dev/pts/4`), or null when it
+   * has none. When it is the terminal of the session's pane, the caller runs
+   * in the session's own pane.
+   */
+  callerTty?: string | null;
+  /**
+   * Whether the caller is the foreground process group of its terminal
+   * (review r2): true or false, null when the caller cannot tell. In the
+   * session's own pane only a foreground caller starts the agent there; a
+   * background one (`&`) does not own the terminal. Undefined: not checked.
+   */
+  callerForeground?: boolean | null;
+  /**
+   * Run the launch script as a child of the caller on the caller's terminal.
+   * Core calls it only when the caller runs in the session's own pane; a
+   * relaunch from the own pane without it is refused.
+   */
+  runInCallerTerminal?: (launch: SessionRelaunchLaunch) => SessionRelaunchChild;
+  /**
+   * Called once directly before the agent starts: the last moment for the
+   * caller to write to a terminal that the agent then takes.
+   */
+  onStart?: (plan: SessionRelaunchPlan) => void;
+  /**
+   * Called at once for each problem of the record's end state (for example
+   * the launch keys could not be cleared yet), also while the agent runs.
+   */
+  onWarning?: (message: string) => void;
+}
+
+/** The launch that `SessionRelaunchOptions.runInCallerTerminal` runs. */
+export interface SessionRelaunchLaunch {
+  /** The launch script: run it with `bash <script>`. */
+  script: string;
+  /**
+   * The working directory of the agent (the session's workspace). The script
+   * replaces itself with the agent (`exec`), so the child is the agent.
+   */
+  cwd: string;
+}
+
+/** The child of a relaunch in the caller's own pane. */
+export interface SessionRelaunchChild {
+  /** Resolves with the exit code of the child (128 + the signal number when a signal ended it). */
+  readonly exited: Promise<number>;
+}
+
+/** What a relaunch starts (session relaunch, 2026-10-22). */
+export interface SessionRelaunchPlan {
+  sessionId: SessionId;
+  /** "pane": typed into the shell of the pane; "caller-terminal": a child of the caller in that pane. */
+  mode: "pane" | "caller-terminal";
+  agentName: string;
+  model?: string;
+  launchCommand: string;
+  /** The conversation that the agent continues (`--continue`), and the source of its ID. */
+  conversation?: { id: string; source: string };
+}
+
+/** The result of `SessionManager.relaunch`. */
+export interface SessionRelaunchResult {
+  plan: SessionRelaunchPlan;
+  /** True when the agent process ran within the bounded wait after the start. */
+  running: boolean;
+  /**
+   * "running": seen running; "absent": a definite answer that it does not run
+   * (or the caller's child ended); "unknown": no definite answer within the
+   * bound (a probe that did not answer or rejected), so it may have started.
+   */
+  agentState: "running" | "absent" | "unknown";
+  /** Lines for the operator: a record write of the end state that did not happen. */
+  warnings: string[];
+  /** Mode "caller-terminal": the agent's child process. */
+  child?: SessionRelaunchChild;
 }
 
 /** OpenCode-specific session manager with remap capability */
@@ -1881,6 +2053,21 @@ export class SessionLaunchInProgressError extends Error {
         `Stop ao process ${launcherPid} or wait for the launch to finish, then try again.`,
     );
     this.name = "SessionLaunchInProgressError";
+  }
+}
+
+/**
+ * Thrown when `SessionManager.relaunch` refuses (session relaunch,
+ * 2026-10-22). Nothing was changed; `next` is the next action for the operator.
+ */
+export class SessionRelaunchRefusedError extends Error {
+  constructor(
+    public readonly sessionId: string,
+    public readonly reason: string,
+    public readonly next: string,
+  ) {
+    super(`Cannot relaunch session ${sessionId}: ${reason}`);
+    this.name = "SessionRelaunchRefusedError";
   }
 }
 

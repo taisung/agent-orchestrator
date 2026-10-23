@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,10 +11,15 @@ import {
   type RuntimeCreateConfig,
   type RuntimeHandle,
   type RuntimeMetrics,
+  type RuntimePaneState,
   type AttachInfo,
   shellEscape,
   exactPaneTarget,
   exactSessionTarget,
+  AGENT_PANE_FORMAT,
+  agentPaneOf,
+  agentPaneTty,
+  isTmuxPaneGone,
   RUNTIME_NO_SERVER_ERROR_CODE,
 } from "@aoagents/ao-core";
 
@@ -91,9 +96,242 @@ function tmuxProbeError(command: string, err: unknown): TmuxProbeError {
   return new TmuxProbeError(`tmux ${command} could not answer: ${detail}`, code, { cause: err });
 }
 
+/** A tmux pane ID, for example `%4`. */
+const PANE_ID = /^%\d+$/;
+
+/** The `display-message` format that names a pane and its session, for `getOutput`. */
+const PANE_OWNER_FORMAT = "#{pane_id} #{session_name}";
+
+/**
+ * The fields of `listPanes`, one pane per line, separated by spaces (tmux
+ * 3.4 prints a tab in a format as "_"). Only the last field, the foreground
+ * command, can hold a space.
+ */
+const PANE_LIST_FORMAT = "#{pane_id} #{pane_tty} #{pane_pid} #{pane_current_command}";
+
+/** How long `runInPane` waits after C-c, so the shell shows its new prompt first. */
+const RUN_IN_PANE_CLEAR_MS = 300;
+
+/** How long `runInPane` waits in all for the evidence of an empty prompt after a C-c. */
+const RUN_IN_PANE_EVIDENCE_MS = 1_500;
+
+/** How often `runInPane` reads the pane again while it waits for that evidence. */
+const RUN_IN_PANE_POLL_MS = 100;
+
+/** The cursor and screen fields of a pane snapshot, before the screen rows. */
+const SNAPSHOT_FORMAT =
+  "#{cursor_x} #{cursor_y} #{history_size} #{history_limit} #{pane_height} #{pane_in_mode} #{alternate_on}";
+
+/** One read of a pane: its cursor, its history counters and its visible rows. */
+export interface PaneSnapshot {
+  cursorX: number;
+  cursorY: number;
+  historySize: number;
+  historyLimit: number;
+  /** Not in copy mode or another mode, and not on the alternate screen. */
+  plain: boolean;
+  /** The visible rows, exactly `pane_height` of them, trailing spaces removed. */
+  rows: string[];
+}
+
+/**
+ * The answer of `display-message -p SNAPSHOT_FORMAT ; capture-pane -p` for
+ * one pane (one tmux call, so the cursor and the rows are of one moment),
+ * or null when it is not one.
+ */
+export function parsePaneSnapshot(answer: string): PaneSnapshot | null {
+  const [head = "", ...screen] = answer.split("\n");
+  const match = /^(\d+) (\d+) (\d+) (\d+) ([1-9]\d*) ([01]) ([01])$/.exec(head);
+  if (!match) return null;
+  const [, x, y, size, limit, height, inMode, alternate] = match.map(Number);
+  if (y >= height || screen.length > height) return null;
+  const rows = Array.from({ length: height }, (_, i) => (screen[i] ?? "").trimEnd());
+  return {
+    cursorX: x,
+    cursorY: y,
+    historySize: size,
+    historyLimit: limit,
+    plain: inMode === 0 && alternate === 0,
+    rows,
+  };
+}
+
+/** The text of a row up to the cursor column (the row padded with spaces). */
+function textBeforeCursor(row: string, cursorX: number): string {
+  return row.padEnd(cursorX).slice(0, cursorX);
+}
+
+/**
+ * Why `snap` is not an empty prompt line, or null when it is one: the text
+ * before the cursor is not blank (the prompt), nothing follows the cursor
+ * on its row, and the rows below the cursor are empty.
+ */
+export function emptyPromptProblem(snap: PaneSnapshot): string | null {
+  if (!snap.plain) return "the pane is in a mode or on the alternate screen";
+  const row = snap.rows[snap.cursorY] ?? "";
+  if (!textBeforeCursor(row, snap.cursorX).trim()) return "no prompt before the cursor";
+  if (row.slice(snap.cursorX).trim()) return "text after the cursor";
+  if (snap.rows.slice(snap.cursorY + 1).some((r) => r.trim())) return "text below the cursor";
+  return null;
+}
+
+/**
+ * Review r2 M-2: the evidence that a C-c gave the shell a fresh, empty input
+ * line. `a` is the pane after a first C-c (an empty prompt line), `b` after
+ * a second one. A shell that discards its input on C-c echoes `^C` (unless
+ * `echo-control-characters` is off) at the end of the prompt of `a` and
+ * shows the same prompt on a later row, with nothing after the cursor. A
+ * shell that ignores SIGINT leaves the screen as it is, and so does a SIGINT
+ * trap that reads input without printing a prompt. A trap that prints the
+ * prompt and then reads input (`read -e -i`) gives the same evidence as a
+ * fresh prompt: a known limit (review r3 M-1), documented in DEVELOPMENT.md.
+ * Returns null for that evidence, else what is missing. The rows that `a` had above its cursor must be the rows above
+ * that prompt in `b`, scrolled by the lines that the history gained; when
+ * the history is full (its size stays at its limit) every scroll that keeps
+ * those rows equal is tried, and exactly one must give the evidence.
+ */
+export function freshPromptProblem(a: PaneSnapshot, b: PaneSnapshot): string | null {
+  const before = emptyPromptProblem(a);
+  if (before) return `after the first C-c: ${before}`;
+  const after = emptyPromptProblem(b);
+  if (after) return `after the second C-c: ${after}`;
+  if (b.rows.length !== a.rows.length) return "the pane changed its size";
+  const unchanged =
+    a.cursorX === b.cursorX &&
+    a.cursorY === b.cursorY &&
+    a.historySize === b.historySize &&
+    a.rows.every((row, i) => row === b.rows[i]);
+  if (unchanged) return "the second C-c changed nothing (the shell may ignore SIGINT)";
+  if (b.historySize < a.historySize) return "the history of the pane was cleared";
+  const prompt = textBeforeCursor(a.rows[a.cursorY] ?? "", a.cursorX);
+  const minShift = b.historySize - a.historySize;
+  const maxShift = b.historySize < b.historyLimit ? minShift : a.cursorY;
+  let passing = 0;
+  for (let shift = minShift; shift <= maxShift; shift++) {
+    const echoRow = a.cursorY - shift;
+    if (echoRow < 0) break;
+    // The rows above the prompt of `a`, scrolled by `shift`.
+    let same = true;
+    for (let i = 0; i < echoRow && same; i++) same = b.rows[i] === a.rows[i + shift];
+    if (!same || b.cursorY <= echoRow) continue;
+    // The prompt of `a` with the echo of the second C-c, or without it.
+    const echo = (b.rows[echoRow] ?? "").trimEnd();
+    if (echo !== `${prompt}^C`.trimEnd() && echo !== prompt.trimEnd()) continue;
+    // The upper lines of a prompt of several lines repeat those of `a`.
+    const upper = b.cursorY - echoRow - 1;
+    if (upper > a.cursorY) continue;
+    let repeated = true;
+    for (let j = 0; j < upper && repeated; j++) {
+      repeated = b.rows[echoRow + 1 + j] === a.rows[a.cursorY - upper + j];
+    }
+    if (!repeated) continue;
+    if (
+      b.cursorX !== a.cursorX ||
+      textBeforeCursor(b.rows[b.cursorY] ?? "", b.cursorX) !== prompt
+    ) {
+      continue;
+    }
+    passing++;
+  }
+  if (passing === 1) return null;
+  return passing === 0
+    ? "no new prompt line after the second C-c"
+    : "more than one way to read the scrolled screen";
+}
+
+interface ParsedPane {
+  paneId: string;
+  tty: string;
+  pid: number;
+  foregroundCommand: string;
+}
+
+/** One line of PANE_LIST_FORMAT, or null when it is not one. */
+function parsePaneLine(line: string): ParsedPane | null {
+  const match = /^(\S+) (\S+) (\S+) (.*)$/.exec(line);
+  const [, paneId = "", tty = "", pid = "", rawCommand = ""] = match ?? [];
+  const foregroundCommand = rawCommand.trim();
+  if (
+    !match ||
+    !PANE_ID.test(paneId) ||
+    !/^\/dev\/\S+$/.test(tty) ||
+    !/^[1-9]\d*$/.test(pid) ||
+    !foregroundCommand
+  ) {
+    return null;
+  }
+  return { paneId, tty, pid: Number(pid), foregroundCommand };
+}
+
+/**
+ * Session relaunch: true when the process group of the pane's shell `pid` is
+ * the foreground process group of its terminal (no job runs, so the shell
+ * reads the next input line), false when another group is in the
+ * foreground, null when /proc cannot tell (no Linux /proc, or the process
+ * ended). Fields 5 and 8 of /proc/<pid>/stat: pgrp and tpgid.
+ */
+function shellWaitsForInput(pid: number): boolean | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+  } catch {
+    return null;
+  }
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const pgrp = Number(fields[2]);
+  const tpgid = Number(fields[5]);
+  if (!Number.isInteger(pgrp) || !Number.isInteger(tpgid) || tpgid <= 0) return null;
+  return pgrp === tpgid;
+}
+
 /** Run a tmux command and return stdout */
 async function tmux(...args: string[]): Promise<string> {
   return runTmux(args);
+}
+
+/**
+ * Review r3 M-3: a tmux pane keeps its ID when it moves to another session,
+ * so a bound pane counts as the agent's pane only while it belongs to the
+ * handle's session, as in the agents' process checks and in `runInPane`.
+ * Resolves when it does. Rejects when the pane is gone, belongs to another
+ * session, or tmux could not answer, so a send never types into a pane of
+ * another session and never reports success for a message it did not type.
+ * `typed`: the check before the Enter, after the text.
+ */
+async function assertAgentPane(
+  handle: RuntimeHandle,
+  paneId: string,
+  typed = false,
+): Promise<void> {
+  const outcome = typed ? "the message was typed but not submitted" : "nothing was sent";
+  let stdout: string;
+  try {
+    stdout = await tmux("list-panes", "-t", paneId, "-F", AGENT_PANE_FORMAT);
+  } catch (err: unknown) {
+    if (isTmuxPaneGone(err, paneId)) {
+      throw new Error(
+        `tmux pane ${paneId}, the agent's pane of session ${handle.id}, no longer exists: ${outcome}`,
+        { cause: err },
+      );
+    }
+    throw tmuxProbeError(`list-panes -t ${paneId}`, err);
+  }
+  let tty: string | null;
+  try {
+    tty = agentPaneTty(stdout, paneId, handle.id);
+  } catch (err: unknown) {
+    throw new TmuxProbeError(
+      err instanceof Error ? err.message : String(err),
+      "ERR_RUNTIME_PROBE",
+      { cause: err },
+    );
+  }
+  if (tty === null) {
+    throw new Error(
+      `tmux pane ${paneId}, the agent's pane of session ${handle.id}, now belongs to another tmux session: ${outcome}`,
+    );
+  }
 }
 
 /** Run a tmux command with an optional client environment and return stdout */
@@ -187,7 +425,12 @@ export function create(): Runtime {
     },
 
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
-      const pane = exactPaneTarget(handle.id);
+      // The agent's pane when core names it (review r2 M-1), and only while
+      // it belongs to the handle's session (review r3 M-3); else the
+      // session's current pane.
+      const agentPane = agentPaneOf(handle);
+      if (agentPane) await assertAgentPane(handle, agentPane);
+      const pane = agentPane ?? exactPaneTarget(handle.id);
       // Clear any partial input
       await tmux("send-keys", "-t", pane, "C-u");
 
@@ -223,19 +466,46 @@ export function create(): Runtime {
       // Small delay to let tmux process the pasted text before pressing Enter.
       // Without this, Enter can arrive before the text is fully rendered.
       await sleep(300);
+      // Again before the key that submits the text: the pane can move to
+      // another session in the meantime (review r3 M-3).
+      if (agentPane) await assertAgentPane(handle, agentPane, true);
       await tmux("send-keys", "-t", pane, "Enter");
     },
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {
+      const agentPane = agentPaneOf(handle);
       try {
-        return await tmux(
+        if (!agentPane) {
+          return await tmux(
+            "capture-pane",
+            "-t",
+            exactPaneTarget(handle.id),
+            "-p",
+            "-S",
+            `-${lines}`,
+          );
+        }
+        // Review r3 M-3: the pane's session and its rows in one tmux call, so
+        // the pane cannot move between them. A pane that now belongs to
+        // another session reads as a pane that is gone (no output).
+        const answer = await tmux(
+          "display-message",
+          "-p",
+          "-t",
+          agentPane,
+          PANE_OWNER_FORMAT,
+          ";",
           "capture-pane",
           "-t",
-          exactPaneTarget(handle.id),
+          agentPane,
           "-p",
           "-S",
           `-${lines}`,
         );
+        const end = answer.indexOf("\n");
+        const owner = end < 0 ? answer : answer.slice(0, end);
+        if (owner !== `${agentPane} ${handle.id}`) return "";
+        return end < 0 ? "" : answer.slice(end + 1);
       } catch {
         return "";
       }
@@ -283,6 +553,141 @@ export function create(): Runtime {
         // Quoted: zsh expands a word that starts with "=" to a command path.
         command: `tmux attach -t ${shellEscape(target)}`,
       };
+    },
+
+    /**
+     * Session relaunch (2026-10-22): every pane of the session, in every
+     * window (`list-panes -s`), with its pane ID, its TTY, its foreground
+     * command, and whether its own shell waits for input (`shellIdle`, from
+     * the shell's /proc stat). Null only for tmux's own "not found" answer.
+     * Any other failure, or an answer that is not a list of panes, rejects.
+     */
+    async listPanes(handle: RuntimeHandle): Promise<RuntimePaneState[] | null> {
+      const target = exactSessionTarget(handle.id);
+      let answer: string;
+      try {
+        answer = await tmux("list-panes", "-s", "-t", target, "-F", PANE_LIST_FORMAT);
+      } catch (err: unknown) {
+        if (isTmuxTargetNotFound(err)) return null;
+        throw tmuxProbeError(`list-panes -s -t ${target}`, err);
+      }
+      const panes = answer.split("\n").map(parsePaneLine);
+      if (answer === "" || panes.some((pane) => pane === null)) {
+        throw new TmuxProbeError(
+          `tmux list-panes -s -t ${target} answered ${JSON.stringify(answer.slice(0, 120))}, not a list of panes`,
+          "ERR_RUNTIME_PROBE",
+          { cause: undefined },
+        );
+      }
+      return panes.map((pane) => {
+        const { pid, ...state } = pane as ParsedPane;
+        return { ...state, shellIdle: shellWaitsForInput(pid) };
+      });
+    },
+
+    /**
+     * Session relaunch (2026-10-22): type `command` and Enter into the shell
+     * of pane `paneId`. Every tmux call targets that pane ID, so a change of
+     * the active window or pane cannot redirect the text. First it checks
+     * that the pane still belongs to the session and that its own shell
+     * still waits for input. Then it ends any mode of the pane (copy mode)
+     * and sends C-c: a shell without a SIGINT trap drops the whole input
+     * line, wherever the cursor is, and also a continuation (PS2) input, and
+     * shows a new prompt. It types the text literally only on the evidence of
+     * `freshPromptProblem`, waits 300 ms, and sends Enter. A SIGINT trap that
+     * prints the prompt and reads input passes that check (review r3 M-1):
+     * its prefilled text can run, or it can take the typed line.
+     */
+    async runInPane(handle: RuntimeHandle, paneId: string, command: string): Promise<void> {
+      if (!PANE_ID.test(paneId)) {
+        throw new Error(`Invalid tmux pane ID ${JSON.stringify(paneId)}`);
+      }
+      let answer: string;
+      try {
+        answer = await tmux("display-message", "-p", "-t", paneId, "#{session_name} #{pane_pid}");
+      } catch (err: unknown) {
+        throw new Error(`Failed to read tmux pane ${paneId}`, { cause: err });
+      }
+      const [sessionName, pid] = answer.split(" ");
+      if (sessionName !== handle.id) {
+        throw new Error(
+          `tmux pane ${paneId} belongs to ${JSON.stringify(sessionName ?? "")}, not to session ${handle.id}`,
+        );
+      }
+      if (shellWaitsForInput(Number(pid)) !== true) {
+        throw new Error(`The shell of tmux pane ${paneId} does not wait for input now`);
+      }
+      // Review r2 M-2: C-c clears the input line only in a shell that does
+      // not ignore or trap SIGINT, and the foreground check above does not
+      // show that. So a second C-c must show a fresh prompt line (see
+      // freshPromptProblem) before any text is typed; else nothing is typed.
+      const snapshot = async (): Promise<PaneSnapshot> => {
+        let answer: string;
+        try {
+          answer = await tmux(
+            "display-message",
+            "-p",
+            "-t",
+            paneId,
+            SNAPSHOT_FORMAT,
+            ";",
+            "capture-pane",
+            "-p",
+            "-t",
+            paneId,
+          );
+        } catch (err: unknown) {
+          throw new Error(`Failed to read tmux pane ${paneId}`, { cause: err });
+        }
+        const snap = parsePaneSnapshot(answer);
+        if (!snap) {
+          throw new Error(
+            `tmux answered ${JSON.stringify(answer.slice(0, 80))} for pane ${paneId}, not a cursor and a screen`,
+          );
+        }
+        return snap;
+      };
+      /** Read the pane until `problem` gives none, or the evidence time ends. */
+      const settled = async (
+        problem: (snap: PaneSnapshot) => string | null,
+      ): Promise<{ snap: PaneSnapshot; problem: string | null }> => {
+        const end = Date.now() + RUN_IN_PANE_EVIDENCE_MS;
+        await sleep(RUN_IN_PANE_CLEAR_MS);
+        for (;;) {
+          const snap = await snapshot();
+          const found = problem(snap);
+          if (!found || Date.now() >= end) return { snap, problem: found };
+          await sleep(RUN_IN_PANE_POLL_MS);
+        }
+      };
+      // The recovery comes first: a caller may cut the message (core shows
+      // the first 200 characters of the cause of a failed relaunch).
+      const refuse = (problem: string): never => {
+        throw new Error(
+          `Clear the input line of tmux pane ${paneId} by hand, then try again (or start the program there by hand): after C-c its shell showed no fresh, empty prompt line (${problem}), so nothing was typed. It may ignore or trap SIGINT`,
+        );
+      };
+      const keys = async (...args: string[]): Promise<void> => {
+        try {
+          await tmux("send-keys", "-t", paneId, ...args);
+        } catch (err: unknown) {
+          throw new Error(`Failed to type the command into tmux pane ${paneId}`, { cause: err });
+        }
+      };
+      try {
+        await tmux("copy-mode", "-q", "-t", paneId);
+      } catch (err: unknown) {
+        throw new Error(`Failed to type the command into tmux pane ${paneId}`, { cause: err });
+      }
+      await keys("C-c");
+      const first = await settled(emptyPromptProblem);
+      if (first.problem) refuse(`after the first C-c: ${first.problem}`);
+      await keys("C-c");
+      const second = await settled((snap) => freshPromptProblem(first.snap, snap));
+      if (second.problem) refuse(second.problem);
+      await keys("-l", command);
+      await sleep(300);
+      await keys("Enter");
     },
   };
 }

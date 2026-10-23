@@ -10,8 +10,12 @@ import {
   type Session,
   type SessionManager,
   type SessionMessageDelivery,
+  AGENT_PANE_FORMAT,
+  agentPaneOf,
+  agentPaneTty,
   exactPaneTarget,
   exactSessionTarget,
+  isTmuxPaneGone,
   loadConfig,
 } from "@aoagents/ao-core";
 import { readCodexScreen, type CodexComposer } from "@aoagents/ao-plugin-agent-codex";
@@ -130,7 +134,43 @@ function exactTmuxTargets(name: string): { session: string; pane: string } | nul
   }
 }
 
-async function sendViaTmux(pane: string, message: string): Promise<void> {
+/**
+ * Why the agent's pane of a relaunched session (core names it in the
+ * session's runtime handle) is not the agent's pane any more, or null when
+ * it still is. A tmux pane keeps its ID when it moves to another session, so
+ * the pane counts only while it belongs to the session's tmux session, as
+ * in the agents' process checks (review r3 M-3). Every answer of tmux other
+ * than its whole "can't find pane" answer is unknown, and unknown is a
+ * reason too: nothing is sent.
+ */
+async function agentPaneProblem(paneId: string, tmuxSession: string): Promise<string | null> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("tmux", ["list-panes", "-t", paneId, "-F", AGENT_PANE_FORMAT]));
+  } catch (err: unknown) {
+    if (isTmuxPaneGone(err, paneId)) {
+      return `its agent's tmux pane ${paneId} (bound by its last relaunch) no longer exists`;
+    }
+    const detail = err instanceof Error ? err.message.replace(/\s+/g, " ").trim() : String(err);
+    return `tmux could not tell whether pane ${paneId} still belongs to tmux session ${tmuxSession} (${detail})`;
+  }
+  try {
+    return agentPaneTty(stdout, paneId, tmuxSession) === null
+      ? `its agent's tmux pane ${paneId} (bound by its last relaunch) now belongs to another tmux session`
+      : null;
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return `tmux could not tell whether pane ${paneId} still belongs to tmux session ${tmuxSession} (${detail})`;
+  }
+}
+
+/** Type the message into `pane`; `ensurePane` runs before the first key and before the Enter. */
+async function sendViaTmux(
+  pane: string,
+  message: string,
+  ensurePane: (stage: "send" | "submit") => Promise<void> = async () => {},
+): Promise<void> {
+  await ensurePane("send");
   await exec("tmux", ["send-keys", "-t", pane, "C-u"]);
   await sleep(200);
 
@@ -157,6 +197,7 @@ async function sendViaTmux(pane: string, message: string): Promise<void> {
   }
 
   await sleep(300);
+  await ensurePane("submit");
   await exec("tmux", ["send-keys", "-t", pane, "Enter"]);
 }
 
@@ -298,10 +339,41 @@ export function registerSend(program: Command): void {
           }
         }
 
+        // A relaunched session: the agent's pane that its last relaunch bound
+        // (core names it in the runtime handle). Every read and key of this
+        // command goes to that pane, and only while it belongs to the session
+        // (review r3 M-3); a session that binds no pane keeps the current pane
+        // of its tmux session.
+        const agentPane =
+          canUseTmux && targets && existingSession?.runtimeHandle
+            ? agentPaneOf(existingSession.runtimeHandle)
+            : null;
+        async function ensureAgentPane(stage: "send" | "submit" | "retry" = "send"): Promise<void> {
+          if (!agentPane) return;
+          const problem = await agentPaneProblem(agentPane, tmuxTarget);
+          if (!problem) return;
+          const outcome =
+            stage === "send"
+              ? `Message not sent to ${session}`
+              : stage === "submit"
+                ? `Message typed into ${session} but not submitted (no Enter)`
+                : `Message sent to ${session}, but no further Enter was pressed`;
+          console.error(chalk.red(`${outcome}: ${problem}`));
+          process.exit(1);
+        }
+        if (tmuxSessionAlive) await ensureAgentPane();
+
         // Helper to capture output from the resolved tmux target
         async function captureOutput(lines: number): Promise<string> {
           if (!targets) return "";
-          const output = await tmux("capture-pane", "-t", targets.pane, "-p", "-S", String(-lines));
+          const output = await tmux(
+            "capture-pane",
+            "-t",
+            agentPane ?? targets.pane,
+            "-p",
+            "-S",
+            String(-lines),
+          );
           return output || "";
         }
 
@@ -359,8 +431,8 @@ export function registerSend(program: Command): void {
         }
 
         // Only a live tmux session reaches this point, so its name is a valid target.
-        const pane = exactPaneTarget(tmuxTarget);
-        await sendViaTmux(pane, message);
+        const pane = agentPane ?? exactPaneTarget(tmuxTarget);
+        await sendViaTmux(pane, message, ensureAgentPane);
 
         // A Codex pane gets no key after the message: an Enter can submit
         // text that another sender typed, or answer a prompt. The command
@@ -431,11 +503,13 @@ export function registerSend(program: Command): void {
             return;
           }
           if (hasUnsubmittedCodexInput(output)) {
+            await ensureAgentPane("retry");
             await tmux("send-keys", "-t", pane, "Enter");
             await sleep(1000);
             continue;
           }
           if (attempt < 3) {
+            await ensureAgentPane("retry");
             await tmux("send-keys", "-t", pane, "Enter");
             await sleep(1000);
           }

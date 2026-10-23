@@ -1,0 +1,23 @@
+== r8_pane_run_pane_not_found_after_request
+2367283 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_pane_run_pane_not_found_after_request.sock"}, 63) = 0
+2367283 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_pane_run_pane_not_found_after_request.sock"}, 63) = 0
+== r8_pane_run_ping_protocol_19
+2367131 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_pane_run_ping_protocol_19.sock"}, 51) = 0
+== r8_pane_run_stale_socket_file
+2367291 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_pane_run_stale_socket_file.sock"}, 52) = -1 ECONNREFUSED (Connection refused)
+== r8_status_json_ping_protocol_19
+2367240 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_status_json_ping_protocol_19.sock"}, 54) = 0
+== r8_status_json_ping_protocol_23
+2367267 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_status_json_ping_protocol_23.sock"}, 54) = 0
+== r8_ws_create_error_after_request
+2367272 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_error_after_request.sock"}, 55) = 0
+2367272 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_error_after_request.sock"}, 55) = 0
+== r8_ws_create_ping_protocol_19
+2367094 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_ping_protocol_19.sock"}, 52) = 0
+== r8_ws_create_ping_protocol_23
+2367251 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_ping_protocol_23.sock"}, 52) = 0
+== r8_ws_create_server_sends_cli_no_server_text
+2367278 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_server_sends_cli_no_server_text.sock"}, 67) = 0
+2367278 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_server_sends_cli_no_server_text.sock"}, 67) = 0
+== r8_ws_create_stale_socket_file
+2367287 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd5/fake/r8_ws_create_stale_socket_file.sock"}, 53) = -1 ECONNREFUSED (Connection refused)
