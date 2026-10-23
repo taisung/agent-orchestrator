@@ -2,6 +2,10 @@ import {
   shellEscape,
   HERDR_RUNTIME_NAME,
   exactPaneTarget,
+  AGENT_PANE_FORMAT,
+  agentPaneOf,
+  agentPaneTty,
+  isTmuxPaneGone,
   isHerdrProcessRunning,
   setupPathWrapperWorkspace,
   buildAgentPath,
@@ -183,8 +187,11 @@ function createGeminiAgent(): Agent {
       // process list): it proves nothing about the agent.
       // Built before any call: a name that the helper refuses is not a pane
       // that the check found without the agent, so the call rejects.
+      const agentPane = agentPaneOf(handle);
       const paneTarget =
-        handle.runtimeName === "tmux" && handle.id ? exactPaneTarget(handle.id) : null;
+        handle.runtimeName === "tmux" && handle.id
+          ? (agentPane ?? exactPaneTarget(handle.id))
+          : null;
       const processRe = /(?:^|\/)gemini(?:\s|$)/;
 
       // herdr owns the PTY and reports a pane's foreground processes directly,
@@ -197,12 +204,27 @@ function createGeminiAgent(): Agent {
       if (paneTarget) {
         let ttyOut: string;
         try {
-          ({ stdout: ttyOut } = await execFileAsync(
-            "tmux",
-            ["list-panes", "-t", paneTarget, "-F", "#{pane_tty}"],
-            { timeout: 30_000 },
-          ));
+          if (agentPane) {
+            // Session relaunch (review r2 M-1): only the agent's own pane,
+            // never the session's current window, which the owner can change.
+            // A pane that now belongs to another session is not this agent's.
+            const { stdout } = await execFileAsync(
+              "tmux",
+              ["list-panes", "-t", agentPane, "-F", AGENT_PANE_FORMAT],
+              { timeout: 30_000 },
+            );
+            const tty = agentPaneTty(stdout, agentPane, handle.id);
+            if (tty === null) return false;
+            ttyOut = tty;
+          } else {
+            ({ stdout: ttyOut } = await execFileAsync(
+              "tmux",
+              ["list-panes", "-t", paneTarget, "-F", "#{pane_tty}"],
+              { timeout: 30_000 },
+            ));
+          }
         } catch (err: unknown) {
+          if (agentPane && isTmuxPaneGone(err, agentPane)) return false;
           // Round 3 (M-4): only tmux's own answer for this target is a missing
           // pane: a call that ended with exit code 1 (no signal, no timeout)
           // whose whole diagnostic is "can't find session: <name>", or "no
