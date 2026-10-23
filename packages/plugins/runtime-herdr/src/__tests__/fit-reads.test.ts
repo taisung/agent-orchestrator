@@ -97,6 +97,15 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
     ["stdout not empty", () => f1(NOT_FOUND, { stdout: "x" })],
     ["stdout absent", () => f1(NOT_FOUND, { stdout: undefined })],
     ["two stderr lines", () => f1(`${NOT_FOUND}\n${NOT_FOUND}`)],
+    // Note 2 (review r1 sol m-1): at most one trailing line feed is the form.
+    ["pane_not_found with two trailing line feeds", () => f1(`${NOT_FOUND}\n`)],
+    [
+      "the CLI no-server answer with two trailing line feeds",
+      () =>
+        f1(
+          '{"id":"cli:pane:get","error":{"code":"server_not_running","message":"no herdr server is running at /tmp/aohd/herdr.sock"}}\n',
+        ),
+    ],
     ["a carriage return", () => f1(`${NOT_FOUND}\r`)],
     ["exit 2", () => f1(NOT_FOUND, { code: 2 })],
     ["a signal", () => f1(NOT_FOUND, { signal: "SIGKILL" })],
@@ -152,6 +161,15 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
     [
       "r5_b_pane_get_server_not_running_from_server (no CLI prefix)",
       () => herdrRejection(herdrFixture("r5_b_pane_get_server_not_running_from_server")),
+      "server_not_running",
+    ],
+    [
+      // Note 2 (review r1 Muse m-1): the no-server prefix counts only at the start.
+      "server_not_running with the CLI prefix not at the start of the message",
+      () =>
+        f1(
+          '{"id":"cli:pane:get","error":{"code":"server_not_running","message":"herdr relay: no herdr server is running at /tmp/x (proxied)"}}',
+        ),
       "server_not_running",
     ],
   ] as const) {

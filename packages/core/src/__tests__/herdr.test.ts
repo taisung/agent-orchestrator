@@ -354,6 +354,8 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 8 (getHerdrPaneProcesses)
   }
   const NOT_FOUND =
     '{"error":{"code":"pane_not_found","message":"pane not found"},"id":"cli:pane:process_info"}';
+  const NO_SERVER =
+    '{"id":"cli:pane:process_info","error":{"code":"server_not_running","message":"no herdr server is running at /tmp/aohd/herdr.sock"}}';
 
   for (const name of ["closedpane_pane_process_info", "closedws_pane_process_info"]) {
     it(`T-1.2: ${name} answers an empty list, and isHerdrProcessRunning false`, async () => {
@@ -389,6 +391,9 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 8 (getHerdrPaneProcesses)
     ["stdout not empty", () => f1(NOT_FOUND, { stdout: "x" })],
     ["stdout absent", () => f1(NOT_FOUND, { stdout: undefined })],
     ["two stderr lines", () => f1(`${NOT_FOUND}\n${NOT_FOUND}`)],
+    // Note 2 (review r1 sol m-1): at most one trailing line feed is the form.
+    ["pane_not_found with two trailing line feeds", () => f1(`${NOT_FOUND}\n`)],
+    ["the CLI no-server answer with two trailing line feeds", () => f1(`${NO_SERVER}\n`)],
     ["a carriage return", () => f1(`${NOT_FOUND}\r`)],
     ["exit 2", () => f1(NOT_FOUND, { code: 2 })],
     ["an errno code", () => f1(NOT_FOUND, { code: "ENOENT" })],
@@ -467,6 +472,15 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 8 (getHerdrPaneProcesses)
         ),
       "server_not_running",
     ],
+    [
+      // Note 2 (review r1 Muse m-1): the no-server prefix counts only at the start.
+      "server_not_running with the CLI prefix not at the start of the message",
+      () =>
+        f1(
+          '{"id":"cli:pane:process_info","error":{"code":"server_not_running","message":"herdr relay: no herdr server is running at /tmp/x (proxied)"}}',
+        ),
+      "server_not_running",
+    ],
   ] as const) {
     it(`T-1.4b: the form with another code (${label}) rejects with that herdrCode and no no-server code`, async () => {
       mockExecFile.mockRejectedValueOnce(rejection());
@@ -526,6 +540,44 @@ describe("Herdr fit F-1: readHerdrCliFailure and isHerdrNoServer", () => {
     expect(fake).toEqual({ code: "server_not_running", message: "fake server says so" });
     expect(isHerdrNoServer(fake)).toBe(false);
     expect(isHerdrNoServer(null)).toBe(false);
+  });
+
+  // Note 2 (review r1 Muse m-1): a message that holds the prefix later is a
+  // failure of the form, but not the CLI's no-server answer.
+  it("is not the no-server answer when the prefix is not at the start of the message", () => {
+    const relayed = readHerdrCliFailure(
+      herdrRejection({
+        command: "herdr pane get w3:p2",
+        exit: 1,
+        stdout: "",
+        stderr:
+          '{"id":"cli:pane:get","error":{"code":"server_not_running","message":"herdr relay: no herdr server is running at /tmp/x (proxied)"}}\n',
+      }),
+      "cli:pane:get",
+    );
+    expect(relayed).toEqual({
+      code: "server_not_running",
+      message: "herdr relay: no herdr server is running at /tmp/x (proxied)",
+    });
+    expect(isHerdrNoServer(relayed)).toBe(false);
+  });
+
+  // Note 2 (review r1 sol m-1): one envelope with two trailing line feeds is
+  // not the form (at most one trailing line feed), so it is neither absence
+  // nor the no-server answer.
+  it("reads nothing for one envelope with two trailing line feeds", () => {
+    for (const error of [
+      { code: "pane_not_found", message: "gone" },
+      { code: "server_not_running", message: "no herdr server is running at /tmp/aohd/herdr.sock" },
+    ]) {
+      const line = JSON.stringify({ id: "cli:pane:get", error });
+      const rejection = (stderr: string) =>
+        herdrRejection({ command: "herdr pane get w3:p2", exit: 1, stdout: "", stderr });
+      expect(readHerdrCliFailure(rejection(`${line}\n`), "cli:pane:get"), error.code).toEqual(
+        error,
+      );
+      expect(readHerdrCliFailure(rejection(`${line}\n\n`), "cli:pane:get"), error.code).toBeNull();
+    }
   });
 
   it("reads nothing with an empty expected ID or a value that is not a rejection", () => {
