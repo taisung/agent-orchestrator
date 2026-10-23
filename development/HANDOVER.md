@@ -217,6 +217,27 @@
   scratch `/tmp/aohd6`; r8 copies in `backup/ao-65-herdr-r8/`).
 - ao-76 does the relaunch landing review r4 (since 22:35).
 
+**Update 2026-10-22 23:45 EDT.**
+- Relaunch: review r4 by ao-76 on main (`05bb30b6`): NOT-LAND-SAFE 0 B 2 M (M-1 an old launch's failed hook
+  replaces the current launch's per-session mark; M-2 an unwritable conversation directory fails both
+  writes, so the stale ID resumes); gates pass, merge into main clean. Owner (23:10) "6 option 1, ao-76
+  checks": ao-63 does round 5 (per-launch marks for M-1, M-2 as limit 4 with the unstarted and SIGKILL
+  hooks, help text corrected; brief `brief-aofork-session-relaunch-r5.md`, `.agent_task_relaunch_r5.md`,
+  scratch `/tmp/aorl5`); then ao-76 checks. The review copy on main has two scratch UUIDs replaced by
+  placeholders (gitleaks).
+- fit-1 code review r1 on main (`7f044478`): ao-77 sol NOT-LAND-SAFE 0 B 2 M 1 m (M-1 a held Herdr record whose
+  pane answers alive is passed over, so isolated `ao start` starts a second orchestrator; M-2 direct isolated
+  core start reaches no guard; m-1 no two-LF test); ao-78 Muse LAND-SAFE 6 m (m-4/m-5 = sol M-1 rated minor).
+  Merge: clean into main; 4 conflicting paths with `feat/session-relaunch` (`docs/DEVELOPMENT.md`, `start.ts`,
+  `start.test.ts`, `session-manager.ts`). Owner (23:35) "7 option 1": ao-73 does note 2 (`.agent_note_2.md`,
+  copy `note-ao-73-fit1-guard.md`): refuse the alive pass-over in both modes, document the `done` record,
+  direct-core and handleless gaps until fit-2 G, two tests, the recovery for each refusal; then ao-77 checks.
+- fit-2 design r9 by ao-65 on main (`258d85bf`): 17 product files, L; new OQ-F9 to OQ-F12 (split recommended).
+  Owner (23:35) "8 option 1": two blind reviews, ao-79 (Codex `gpt-6.1-sol` xhigh, `herdr_fit2_design_review_r9_sol61.md`)
+  and ao-80 (OpenCode Muse 1.3, `..._muse13.md`), briefs `brief-review-herdr-fit2-r9-{sol61,muse13}.md`,
+  branches at `5f38ffd4`, watcher 347765 (state `aofork-2026-10-22n`). Commit both reviews to main together.
+- Idle and done: ao-65, ao-77, ao-78 (ao-77 keeps for the note 2 check), ao-76 (waits for round 5).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
