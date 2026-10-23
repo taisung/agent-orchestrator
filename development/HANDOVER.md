@@ -127,6 +127,18 @@
 - ao-71 reviews r7 (Codex `gpt-6.1-sol` xhigh, branch at `68ec0c94`, brief `brief-review-herdr-fit-r7-sol61.md`,
   review file `development/reviews/herdr_fit_design_review_r7_sol61.md`); watcher 1732201 (state `~/.cache/fleet_watch/aofork-2026-10-22h`).
 
+**Update 2026-10-22 21:00 EDT.**
+- Fit review r7 by ao-71 (`262fbb40`): NOT-SOUND, 0 B 3 M 4 m (M-1 guard G misses an in-flight isolated
+  launch; M-2 F-4 trusts any create error envelope; M-3 reuse probes with the new runtime). The reviewer
+  prefers two rounds: fit-1 = commits 1-3 (F-1, F-2, F-6, F-5; low risk), fit-2 = F-3, F-4, F-7, F-9,
+  F-8. Owner decisions open: OQ-F3 split, OQ-F1 (b), OQ-F2 (a) or (c), push, close ao-70 and ao-71.
+- Relaunch round 3 by ao-63 done at `9e501603` (`0aa13578..9e501603`, 10 commits, 22 files; 3805/1/29;
+  red 0/16/6/0; changes claude-code, codex and gemini `isProcessRunning` to the bound agent pane; M-6
+  unchanged). ao-72 reviews it (Codex `gpt-6.1-sol` xhigh, branch `review/session-relaunch-r3` at
+  `9e501603`, brief `brief-review-session-relaunch-r3-sol61.md`, review file
+  `development/reviews/session_relaunch_review_r3_sol61.md`, watcher 2157657, state
+  `~/.cache/fleet_watch/aofork-2026-10-22i`). ao-63 and ao-65 are idle; watcher 530444 still watches them.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
