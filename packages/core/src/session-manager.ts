@@ -2508,9 +2508,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
    * 1. The record is gone or replaced (this strict read proves it): remove
    *    and write nothing, warn once. It cannot be read: the unwritable path.
    * 2. A partial create: publish its handle (the publication rule; P goes).
-   * 3. Stop through the runtime; Herdr answers `unknown`, so
-   *    keepUnconfirmedLaunch keeps everything, writes `launchFailed` and
-   *    settles the claim.
+   * 3. Stop through the handle's runtime (runtimeForHandle); Herdr answers
+   *    `unknown`, so keepUnconfirmedLaunch keeps everything, writes
+   *    `launchFailed` and settles the claim.
    */
   async function keepUnprovenLaunch(
     rollback: LaunchRollback,
@@ -2565,8 +2565,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         return unwritable(published.error, published.before, published.after);
       }
     }
-    // 3.
-    const stopped = await stopRuntime(runtime, handle);
+    // 3. Through the handle's runtime (design r11 5.2.3, 4.6); one in the set
+    // that is not loaded is an unconfirmed stop.
+    const handleRuntime = runtimeForHandle(handle, runtime);
+    const stopped = handleRuntime
+      ? await stopRuntime(handleRuntime, handle)
+      : notLoadedStop(handle);
     if (!isRuntimeStopConfirmed(stopped)) {
       keepUnconfirmedLaunch(rollback, handle, stopped);
       return true;
