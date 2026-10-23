@@ -391,6 +391,17 @@ delete land/session-relaunch".
 - ao-73 stays for fit-2b (owner 26 (a)); its watcher `aofork-2026-10-22j` (loop 2303560, parent 2303556) runs.
 - Doc 0004 (§1, §3, §5, §5a) and doc 0013 (§9) describe the fit-2a build (`cab93027`).
 
+**Update 2026-10-23 17:33 EDT: fit-2b dispatched to ao-73.**
+- Owner "proceed with fit-2b". ao-73 (claude-code, Opus 5.5) writes design r11 §8.2: commits 5 to 8 (A, G, R,
+  the classifier, `findReusableOrchestrators`, `runtime-stop.ts`, the CLI start and preflight, `spawn.ts`, F-9,
+  the status token, the final docs), 12 product files, with fit-2a's deferred assertions (T-4.11, T-4.12,
+  T-4.16, T-4.17, T-4.20c/d) and the move of fit-2a's by-hand retirement texts to F-9.
+- Branch `feat/herdr-fit2b` at main `c6d80383` (made by the orchestrator, worktree switched); brief
+  `brief-aofork-herdr-fit2b-impl.md` as `.agent_task_fit2b.md`; scratch `/tmp/aofit2b`, servers `aofit2b-*`.
+  The old `.agent_report.md` equals `reports/ao-73_herdr_fit2a_r2.report.md`; the new one holds only fit-2b.
+- Router row open (author, opus-5-5). Watcher `aofork-2026-10-22j` (loop 2303560) reads its report.
+- Next: two blind code reviews (Codex gpt-6.1-sol and Muse 1.3), as for fit-2a, after the owner's word.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
