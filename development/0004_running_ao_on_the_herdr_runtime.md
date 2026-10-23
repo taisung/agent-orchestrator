@@ -35,8 +35,10 @@ the stop answer `unknown` and keep the record and the worktree, and the operator
 after a check (the "Next" line of the refusal). Two older close paths of the plugin still exist (read from the
 code): when the agent launch fails during a create, the plugin closes the workspace that it just created, by
 its ID and without a check; and the plugin's `destroy` closes the recorded workspace (no core caller uses it,
-because core calls `stop`). The "Herdr 0.9.5 fit" round and the optional round RH (designs, not built:
-[RH design r6](reviews/rh_design_r6_opus.md)) would remove both and add a bound close.
+because core calls `stop`). The "Herdr 0.9.5 fit" round ([Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md),
+not built) would remove both: a failed create would then keep the workspace, the worktree, the agent session
+and the record, with `launchFailed`, for the operator. The optional round RH ([RH design
+r6](reviews/rh_design_r6_opus.md), not built) would add a bound close.
 
 **0.9.5: which server AO reaches.** AO runs plain `herdr`, so the caller's environment picks the server. The
 CLI's order (measured, RH design r5 §2.1): `--session <name>` (AO never passes it), then `HERDR_SOCKET_PATH`,
@@ -45,7 +47,7 @@ then `HERDR_SESSION` (`$XDG_CONFIG_HOME/herdr/sessions/<name>/herdr.sock`), then
 measured (r5, r6) had `HERDR_SOCKET_PATH` and `HERDR_SESSION` in its environment, so an `ao` command that runs
 inside a herdr pane talks to that pane's server, and an `ao` command in a plain terminal talks to the default
 socket. Run every `ao` command of a Herdr project with the same herdr environment. AO records no socket per
-session yet (the "Herdr 0.9.5 fit" round of RH design r6 would pin it).
+session yet (the "Herdr 0.9.5 fit" round, Herdr fit design r7, would pin it).
 
 **0.9.5: `herdr status server`.** With a server: `status: running`, then `version`, `endpoint_compatible`,
 `private_protocol: 22`, `private_protocol_compatible` and `socket` lines. With no server: exit 0 and
@@ -240,7 +242,8 @@ AO's call answers changed). More 0.9.5 forms (RH design r5 §2.1):
   lifecycle calls `pane process-info --pane <session name>`. herdr answers `pane_not_found` for any malformed
   ID.
 
-The fix is the "Herdr 0.9.5 fit" round of RH design r6 (not built).
+The fix is the "Herdr 0.9.5 fit" round of [Herdr fit design r7](reviews/herdr_fit_design_r7_opus.md) (not
+built). It replaces the fit section of RH design r6.
 
 **`pane read --source recent-unwrapped`.** **0.8.0:** empty for a pane with no detected agent, so `getOutput`
 fell back to `visible`. **0.9.5:** it returned the shell text of such a pane in the measured case, so the
