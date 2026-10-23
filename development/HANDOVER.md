@@ -275,6 +275,24 @@
   stopped. Kept: ao-63 (round 6), ao-65 and ao-79 (the next fit-2 step), ao-73 and ao-77 (the fit-1 merge).
 - Open for the owner: the fit-2 step after the r10 checks.
 
+**Update 2026-10-23 09:20 EDT: relaunch landed on main (not built, not restarted).**
+- Relaunch round 6 by ao-63 (`b08e8141`): explicit UUID check of the context token, `EISDIR` mark test;
+  orchestrator check passed. A real merge of main conflicts in 3 paths (the branch sits on `3e366a01`, the old
+  defect A/B branch; main holds copies of its 16 commits plus `a8bda7ff`, `fa6fd1ad`, `133e2bcf`), so the
+  "clean merge" of decision 13 was wrong. A clean cherry-pick candidate (`land/session-relaunch`, `804d1347`,
+  local branch, scratch worktree under the orchestrator scratchpad) passed the full gates (3834/1/29, red
+  R1 0 R2 16 R3 6 R4 0). Owner "16b, 15 (1), then push": ao-63 merged main `d3e2ed8c` into its branch
+  (`7328d710`, 12 hunks, each main's side, tree equal to the cherry-pick oracle); new reviewer ao-81 (Codex sol,
+  `session_relaunch_merge_check_sol61.md`) LAND-SAFE 0/0/0; main fast-forwarded to `7328d710`. The live `ao`
+  and the lifecycle workers 4027448 and 4027591 still run the old build: build and restart need the owner's word.
+- fit-2 design r11 by ao-65 runs (`.agent_task_fit2_r11.md`, copy `brief-aofork-herdr-fit2-r11.md`, scratch
+  `/tmp/aohd8`): sol M-1 fixed adoption identity, M-2 retry after effect, 3 sol and 2 Muse minors, OQ-F4 to
+  OQ-F13 decided, the fit-2a scope; then ao-79 checks it alone.
+- Next for fit-1 (decision 13): ao-73 merges the new main into fit-1 (`60da85ee`; 4 paths conflict with relaunch),
+  ao-77 checks, then a second fast-forward.
+- `land/session-relaunch` (`804d1347`, patch-equal copies of the relaunch commits) and its scratch worktree can
+  go; ask the owner before the branch delete. ao-81 is done (watcher 1832900).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
