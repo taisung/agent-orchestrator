@@ -914,16 +914,22 @@ function recordRuntimeName(
  *
  * What the interim guard covers: `ao start`, in both workspace modes, for
  * each Herdr orchestrator record with a stored handle that is not terminal or
- * is held. `isAlive` false and the no-server code are unknown (the start
- * refuses); a held record that answers alive refuses the start too (note 2,
- * review r1 M-1: it still runs, and a terminal record is never reused); a
- * live record that is not terminal is reused. Core `spawnOrchestrator` in
- * project mode refuses on false and no-server for the fixed ID as well.
+ * is held. `isAlive` false and the no-server code are unknown, and a held
+ * record that answers alive still runs (note 2, review r1 M-1). Neither is
+ * reused (a terminal record never is), and each blocks the start of a new
+ * orchestrator: the start exits 1 with the reason or the still-runs refusal
+ * only when no other record can be reused. A record that is not terminal and
+ * is alive or unchecked is still reused next to them, with no refusal (note
+ * 3, review r2 m-2). Core `spawnOrchestrator` in project mode refuses on
+ * false and no-server for the fixed ID as well.
  *
  * Its limits until fit-2 G (docs/DEVELOPMENT.md names them for the owner):
- * - a record with another persisted terminal status (`done`, `merged`,
- *   `errored`, ...) is not probed, so isolated `ao start` can start a new
- *   orchestrator next to a live pane of such a record;
+ * - a record whose persisted status, after core's read repair, is terminal
+ *   and not `killed` (`done`, `errored`, `terminated`, `cleanup`) is not
+ *   probed, so isolated `ao start` can start a new orchestrator next to a
+ *   live pane of such a record (the repair writes `working` over a stored
+ *   `merged` of an orchestrator record, so the guard checks that one: note 3,
+ *   review r2 m-3);
  * - direct isolated core `sm.spawnOrchestrator` reads no old record (`ao
  *   start` is today's only product caller);
  * - a record with no stored handle (a reservation or an in-flight create)
@@ -1091,12 +1097,14 @@ async function runStartup(
     // Defect A: a candidate is reused only when it is alive (or unchecked, as
     // before); a gone one is left to `spawnOrchestrator`, which archives or
     // replaces its record (project mode) or starts the next ID (isolated
-    // mode). An unknown one stops the start: it may still run.
+    // mode). An unknown one blocks a new orchestrator: it may still run.
     // Herdr fit-1 interim: a held Herdr record (terminal only by a probe or a
     // persisted `killed`, see isHerdrProbeTerminal) is checked too. Unknown,
-    // it stops the start. Alive, it still runs: it is not reused (a terminal
-    // record never is) and, since note 2 (review r1 M-1), not passed over
-    // either, so it stops the start too.
+    // it blocks a new orchestrator. Alive, it still runs: it is not reused (a
+    // terminal record never is) and, since note 2 (review r1 M-1), not passed
+    // over either, so it blocks a new orchestrator too. A blocking candidate
+    // stops the start only when no other candidate is reused (note 3, review
+    // r2 m-2: a live candidate that is not terminal is still reused).
     const registry = candidates.length > 0 ? await getPluginRegistry(config) : null;
     const checked = registry
       ? await Promise.all(
