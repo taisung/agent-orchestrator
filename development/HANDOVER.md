@@ -322,6 +322,20 @@ delete land/session-relaunch".
   and 347765 stopped. Deleted `land/session-relaunch` (`804d1347`; all 31 commits patch-equal on main) and its
   scratch worktree. Running: ao-63 (CI fix, watcher 530444), ao-73 (fit-2a, watcher 2303560).
 
+**Update 2026-10-23 10:30 EDT: relaunch, fit-1 and the CI fix are pushed, built and live.**
+- ao-63 fixed the CI cleanup race (`b695d933`, 4 relaunch test files; a pane bash writes its history to `HOME`,
+  the test directory, on SIGHUP; the fix waits up to 5 s for the server and pane PIDs, then removes with
+  retries). Checked (test files only), cherry-picked clean onto main as `ade84189`, router row closed.
+- Owner "push": pushed `80ce3a89..e43db964` (15 commits: fit-1, the CI fix, docs). CI 4 of 4 success
+  (CI `39968748496`, Integration Tests, Onboarding, Security).
+- Owner "build and restart after CI is green": no dependency or `WRAPPER_VERSION` change since `9846cf6a`.
+  `pnpm build` 10:23:28 to 10:23:35, rc 0. Lifecycle workers restarted by exact PID (see "Lifecycle workers").
+  The Nexus worker 140323 is not restarted (owner to decide).
+- ao-73 (fit-2a) still names 4027448 and 4027591 in its do-not-touch list; its rule "kill only a PID that you
+  started" covers the new PIDs.
+- Doc `development/0013_herdr_runtime_status_assessment_2026_10_23.md` (`32e1e12e`) is the Herdr status at
+  10:15, before the build. Its section 8 (correct doc 0004 once the fit-1 build is live) is now due.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
@@ -365,12 +379,16 @@ All under `CONFIG_PATH` of the profile, tmux prefix `60756641ca25-`, worktrees u
 | ao-65 | Claude Code Opus 5.5, step 1 done 16:3x (findings and fixtures on `main` in `7b940495`); working since 17:58 on Herdr step 2, the RH design r5 (brief `.agent_task_rh_r5.md`, copy `brief-aofork-rh-design-r5.md`), context 10% (compacted after step 1). Branch `feat/herdr-live-read-agent-task-md-in-your-worktree-and-execute-i` fast-forwarded to `main` `9846cf6a` 17:57; its untracked step 1 copies (equal to `main`) went to `backup/ao-65-herdr/` | author of Herdr step 2; deliverables uncommitted: `development/reviews/rh_design_r5_opus.md` and an update of doc 0004; a new Codex reviewer next |
 | ao-66 | killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`). Branch `feat/note-fix-read-agent-task-md-in-your-worktree-and-execute-it` kept at `13d3a129`; both commits landed (`-` in `git cherry main`) | deletable branch |
 
-**Lifecycle workers (now)**: 4027448 (this config) and 4027591 (agent-skills), restarted 2026-10-22 17:53 EDT
-by exact PID on the build of `9846cf6a` (source `fa6fd1ad`, the progress note and its fix). First polls: 2 of
-2 success each, 0 failures, health `ok` (`~/.agent-orchestrator/<hash>-observability/processes/lifecycle-manager-<pid>.json`). Pid files: `~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
+**Lifecycle workers (now)**: 3133311 (this config) and 3133656 (agent-skills), restarted 2026-10-23 10:23 EDT
+by exact PID (4027448 -> 3133311, 4027591 -> 3133656) on the build of `e43db964` (relaunch, fit-1 and the CI
+fix). First polls: 1 of 1 success each, 0 failures, health `ok`
+(`~/.agent-orchestrator/<hash>-observability/processes/lifecycle-manager-<pid>.json`). Pid files:
+`~/.agent-orchestrator/60756641ca25-agent-orchestrator/lifecycle-worker.pid` and
 `~/.agent-orchestrator/f6790d5546be-agent-skills/lifecycle-worker.pid`. `ao start` keeps a running worker
-("already running"). The workers of Nexus, VSF and the Nexus config of this fork do not run until their
-orchestrators run `ao start`. The global OpenCode service does not run.
+("already running"). **The Nexus worker 140323** (`6513108c38cb-Nexus`, config `/Data1/NgFEP/Nexus/agent-orchestrator.yaml`,
+17 active sessions) started 2026-10-22 18:20 and still runs the build of `9846cf6a`: not restarted, owner to
+decide. The workers of VSF and the Nexus config of this fork do not run until their orchestrators run
+`ao start`. The global OpenCode service does not run.
 
 **Watchers**: one runs since 2026-10-22 16:00:02: PID 2750995, state `~/.cache/fleet_watch/aofork-2026-10-22b`,
 watching ao-63, ao-64 and ao-65, notify and fallback `ao-orchestrator`, `-i 60 -s 20`, preseeded. The three
@@ -557,7 +575,7 @@ the owner's `ao start` after the `ao start` / `ao stop` fix landed. Read the pro
 `~/agent-skills/skills/shared/ao-profiles/agent-orchestrator.md` once. The global `ao` of this host runs from
 this checkout's `dist`, so every fleet runs what you land after a rebuild. Only you rebuild, only on the
 owner's word (D-3), and a rebuild reaches a running `ao lifecycle-worker` only after a restart by exact PID
-with `~/agent-skills/scripts/restart_lifecycle.py <pid> [--do]` (now 2087525 and 2087614).
+with `~/agent-skills/scripts/restart_lifecycle.py <pid> [--do]` (now 3133311 and 3133656).
 
 Four rounds landed on 2026-10-22 and are live and pushed. Two sessions stay for the next work (owner "2a"):
 ao-63 (Claude Code, the author of the start/stop fix) holds 2 unreviewed commits, a 30-second progress note
