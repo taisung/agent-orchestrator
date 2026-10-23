@@ -311,6 +311,17 @@
   author), 19 (close ao-65 and ao-79), build and restart after CI is green, delete `land/session-relaunch`,
   the push of fit-1 and the CI fix.
 
+**Update 2026-10-23 10:10 EDT.** Owner: "push; 17 (1); 18 (1); 19 (1); build and restart after CI is green;
+delete land/session-relaunch".
+- Push: one push of fit-1 with ao-63's CI fix, after the orchestrator checks the fix. Then build and restart
+  (lifecycle workers 4027448 and 4027591) once CI is green.
+- fit-2a: ao-73 implements design r11 section 8.1 on the new branch `feat/herdr-fit2a` (made at main
+  `36caf8a9`; brief `.agent_task_fit2a.md`, copy `brief-aofork-herdr-fit2a-impl.md`, scratch `/tmp/aofit2a`),
+  with r11 check m-1 (two final settlement attempts) and m-2 (the ordinary-settlement null test).
+- Closed: ao-65, ao-77, ao-79 (their files on main, briefs in `backup-closed-sessions/`); watchers 3857091
+  and 347765 stopped. Deleted `land/session-relaunch` (`804d1347`; all 31 commits patch-equal on main) and its
+  scratch worktree. Running: ao-63 (CI fix, watcher 530444), ao-73 (fit-2a, watcher 2303560).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
