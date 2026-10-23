@@ -1,0 +1,8 @@
+d_before: {"server": 669304, "server_stat": {"state": "S", "ticks": "20282847"}, "pane": "w3:p1", "terminal": "term_65e75df89835e2", "shell": 677015, "shell_stat": {"state": "S", "ticks": "20286965"}, "lc": {"file": [66309, 121256363], "is_socket": true, "own": true, "listen": ["28962630"], "connected_entries": 0}}
+d_held_connected: {"peer_cred": 669304}
+d_live_handoff: {"answer": "{\"id\":\"aohd3\",\"result\":{\"type\":\"ok\"}}\n", "eof_ms": 530.11, "error": null}
+d_after: {"server": 677031, "server_stat": {"state": "S", "ticks": "20287068"}, "old_server_now": {"error": "FileNotFoundError errno=2"}, "lc": {"file": [66309, 121256372], "is_socket": true, "own": true, "listen": ["28959716"], "connected_entries": 0}, "lc_equal": false, "shell_stat": {"state": "S", "ticks": "20286965"}, "pane_get": "{\"id\":\"aohd3\",\"result\":{\"type\":\"pane_info\",\"pane\":{\"pane_id\":\"w3:p1\",\"terminal_id\":\"term_65e75dfa03df72\",\"workspace_id\":\"w3\",\"tab_id\":\"w3:t1\",\"focused\":false,\"cwd\":\"/tmp/aohd3/tmp/wsd\",\"foreground_cwd"}
+d_new_server: {"ppid": ["PPid:\t1"], "exe": "/tmp/aohd3/bin2/herdr"}
+d_held_result: BrokenPipeError errno=32
+d_guarded_client: {"mode":"guarded","path":"/tmp/aohd3/xdg/config/herdr/sessions/aohd3-1/herdr.sock","k0":"66309:121256363/28962630","preConnect":"66309:121256363/28962630","waitedForSignal":true,"postConnect":"66309:121256372/28959716","result":"refused after connect: LC differs from LC0; nothing written"}
+d_shell_after_all: {"state": "S", "ticks": "20286965"}

@@ -1,0 +1,10 @@
+b0_pane_get: exit=1 stdout='' stderr='Error: Custom { kind: Other, error: ErrorResponse(ErrorResponse { id: "api-client:status", error: ErrorBody { code: "pane_not_found", message: "fake: pane not found" } }) }'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b0_pane_process_info: exit=1 stdout='' stderr='Error: Custom { kind: Other, error: ErrorResponse(ErrorResponse { id: "api-client:status", error: ErrorBody { code: "pane_not_found", message: "fake: pane not found" } }) }'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b0_pane_get_empty_id: exit=1 stdout='' stderr='Error: Custom { kind: Other, error: ErrorResponse(ErrorResponse { id: "api-client:status", error: ErrorBody { code: "pane_not_found", message: "fake: pane not found" } }) }'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b0_pane_get_bad_id: exit=1 stdout='' stderr='Error: Custom { kind: Other, error: ErrorResponse(ErrorResponse { id: "api-client:status", error: ErrorBody { code: "pane_not_found", message: "fake: pane not found" } }) }'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+b0_status_server_json: exit=1 stdout='' stderr='Error: Custom { kind: Other, error: ErrorResponse(ErrorResponse { id: "api-client:status", error: ErrorBody { code: "pane_not_found", message: "fake: pane not found" } }) }'
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}

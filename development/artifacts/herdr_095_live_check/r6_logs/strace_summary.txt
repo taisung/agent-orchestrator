@@ -1,0 +1,30 @@
+strace summary of the aohd3 checks (design r6, ao-65), generated 2026-10-22T19:06:51-04:00
+
+== herdr client calls through the shim (strace -f -e trace=connect,socket,execve per call)
+calls: 7
+connect targets:
+    111 sa_family=AF_UNIX
+     80 sun_path="/tmp/aohd3/xdg/config/herdr/sessions/aohd3-1/herdr.sock"
+     31 sun_path="/tmp/aohd3/xdg/config/herdr/sessions/aohd3-2/herdr.sock"
+execve:       7 execve("/tmp/aohd3/bin/herdr-real" 
+
+== servers (strace -ff -e trace=network,execve): files 731
+socket families:
+     30 AF_UNIX
+connect lines that are not AF_UNIX: 0
+non-scratch AF_UNIX connect targets:
+      8 sun_path="/var/run/dbus/system_bus_socket"
+      2 sun_path="/var/run/nscd/socket"
+execve programs:
+     50 execve("/bin/sh"
+      1 execve("/tmp/aohd3/bin2/herdr"
+      1 execve("/tmp/aohd3/bin/bash"
+      2 execve("/tmp/aohd3/bin/git"
+      7 execve("/tmp/aohd3/bin/herdr-real"
+      1 execve("/tmp/aohd3/bin/sh"
+      3 execve("/usr/lib/git-core/git"
+
+== driver git calls (strace -f -e trace=connect,socket): files 8
+socket lines: 0  connect lines: 0
+
+note: the handoff successor 677031 (parent 1, exe /tmp/aohd3/bin2/herdr) ran outside strace from 19:03:38 until its server stop.

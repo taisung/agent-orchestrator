@@ -1,0 +1,5 @@
+# r9: strace -f -e trace=network of the two herdr calls of r9_forms_script.txt (connect lines)
+## r9_pane_run_ping_protocol_19_control.strace
+4077111 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd6/fake/r9_pane_run_ping_protocol_19_control.sock"}, 59) = 0
+## r9_pane_run_ping_protocol_23.strace
+4076957 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/aohd6/fake/r9_pane_run_ping_protocol_23.sock"}, 51) = 0

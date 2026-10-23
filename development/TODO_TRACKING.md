@@ -469,6 +469,36 @@ Durable progress record for this fork. Dated events only; the current state live
   each, 0 failures, health ok; the Claude Code sessions read `working` or `stuck`, none `killed` or `exited`.
   Pushed `8ae3efba..dee08849` at 10:45:23. Follow-ups F-8 and F-9 (Known Issues).
 
+- `d1efcb94..de7c1bfc` (2026-10-22, ao-63 Claude Opus 5.5, rounds 1 to 3; reviews by ao-64, Codex gpt-6-astra) -
+  **`ao start` with no tmux server, and the always-detached `ao stop`** (owner "1", "proceed 1", "2"). `ao start`
+  asks the runtime for each orchestrator record that is not terminal: alive is reused, not alive or no server
+  starts a new orchestrator (`does not run: ... Starting a new one.`), anything else refuses with exit 1. In core,
+  an `isAlive` answer that is not a boolean is unknown (`enrichSessionWithRuntimeState`, `isOrchestratorRuntimeAlive`).
+  `ao stop` runs the stop of every existing record in a detached process (own session, two logs per stop, pruned
+  after 7 days, generated regular files only); the caller copies all output with backpressure, ends with the
+  child's exit code, and Ctrl-C exits 130 while the stop goes on. Reviews r1 LAND-WITH-CHANGES (0 B 3 M 2 m), r2
+  LAND-WITH-CHANGES (0 B 1 M 1 m), r3 LAND-SAFE (0 B 0 M 0 m) (`start_no_server_review_r1..r3_astra6.md`). Clean
+  cherry-pick of `dc7815d2..e6695161` (14 commits; tree equal to the `git merge-tree` result `ab13588b`). Gates of
+  `main` `de7c1bfc` PASS (ao-64: 3596 passed, 1 expected fail, 29 skipped; red 0/16/6/0; incident and no-server
+  smokes; `gates_main_start_no_server_astra6.md`). Built 14:34:52 to 14:34:59 EDT; lifecycle workers restarted by
+  exact PID 14:35 (65891 -> 2087525, 68422 -> 2087614); first polls 14:36:12 and 14:36:14, 0 failures, health `ok`.
+  Pushed `dc7815d2..2bb51734` 14:37 EDT; CI of `2bb51734`: 4 of 4 passed (Security, Integration Tests, Onboarding
+  Integration Test, CI; the last at 14:39:52 EDT).
+- `606869a0..fa6fd1ad` (2026-10-22, ao-63 and ao-66 Claude Opus 5.5; reviews by ao-64, Codex gpt-6-astra) -
+  **the 30 s progress note of `ao stop`** (owner's request in ao-63's pane; owner "1": fix first with a new
+  worker). When the detached stop still runs after 30 s, the caller writes one note with the PID and the two log
+  paths, and the wait goes on with no deadline. Each output stream takes one write at a time, so the note takes
+  the next write on its own stream at once (a slow stdout does not hold it back), and it goes to stdout when its
+  own stderr write finds an output error. No note after the stop ended. Commits: ao-63 `e08df7a3`, `3e366a01`;
+  ao-66 `9a3b8611`, `13d3a129`. Review r4 LAND-WITH-CHANGES (0 B 0 M 2 m, gates PASS 3599), r5 LAND-SAFE
+  (0 B 0 M 0 m; gates PASS on `13d3a129`: 3604 passed, 1 expected fail, 29 skipped; red 0/16/6/0; gitleaks
+  clean) (`start_no_server_review_r4_astra6.md`, `..._r5_astra6.md`). Clean cherry-pick 16:50 EDT; tree equal
+  to `13d3a129` outside `development/`; gitleaks on the 4 landed commits: no leaks (ao-66's first commit had
+  skipped the hook). Owner "1, 2, 3, 4": built 17:53:33 to 17:53:41 EDT (`pnpm build`); lifecycle workers
+  restarted by exact PID 17:53 (2087525 -> 4027448, 2087614 -> 4027591); first polls 2 of 2 success, 0
+  failures, health `ok`. Pushed `d5b6a180..9846cf6a` 17:55:04 EDT; CI of `9846cf6a`: 4 of 4 passed (the last
+  at 17:57:09 EDT). ao-66 killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`; branch kept, both commits
+  `-` in `git cherry main`).
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on
@@ -547,8 +577,66 @@ the allows of the three core r5 race tests with a `processScope` that only the t
 stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/same_id_design_r{1..4}_opus.md`,
 `same_id_design_review_r{1..4}_astra6.md`.
 
+**D-9 — Herdr 0.9.5 fit decisions** (owner 2026-10-22 and 2026-10-23; designs
+`development/reviews/herdr_fit_design_r7_opus.md` (fit-1) and `herdr_fit2_design_r10_opus.md` (fit-2)).
+OQ-F3 (b): two rounds, fit-1 (F-1, F-2, F-5, F-6 without `Runtime.preflight()`, and an interim startup
+guard) and fit-2 (F-3, F-4, F-7 with `Runtime.preflight()`, F-9, the rest of F-8). OQ-F1 (b): before RH-A
+no Herdr answer retires an old orchestrator at startup. OQ-F2 (a): F-9 is `ao session kill <id>
+--confirm-runtime-closed`, with the safeguards of review r7. After design r10 and its two checks (answer
+"11: accept the recommendations for OQ-F4 to OQ-F13", 2026-10-23 about 07:55 EDT): OQ-F4 (a) a live Herdr
+orchestrator blocks the start while the project selects another runtime; OQ-F5 (a) no special `ao send`
+policy for a kept failed launch, documented and tested; OQ-F6 (a) a Herdr orchestrator start or restore
+refuses on a platform without the abstract-socket lock (macOS); OQ-F7 (a) the rule Q cases Q0, Q1 and Q2
+are qualified, and the residual R-Q is accepted; OQ-F8 (a) the F-9 token is required; OQ-F9 (a) the
+admission subject is the real path of the nearest existing ancestor plus the missing suffix; OQ-F10 (a)
+no new launch next to a record that AO cannot judge; OQ-F11 (b) fit-2 builds on fit-1 and does not wait
+for relaunch, and the round that lands second adapts; OQ-F12 (b) two rounds, fit-2a (design commits 1 to
+4) and fit-2b (commits 5 to 8), each with its own review; OQ-F13 (a) G reuses a project-mode Herdr record
+whose pane runs while its agent shows exited (fit-1 note 2 refuses it). The r10 sol check (m-3) found the
+premise of the OQ-F13 text wrong (codex, gemini and opencode reject a Herdr check error, they do not
+answer false); the decision stands, and the design text needs that correction.
+
 ## Known Issues
 
+- **`ao start` reuses a dead orchestrator when no tmux server runs, and `ao stop` in the orchestrator's own
+  pane stops only half** (found 2026-10-22 by the owner). Incident (EDT): in the orchestrator pane the owner
+  quit Claude Code, ran `ao stop` (it returned with an error that is lost: no kill, no archive, the lifecycle
+  worker 65891 kept running), then `exit` (11:00:21; the last session, so the tmux server ended). `ao start`
+  then created no session: `runStartup` (`cli/src/commands/start.ts`) reuses any orchestrator record that is
+  not terminal, and with no tmux server `runtime-tmux` `isAlive` rejects (`RUNTIME_NO_SERVER_ERROR_CODE`),
+  so `enrichSessionWithRuntimeState` keeps `status=working`. The exception for exactly this case
+  (`isOrchestratorRuntimeAlive`, killed-status fix `a62e798c`: no server means not alive) is used only by
+  `spawnOrchestrator`, which `runStartup` does not reach. The lifecycle worker wrote `killed` at 11:03:32,
+  47 s after the owner started a tmux server by hand (11:02:45). Second defect: `ao stop` kills the session
+  before it stops the lifecycle worker, so a stop typed in the orchestrator's own pane ends itself first.
+  The same no-server path follows a host restart. Fix dispatched to ao-63 (owner "1", 11:20 EDT).
+  Review r1 (ao-64, Codex gpt-6-astra, `development/reviews/start_no_server_review_r1_astra6.md`):
+  LAND-WITH-CHANGES, 0 B, 3 M, 2 m on `dc7815d2..f095f5ce`; round 2 dispatched 12:33 EDT. Three items from the
+  old code that the round does not fix:
+  - A runtime handle stores no tmux socket. An `ao stop` (or any stop) with `TMUX` set to another server
+    reads and stops on that server, so it can archive the record and stop the lifecycle worker while the
+    orchestrator runs on its own server (measured by ao-64 on two private servers). Same on `dc7815d2`.
+  - `ao stop` targets only `<prefix>-orchestrator`. For an isolated orchestrator (`<prefix>-orchestrator-N`) it
+    prints "is not running" and stops the lifecycle worker while that orchestrator runs.
+  - The real `ao stop` error of 11:00 is not known. ao-64 ruled out a plugin import failure (caught at
+    `plugin-registry.ts:435-441`); config, project, record read, record change, launch guard and an
+    unconfirmed runtime stop remain.
+  Rounds 2 and 3 (ao-63) answered reviews r1 and r2; re-check r3 (ao-64, 14:23 EDT) is LAND-SAFE, 0 B 0 M 0 m,
+  on `dc7815d2..e6695161` (14 commits). Two small follow-ups, not blocking:
+  - An `ao stop` from outside in a terminal now shows the child's lines without colors, and the spinner's
+    start line `- Stopping orchestrator session` stays as a line (the child has no terminal). Piped output
+    is byte-identical. ao-64: cosmetic. A child `FORCE_COLOR` from the parent's color level brings the
+    colors back (ANSI codes then go into the logs); the owner decides.
+  - Test gap (review r3): removing the fallback that reports a stderr output error on stdout
+    (`start.ts` about 1436-1441) passes all 82 targeted tests. The live path works.
+  LANDED 2026-10-22 as `d1efcb94..de7c1bfc`, built and live 14:35 EDT (What Landed). The three items from the old
+  code and the two follow-ups above stay open.
+  The 30 s progress note (ao-63 `e08df7a3`, `3e366a01`, with ao-66's fix of review r4) LANDED 2026-10-22 as
+  `606869a0..fa6fd1ad` (What Landed); built and live 17:53 EDT, pushed in `9846cf6a`. Open from review r5 (accepted, not blocking): a slow
+  stderr holds the note until it drains or fails (the note never moves to stdout for slowness), and a reader
+  that never reads holds the caller with no deadline, as before. ao-63's other suggestions (report R3-14):
+  copy the two streams at the same time (a slow stderr reader holds back stdout), and move
+  `stop-relay.test.ts` to the integration tests if it flakes.
 - **`ao send` to an idle Codex pane prints "Message sent and processing" for an unsubmitted paste**
   (found 2026-10-21, owner "4a": a small worker fix after the same-ID design re-check). A 13:36 EDT
   `ao send --no-wait ao-51` notice (over 200 characters: `load-buffer` + `paste-buffer` without `-p`, then
@@ -576,6 +664,17 @@ stay non-allowable. Design r8 covers RW and R2b-2. Files: `development/reviews/s
   `--append-system-prompt`), or `ao stop` and `ao start`. A worker round in the fork (MEDIUM: one CLI
   command and the agent launch path). Until then: the helper `scripts/ao_relaunch.py` in `~/agent-skills`
   (ao-49, below).
+  Owner 2026-10-22: a separate worker round after the fix of the `ao start` / `ao stop` defects (ao-63)
+  lands, because both rounds change the launch code.
+  The fix landed 2026-10-22 (`d1efcb94..de7c1bfc`). Owner "2a": ao-63 (the author of that fix) authors the
+  relaunch round and ao-64 (its Codex reviewer) reviews it; both sessions stay open for it.
+- **The claude-code PostToolUse hook has `timeout: 5000`, which Claude Code reads as 5000 s** (found
+  2026-10-22 by ao-63, checked by ao-64 in relaunch review r1 m-1 from the schema and runner of the
+  installed Claude Code 2.1.308, not run: "Timeout in seconds", converted with `timeout * 1000`). A hung
+  metadata hook can hold a tool call for up to 83 min 20 s. Also open from the same review: claude-code
+  `getRestoreCommand` takes the newest `.jsonl` of the workspace folder (in project mode another session's
+  conversation), and a restored orchestrator loses `--append-system-prompt` (restore passes no
+  `systemPromptFile`). Small worker changes; owner choice.
 - **Session helpers moved out of `~/.cache`** (owner 2026-10-21, "1a"): `restart_lifecycle.py` and a
   generic `ao_relaunch.py` (save the live argv of a session's agent, run it again in the pane shell) go to
   `~/agent-skills/scripts/` with tests. ao-49 (Claude Code Opus 5.5; OpenCode Muse skipped because an

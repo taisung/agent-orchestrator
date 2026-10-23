@@ -1,0 +1,6 @@
+server aohd3-3: strace 811557, herdr 811572, started 19:17:24
+server aohd3-4: strace 817016, herdr 817019, started 19:17:53
+survivors of the pane close (to stop by exact PID): []
+server aohd3-5: strace 820716, herdr 820719, started 19:18:20
+survivors of the pane close (to stop by exact PID): [820767]
+survivor 820767 stopped by kill 820767 : the child logged and ignored SIGTERM; then kill -KILL 820767; ended

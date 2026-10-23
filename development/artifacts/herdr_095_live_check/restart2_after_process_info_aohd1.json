@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":3025952,"foreground_processes":[{"argv":["/tmp/aohd/bin/bash"],"cmdline":"/tmp/aohd/bin/bash","cwd":"/tmp/aohd/home/.worktrees/aohd/aohd-1","name":"bash","pid":3025952}],"pane_id":"w1M:p1","shell_pid":3025952},"type":"pane_process_info"}}

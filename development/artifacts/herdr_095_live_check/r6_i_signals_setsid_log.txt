@@ -1,0 +1,6 @@
+server: {"strace_pid": 820716, "herdr_pid": 820719}
+i3_before_close: {"pane": "w1:p1", "shell": 820760, "shell_stat": {"state": "S", "ppid": "820719", "pgrp": "820760", "session": "820760", "ticks": "20375567"}, "children": {"ign": {"pid": 820765, "stat": {"state": "S", "ppid": "820760", "pgrp": "820765", "session": "820760", "ticks": "20375570"}}, "sid": {"pid": 820767, "stat": {"state": "S", "ppid": "1", "pgrp": "820767", "session": "820767", "ticks": "20375574"}}}, "logs": {"ign": ["start pid=820765 sid=820760 pgrp=820765"], "sid": ["start pid=820767 sid=820767 pgrp=820767"]}}
+i3_pane_close: {"id":"aohd3","result":{"type":"ok"}}
+i3_after_close: {"shell_stat": {"error": "FileNotFoundError errno=2"}, "children": {"ign": {"error": "FileNotFoundError errno=2"}, "sid": {"state": "S", "ppid": "1", "pgrp": "820767", "session": "820767", "ticks": "20375574"}}, "logs": {"ign": ["start pid=820765 sid=820760 pgrp=820765", "signal SIGHUP", "signal SIGTERM"], "sid": ["start pid=820767 sid=820767 pgrp=820767"]}}
+i3_survivors: [820767]
+i3_server_stop: {"exit": 0, "server_now": {"error": "FileNotFoundError errno=2"}}

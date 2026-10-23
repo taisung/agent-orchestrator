@@ -1,0 +1,85 @@
+// r9: the name of the admission lock A before and after the first mkdir of the sessions directory,
+// under a symlinked parent (sol r8 review, M-1). Pure node:fs, node:path and node:crypto: no product
+// module, no socket, no child process. Run with `node < this file` under env -i.
+"use strict";
+const { mkdirSync, realpathSync, lstatSync, writeFileSync, symlinkSync } = require("node:fs");
+const { dirname, basename, join, resolve, sep } = require("node:path");
+const { createHash } = require("node:crypto");
+
+const ROOT = "/tmp/aohd6/subj";
+const lockName = (subject) =>
+  `ao-delivery-${process.getuid()}-admission-` +
+  createHash("sha256").update(subject, "utf-8").digest("hex").slice(0, 32);
+
+// r8 rule (as recordLockName): the real path, else the lexical absolute path.
+function r8Subject(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+// r9 rule: the real path of the nearest existing ancestor plus the missing suffix. Only ENOENT of
+// a component that does not exist (lstat ENOENT too) walks up; every other failure refuses.
+function r9Subject(dir) {
+  let current = resolve(dir);
+  const missing = [];
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...missing.reverse());
+    } catch (err) {
+      if (err.code !== "ENOENT") throw new Error(`refused: ${err.code} at ${current}`);
+      try {
+        lstatSync(current);
+        throw new Error(`refused: ${current} exists but does not resolve (a dangling symlink)`);
+      } catch (lerr) {
+        if (lerr.code !== "ENOENT") throw lerr.message.startsWith("refused") ? lerr : new Error(`refused: ${lerr.code} at ${current}`);
+      }
+      const parent = dirname(current);
+      if (parent === current) throw new Error("refused: no existing ancestor");
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function check(label, dir, before) {
+  const out = { case: label, dir };
+  for (const [name, fn] of [["r8", r8Subject], ["r9", r9Subject]]) {
+    try {
+      const s = fn(dir);
+      out[`${name}${before ? "Before" : "After"}`] = s;
+      out[`${name}${before ? "Before" : "After"}Lock`] = lockName(s);
+    } catch (err) {
+      out[`${name}${before ? "Before" : "After"}`] = err.message;
+    }
+  }
+  return out;
+}
+
+mkdirSync(join(ROOT, "real"), { recursive: true });
+symlinkSync(join(ROOT, "real"), join(ROOT, "alias"));
+const sessions = join(ROOT, "alias", "state", "0123456789ab-proj", "sessions");
+
+const results = [];
+const before = check("symlinked parent, three missing components", sessions, true);
+mkdirSync(sessions, { recursive: true });
+const after = check("symlinked parent, three missing components", sessions, false);
+results.push({
+  ...before,
+  ...after,
+  r8SameLock: before.r8BeforeLock === after.r8AfterLock,
+  r9SameLock: before.r9BeforeLock === after.r9AfterLock,
+});
+
+// A file where a directory must be: ENOTDIR refuses (r9); r8 falls back to the lexical path.
+writeFileSync(join(ROOT, "afile"), "x");
+results.push(check("a file as a path component (ENOTDIR)", join(ROOT, "afile", "sessions"), true));
+
+// A dangling symlink as a path component: r9 refuses; r8 falls back to the lexical path.
+symlinkSync(join(ROOT, "nowhere"), join(ROOT, "dangling"));
+results.push(check("a dangling symlink as a path component", join(ROOT, "dangling", "sessions"), true));
+
+for (const r of results) console.log(JSON.stringify(r));
+console.log(`path separator ${JSON.stringify(sep)}; node ${process.version}`);

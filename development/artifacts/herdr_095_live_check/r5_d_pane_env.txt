@@ -1,0 +1,10 @@
+HERDR_BIN_PATH=<home>/.local/bin/herdr
+HERDR_ENV=1
+HERDR_PANE_ID=w1:p1
+HERDR_SESSION=aohd2-1
+HERDR_SOCKET_PATH=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr.sock
+HERDR_TAB_ID=w1:t1
+HERDR_WORKSPACE_ID=w1
+HOME=/tmp/aohd2/home
+SHELL=/bin/bash
+XDG_CONFIG_HOME=/tmp/aohd2/xdg/config

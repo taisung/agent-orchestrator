@@ -11,6 +11,8 @@ export default tseslint.config(
       "**/coverage/**",
       "test-clipboard*.mjs",
       "test-clipboard*.sh",
+      // Measurement fixtures are evidence, not product code
+      "development/artifacts/**",
     ],
   },
 

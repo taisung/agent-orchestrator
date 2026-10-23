@@ -1,0 +1,83 @@
+strace summary of the aohd2 checks (design r5, ao-65), generated 2026-10-22T18:09:10-04:00
+
+== herdr client calls through the shim (strace -f -e trace=connect,socket,execve per call)
+calls: 62
+connect targets:
+      4 sun_path="/tmp/aohd2/c/mode000/s.sock"
+      1 sun_path="/tmp/aohd2/c/nosuchdir/s.sock"
+      1 sun_path="/tmp/aohd2/c/regular.sock"
+      1 sun_path="/tmp/aohd2/c/stale.sock"
+      5 sun_path="/tmp/aohd2/fake/b0.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_close_no_answer.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_error_and_result.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_error_no_code.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_error_not_object.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_garbage.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_hang.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_no_result_no_error.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_other_pane.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_pane_not_found.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_partial.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_result.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_server_not_running_from_server.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_two_lines.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_unknown_code.sock"
+      2 sun_path="/tmp/aohd2/fake/b_pane_get_wrong_id.sock"
+      1 sun_path="/tmp/aohd2/fake/b_ping_close.sock"
+      1 sun_path="/tmp/aohd2/fake/b_ping_garbage.sock"
+      1 sun_path="/tmp/aohd2/fake/b_ping_hang.sock"
+      1 sun_path="/tmp/aohd2/fake/b_ping_protocol_19.sock"
+      2 sun_path="/tmp/aohd2/fake/b_ping_version_0_9_4.sock"
+      2 sun_path="/tmp/aohd2/fake/b_process_info_pane_not_found.sock"
+      2 sun_path="/tmp/aohd2/fake/b_process_info_result.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_agent_prompt.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_pane_close.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_pane_read.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_pane_run.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_pane_send_keys.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_pane_send_text.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_workspace_close_group.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_workspace_close.sock"
+      2 sun_path="/tmp/aohd2/fake/b_req_workspace_create.sock"
+      1 sun_path="/tmp/aohd2/home/.config/herdr/herdr.sock"
+      3 sun_path="/tmp/aohd2/s/custom.sock"
+      5 sun_path="/tmp/aohd2/xdg/config/herdr/herdr.sock"
+     14 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr.sock"
+     16 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-2/herdr.sock"
+      2 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-env/herdr.sock"
+      2 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-flag/herdr.sock"
+socket families:
+    113 socket(AF_UNIX
+execve:
+     62 execve("/tmp/aohd2/bin/herdr-real"
+
+== server run strace-server1 (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+      1 sun_path="/var/run/dbus/system_bus_socket"
+execve:
+      3 execve("/bin/sh", ["/bin/sh"
+      1 execve("/tmp/aohd2/bin/env", ["env"
+      1 execve("/tmp/aohd2/bin/grep", ["grep"
+      1 execve("/tmp/aohd2/bin/herdr-real", ["/tmp/aohd2/bin/herdr-real"
+      1 execve("/tmp/aohd2/bin/sort", ["sort"
+
+== server run strace-server2 (strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+      1 sun_path="/var/run/dbus/system_bus_socket"
+execve:
+      1 execve("/tmp/aohd2/bin2/herdr", ["/tmp/aohd2/bin2/herdr"
+
+== server run strace-server3 (handoff; strace -ff -e trace=network,execve)
+AF_INET/AF_INET6 lines: 0
+connect targets:
+     48 sun_path="/run/dbus/system_bus_socket"
+      3 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-client.sock"
+      2 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-handoff-56174.sock"
+      3 sun_path="/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr.sock"
+      2 sun_path="/var/run/dbus/system_bus_socket"
+execve:
+      1 execve("/bin/sh", ["/bin/sh"
+      1 execve("/tmp/aohd2/bin3/herdr", ["/tmp/aohd2/bin3/herdr"
+      1 execve("/tmp/aohd2/bin/herdr-real", ["/tmp/aohd2/bin/herdr-real"

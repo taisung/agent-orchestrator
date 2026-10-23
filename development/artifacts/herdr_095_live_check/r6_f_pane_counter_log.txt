@@ -1,0 +1,2 @@
+f_workspace: w4
+f_pane_ids_in_order: ["w4:p1", "w4:p2", "w4:p3", "w4:p4", "w4:p5", "w4:p6", "w4:p7", "w4:p8", "w4:p9", "w4:pA", "w4:pB", "w4:pC", "w4:pD", "w4:pE", "w4:pF", "w4:pG", "w4:pH", "w4:pJ", "w4:pK", "w4:pM", "w4:pN", "w4:pP", "w4:pQ", "w4:pR", "w4:pS", "w4:pT", "w4:pV", "w4:pW", "w4:pX", "w4:pY", "w4:pZ", "w4:p0", "w4:p11", "w4:p12", "w4:p13"]

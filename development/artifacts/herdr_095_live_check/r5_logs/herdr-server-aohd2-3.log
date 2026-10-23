@@ -1,0 +1,33 @@
+2026-10-22T22:12:53.440461Z  INFO herdr::api::server: api server listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr.sock
+2026-10-22T22:12:53.457564Z  INFO herdr::persist::io: session file is missing event="persist.restore" subsystem="persist" outcome="missing" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/session.json
+2026-10-22T22:12:53.457912Z  INFO herdr::app: using pane scrollback configuration pane_scrollback_limit_bytes=10000000
+2026-10-22T22:12:53.768625Z  INFO herdr::server::headless: client protocol socket listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-client.sock
+2026-10-22T22:12:53.768824Z  INFO herdr::server::headless::bootstrap: herdr server started api_socket=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr.sock client_socket=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-client.sock
+2026-10-22T22:12:53.769327Z  INFO herdr::logging: herdr starting event="app.startup" subsystem="server" outcome="started" pid=56174
+2026-10-22T22:13:06.795936Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="workspace.create" changes_ui=true
+2026-10-22T22:13:06.796973Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=1 rows=40 cols=119 scrollback_limit_bytes=10000000
+2026-10-22T22:13:06.802329Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=1 pid=59278
+2026-10-22T22:13:06.805015Z  INFO herdr::logging: workspace created event="workspace.create" subsystem="workspace" outcome="ok" workspace_id="w1" pane_id=1
+2026-10-22T22:13:06.805075Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w1"
+2026-10-22T22:13:06.805130Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w1" tab_id="w1:t1"
+2026-10-22T22:13:06.805173Z  INFO herdr::logging: workspace renamed event="workspace.rename" subsystem="workspace" outcome="ok" workspace_id="w1"
+2026-10-22T22:13:06.807105Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="workspace.create"
+2026-10-22T22:13:06.825641Z  INFO herdr::server::headless::lifecycle: starting live handoff
+2026-10-22T22:13:06.829568Z  INFO herdr::server::headless::lifecycle: spawned handoff import server pid=59284 socket=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-handoff-56174.sock
+2026-10-22T22:13:06.905414Z  INFO herdr::server::handoff: handoff import ready panes=1
+2026-10-22T22:13:06.921477Z  INFO herdr::app: using pane scrollback configuration pane_scrollback_limit_bytes=10000000
+2026-10-22T22:13:07.252829Z  INFO herdr::api::server: api server listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr.sock
+2026-10-22T22:13:07.253934Z  INFO herdr::server::headless: client protocol socket listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr-client.sock
+2026-10-22T22:13:07.255694Z  INFO herdr::server::headless::bootstrap: handoff import server started
+2026-10-22T22:13:07.256417Z  INFO herdr::server::headless::lifecycle: live handoff completed; old server exiting
+2026-10-22T22:13:07.256559Z  INFO herdr::server::headless::lifecycle: completing server shutdown
+2026-10-22T22:13:07.256661Z  INFO herdr::server::headless: headless server exiting
+2026-10-22T22:13:07.256893Z  INFO herdr::logging: herdr starting event="app.startup" subsystem="server" outcome="started" pid=59284
+2026-10-22T22:13:07.361858Z  INFO herdr::logging: herdr exiting event="app.shutdown" subsystem="server" outcome="completed" pid=56174
+2026-10-22T22:16:34.813397Z  INFO herdr::server::headless::lifecycle: server shutdown initiated reason=server.stop request from pid 98892 (herdr-real), parent pid 98878 (strace)
+2026-10-22T22:16:34.863657Z  INFO herdr::server::headless::lifecycle: completing server shutdown
+2026-10-22T22:16:34.870254Z  INFO herdr::persist::writer: preserved session recovery copy event="persist.backup" subsystem="persist" outcome="ok" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/session.json backup_path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/session-snapshots/session-000000000000000000001792707394868135287-59284-0.json
+2026-10-22T22:16:34.870519Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/session.json workspaces=1
+2026-10-22T22:16:34.870578Z  INFO herdr::server::headless: headless server exiting
+2026-10-22T22:16:35.089398Z  INFO herdr::pane: pane session terminated pane=1 pid=59278 signal=Hangup
+2026-10-22T22:16:35.096501Z  INFO herdr::logging: herdr exiting event="app.shutdown" subsystem="server" outcome="completed" pid=59284

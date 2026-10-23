@@ -1,0 +1,25 @@
+{
+ "path": "/tmp/aohd2/xdg/config/herdr/sessions/aohd2-3/herdr.sock",
+ "proc_net_unix": [
+  {
+   "inode": "28484308",
+   "listen": true,
+   "state": "01"
+  }
+ ],
+ "holders": {
+  "28484308": [
+   {
+    "pid": 59284,
+    "fd": 14,
+    "comm": "herdr"
+   }
+  ]
+ },
+ "ping_peer": {
+  "peer_pid": 59284,
+  "peer_uid_is_self": true,
+  "peer_start_ticks": "19984170",
+  "peer_exe": "/tmp/aohd2/bin3/herdr"
+ }
+}

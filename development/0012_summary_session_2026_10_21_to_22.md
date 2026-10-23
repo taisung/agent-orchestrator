@@ -2,8 +2,9 @@
 
 **Session**: `ao-orchestrator` (Claude Code, Opus 5.5), primary checkout, `main`. Transcript
 `~/.claude/projects/-home-taisung-local-agent-orchestrator/d1cd4fa3-37cc-4619-856a-56f78cdf584d.jsonl`.
-**Period**: from the handover close of 2026-10-21 11:40 EDT (`567f75be`) to the final handover of 2026-10-22
-after the F-6 landing (pushed 10:45 EDT) and its close steps.
+**Period**: from the handover close of 2026-10-21 11:40 EDT (`567f75be`) to the handover of 2026-10-22
+after the F-6 landing (pushed 10:45 EDT), then the `ao start` / `ao stop` round to the handover of 15:22 EDT
+(section 10).
 **State at the end**: [HANDOVER.md](HANDOVER.md). Durable records: [TODO_TRACKING.md](TODO_TRACKING.md)
 (What Landed, D-8, Known Issues).
 
@@ -174,3 +175,29 @@ The full list is in [HANDOVER.md "Open and Blocked Items"](HANDOVER.md). The ite
   `live-check-2026-10-22/`.
 - Rules added to `docs/DEVELOPMENT.md` by the landed rounds: "tmux Targets", the R2a stop outcome, the
   Claude Code screen rule, "Absence forms of the R4 reads".
+
+## 10. Addendum: the `ao start` / `ao stop` round (2026-10-22, 11:00 to 15:22 EDT)
+
+- **Incident.** At about 11:00 the owner quit Claude Code in the orchestrator pane, ran `ao stop` (it returned
+  with an error that is lost: no kill, no archive, the lifecycle worker kept running), then `exit`. That ended
+  the last tmux session, so the tmux server ended. `ao start` then created nothing: `runStartup` reused the
+  record, which still read `working` because no tmux server could answer. The owner made tmux session `0` by
+  hand (11:02:45) and resumed the orchestrator Claude in it; AO did not know that session, so the orchestrator
+  waited on report files with background loops for the rest of the day.
+- **Rounds.** ao-63 (Claude Code Opus 5.5) wrote three rounds; ao-64 (Codex gpt-6-astra) reviewed them:
+  r1 LAND-WITH-CHANGES (0 B, 3 M, 2 m: an empty caller lookup gave a half stop, a lookup with no timeout, a
+  falsy `isAlive` passed the refusal, a shared log, an untested `TMUX`), r2 LAND-WITH-CHANGES (0 B, 1 M, 1 m:
+  the relay lost the output of a failed stop on a slow pipe, the prune was too wide), r3 LAND-SAFE.
+- **Result.** `ao start` asks the runtime for each orchestrator record that is not terminal (no server = a
+  new orchestrator, unknown = refuse with exit 1); a non-boolean `isAlive` answer is unknown in core; every
+  `ao stop` of an existing record runs detached and relays all output, so a stop typed in the orchestrator
+  pane completes. Landed `d1efcb94..de7c1bfc` (14 commits) at 14:27 (owner "2"), gates PASS (3596 passed),
+  built 14:34:59, lifecycle workers restarted (2087525, 2087614), pushed `dc7815d2..2bb51734` at 14:37:25,
+  CI 4 of 4 passed.
+- **Also.** The `ao session relaunch` command was planned as the next round (owner), with ao-63 and ao-64
+  kept for it ("2a"). On the owner's request in its pane, ao-63 added a 30-second progress note
+  (`e6695161..3e366a01`, not reviewed, not landed). Two orchestrator slips: a reviewer brief went out after a
+  failed branch switch (corrected within 16 s, nothing ran on the wrong base), and one reviewer test setup
+  reached the npm registry through `npx tsx` (scratch only; later briefs forbid `npx`).
+- **At the end.** The owner runs `ao start` outside tmux for a new AO-managed orchestrator and ends tmux
+  session `0` (HANDOVER.md).

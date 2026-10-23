@@ -1,0 +1,14 @@
+r9_pane_run_ping_protocol_23: herdr pane run w1:p1 bash /tmp/aohd6/tmp/x.sh
+  exit=1
+  stdout=''
+  stderr='{"id":"cli:request","error":{"code":"protocol_mismatch","message":"client protocol 22 is older than server protocol 23; upgrade the Herdr client before using this command"}}\n'
+  connections that reached the fake server: 1
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  strace connect() calls: 1, address families: ['AF_UNIX']
+r9_pane_run_ping_protocol_19_control: herdr pane run w1:p1 bash /tmp/aohd6/tmp/x.sh
+  exit=1
+  stdout=''
+  stderr='{"id":"cli:request","error":{"code":"protocol_mismatch","message":"client protocol 22 is newer than server protocol 19; restart the Herdr server before using this command. Stop the old server to use the new version.\\nStopping exits pane processes.\\nRun `HERDR_SOCKET_PATH=/tmp/aohd6/fake/r9_pane_run_ping_protocol_19_control.sock herdr server stop`, then restart Herdr with the same socket override."}}\n'
+  connections that reached the fake server: 1
+  connection 1: {"id":"api-client:status","method":"ping","params":{}}
+  strace connect() calls: 1, address families: ['AF_UNIX']

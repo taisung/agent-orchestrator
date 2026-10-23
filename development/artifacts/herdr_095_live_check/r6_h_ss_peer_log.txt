@@ -1,0 +1,2 @@
+h_ss_query: {"client_inode": "28991496", "peercred_pid": 681160, "ss_exit": 0, "ss_ms": 22.9, "rows_total": 1, "row_with_our_peer": ["u_str ESTAB 0      0      /tmp/aohd3/xdg/config/herdr/sessions/aohd3-2/herdr.sock 28973521 * 28991496 users:((\"herdr-real\",pid=681160,fd=6))"], "stderr": ""}
+h_ss_without_p: {"rows": ["u_str ESTAB 0      0      /tmp/aohd3/xdg/config/herdr/sessions/aohd3-2/herdr.sock 28973521 * 28991496"]}

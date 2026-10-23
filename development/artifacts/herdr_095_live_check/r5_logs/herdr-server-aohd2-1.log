@@ -1,0 +1,70 @@
+2026-10-22T22:05:22.251203Z  INFO herdr::api::server: api server listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr.sock
+2026-10-22T22:05:22.270203Z  INFO herdr::persist::io: session file is missing event="persist.restore" subsystem="persist" outcome="missing" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/session.json
+2026-10-22T22:05:22.270687Z  INFO herdr::app: using pane scrollback configuration pane_scrollback_limit_bytes=10000000
+2026-10-22T22:05:22.639285Z  INFO herdr::server::headless: client protocol socket listening path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr-client.sock
+2026-10-22T22:05:22.639500Z  INFO herdr::server::headless::bootstrap: herdr server started api_socket=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr.sock client_socket=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/herdr-client.sock
+2026-10-22T22:05:22.640011Z  INFO herdr::logging: herdr starting event="app.startup" subsystem="server" outcome="started" pid=4158055
+2026-10-22T22:05:54.877639Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.888722Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.905449Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.909772Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.913804Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.917940Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.921985Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.925944Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.929643Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.933314Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.936964Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.940514Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:54.952809Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="workspace.create" changes_ui=true
+2026-10-22T22:05:54.953520Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=1 rows=40 cols=119 scrollback_limit_bytes=10000000
+2026-10-22T22:05:54.957936Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=1 pid=4162344
+2026-10-22T22:05:54.960027Z  INFO herdr::logging: workspace created event="workspace.create" subsystem="workspace" outcome="ok" workspace_id="w1" pane_id=1
+2026-10-22T22:05:54.960078Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w1"
+2026-10-22T22:05:54.960112Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w1" tab_id="w1:t1"
+2026-10-22T22:05:54.960148Z  INFO herdr::logging: workspace renamed event="workspace.rename" subsystem="workspace" outcome="ok" workspace_id="w1"
+2026-10-22T22:05:54.961683Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="workspace.create"
+2026-10-22T22:05:56.487836Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="pane.split" changes_ui=true
+2026-10-22T22:05:56.489515Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=2 rows=38 cols=57 scrollback_limit_bytes=10000000
+2026-10-22T22:05:56.495813Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=2 pid=4162356
+2026-10-22T22:05:56.498561Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="pane.split"
+2026-10-22T22:05:56.504666Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="pane.close" changes_ui=true
+2026-10-22T22:05:56.505701Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=2 status="ExitStatus { code: 1, signal: Some(\"Hangup\") }"
+2026-10-22T22:05:56.631446Z  INFO herdr::pane: pane session terminated pane=2 pid=4162356 signal=Hangup
+2026-10-22T22:05:56.631806Z  WARN herdr::app::actions: PaneDied for unknown pane pane=2
+2026-10-22T22:05:56.631966Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="pane.close"
+2026-10-22T22:05:56.635094Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:56.637977Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="pane.close" changes_ui=true
+2026-10-22T22:05:56.638266Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.close"
+2026-10-22T22:05:56.641951Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="workspace.close" changes_ui=true
+2026-10-22T22:05:56.642095Z  INFO herdr::logging: workspace closed event="workspace.close" subsystem="workspace" outcome="ok" workspace_id="w1"
+2026-10-22T22:05:56.642685Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=1 status="ExitStatus { code: 1, signal: Some(\"Hangup\") }"
+2026-10-22T22:05:56.720450Z  INFO herdr::pane: pane session terminated pane=1 pid=4162344 signal=Hangup
+2026-10-22T22:05:56.721213Z  WARN herdr::app::actions: PaneDied for unknown pane pane=1
+2026-10-22T22:05:56.721366Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="workspace.close"
+2026-10-22T22:05:56.726365Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.get"
+2026-10-22T22:05:56.731176Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="pane.process_info"
+2026-10-22T22:05:56.735404Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="workspace.close" changes_ui=true
+2026-10-22T22:05:56.735750Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="workspace.close"
+2026-10-22T22:05:56.739883Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="workspace.get"
+2026-10-22T22:05:56.745409Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="workspace.create" changes_ui=true
+2026-10-22T22:05:56.746184Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=3 rows=40 cols=119 scrollback_limit_bytes=10000000
+2026-10-22T22:05:56.750144Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=3 pid=4162368
+2026-10-22T22:05:56.751811Z  INFO herdr::logging: workspace created event="workspace.create" subsystem="workspace" outcome="ok" workspace_id="w2" pane_id=3
+2026-10-22T22:05:56.751855Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w2"
+2026-10-22T22:05:56.751890Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w2" tab_id="w2:t1"
+2026-10-22T22:05:56.751923Z  INFO herdr::logging: workspace renamed event="workspace.rename" subsystem="workspace" outcome="ok" workspace_id="w2"
+2026-10-22T22:05:56.753574Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="workspace.create"
+2026-10-22T22:05:56.757018Z  INFO herdr::logging: api request received event="api.request.start" subsystem="api" outcome="started" request_id="aohd2" method="pane.close" changes_ui=true
+2026-10-22T22:05:56.757188Z  INFO herdr::logging: workspace closed event="workspace.close" subsystem="workspace" outcome="ok" workspace_id="w2"
+2026-10-22T22:05:56.757752Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=3 status="ExitStatus { code: 1, signal: Some(\"Hangup\") }"
+2026-10-22T22:05:56.856467Z  INFO herdr::pane: pane session terminated pane=3 pid=4162368 signal=Hangup
+2026-10-22T22:05:56.856785Z  WARN herdr::app::actions: PaneDied for unknown pane pane=3
+2026-10-22T22:05:56.856971Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="ok" request_id="aohd2" method="pane.close"
+2026-10-22T22:05:56.860232Z  INFO herdr::logging: api request completed event="api.request.complete" subsystem="api" outcome="error" request_id="aohd2" method="workspace.get"
+2026-10-22T22:06:01.859597Z  INFO herdr::logging: session cleared event="persist.clear" subsystem="persist" outcome="ok" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/session.json
+2026-10-22T22:09:02.524940Z  INFO herdr::server::headless::lifecycle: server shutdown initiated reason=server.stop request from pid 12354 (herdr-real), parent pid 12349 (strace)
+2026-10-22T22:09:02.575406Z  INFO herdr::server::headless::lifecycle: completing server shutdown
+2026-10-22T22:09:02.576036Z  INFO herdr::logging: session cleared event="persist.clear" subsystem="persist" outcome="ok" path=/tmp/aohd2/xdg/config/herdr/sessions/aohd2-1/session.json
+2026-10-22T22:09:02.576112Z  INFO herdr::server::headless: headless server exiting
+2026-10-22T22:09:02.588789Z  INFO herdr::logging: herdr exiting event="app.shutdown" subsystem="server" outcome="completed" pid=4158055

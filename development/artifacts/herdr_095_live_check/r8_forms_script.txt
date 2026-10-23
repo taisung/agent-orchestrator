@@ -1,0 +1,139 @@
+# r8: which herdr 0.9.5 CLI failures of `workspace create`, `pane run` and `status server --json`
+# are refused before the request is sent. A fake server at HERDR_SOCKET_PATH logs every connection.
+# No real herdr server runs. Every herdr call runs under strace (network calls only).
+import json, os, socket, subprocess, threading, time
+
+ROOT = "/tmp/aohd5"
+PONG = {"type": "pong", "version": "0.9.5", "protocol": 22, "capabilities": {"live_handoff": True,
+        "detached_server_daemon": False, "endpoint_protocol_generation": 1, "surface_interest": True,
+        "health_check": True, "ssh_agent_registration": True}}
+
+
+def line(o):
+    return (json.dumps(o) + "\n").encode()
+
+
+def rid(req):
+    try:
+        return json.loads(req).get("id")
+    except Exception:
+        return None
+
+
+class FakeServer:
+    def __init__(self, path, handler):
+        self.path, self.handler, self.log = path, handler, []
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        self.sock.listen(8)
+        self.sock.settimeout(0.2)
+        self.stop = False
+        self.t = threading.Thread(target=self.loop, daemon=True)
+        self.t.start()
+
+    def loop(self):
+        while not self.stop:
+            try:
+                c, _ = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            c.settimeout(5)
+            buf = b""
+            try:
+                while b"\n" not in buf:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+            except socket.timeout:
+                pass
+            req = buf.decode(errors="replace").strip()
+            self.log.append(req)
+            out, then = self.handler(req)
+            try:
+                if out:
+                    c.sendall(out)
+            finally:
+                c.close()
+
+    def close(self):
+        self.stop = True
+        self.t.join(2)
+        self.sock.close()
+        os.unlink(self.path)
+
+
+def env_for(sock_path):
+    return {
+        "HOME": f"{ROOT}/home", "TMPDIR": f"{ROOT}/tmp", "PATH": f"{ROOT}/bin",
+        "XDG_CONFIG_HOME": f"{ROOT}/home/.config", "XDG_STATE_HOME": f"{ROOT}/state",
+        "XDG_DATA_HOME": f"{ROOT}/data", "XDG_CACHE_HOME": f"{ROOT}/cache",
+        "XDG_RUNTIME_DIR": f"{ROOT}/run", "HERDR_SOCKET_PATH": sock_path,
+    }
+
+
+log = []
+
+
+def run(name, args, request_answer, ping_answer=None, stale=False):
+    path = f"{ROOT}/fake/{name}.sock"
+    fs = None
+    if stale:
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(path)
+        s.close()
+    else:
+        def handler(req):
+            try:
+                is_ping = json.loads(req).get("method") == "ping"
+            except Exception:
+                is_ping = False
+            if is_ping:
+                return (ping_answer(req) if ping_answer else line({"id": rid(req), "result": PONG})), "close"
+            return request_answer(req), "close"
+        fs = FakeServer(path, handler)
+    trace = f"{ROOT}/out/{name}.strace"
+    try:
+        p = subprocess.run(["strace", "-f", "-e", "trace=network", "-o", trace, "herdr"] + args,
+                           env=env_for(path), capture_output=True, timeout=20)
+        code, out, err = p.returncode, p.stdout.decode(), p.stderr.decode()
+    except subprocess.TimeoutExpired:
+        code, out, err = "timeout after 20 s", "", ""
+    reqs = list(fs.log) if fs else []
+    if fs:
+        fs.close()
+    else:
+        os.unlink(path)
+    connects = [l.strip() for l in open(trace) if "connect(" in l]
+    families = sorted({c.split("sa_family=")[1].split(",")[0] for c in connects if "sa_family=" in c})
+    entry = [f"{name}: herdr {' '.join(args)}", f"  exit={code}", f"  stdout={out!r}", f"  stderr={err!r}",
+             f"  connections that reached the fake server: {len(reqs)}"]
+    entry += [f"  connection {j}: {r}" for j, r in enumerate(reqs, 1)]
+    entry.append(f"  strace connect() calls: {len(connects)}, address families: {families}")
+    log.append("\n".join(entry))
+    print(log[-1][:1500])
+
+
+open(f"{ROOT}/tmp/x.sh", "w").write("exit 0\n")
+WS = ["workspace", "create", "--cwd", f"{ROOT}/tmp", "--label", "aohd5-1", "--env", "A=1", "--no-focus"]
+RUN = ["pane", "run", "w1:p1", "bash", f"{ROOT}/tmp/x.sh"]
+ST = ["status", "server", "--json"]
+okws = lambda req: line({"id": rid(req), "result": {"type": "workspace_created"}})
+p19 = lambda req: line({"id": rid(req), "result": {**PONG, "version": "0.8.0", "protocol": 19}})
+p23 = lambda req: line({"id": rid(req), "result": {**PONG, "version": "0.9.9", "protocol": 23}})
+err = lambda code, msg: (lambda req: line({"id": rid(req), "error": {"code": code, "message": msg}}))
+
+run("r8_ws_create_ping_protocol_19", WS, okws, ping_answer=p19)
+run("r8_pane_run_ping_protocol_19", RUN, err("x", "x"), ping_answer=p19)
+run("r8_status_json_ping_protocol_19", ST, err("x", "x"), ping_answer=p19)
+run("r8_ws_create_ping_protocol_23", WS, okws, ping_answer=p23)
+run("r8_status_json_ping_protocol_23", ST, err("x", "x"), ping_answer=p23)
+run("r8_ws_create_error_after_request", WS, err("zz_unknown_code", "fake: refused after the request"))
+run("r8_ws_create_server_sends_cli_no_server_text", WS,
+    err("server_not_running", f"no herdr server is running at {ROOT}/fake/elsewhere.sock"))
+run("r8_pane_run_pane_not_found_after_request", RUN, err("pane_not_found", "pane w1:p1 not found"))
+run("r8_ws_create_stale_socket_file", WS, None, stale=True)
+run("r8_pane_run_stale_socket_file", RUN, None, stale=True)
+open(f"{ROOT}/out/r8_cli_forms_log.txt", "w").write("\n".join(log) + "\n")

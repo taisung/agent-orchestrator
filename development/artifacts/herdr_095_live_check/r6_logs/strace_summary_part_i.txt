@@ -1,0 +1,14 @@
+
+== part I (added 19:20): servers aohd3-3, aohd3-4, aohd3-5 under strace -ff -e trace=network,execve(,kill) (-tt for aohd3-5): files 186
+socket families:       9 AF_UNIX 
+connect lines that are not AF_UNIX: 0
+non-scratch AF_UNIX connect targets:
+      3 sun_path="/var/run/dbus/system_bus_socket"
+kill calls other than signal 0:
+kill(817065, SIGHUP)                    = 0
+kill(817065, SIGTERM)                   = 0
+kill(817065, SIGKILL)                   = 0
+19:18:22.467276 kill(820765, SIGHUP)    = 0
+19:18:22.731780 kill(820765, SIGTERM)   = 0
+19:18:22.996631 kill(820765, SIGKILL)   = 0
+shim calls in part I: 3

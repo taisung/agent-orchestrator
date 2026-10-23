@@ -1,0 +1,3 @@
++79ms claude idle term_65e736cb2902a2
++980ms claude working term_65e736cb2902a2
++10050ms end (claude working term_65e736cb2902a2)

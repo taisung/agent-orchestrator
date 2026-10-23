@@ -1,0 +1,10 @@
+herdr server aohd-1 pid 2842003 (strace 2842000) started 16:06:29
+herdr server aohd-1 pid 2842003 stopped 16:12:39 by herdr server stop
+herdr server aohd-1 pid 2914035 (strace 2914032) started 16:12:52 (restart)
+lifecycle-worker aohd pid 2949663 started 16:15:55 by ao spawn
+herdr server aohd-1 pid 2914035 stopped 16:21:26 by herdr server stop
+herdr server aohd-1 pid 3025657 (strace 3025654) started 16:21:47 (restart 2)
+herdr server aohd-1 pid 3025657 stopped 16:23:30 by herdr server stop
+herdr server aohd-1 pid 3043263 (strace 3043254) started 16:23:29 (restart 3)
+lifecycle-worker aohd pid 2949663 stopped 16:27:48 by kill of the pid-file PID
+herdr server aohd-1 pid 3043263 stopped 16:28:04 by kill of the exact PID

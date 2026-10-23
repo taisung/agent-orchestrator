@@ -1,0 +1,5 @@
+[user]
+	name = aohd3 scratch
+	email = aohd3@invalid.example
+[init]
+	defaultBranch = main

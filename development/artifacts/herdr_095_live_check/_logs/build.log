@@ -1,0 +1,54 @@
+== install 16:14:00
+Scope: all 15 workspace projects
+(node:2931018) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +379
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 379, reused 379, downloaded 0, added 379, done
+ WARN  Failed to create bin at <home>/.worktrees/agent-orchestrator/ao-65/packages/ao/node_modules/.bin/ao. ENOENT: no such file or directory, open '<home>/.worktrees/agent-orchestrator/ao-65/packages/cli/dist/index.js'
+
+devDependencies:
++ @changesets/cli 2.30.0
++ @eslint/js 10.0.1
++ @types/node 25.6.0
++ eslint 10.2.0
++ eslint-config-prettier 10.1.8
++ husky 9.1.7
++ prettier 3.8.2
++ typescript-eslint 8.58.1
+
+Done in 1.5s
+install exit=0 16:14:02
+== build 16:14:02
+
+> agent-orchestrator@0.1.0 build <home>/.worktrees/agent-orchestrator/ao-65
+> pnpm -r build
+
+Scope: 14 of 15 workspace projects
+packages/core build$ tsc -p tsconfig.build.json
+packages/core build: Done
+packages/plugins/agent-claude-code build$ tsc
+packages/plugins/agent-gemini build$ tsc
+packages/plugins/agent-codex build$ tsc
+packages/plugins/agent-opencode build$ tsc
+packages/plugins/agent-gemini build: Done
+packages/plugins/notifier-desktop build$ tsc
+packages/plugins/agent-codex build: Done
+packages/plugins/agent-claude-code build: Done
+packages/plugins/runtime-herdr build$ tsc
+packages/plugins/runtime-tmux build$ tsc
+packages/plugins/agent-opencode build: Done
+packages/plugins/scm-github build$ tsc
+packages/plugins/scm-github build: Done
+packages/plugins/tracker-github build$ tsc
+packages/plugins/notifier-desktop build: Done
+packages/plugins/workspace-worktree build$ tsc
+packages/plugins/runtime-herdr build: Done
+packages/plugins/runtime-tmux build: Done
+packages/plugins/tracker-github build: Done
+packages/plugins/workspace-worktree build: Done
+packages/cli build$ tsc
+packages/cli build: Done
+build exit=0 16:14:13
