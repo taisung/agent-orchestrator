@@ -35,6 +35,7 @@ import {
   isIssueNotFoundError,
   isLaunchEndUnproven,
   isRestorable,
+  isUnprovenLaunchRecord,
   LAUNCH_GRACE_MS,
   NON_RESTORABLE_STATUSES,
   RUNTIME_NO_SERVER_ERROR_CODE,
@@ -1118,7 +1119,7 @@ async function getTmuxForegroundCommand(
  * archived.
  */
 async function isOrchestratorRuntimeAlive(
-  runtime: Runtime,
+  runtime: Runtime | null,
   handle: RuntimeHandle,
   sessionId: SessionId,
 ): Promise<boolean> {
@@ -1127,6 +1128,11 @@ async function isOrchestratorRuntimeAlive(
       `Cannot tell whether session ${sessionId} is alive, so it is neither reused nor replaced. Check the runtime and retry.`,
       { cause },
     );
+  // Herdr fit-2 (design r11 4.6): no runtime may answer for the handle (its
+  // runtime is in LAUNCH_END_UNPROVEN_RUNTIMES and not loaded): unknown.
+  if (!runtime) {
+    throw unknown(new Error(`no runtime plugin ${handle.runtimeName} is loaded`));
+  }
   const herdrRecord = (handle.runtimeName || runtime.name) === HERDR_RUNTIME_NAME;
   let alive: unknown;
   try {
@@ -2097,11 +2103,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // under one runtime must keep being probed by that runtime even after the
     // project's configured runtime changes, otherwise flipping the default
     // routes live sessions to a plugin that knows nothing about them.
-    const handleRuntimeName = session.runtimeHandle?.runtimeName;
-    const runtime =
-      handleRuntimeName && handleRuntimeName !== plugins.runtime?.name
-        ? (registry.get<Runtime>("runtime", handleRuntimeName) ?? plugins.runtime)
-        : plugins.runtime;
+    // Herdr fit-2 (design r11 4.6): a handle of a runtime in
+    // LAUNCH_END_UNPROVEN_RUNTIMES that is not loaded gets no probe.
+    const runtime = session.runtimeHandle
+      ? runtimeForHandle(session.runtimeHandle, plugins.runtime)
+      : plugins.runtime;
 
     // Check runtime liveness first — regardless of session status. A terminal
     // status must not force activity to "exited" while the agent is still alive:
@@ -2738,6 +2744,32 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   /**
+   * Herdr fit-2 (design r11 4.6): the runtime that answers for an old
+   * record's handle. A registered `handle.runtimeName` gives that plugin; a
+   * runtime in LAUNCH_END_UNPROVEN_RUNTIMES that is not registered gives null
+   * (no other runtime may answer for it); any other case gives `fallback`,
+   * today's runtime of the site. A new launch still creates through the
+   * project's selected runtime.
+   */
+  function runtimeForHandle(
+    handle: RuntimeHandle,
+    fallback: Runtime | null | undefined,
+  ): Runtime | null {
+    const name = handle.runtimeName;
+    if (name) {
+      const registered = registry.get<Runtime>("runtime", name);
+      if (registered) return registered;
+      if (isLaunchEndUnproven(name)) return null;
+    }
+    return fallback ?? null;
+  }
+
+  /** The `unknown` stop of a handle whose runtime is not loaded (runtimeForHandle null). */
+  function notLoadedStop(handle: RuntimeHandle): UnconfirmedRuntimeStop {
+    return { outcome: "unknown", detail: `no runtime plugin ${handle.runtimeName} is loaded` };
+  }
+
+  /**
    * Herdr fit-2 (design r11 4.4, 4.5): the `initial` of a launch's
    * reservation. A create runtime in LAUNCH_END_UNPROVEN_RUNTIMES starts the
    * record with the pending handle P, `launchFields` and the claim; any other
@@ -3284,7 +3316,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
      */
     const orchestratorRuntime = plugins.runtime;
     const stopOrchestratorOrRefuse = async (handle: RuntimeHandle, kept: string): Promise<void> => {
-      const stopped = await stopRuntime(orchestratorRuntime, handle);
+      // Herdr fit-2 (design r11 4.6): through the handle's runtime; one that
+      // is in the set and not loaded is an unconfirmed stop.
+      const handleRuntime = runtimeForHandle(handle, orchestratorRuntime);
+      const stopped = handleRuntime
+        ? await stopRuntime(handleRuntime, handle)
+        : notLoadedStop(handle);
       if (!isRuntimeStopConfirmed(stopped)) {
         throw new RuntimeStopUnconfirmedError({
           sessionId: `${project.sessionPrefix}-orchestrator`,
@@ -3327,7 +3364,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       };
       if (existingRaw && existingOrchestrator?.runtimeHandle) {
         const existingAlive = await isOrchestratorRuntimeAlive(
-          plugins.runtime,
+          runtimeForHandle(existingOrchestrator.runtimeHandle, plugins.runtime),
           existingOrchestrator.runtimeHandle,
           sessionId,
         );
@@ -3388,7 +3425,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           : null;
         if (concurrentRaw && concurrentSession?.runtimeHandle) {
           const concurrentAlive = await isOrchestratorRuntimeAlive(
-            plugins.runtime,
+            runtimeForHandle(concurrentSession.runtimeHandle, plugins.runtime),
             concurrentSession.runtimeHandle,
             sessionId,
           );
@@ -3942,11 +3979,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (raw["runtimeHandle"]) {
       const handle = safeJsonParse<RuntimeHandle>(raw["runtimeHandle"]);
       if (handle) {
-        const runtimePlugin = registry.get<Runtime>(
-          "runtime",
-          handle.runtimeName ??
-            (project ? (project.runtime ?? config.defaults.runtime) : config.defaults.runtime),
-        );
+        // Herdr fit-2 (design r11 4.6): a handle of a runtime in
+        // LAUNCH_END_UNPROVEN_RUNTIMES that is not loaded refuses (nothing
+        // removed); another runtime that is not loaded skips the stop, as before.
+        const runtimePlugin = handle.runtimeName
+          ? runtimeForHandle(handle, null)
+          : (registry.get<Runtime>(
+              "runtime",
+              project ? (project.runtime ?? config.defaults.runtime) : config.defaults.runtime,
+            ) ?? null);
+        if (!runtimePlugin && isLaunchEndUnproven(handle.runtimeName)) {
+          throw new RuntimeStopUnconfirmedError({
+            sessionId,
+            handle,
+            stop: notLoadedStop(handle),
+            kept: "record and worktree kept",
+            retry: decidedFrom ? "ao session cleanup" : `ao session kill ${sessionId}`,
+          });
+        }
         if (runtimePlugin) {
           // Round 5 (1.0.1): the launcher check awaited. What is left is the
           // window between this read and the tmux command (the runtime name
@@ -4280,11 +4330,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           }
         }
 
-        // Check if runtime is dead
-        if (!shouldKill && session.runtimeHandle && plugins.runtime) {
+        // Check if runtime is dead. Herdr fit-2 (design r11 4.6): through the
+        // handle's runtime; a runtime in the set that is not loaded gets no
+        // probe, and this rule kills nothing.
+        const deadCheckRuntime = session.runtimeHandle
+          ? runtimeForHandle(session.runtimeHandle, plugins.runtime)
+          : null;
+        if (!shouldKill && session.runtimeHandle && deadCheckRuntime) {
           const handle = session.runtimeHandle;
           try {
-            const alive = await plugins.runtime.isAlive(handle);
+            const alive = await deadCheckRuntime.isAlive(handle);
             if (!alive) {
               // Do not archive an OpenCode holder on an uncertain negative and
               // thereby remove it from the archived-purge guard below.
@@ -5355,19 +5410,38 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // the workspace as they were. A copy-back where one of those values
     // changed during the stop, or that another operation replaced, stays,
     // and the refusal says so.
+    //    Herdr fit-2 (design r11 4.6, 5.2.4): the stop goes through the
+    //    handle's runtime; one in LAUNCH_END_UNPROVEN_RUNTIMES that is not
+    //    loaded is unknown. A runtimeHandle text that gives no handle but
+    //    names herdr (or a project whose runtime is in the set) refuses like
+    //    an unconfirmed stop: a skipped stop would let a second launch start
+    //    next to a launch that no handle names.
+    const refuseStep7 = (handle: RuntimeHandle, stopped: UnconfirmedRuntimeStop): never => {
+      throw new RuntimeStopUnconfirmedError({
+        sessionId,
+        handle,
+        stop: stopped,
+        kept: fromArchive
+          ? releaseCopyBack(sessionsDir, sessionId, owned)
+          : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
+        retry: `ao session restore ${sessionId}`,
+      });
+    };
     if (session.runtimeHandle) {
-      const stopped = await stopRuntime(plugins.runtime, session.runtimeHandle);
-      if (!isRuntimeStopConfirmed(stopped)) {
-        throw new RuntimeStopUnconfirmedError({
-          sessionId,
-          handle: session.runtimeHandle,
-          stop: stopped,
-          kept: fromArchive
-            ? releaseCopyBack(sessionsDir, sessionId, owned)
-            : "nothing was restored: this restore did not change the record or the workspace, and no new runtime was created",
-          retry: `ao session restore ${sessionId}`,
-        });
-      }
+      const handleRuntime = runtimeForHandle(session.runtimeHandle, plugins.runtime);
+      const stopped = handleRuntime
+        ? await stopRuntime(handleRuntime, session.runtimeHandle)
+        : notLoadedStop(session.runtimeHandle);
+      if (!isRuntimeStopConfirmed(stopped)) refuseStep7(session.runtimeHandle, stopped);
+    } else if (raw["runtimeHandle"] && isUnprovenLaunchRecord(raw, plugins.runtime.name)) {
+      const text = raw["runtimeHandle"];
+      refuseStep7(
+        { id: "", runtimeName: HERDR_RUNTIME_NAME, data: {} },
+        {
+          outcome: "unknown",
+          detail: `the runtime handle of ${sessionId} cannot be read (${text.slice(0, 80)}); retire it by hand`,
+        },
+      );
     }
 
     // 7a. Herdr fit-2 (design r11 5.2.4): the transition write. Before any
