@@ -109,6 +109,15 @@
   in `backup/ao-65-herdr-r6/`). RH-A and RH-B stay design-only (r6 B-1, B-2, M-3 open); a Herdr stop
   keeps answering `unknown`. Next: a new sol reviewer reviews r7, then a worker implements the fit round.
 
+**Update 2026-10-22 20:10 EDT.**
+- CI `CI` / Lint failed on the push `541becfb` (Test, Typecheck, Security, both integration runs passed):
+  `eslint .` lints `development/`, and the fixture scripts `r5_setup/r5_g_node.mjs` (`f66f885e`) and
+  `r6_setup/r6_guard.mjs` (`3ad87bd4`) gave 22 `no-undef` errors. ao-70 (OpenCode Muse) added
+  `"development/artifacts/**"` to the eslint global ignores (`133e2bcf`, fast-forwarded onto main); lint
+  0 errors, 5 known warnings. Not pushed yet (owner's word). A local `pnpm lint` in the primary checkout
+  also reports ~34800 errors from the untracked `packages/web` leftovers; use
+  `--ignore-pattern 'packages/web/**'`. ao-70 is done; watcher 1353610 watches it.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
