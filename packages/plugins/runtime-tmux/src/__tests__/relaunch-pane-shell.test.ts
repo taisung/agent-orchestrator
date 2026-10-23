@@ -11,7 +11,15 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { RuntimeHandle } from "@aoagents/ao-core";
@@ -48,6 +56,47 @@ async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return check();
+}
+
+/** False when `pid` has exited, also as a zombie (its exit work is done). */
+function running(pid: number): boolean {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return false;
+    throw err;
+  }
+  // The state follows the command name, which is in parentheses.
+  return !/^[ZX]/.test(stat.slice(stat.lastIndexOf(")") + 2));
+}
+
+/**
+ * Stop the private server, then remove the test directory. `kill-server`
+ * returns before the server and its pane shells exit, and a bash that exits
+ * on SIGHUP still writes its history to $HOME, the test directory: CI run
+ * 39964135618 failed with ENOTEMPTY when `rmSync` ran at once. So this waits
+ * (at most 5 s) until the server and every pane process have exited, then
+ * removes the directory with retries. A process that still runs after the
+ * wait fails the hook. Every call goes through the wrapper (never to the
+ * default server); `list-panes` finds nothing when no server runs.
+ */
+async function stopServerAndRemoveDir(): Promise<void> {
+  const wrapper = join(dir, "bin", "tmux");
+  const panes = spawnSync(wrapper, ["list-panes", "-a", "-F", "#{pid} #{pane_pid}"], {
+    encoding: "utf-8",
+  });
+  const pids =
+    panes.status === 0 ? [...new Set(panes.stdout.split(/\s+/).filter(Boolean).map(Number))] : [];
+  spawnSync(wrapper, ["kill-server"], { stdio: "ignore" });
+  const exited = await waitFor(() => !pids.some(running), 5_000);
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (!exited) {
+    throw new Error(
+      `tmux processes ${pids.filter(running).join(", ")} still run 5 s after kill-server`,
+    );
+  }
 }
 
 /** Run a line in the pane's shell and wait for its next prompt. */
@@ -105,13 +154,13 @@ describe.skipIf(!supported)(
       process.env["PATH"] = `${join(dir, "bin")}${delimiter}${savedPath ?? ""}`;
     });
 
-    afterAll(() => {
-      if (dir) {
-        spawnSync(join(dir, "bin", "tmux"), ["kill-server"], { stdio: "ignore" });
-        rmSync(dir, { recursive: true, force: true });
+    afterAll(async () => {
+      try {
+        if (dir) await stopServerAndRemoveDir();
+      } finally {
+        process.env["PATH"] = savedPath;
       }
-      process.env["PATH"] = savedPath;
-    });
+    }, 15_000);
 
     const cases: Array<{ name: string; owner: (paneId: string, mark: string) => Promise<void> }> = [
       {

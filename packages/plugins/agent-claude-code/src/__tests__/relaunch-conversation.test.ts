@@ -196,7 +196,8 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env["HOME"] = savedHome;
-  rmSync(dir, { recursive: true, force: true });
+  // With retries: see stopPrivateServer.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("SessionStart hook: records only the agent of an AO launch", () => {
@@ -606,6 +607,45 @@ function findOnPath(name: string): string | null {
 
 const tmuxBin = findOnPath("tmux");
 
+/** False when `pid` has exited, also as a zombie (its exit work is done). */
+function running(pid: number): boolean {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return false;
+    throw err;
+  }
+  // The state follows the command name, which is in parentheses.
+  return !/^[ZX]/.test(stat.slice(stat.lastIndexOf(")") + 2));
+}
+
+/**
+ * Stop the private server of `wrapper` and wait (at most 5 s) until the
+ * server and every pane process have exited; answers the PIDs that still
+ * run. `kill-server` returns before they exit, and a process can still write
+ * to the test directory then, which afterEach removes: CI run 39964135618
+ * failed with ENOTEMPTY when `rmSync` ran at once (relaunch-pane-shell.test.ts
+ * of runtime-tmux). It does not throw on a remaining process (a test calls
+ * it in `finally`, and a throw there would hide the test's own failure).
+ * Every call goes through the wrapper, never to the default server.
+ */
+async function stopPrivateServer(wrapper: string, env: Record<string, string>): Promise<number[]> {
+  const panes = spawnSync(wrapper, ["list-panes", "-a", "-F", "#{pid} #{pane_pid}"], {
+    encoding: "utf-8",
+    env,
+  });
+  const pids =
+    panes.status === 0 ? [...new Set(panes.stdout.split(/\s+/).filter(Boolean).map(Number))] : [];
+  spawnSync(wrapper, ["kill-server"], { env, stdio: "ignore" });
+  const end = Date.now() + 5_000;
+  while (pids.some(running) && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return pids.filter(running);
+}
+
 describe.skipIf(process.platform !== "linux" || tmuxBin === null)(
   "SessionStart hook in a real tmux session (review r1 M-1)",
   () => {
@@ -647,6 +687,7 @@ describe.skipIf(process.platform !== "linux" || tmuxBin === null)(
         return result.stdout.trim();
       };
 
+      let stillRunning: number[];
       try {
         // The launch: the tmux session environment has AO_SESSION and
         // AO_DATA_DIR (as runtime-tmux creates it); only the launch command
@@ -713,8 +754,9 @@ describe.skipIf(process.platform !== "linux" || tmuxBin === null)(
         });
         expect(fromSecond.id).toBeNull();
       } finally {
-        spawnSync(join(bin, "tmux"), ["kill-server"], { env, stdio: "ignore" });
+        stillRunning = await stopPrivateServer(join(bin, "tmux"), env);
       }
+      expect(stillRunning, "tmux processes still run 5 s after kill-server").toEqual([]);
     }, 30_000);
   },
 );
