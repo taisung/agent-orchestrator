@@ -139,6 +139,23 @@
   `development/reviews/session_relaunch_review_r3_sol61.md`, watcher 2157657, state
   `~/.cache/fleet_watch/aofork-2026-10-22i`). ao-63 and ao-65 are idle; watcher 530444 still watches them.
 
+**Update 2026-10-22 21:15 EDT.**
+- Owner (21:07): "1 (b), 2 yes, 3 (a), push, close both": OQ-F3 (b) two rounds, OQ-F1 (b), OQ-F2 (a)
+  F-9 with the r7 review safeguards. Pushed `541becfb..389b8dfe` (7 commits incl. the lint fix
+  `133e2bcf`); CI on `389b8dfe`: no run registered at 21:13, check again. ao-70 and ao-71 killed 21:08
+  (archives `ao-70_2026-10-23T01-08-51-741Z`, `ao-71_2026-10-23T01-08-52-111Z`); watchers 1353610 and
+  1732201 stopped with TERM first.
+- ao-73 (Claude Code Opus 5.5) implements Herdr fit-1 on `389b8dfe` (brief `brief-aofork-herdr-fit1-impl.md`,
+  scratch `/tmp/aofit1`, watcher 2303560 state `aofork-2026-10-22j`): F-1, F-2, F-6 without
+  `preflight()`, F-5, docs, plus an orchestrator-added interim startup guard (for a Herdr record neither
+  the no-server code nor `isAlive` false is "gone" in `isOrchestratorRuntimeAlive` and
+  `checkOrchestratorLiveness`), because F-1 alone would bring back r5 M-4 (the design defers it to F-7).
+  Note: `feat/session-relaunch` also changes claude-code, codex and gemini `isProcessRunning`; the
+  second branch to land needs a merge by a worker.
+- ao-65 writes Herdr fit-2 design r8 since 21:12 (brief `.agent_task_fit2_r8.md`, copy
+  `brief-aofork-herdr-fit2-r8.md`, deliverable `development/reviews/herdr_fit2_design_r8_opus.md`, scratch
+  `/tmp/aohd5`, no script fixtures; r7 copies in `backup/ao-65-herdr-r7/`).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
