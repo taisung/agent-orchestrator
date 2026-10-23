@@ -230,6 +230,7 @@ export default { manifest, create, detect } satisfies PluginModule<Runtime>;
 - Return `null` for "not found" (e.g. tracker issue lookup), throw for unexpected errors
 - Never silently swallow errors
 - Use `shellEscape()` from core for all command arguments (prevent injection)
+- A runtime's `create` throws a plain error only when nothing of the session can exist in the runtime; otherwise it throws `RuntimeCreatePartialError` with the handle of what may exist and `closed: "nothing"`, and closes nothing. Core keeps the record, the workspace and the agent session then. runtime-tmux keeps its best-effort kill of its own session; the Herdr measurements do not qualify it.
 
 ### Interface Implementation
 
