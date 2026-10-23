@@ -904,12 +904,30 @@ function recordRuntimeName(
 
 /**
  * Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
- * it with the full startup guard): a Herdr orchestrator record that `sm.list`
- * shows terminal is still checked at startup when that terminal state came
- * from a liveness probe: the enrichment of this `sm.list` (the record's own
- * status is not terminal) or a persisted `killed` (the lifecycle writes it
- * after probe answers). Before RH no Herdr answer proves that a launch ended,
- * so such a record must not be passed over as if it had ended.
+ * it with the full startup guard G): a Herdr orchestrator record that
+ * `sm.list` shows terminal is still checked at startup when that terminal
+ * state came from a liveness probe: the enrichment of this `sm.list` (the
+ * record's own status is not terminal, for example activity `exited`) or a
+ * persisted `killed` (the lifecycle writes it after probe answers). Before RH
+ * no Herdr answer proves that a launch ended, so such a "held" record must
+ * not be passed over as if it had ended.
+ *
+ * What the interim guard covers: `ao start`, in both workspace modes, for
+ * each Herdr orchestrator record with a stored handle that is not terminal or
+ * is held. `isAlive` false and the no-server code are unknown (the start
+ * refuses); a held record that answers alive refuses the start too (note 2,
+ * review r1 M-1: it still runs, and a terminal record is never reused); a
+ * live record that is not terminal is reused. Core `spawnOrchestrator` in
+ * project mode refuses on false and no-server for the fixed ID as well.
+ *
+ * Its limits until fit-2 G (docs/DEVELOPMENT.md names them for the owner):
+ * - a record with another persisted terminal status (`done`, `merged`,
+ *   `errored`, ...) is not probed, so isolated `ao start` can start a new
+ *   orchestrator next to a live pane of such a record;
+ * - direct isolated core `sm.spawnOrchestrator` reads no old record (`ao
+ *   start` is today's only product caller);
+ * - a record with no stored handle (a reservation or an in-flight create)
+ *   counts as `unchecked` and is reused without a probe, as today.
  */
 function isHerdrProbeTerminal(
   config: OrchestratorConfig,
@@ -920,6 +938,28 @@ function isHerdrProbeTerminal(
   if (recordRuntimeName(config, project, session) !== HERDR_RUNTIME_NAME) return false;
   const persisted = session.metadata?.["status"];
   return !persisted || persisted === "killed" || !TERMINAL_STATUSES.has(persisted as SessionStatus);
+}
+
+/** How a held Herdr record came to be terminal, for the refusal text. */
+function heldStateOf(session: Session): string {
+  if (session.metadata?.["status"] === "killed") return "recorded as killed";
+  return `shown as ${session.status}${session.activity ? ` with activity ${session.activity}` : ""}`;
+}
+
+/**
+ * Herdr fit-1 note 2 (review r1 M-1): the refusal for a held Herdr record that
+ * answers alive. The recoveries are the ones that work on fit-1 code: attach
+ * works on a live pane whatever the record's status; `ao session kill` cannot
+ * retire a Herdr record before RH (the Herdr stop answers unknown), so the
+ * record is retired by hand after the pane is closed.
+ */
+function runningHeldRefusal(session: Session): string {
+  return (
+    `Orchestrator session ${session.id} is ${heldStateOf(session)}, but its Herdr pane ` +
+    `${session.runtimeHandle?.id ?? ""} still runs, so it is not reused and no new orchestrator ` +
+    `was started. Attach to it with \`ao session attach ${session.id}\`, or close that pane in ` +
+    "herdr and then retire the record by hand (docs/DEVELOPMENT.md, the Herdr fit-1 startup rule)."
+  );
 }
 
 /**
@@ -1052,22 +1092,26 @@ async function runStartup(
     // before); a gone one is left to `spawnOrchestrator`, which archives or
     // replaces its record (project mode) or starts the next ID (isolated
     // mode). An unknown one stops the start: it may still run.
-    // Herdr fit-1 interim: a Herdr record that is terminal only by a probe is
-    // checked too. Alive, it is passed over as every terminal record is
-    // (today's rule); unknown, it stops the start.
+    // Herdr fit-1 interim: a held Herdr record (terminal only by a probe or a
+    // persisted `killed`, see isHerdrProbeTerminal) is checked too. Unknown,
+    // it stops the start. Alive, it still runs: it is not reused (a terminal
+    // record never is) and, since note 2 (review r1 M-1), not passed over
+    // either, so it stops the start too.
     const registry = candidates.length > 0 ? await getPluginRegistry(config) : null;
     const checked = registry
-      ? (
-          await Promise.all(
-            candidates.map(async (session) => ({
-              session,
-              liveness: await checkOrchestratorLiveness(registry, config, project, session),
-            })),
-          )
-        ).filter((c) => !(isTerminalSession(c.session) && c.liveness.state === "alive"))
+      ? await Promise.all(
+          candidates.map(async (session) => ({
+            session,
+            liveness: await checkOrchestratorLiveness(registry, config, project, session),
+          })),
+        )
       : [];
     const existingOrchestrators = checked
-      .filter((c) => c.liveness.state === "alive" || c.liveness.state === "unchecked")
+      .filter(
+        (c) =>
+          !isTerminalSession(c.session) &&
+          (c.liveness.state === "alive" || c.liveness.state === "unchecked"),
+      )
       .map((c) => c.session);
     const unknownOrchestrators = checked.flatMap((c) =>
       c.liveness.state === "unknown"
@@ -1076,14 +1120,31 @@ async function runStartup(
           ]
         : [],
     );
+    const runningHeldOrchestrators = checked.flatMap((c) =>
+      isTerminalSession(c.session) && c.liveness.state === "alive"
+        ? [runningHeldRefusal(c.session)]
+        : [],
+    );
 
-    if (existingOrchestrators.length === 0 && unknownOrchestrators.length > 0) {
-      spinner.fail("Orchestrator liveness unknown");
+    if (
+      existingOrchestrators.length === 0 &&
+      (unknownOrchestrators.length > 0 || runningHeldOrchestrators.length > 0)
+    ) {
+      spinner.fail(
+        unknownOrchestrators.length > 0
+          ? "Orchestrator liveness unknown"
+          : "An old Herdr orchestrator still runs",
+      );
       throw new Error(
         [
           ...unknownOrchestrators,
-          `${unknownOrchestrators.length === 1 ? "It is" : "They are"} neither reused nor replaced, ` +
-            "and no new orchestrator was started. Check the runtime and run `ao start` again.",
+          ...(unknownOrchestrators.length > 0
+            ? [
+                `${unknownOrchestrators.length === 1 ? "It is" : "They are"} neither reused nor replaced, ` +
+                  "and no new orchestrator was started. Check the runtime and run `ao start` again.",
+              ]
+            : []),
+          ...runningHeldOrchestrators,
         ].join(" "),
       );
     }

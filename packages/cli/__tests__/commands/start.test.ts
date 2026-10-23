@@ -1339,18 +1339,56 @@ describe("start command — old Herdr orchestrators (fit-1 interim)", () => {
         ]);
       });
 
-      it("a killed record whose pane runs is passed over as before (today's terminal rule)", async () => {
+      // Note 2 (review r1 M-1): a held record that answers alive still runs. It
+      // was passed over (a second orchestrator started); now it refuses the
+      // start, and it is not reused (a terminal record never is).
+      for (const [label, record, state] of [
+        [
+          "a record that the lifecycle wrote killed (runtime), isAlive true",
+          () => herdrRecord({ status: "killed" }, { status: "killed", killedReason: "runtime" }),
+          "recorded as killed",
+        ],
+        [
+          "a working record that sm.list shows with activity exited, isAlive true",
+          () => herdrRecord({ activity: "exited" }),
+          "shown as working with activity exited",
+        ],
+      ] as const) {
+        it(`${label}: exit 1 with the still-runs refusal, not reused, and no new orchestrator`, async () => {
+          mockSessionManager.list.mockResolvedValue([record()]);
+          mockHerdrRuntime.isAlive.mockResolvedValue(true);
+
+          await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow(
+            "process.exit(1)",
+          );
+
+          expect(mockHerdrRuntime.isAlive).toHaveBeenCalledWith(handle);
+          expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+          expect(errors()).toContain(
+            `Orchestrator session app-orchestrator is ${state}, but its Herdr pane w3:p2 still runs, so it is not reused and no new orchestrator was started. Attach to it with \`ao session attach app-orchestrator\`, or close that pane in herdr and then retire the record by hand (docs/DEVELOPMENT.md, the Herdr fit-1 startup rule).`,
+          );
+          expect(errors()).not.toContain("Cannot tell whether");
+          expect(oraLog).toContainEqual(["fail", "An old Herdr orchestrator still runs"]);
+          expect(oraLog.some(([, text]) => text?.startsWith("Using existing orchestrator"))).toBe(
+            false,
+          );
+        });
+      }
+
+      it("control: a live record that is not terminal is still reused next to a held live record", async () => {
         mockSessionManager.list.mockResolvedValue([
           herdrRecord({ status: "killed" }, { status: "killed", killedReason: "runtime" }),
+          herdrRecord({ id: "app-orchestrator-3" }),
         ]);
         mockHerdrRuntime.isAlive.mockResolvedValue(true);
 
         await program.parseAsync(["node", "test", "start"]);
 
-        expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledTimes(1);
-        expect(oraLog.some(([, text]) => text?.startsWith("Using existing orchestrator"))).toBe(
-          false,
-        );
+        expect(mockSessionManager.spawnOrchestrator).not.toHaveBeenCalled();
+        expect(oraLog).toContainEqual([
+          "succeed",
+          "Using existing orchestrator session: app-orchestrator-3",
+        ]);
       });
 
       it("a record with another terminal status (done) is not probed, as before", async () => {
