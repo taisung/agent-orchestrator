@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockExecFile = vi.fn();
 
@@ -21,7 +21,15 @@ const {
   readHerdrCliFailure,
   isHerdrNoServer,
   isHerdrPaneId,
+  resolveHerdrEndpoint,
+  herdrInvocationFor,
+  HerdrPinError,
+  HERDR_PIN_ERROR_CODE,
 } = await import("../herdr.js");
+const { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync } =
+  await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { join } = await import("node:path");
 const { RUNTIME_NO_SERVER_ERROR_CODE } = await import("../types.js");
 const { herdrFixture, herdrRejection } = await import("./herdr-fixtures.js");
 
@@ -567,6 +575,216 @@ describe("Herdr fit F-2: the pane ID grammar of row 8", () => {
 
   it("keeps the empty ID: an empty list with no call (R4)", async () => {
     expect(await getHerdrPaneProcesses("")).toEqual([]);
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+// Herdr fit F-6 (r5 M-3): a new launch pins the absolute herdr binary and the
+// server socket; every later call for its handle uses them.
+describe("Herdr fit F-6: resolveHerdrEndpoint", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ao-herdr-pins-"));
+  });
+  afterEach(() => {
+    mockExecFile.mockReset();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** An empty file with the given mode (never run: execFile is mocked). */
+  function file(path: string, mode = 0o755): string {
+    closeSync(openSync(path, "w", mode));
+    chmodSync(path, mode);
+    return path;
+  }
+  const RUNNING = { stdout: herdrFixture("closedpane_status_server_json").stdout, stderr: "" };
+  const SOCKET = "/tmp/aohd/xdg/config/herdr/sessions/aohd-1/herdr.sock";
+
+  it("T-6.1: finds a bare name in the absolute PATH entries and asks status server --json with env", async () => {
+    mkdirSync(join(dir, "a"));
+    mkdirSync(join(dir, "b"));
+    const bin = file(join(dir, "b", "herdr"));
+    const env = { PATH: ["", "relative/bin", join(dir, "a"), join(dir, "b")].join(":"), X: "1" };
+    mockExecFile.mockResolvedValueOnce(RUNNING);
+
+    await expect(resolveHerdrEndpoint({ binPath: "herdr", env })).resolves.toEqual({
+      bin,
+      socket: SOCKET,
+      running: true,
+    });
+    expect(mockExecFile.mock.calls[0][0]).toBe(bin);
+    expect(mockExecFile.mock.calls[0][1]).toEqual(["status", "server", "--json"]);
+    expect(mockExecFile.mock.calls[0][2]).toMatchObject({ env, timeout: 10_000 });
+  });
+
+  it("keeps a symlink on PATH as the path, and normalizes an absolute binPath", async () => {
+    const target = file(join(dir, "herdr-0.9.5"));
+    symlinkSync(target, join(dir, "herdr"));
+    mockExecFile.mockResolvedValue(RUNNING);
+
+    expect((await resolveHerdrEndpoint({ binPath: "herdr", env: { PATH: dir } })).bin).toBe(
+      join(dir, "herdr"),
+    );
+    expect(
+      (await resolveHerdrEndpoint({ binPath: `${dir}/./x/../herdr-0.9.5`, env: {} })).bin,
+    ).toBe(target);
+  });
+
+  it("answers running false with the socket (no server at the endpoint)", async () => {
+    const bin = file(join(dir, "herdr"));
+    mockExecFile.mockResolvedValueOnce({
+      stdout: herdrFixture("noserver_never_status_server_json").stdout,
+      stderr: "",
+    });
+    await expect(resolveHerdrEndpoint({ binPath: bin, env: {} })).resolves.toEqual({
+      bin,
+      socket: SOCKET,
+      running: false,
+    });
+  });
+
+  for (const [label, binPath, env, message] of [
+    ["a relative path with a slash", "./bin/herdr", {}, /is a relative path/],
+    [
+      "a bare name that is not on PATH",
+      "herdr",
+      { PATH: "/nonexistent-ao-dir" },
+      /herdr is not installed/,
+    ],
+    [
+      "a bare name with only relative PATH entries",
+      "herdr",
+      { PATH: "bin:." },
+      /herdr is not installed/,
+    ],
+  ] as const) {
+    it(`T-6.4: rejects ${label} with no call`, async () => {
+      await expect(resolveHerdrEndpoint({ binPath, env: { ...env } })).rejects.toThrow(message);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+  }
+
+  it("T-6.4: rejects an absolute path that is a directory, or a file without an execute bit, with no call", async () => {
+    await expect(resolveHerdrEndpoint({ binPath: dir, env: {} })).rejects.toThrow(
+      /is not an executable file/,
+    );
+    const plain = file(join(dir, "herdr"), 0o644);
+    await expect(resolveHerdrEndpoint({ binPath: plain, env: {} })).rejects.toThrow(
+      /is not an executable file/,
+    );
+    await expect(resolveHerdrEndpoint({ binPath: "herdr", env: { PATH: dir } })).rejects.toThrow(
+      /herdr is not installed/,
+    );
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  for (const [label, answer, message] of [
+    [
+      "a relative socket",
+      { running: true, socket: "herdr.sock" },
+      /socket that is not an absolute path/,
+    ],
+    [
+      "a socket with a newline",
+      { running: true, socket: "/tmp/a\nb.sock" },
+      /socket that is not an absolute path/,
+    ],
+    ["no socket", { running: true }, /socket that is not an absolute path/],
+    [
+      "running that is not a boolean",
+      { running: "yes", socket: "/tmp/s.sock" },
+      /without a boolean running/,
+    ],
+  ] as const) {
+    it(`T-6.5: rejects a status answer with ${label}`, async () => {
+      const bin = file(join(dir, "herdr"));
+      mockExecFile.mockResolvedValueOnce({ stdout: JSON.stringify(answer), stderr: "" });
+      await expect(resolveHerdrEndpoint({ binPath: bin, env: {} })).rejects.toThrow(message);
+    });
+  }
+
+  it("T-6.5: rejects text that is not JSON, and the Rust text of r5_b0_status_server_json (exit 1)", async () => {
+    const bin = file(join(dir, "herdr"));
+    mockExecFile.mockResolvedValueOnce({ stdout: "status: running", stderr: "" });
+    await expect(resolveHerdrEndpoint({ binPath: bin, env: {} })).rejects.toThrow(/not JSON/);
+    mockExecFile.mockRejectedValueOnce(herdrRejection(herdrFixture("r5_b0_status_server_json")));
+    await expect(resolveHerdrEndpoint({ binPath: bin, env: {} })).rejects.toThrow(
+      /herdr status server answered with a failure: Error: Custom/,
+    );
+  });
+});
+
+describe("Herdr fit F-6: herdrInvocationFor and row 8 with a handle", () => {
+  afterEach(() => {
+    mockExecFile.mockReset();
+  });
+  const PINS = { herdrBin: "/opt/herdr/bin/herdr", herdrSocket: "/tmp/aohd/herdr.sock" };
+  const handle = (data: Record<string, unknown>) => ({ id: "w8:p1", runtimeName: "herdr", data });
+
+  it("T-6.2, T-6.3: a pinned handle runs herdrBin with HERDR_SOCKET_PATH, whatever the caller's environment", async () => {
+    const saved = { ...process.env };
+    process.env["PATH"] = "/somewhere/else";
+    process.env["HERDR_SOCKET_PATH"] = "/tmp/caller/other.sock";
+    process.env["HERDR_SESSION"] = "caller-session";
+    try {
+      expect(herdrInvocationFor(handle(PINS), "herdr")).toEqual({
+        bin: "/opt/herdr/bin/herdr",
+        env: expect.objectContaining({
+          HERDR_SOCKET_PATH: "/tmp/aohd/herdr.sock",
+          PATH: "/somewhere/else",
+        }),
+      });
+      mockExecFile.mockResolvedValueOnce(paneProcesses([CLAUDE]));
+      expect(await isHerdrProcessRunning(handle(PINS), /(?:^|\/)claude(?:\s|$)/)).toBe(true);
+      expect(mockExecFile.mock.calls[0][0]).toBe("/opt/herdr/bin/herdr");
+      expect(mockExecFile.mock.calls[0][2].env.HERDR_SOCKET_PATH).toBe("/tmp/aohd/herdr.sock");
+    } finally {
+      for (const key of ["PATH", "HERDR_SOCKET_PATH", "HERDR_SESSION"]) {
+        if (saved[key] === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+
+  it("T-6.6: a handle without pins, and a pane ID string, run herdr with the caller's environment", async () => {
+    expect(herdrInvocationFor(handle({ workspaceId: "w8" }), "/custom/herdr")).toEqual({
+      bin: "/custom/herdr",
+      env: undefined,
+    });
+    mockExecFile.mockResolvedValue(paneProcesses([]));
+    await getHerdrPaneProcesses(handle({ terminalId: "t" }));
+    await getHerdrPaneProcesses("w8:p1");
+    for (const call of mockExecFile.mock.calls) {
+      expect(call[0]).toBe("herdr");
+      expect(call[2]).toEqual({ timeout: 10_000 });
+    }
+  });
+
+  for (const [label, data] of [
+    ["only herdrBin", { herdrBin: PINS.herdrBin }],
+    ["only herdrSocket", { herdrSocket: PINS.herdrSocket }],
+    ["a relative binary", { ...PINS, herdrBin: "bin/herdr" }],
+    ["a relative socket", { ...PINS, herdrSocket: "herdr.sock" }],
+    ["a control character", { ...PINS, herdrSocket: "/tmp/a\u0007b.sock" }],
+    ["a number", { ...PINS, herdrBin: 7 }],
+  ] as const) {
+    it(`T-6.7: malformed pins (${label}) throw HerdrPinError, and row 8 rejects with no call`, async () => {
+      expect(() => herdrInvocationFor(handle({ ...data }), "herdr")).toThrow(HerdrPinError);
+      const err = await getHerdrPaneProcesses(handle({ ...data })).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HerdrPinError);
+      expect(err).toMatchObject({
+        code: HERDR_PIN_ERROR_CODE,
+        message: expect.stringContaining("the herdr pins of this record are malformed:"),
+      });
+      await expect(isHerdrProcessRunning(handle({ ...data }), /claude/)).rejects.toThrow(
+        HerdrPinError,
+      );
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+  }
+
+  it("keeps the empty ID of a handle: an empty list with no call", async () => {
+    expect(await getHerdrPaneProcesses({ id: "", runtimeName: "herdr", data: PINS })).toEqual([]);
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });

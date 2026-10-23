@@ -6,7 +6,7 @@
  * (development/artifacts/herdr_095_live_check) are the test data. F-2: no
  * herdr call for an ID outside herdr's pane ID grammar.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type * as Fs from "node:fs";
 
 const mockExecFile = vi.fn();
@@ -35,7 +35,8 @@ vi.mock("node:timers/promises", () => ({
 
 const { create } = await import("../index.js");
 const { RUNTIME_NO_SERVER_ERROR_CODE } = await import("@aoagents/ao-core");
-const { herdrFixture, herdrRejection } = await import("./herdr-fixtures.js");
+const { herdrFixture, herdrRejection, standInHerdrOnPath, statusRunning } =
+  await import("./herdr-fixtures.js");
 
 const HANDLE = {
   id: "w3:p2",
@@ -54,8 +55,15 @@ function f1(line: string, overrides: Record<string, unknown> = {}): Error {
 const NOT_FOUND =
   '{"error":{"code":"pane_not_found","message":"pane w3:p2 not found"},"id":"cli:pane:get"}';
 
+// Herdr fit F-6: create() resolves `herdr` on PATH first (a stand-in file).
+let standIn: ReturnType<typeof standInHerdrOnPath>;
 beforeEach(() => {
   vi.clearAllMocks();
+  mockExecFile.mockReset();
+  standIn = standInHerdrOnPath();
+});
+afterEach(() => {
+  standIn.restore();
 });
 
 describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
@@ -179,9 +187,9 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
   });
 
   it("reads the failure form of every call with its own command ID (workspace create)", async () => {
-    mockExecFile.mockRejectedValueOnce(
-      herdrRejection(herdrFixture("noserver_never_workspace_create")),
-    );
+    mockExecFile
+      .mockResolvedValueOnce(statusRunning())
+      .mockRejectedValueOnce(herdrRejection(herdrFixture("noserver_never_workspace_create")));
     const err = await create()
       .create({
         sessionId: "nsx",
@@ -194,12 +202,13 @@ describe("Herdr fit F-1: the 0.9.5 failure form of row 9 (isAlive)", () => {
       herdrCode: "server_not_running",
       code: RUNTIME_NO_SERVER_ERROR_CODE,
     });
-    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
   });
 
   it("reads the pane run failure with the command ID cli:request", async () => {
     // The launch cleanup (`workspace close`, W-5a) stays until fit-2 (F-4).
     mockExecFile
+      .mockResolvedValueOnce(statusRunning())
       .mockResolvedValueOnce({
         stdout: JSON.stringify({
           id: "cli:workspace:create",
@@ -253,7 +262,7 @@ describe("Herdr fit F-2: no herdr call for an ID outside the pane ID grammar", (
     });
 
     it(`T-2.1: create with the root pane ${JSON.stringify(id)} throws and makes no further call`, async () => {
-      mockExecFile.mockResolvedValueOnce({
+      mockExecFile.mockResolvedValueOnce(statusRunning()).mockResolvedValueOnce({
         stdout: JSON.stringify({
           id: "cli:workspace:create",
           result: {
@@ -271,8 +280,8 @@ describe("Herdr fit F-2: no herdr call for an ID outside the pane ID grammar", (
           environment: {},
         }),
       ).rejects.toThrow(/no usable pane/);
-      expect(mockExecFile).toHaveBeenCalledTimes(1);
-      expect(mockExecFile.mock.calls[0][1].slice(0, 2)).toEqual(["workspace", "create"]);
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+      expect(mockExecFile.mock.calls[1][1].slice(0, 2)).toEqual(["workspace", "create"]);
     });
   }
 

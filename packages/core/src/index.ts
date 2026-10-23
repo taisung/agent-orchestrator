@@ -61,8 +61,13 @@ export {
   isHerdrNoServer,
   HERDR_PANE_ID_RE,
   isHerdrPaneId,
+  resolveHerdrEndpoint,
+  herdrInvocationFor,
+  herdrExecOptions,
+  HerdrPinError,
+  HERDR_PIN_ERROR_CODE,
 } from "./herdr.js";
-export type { HerdrPaneProcess, HerdrCliFailure } from "./herdr.js";
+export type { HerdrPaneProcess, HerdrCliFailure, HerdrInvocation, HerdrEndpoint } from "./herdr.js";
 
 // Runtime stop — the outcome that every destructive caller acts on (same-ID R2a)
 export {

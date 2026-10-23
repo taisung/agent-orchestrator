@@ -887,6 +887,41 @@ describe("isProcessRunning — herdr runtime", () => {
     expect(mockExecFileAsync.mock.calls.every((c: any[]) => c[0] !== "tmux")).toBe(true);
   });
 
+  // Herdr fit F-6 (T-6.9): the agent passes the handle, so a pinned launch is
+  // read at its own binary and socket, whatever the caller's environment.
+  it("runs a pinned handle's herdrBin with HERDR_SOCKET_PATH, and a legacy handle's herdr as before", async () => {
+    const saved = process.env["HERDR_SOCKET_PATH"];
+    process.env["HERDR_SOCKET_PATH"] = "/tmp/caller/other.sock";
+    try {
+      mockExecFileAsync.mockResolvedValue(
+        paneProcesses([{ cmdline: "gemini --model pro", name: "gemini", pid: 42 }]),
+      );
+      const agent = create();
+
+      const pinned = {
+        ...herdrHandle,
+        data: {
+          ...herdrHandle.data,
+          herdrBin: "/opt/herdr/bin/herdr",
+          herdrSocket: "/tmp/aohd/herdr.sock",
+        },
+      };
+      expect(await agent.isProcessRunning(pinned)).toBe(true);
+      expect(await agent.isProcessRunning(herdrHandle)).toBe(true);
+
+      const [pinnedBin, pinnedArgs, pinnedOptions] = mockExecFileAsync.mock.calls[0];
+      expect(pinnedBin).toBe("/opt/herdr/bin/herdr");
+      expect(pinnedArgs).toEqual(["pane", "process-info", "--pane", "w8:p1"]);
+      expect(pinnedOptions.env.HERDR_SOCKET_PATH).toBe("/tmp/aohd/herdr.sock");
+      const [legacyBin, , legacyOptions] = mockExecFileAsync.mock.calls[1];
+      expect(legacyBin).toBe("herdr");
+      expect(legacyOptions).not.toHaveProperty("env");
+    } finally {
+      if (saved === undefined) delete process.env["HERDR_SOCKET_PATH"];
+      else process.env["HERDR_SOCKET_PATH"] = saved;
+    }
+  });
+
   it("is false when only an unrelated process runs in the pane", async () => {
     mockExecFileAsync.mockResolvedValueOnce(
       paneProcesses([{ cmdline: "bash", name: "bash", pid: 7 }]),

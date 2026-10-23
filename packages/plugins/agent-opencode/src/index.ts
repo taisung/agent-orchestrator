@@ -657,8 +657,9 @@ async function findPaneOpenCodeProcess(
   handle: RuntimeHandle,
   sessionId: string,
 ): Promise<number | null> {
+  // Herdr fit F-6: the handle carries the pins (binary and socket) of its launch.
   if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-    const processes = await getHerdrPaneProcesses(handle.id);
+    const processes = await getHerdrPaneProcesses(handle);
     return findOpenCodeProcess(
       processes.map((proc) => proc.pid),
       sessionId,
@@ -1335,9 +1336,10 @@ function createOpenCodeAgent(): Agent {
 
       // herdr owns the PTY and reports a pane's foreground processes directly,
       // so neither the tmux TTY scan nor the process-runtime PID applies. The
-      // core helper rejects when herdr cannot answer.
+      // core helper rejects when herdr cannot answer. Herdr fit F-6: the
+      // handle carries the pins (binary and socket) of its launch.
       if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-        return isHerdrProcessRunning(handle.id, processRe);
+        return isHerdrProcessRunning(handle, processRe);
       }
 
       if (paneTarget) {

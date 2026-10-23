@@ -128,10 +128,7 @@ async function collectJsonlFiles(dir: string, depth = 0): Promise<string[]> {
  * entry matching the given workspace path. Reads only the first 4 KB
  * to avoid loading large rollout files into memory.
  */
-async function sessionFileMatchesCwd(
-  filePath: string,
-  workspacePath: string,
-): Promise<boolean> {
+async function sessionFileMatchesCwd(filePath: string, workspacePath: string): Promise<boolean> {
   try {
     // Read only the first 4 KB — session_meta is always in the first few lines.
     // Avoids loading large rollout files (100 MB+) into memory.
@@ -337,7 +334,10 @@ async function findCodexSessionFileCached(workspacePath: string): Promise<string
     return cached.path;
   }
   const result = await findCodexSessionFile(workspacePath);
-  sessionFileCache.set(workspacePath, { path: result, expiry: Date.now() + SESSION_FILE_CACHE_TTL_MS });
+  sessionFileCache.set(workspacePath, {
+    path: result,
+    expiry: Date.now() + SESSION_FILE_CACHE_TTL_MS,
+  });
   return result;
 }
 
@@ -449,7 +449,10 @@ function createCodexAgent(): Agent {
       return "active";
     },
 
-    async getActivityState(session: Session, readyThresholdMs?: number): Promise<ActivityDetection | null> {
+    async getActivityState(
+      session: Session,
+      readyThresholdMs?: number,
+    ): Promise<ActivityDetection | null> {
       const threshold = readyThresholdMs ?? DEFAULT_READY_THRESHOLD_MS;
 
       // Check if process is running first
@@ -576,9 +579,10 @@ function createCodexAgent(): Agent {
 
       // herdr owns the PTY and reports a pane's foreground processes directly,
       // so neither the tmux TTY scan nor the process-runtime PID applies. The
-      // core helper rejects when herdr cannot answer.
+      // core helper rejects when herdr cannot answer. Herdr fit F-6: the
+      // handle carries the pins (binary and socket) of its launch.
       if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-        return isHerdrProcessRunning(handle.id, processRe);
+        return isHerdrProcessRunning(handle, processRe);
       }
 
       if (paneTarget) {

@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import chalk from "chalk";
 import type { Command } from "commander";
 import {
+  HERDR_RUNTIME_NAME,
   exactSessionTarget,
+  herdrInvocationFor,
+  isHerdrPaneId,
   isOrchestratorSession,
   isRuntimeStopUnconfirmedError,
   loadConfig,
@@ -188,14 +191,35 @@ export function registerSession(program: Command): void {
       const target = attachInfo?.target ?? handle.id;
       let command: string;
       let args: string[];
+      let env: NodeJS.ProcessEnv | undefined;
       if (handle.runtimeName === "tmux") {
         command = "tmux";
         // An exact target: a plain `-t` also attaches to a session whose name
         // only starts with this one.
         args = ["attach", "-t", exactSessionTarget(handle.id)];
-      } else if (handle.runtimeName === "herdr") {
-        command = "herdr";
+      } else if (handle.runtimeName === HERDR_RUNTIME_NAME) {
+        // Herdr fit F-2: only a pane ID in herdr's grammar is attached.
+        if (!isHerdrPaneId(target)) {
+          console.error(
+            chalk.red(
+              `Session '${sessionName}' has no herdr pane ID to attach (${JSON.stringify(target)})`,
+            ),
+          );
+          process.exit(1);
+        }
+        // Herdr fit F-6: the pinned binary at the pinned socket; a record made
+        // before the pins attaches with `herdr` and the caller's environment.
+        let invocation: ReturnType<typeof herdrInvocationFor>;
+        try {
+          invocation = herdrInvocationFor(handle, "herdr");
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          console.error(chalk.red(`Cannot attach to session '${sessionName}': ${reason}`));
+          process.exit(1);
+        }
+        command = invocation.bin;
         args = ["agent", "attach", target];
+        env = invocation.env;
       } else {
         console.error(
           chalk.red(
@@ -206,7 +230,7 @@ export function registerSession(program: Command): void {
       }
 
       await new Promise<void>((resolve, reject) => {
-        const child = spawn(command, args, { stdio: "inherit" });
+        const child = spawn(command, args, env ? { stdio: "inherit", env } : { stdio: "inherit" });
         child.once("error", (err) => reject(err));
         child.once("exit", (code) => {
           if (code === 0 || code === null) {

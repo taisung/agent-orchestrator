@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type * as Fs from "node:fs";
 
 const mockExecFile = vi.fn();
 const mockExecFileSync = vi.fn();
@@ -16,15 +17,19 @@ vi.mock("node:util", () => ({
       mockExecFile(...args),
 }));
 
-vi.mock("node:fs", () => ({
-  writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
-}));
+// Herdr fit F-6: create() checks the herdr binary with the real fs (statSync,
+// accessSync); only the launch script is not written.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof Fs>();
+  return { ...actual, writeFileSync: (...args: any[]) => mockWriteFileSync(...args) };
+});
 
 vi.mock("node:timers/promises", () => ({
   setTimeout: () => Promise.resolve(),
 }));
 
 const { manifest, create, detect } = await import("../index.js");
+const { standInHerdrOnPath } = await import("./herdr-fixtures.js");
 
 /** herdr answers `{id, result}` on success and `{error}` on failure, both exit 0. */
 function ok(result: unknown) {
@@ -36,6 +41,21 @@ function herdrError(code: string, message = "boom") {
 function text(body: string) {
   return { stdout: body, stderr: "" };
 }
+
+/**
+ * Herdr fit F-6: create() first resolves the binary on PATH and asks
+ * `herdr status server --json` for the socket. A stand-in `herdr` file (never
+ * run: execFile is mocked) is the one on PATH.
+ */
+const STATUS_RUNNING = {
+  stdout: JSON.stringify({
+    status: "running",
+    running: true,
+    version: "0.9.5",
+    socket: "/tmp/aofit-herdr/herdr.sock",
+  }),
+  stderr: "",
+};
 
 const WORKSPACE_CREATED = {
   workspace: { workspace_id: "w7", label: "app-1" },
@@ -84,6 +104,14 @@ describe("manifest", () => {
 });
 
 describe("create()", () => {
+  let standIn: ReturnType<typeof standInHerdrOnPath>;
+  beforeEach(() => {
+    standIn = standInHerdrOnPath();
+  });
+  afterEach(() => {
+    standIn.restore();
+  });
+
   it("returns a Runtime named herdr", () => {
     expect(create().name).toBe("herdr");
   });
@@ -97,11 +125,15 @@ describe("create()", () => {
   });
 
   it("creates the workspace with cwd, label and one --env per variable", async () => {
-    mockExecFile.mockResolvedValueOnce(ok(WORKSPACE_CREATED)).mockResolvedValueOnce(ok({}));
+    mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
+      .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+      .mockResolvedValueOnce(ok({}));
 
     await create().create(CREATE_CONFIG);
 
-    const args = argsOf(0);
+    expect(argsOf(0)).toEqual(["status", "server", "--json"]);
+    const args = argsOf(1);
     expect(args.slice(0, 2)).toEqual(["workspace", "create"]);
     expect(args).toContain("--cwd");
     expect(args[args.indexOf("--cwd") + 1]).toBe("/tmp/wt/app-1");
@@ -113,11 +145,14 @@ describe("create()", () => {
 
   it("launches via `pane run` on a script so the launch command is preserved verbatim", async () => {
     // agent start would run the bare executable and drop AO's --model flag.
-    mockExecFile.mockResolvedValueOnce(ok(WORKSPACE_CREATED)).mockResolvedValueOnce(ok({}));
+    mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
+      .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+      .mockResolvedValueOnce(ok({}));
 
     await create().create(CREATE_CONFIG);
 
-    expect(argsOf(1).slice(0, 4)).toEqual(["pane", "run", "w7:p1", "bash"]);
+    expect(argsOf(2).slice(0, 4)).toEqual(["pane", "run", "w7:p1", "bash"]);
     expect(
       mockExecFile.mock.calls.some((c) => c[1]?.includes("agent") && c[1]?.includes("start")),
     ).toBe(false);
@@ -127,7 +162,10 @@ describe("create()", () => {
   });
 
   it("returns a handle keyed by pane id, carrying workspace and terminal ids", async () => {
-    mockExecFile.mockResolvedValueOnce(ok(WORKSPACE_CREATED)).mockResolvedValueOnce(ok({}));
+    mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
+      .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
+      .mockResolvedValueOnce(ok({}));
 
     const handle = await create().create(CREATE_CONFIG);
 
@@ -139,16 +177,19 @@ describe("create()", () => {
 
   it("closes the workspace when the launch fails, leaving nothing in the shared server", async () => {
     mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
       .mockResolvedValueOnce(ok(WORKSPACE_CREATED))
       .mockRejectedValueOnce(new Error("spawn failed"))
       .mockResolvedValueOnce(ok({}));
 
     await expect(create().create(CREATE_CONFIG)).rejects.toThrow(/Failed to launch agent/);
-    expect(argsOf(2)).toEqual(["workspace", "close", "w7"]);
+    expect(argsOf(3)).toEqual(["workspace", "close", "w7"]);
   });
 
   it("surfaces a herdr error body even though the CLI exits 0", async () => {
-    mockExecFile.mockResolvedValueOnce(herdrError("workspace_create_failed", "no such dir"));
+    mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
+      .mockResolvedValueOnce(herdrError("workspace_create_failed", "no such dir"));
 
     await expect(create().create(CREATE_CONFIG)).rejects.toThrow(
       /workspace_create_failed.*no such dir/,
@@ -156,7 +197,9 @@ describe("create()", () => {
   });
 
   it("throws when the response carries no usable pane", async () => {
-    mockExecFile.mockResolvedValueOnce(ok({ workspace: { workspace_id: "w7" } }));
+    mockExecFile
+      .mockResolvedValueOnce(STATUS_RUNNING)
+      .mockResolvedValueOnce(ok({ workspace: { workspace_id: "w7" } }));
 
     await expect(create().create(CREATE_CONFIG)).rejects.toThrow(/no usable pane/);
   });

@@ -32,9 +32,13 @@ import { join } from "node:path";
 import {
   HERDR_CLI_IDS,
   RUNTIME_NO_SERVER_ERROR_CODE,
+  herdrExecOptions,
+  herdrInvocationFor,
   isHerdrNoServer,
   isHerdrPaneId,
   readHerdrCliFailure,
+  resolveHerdrEndpoint,
+  type HerdrInvocation,
   type PluginModule,
   type Runtime,
   type RuntimeCreateConfig,
@@ -254,10 +258,24 @@ export function create(config?: Record<string, unknown>): Runtime {
       ? raw.sendAttempts
       : DEFAULT_SEND_ATTEMPTS;
 
+  /**
+   * Herdr fit F-6: the calls for a handle use its pins (herdrInvocationFor):
+   * a pinned launch runs its own binary at its own socket; a handle made
+   * before the pins runs `bin` with the caller's environment, as before.
+   * Malformed pins throw HerdrPinError before any call.
+   */
+  function invocationFor(handle: RuntimeHandle): HerdrInvocation {
+    return herdrInvocationFor(handle, bin);
+  }
+
   /** Run a herdr CLI command and return its stdout; a failure throws herdrCallError. */
-  async function herdrStdout(args: string[]): Promise<string> {
+  async function herdrStdout(invocation: HerdrInvocation, args: string[]): Promise<string> {
     try {
-      const { stdout } = await execFileAsync(bin, args, { timeout: commandTimeoutMs });
+      const { stdout } = await execFileAsync(
+        invocation.bin,
+        args,
+        herdrExecOptions(invocation, commandTimeoutMs),
+      );
       return stdout;
     } catch (err: unknown) {
       throw herdrCallError(args, err);
@@ -265,21 +283,32 @@ export function create(config?: Record<string, unknown>): Runtime {
   }
 
   /** Run a herdr CLI command and return its parsed `result` object. */
-  async function herdr(...args: string[]): Promise<Record<string, unknown>> {
-    return parseHerdrResult(await herdrStdout(args));
+  async function herdr(
+    invocation: HerdrInvocation,
+    ...args: string[]
+  ): Promise<Record<string, unknown>> {
+    return parseHerdrResult(await herdrStdout(invocation, args));
   }
 
   /** `herdr` for a read that decides a negative: only a `result` object answers. */
-  async function herdrResult(...args: string[]): Promise<Record<string, unknown>> {
-    return parseHerdrResult(await herdrStdout(args), true);
+  async function herdrResult(
+    invocation: HerdrInvocation,
+    ...args: string[]
+  ): Promise<Record<string, unknown>> {
+    return parseHerdrResult(await herdrStdout(invocation, args), true);
   }
 
   /** Read a pane, returning raw terminal text (read commands answer in text, not JSON). */
-  async function readPane(paneId: string, source: string, lines: number): Promise<string> {
+  async function readPane(
+    invocation: HerdrInvocation,
+    paneId: string,
+    source: string,
+    lines: number,
+  ): Promise<string> {
     const { stdout } = await execFileAsync(
-      bin,
+      invocation.bin,
       ["pane", "read", paneId, "--source", source, "--lines", String(lines)],
-      { timeout: commandTimeoutMs },
+      herdrExecOptions(invocation, commandTimeoutMs),
     );
     return stdout.trimEnd();
   }
@@ -299,11 +328,14 @@ export function create(config?: Record<string, unknown>): Runtime {
    * keeps the no-server `code` of its cause, which the lifecycle and startup
    * read. F-2: an ID outside herdr's pane ID grammar rejects with no call.
    */
-  async function getPaneStrict(paneId: string): Promise<HerdrPane | null> {
+  async function getPaneStrict(
+    invocation: HerdrInvocation,
+    paneId: string,
+  ): Promise<HerdrPane | null> {
     if (!isHerdrPaneId(paneId)) throw notAPaneId("pane get", paneId);
     let result: Record<string, unknown>;
     try {
-      result = await herdrResult("pane", "get", paneId);
+      result = await herdrResult(invocation, "pane", "get", paneId);
     } catch (err) {
       if (isPaneNotFound(err)) return null;
       const detail = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
@@ -330,8 +362,8 @@ export function create(config?: Record<string, unknown>): Runtime {
    * The pane for the delivery waits (`sendMessage`), null for any failure:
    * a wait polls again, and no stop or removal decides from it.
    */
-  async function getPane(paneId: string): Promise<HerdrPane | null> {
-    return getPaneStrict(paneId).catch(() => null);
+  async function getPane(invocation: HerdrInvocation, paneId: string): Promise<HerdrPane | null> {
+    return getPaneStrict(invocation, paneId).catch(() => null);
   }
 
   /**
@@ -344,10 +376,14 @@ export function create(config?: Record<string, unknown>): Runtime {
    * after launch for claude, where a prompt is accepted by herdr and silently
    * discarded. Delivery must be verified separately; see `promptWasConsumed`.
    */
-  async function waitForSettledAgent(paneId: string, timeoutMs: number): Promise<string | null> {
+  async function waitForSettledAgent(
+    invocation: HerdrInvocation,
+    paneId: string,
+    timeoutMs: number,
+  ): Promise<string | null> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const pane = await getPane(paneId);
+      const pane = await getPane(invocation, paneId);
       if (pane?.agent && pane.agent_status && SETTLED_STATES.has(pane.agent_status)) {
         return pane.agent_status;
       }
@@ -369,13 +405,14 @@ export function create(config?: Record<string, unknown>): Runtime {
    * distinguishes a new turn from the old one.
    */
   async function promptWasConsumed(
+    invocation: HerdrInvocation,
     paneId: string,
     stateBeforeSend: string,
     timeoutMs: number,
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const status = (await getPane(paneId))?.agent_status;
+      const status = (await getPane(invocation, paneId))?.agent_status;
       if (status === "working") return true;
       if (stateBeforeSend === "idle" && status && status !== "idle" && status !== "unknown") {
         return true;
@@ -391,12 +428,25 @@ export function create(config?: Record<string, unknown>): Runtime {
     async create(createConfig: RuntimeCreateConfig): Promise<RuntimeHandle> {
       assertValidSessionId(createConfig.sessionId);
 
+      // Herdr fit F-6: pin the binary and the server endpoint first, and make
+      // every call of this launch with them; the handle stores them for every
+      // later call (herdrInvocationFor).
+      const endpoint = await resolveHerdrEndpoint({ binPath: bin, env: process.env });
+      if (!endpoint.running) {
+        throw new Error(`no herdr server runs at ${endpoint.socket}; start one: herdr server`);
+      }
+      const pinned: HerdrInvocation = {
+        bin: endpoint.bin,
+        env: { ...process.env, HERDR_SOCKET_PATH: endpoint.socket },
+      };
+
       const envArgs: string[] = [];
       for (const [key, value] of Object.entries(createConfig.environment ?? {})) {
         envArgs.push("--env", `${key}=${value}`);
       }
 
       const result = await herdr(
+        pinned,
         "workspace",
         "create",
         "--cwd",
@@ -422,10 +472,10 @@ export function create(config?: Record<string, unknown>): Runtime {
       // session never lingers in the shared server.
       try {
         const scriptPath = writeLaunchScript(createConfig.launchCommand);
-        await herdr("pane", "run", rootPane.pane_id, "bash", scriptPath);
+        await herdr(pinned, "pane", "run", rootPane.pane_id, "bash", scriptPath);
       } catch (err: unknown) {
         try {
-          await herdr("workspace", "close", workspaceId);
+          await herdr(pinned, "workspace", "close", workspaceId);
         } catch {
           // Best-effort cleanup.
         }
@@ -450,6 +500,8 @@ export function create(config?: Record<string, unknown>): Runtime {
           sessionId: createConfig.sessionId,
           workspacePath: createConfig.workspacePath,
           createdAt: Date.now(),
+          herdrBin: endpoint.bin,
+          herdrSocket: endpoint.socket,
         },
       };
     },
@@ -458,10 +510,11 @@ export function create(config?: Record<string, unknown>): Runtime {
       const workspaceId =
         typeof handle.data.workspaceId === "string" ? handle.data.workspaceId : "";
       try {
+        const invocation = invocationFor(handle);
         if (workspaceId) {
-          await herdr("workspace", "close", workspaceId);
+          await herdr(invocation, "workspace", "close", workspaceId);
         } else {
-          await herdr("pane", "close", handle.id);
+          await herdr(invocation, "pane", "close", handle.id);
         }
       } catch {
         // Already gone — that's fine.
@@ -509,30 +562,34 @@ export function create(config?: Record<string, unknown>): Runtime {
     async sendMessage(handle: RuntimeHandle, message: string): Promise<void> {
       // Herdr fit F-2: no prompt, read or raw input for an ID outside the grammar.
       if (!isHerdrPaneId(handle.id)) throw notAPaneId("send", handle.id);
-      const settledState = await waitForSettledAgent(handle.id, settleTimeoutMs);
+      const invocation = invocationFor(handle);
+      const settledState = await waitForSettledAgent(invocation, handle.id, settleTimeoutMs);
 
       if (settledState) {
         for (let attempt = 1; attempt <= sendAttempts; attempt++) {
-          const before = (await getPane(handle.id))?.agent_status ?? settledState;
-          await herdr("agent", "prompt", handle.id, message);
-          if (await promptWasConsumed(handle.id, before, deliveryTimeoutMs)) return;
+          const before = (await getPane(invocation, handle.id))?.agent_status ?? settledState;
+          await herdr(invocation, "agent", "prompt", handle.id, message);
+          if (await promptWasConsumed(invocation, handle.id, before, deliveryTimeoutMs)) return;
           // No evidence it landed. The agent is almost certainly still warming
           // up, so let it settle again before retrying rather than hammering.
-          await waitForSettledAgent(handle.id, settleTimeoutMs);
+          await waitForSettledAgent(invocation, handle.id, settleTimeoutMs);
         }
       }
 
       // Either no agent was ever detected, or every prompt attempt was discarded.
       // Fall back to raw terminal input, which reaches a pane that herdr has not
       // classified as an agent at all.
-      await herdr("pane", "send-text", handle.id, message);
+      await herdr(invocation, "pane", "send-text", handle.id, message);
       await sleep(300);
-      await herdr("pane", "send-keys", handle.id, "Enter");
+      await herdr(invocation, "pane", "send-keys", handle.id, "Enter");
 
       // Report failure rather than returning a false success: an undelivered
       // instruction that reads as delivered is exactly the failure mode that cost
       // a worker its brief in 0001 §5.
-      if (settledState && !(await promptWasConsumed(handle.id, "idle", deliveryTimeoutMs))) {
+      if (
+        settledState &&
+        !(await promptWasConsumed(invocation, handle.id, "idle", deliveryTimeoutMs))
+      ) {
         throw new Error(
           `herdr agent in pane "${handle.id}" did not consume the message after ` +
             `${sendAttempts} attempts and a raw terminal fallback`,
@@ -543,18 +600,25 @@ export function create(config?: Record<string, unknown>): Runtime {
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {
       // Herdr fit F-2: an ID outside herdr's grammar names no pane to read.
       if (!isHerdrPaneId(handle.id)) return "";
+      // Herdr fit F-6: malformed pins read nothing.
+      let invocation: HerdrInvocation;
+      try {
+        invocation = invocationFor(handle);
+      } catch {
+        return "";
+      }
       // recent-unwrapped reaches the full scrollback of an alt-screen TUI agent,
       // which is the whole point of this runtime (0001 §4). It returns empty for a
       // pane with no detected agent, so fall back to the visible viewport.
       try {
-        const recent = await readPane(handle.id, "recent-unwrapped", lines);
+        const recent = await readPane(invocation, handle.id, "recent-unwrapped", lines);
         if (recent.trim()) return recent;
       } catch {
         // Fall through to visible.
       }
 
       try {
-        return await readPane(handle.id, "visible", lines);
+        return await readPane(invocation, handle.id, "visible", lines);
       } catch {
         return "";
       }
@@ -565,8 +629,10 @@ export function create(config?: Record<string, unknown>): Runtime {
       // pane ID that names another terminal; rejects when herdr cannot answer.
       // Herdr fit F-1, F-2: `pane_not_found` also in the 0.9.5 failure form;
       // no server at the socket rejects with RUNTIME_NO_SERVER_ERROR_CODE; an
-      // empty ID or one outside the grammar rejects with no call.
-      const pane = await getPaneStrict(handle.id);
+      // empty ID or one outside the grammar rejects with no call. F-6: the
+      // handle's pins; malformed pins reject with no call.
+      if (!isHerdrPaneId(handle.id)) throw notAPaneId("pane get", handle.id);
+      const pane = await getPaneStrict(invocationFor(handle), handle.id);
       if (!pane) return false;
 
       // Guard against a recycled pane id pointing at somebody else's terminal.

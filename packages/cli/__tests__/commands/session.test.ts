@@ -602,7 +602,7 @@ describe("session attach", () => {
       issueId: null,
       pr: null,
       workspacePath: null,
-      runtimeHandle: { id: "herdr-agent-2", runtimeName: "herdr", data: {} },
+      runtimeHandle: { id: "w2:p1", runtimeName: "herdr", data: {} },
       agentInfo: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
@@ -610,15 +610,107 @@ describe("session attach", () => {
     } satisfies Session);
     mockRuntime.getAttachInfo.mockResolvedValue({
       type: "process",
-      target: "herdr-agent-2",
-      command: "herdr agent attach herdr-agent-2",
+      target: "w2:p1",
+      command: "herdr agent attach w2:p1",
     });
 
     await program.parseAsync(["node", "test", "session", "attach", "app-2"]);
 
     expect(mockPluginRegistry.get).toHaveBeenCalledWith("runtime", "herdr");
-    expect(mockSpawn).toHaveBeenCalledWith("herdr", ["agent", "attach", "herdr-agent-2"], {
+    expect(mockSpawn).toHaveBeenCalledWith("herdr", ["agent", "attach", "w2:p1"], {
       stdio: "inherit",
+    });
+  });
+
+  // Herdr fit F-6 (T-6.8) and F-2: attach runs the pinned binary at the
+  // pinned socket; a record made before the pins runs `herdr` with the
+  // caller's environment (above); malformed pins and a target outside herdr's
+  // pane ID grammar exit 1 with no spawn.
+  describe("a Herdr session (fit F-6, F-2)", () => {
+    function herdrSession(handle: { id: string; data: Record<string, unknown> }): Session {
+      return {
+        id: "app-2",
+        projectId: "my-app",
+        status: "working",
+        activity: null,
+        branch: null,
+        issueId: null,
+        pr: null,
+        workspacePath: null,
+        runtimeHandle: { ...handle, runtimeName: "herdr" },
+        agentInfo: null,
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+        metadata: {},
+      };
+    }
+
+    function errors(): string {
+      return vi
+        .mocked(console.error)
+        .mock.calls.map((c) => String(c[0]))
+        .join("\n");
+    }
+
+    it("T-6.8: spawns the pinned binary with HERDR_SOCKET_PATH set to the pinned socket", async () => {
+      const saved = process.env["HERDR_SOCKET_PATH"];
+      process.env["HERDR_SOCKET_PATH"] = "/tmp/caller/other.sock";
+      try {
+        mockSessionManager.get.mockResolvedValue(
+          herdrSession({
+            id: "w2:p1",
+            data: { herdrBin: "/opt/herdr/bin/herdr", herdrSocket: "/tmp/aohd/herdr.sock" },
+          }),
+        );
+        mockRuntime.getAttachInfo.mockResolvedValue({ type: "process", target: "w2:p1" });
+
+        await program.parseAsync(["node", "test", "session", "attach", "app-2"]);
+
+        expect(mockSpawn).toHaveBeenCalledWith(
+          "/opt/herdr/bin/herdr",
+          ["agent", "attach", "w2:p1"],
+          {
+            stdio: "inherit",
+            env: expect.objectContaining({ HERDR_SOCKET_PATH: "/tmp/aohd/herdr.sock" }),
+          },
+        );
+      } finally {
+        if (saved === undefined) delete process.env["HERDR_SOCKET_PATH"];
+        else process.env["HERDR_SOCKET_PATH"] = saved;
+      }
+    });
+
+    for (const [label, data] of [
+      ["only herdrBin", { herdrBin: "/opt/herdr/bin/herdr" }],
+      ["a relative socket", { herdrBin: "/opt/herdr/bin/herdr", herdrSocket: "herdr.sock" }],
+      ["a newline in the binary", { herdrBin: "/opt/herdr\n/herdr", herdrSocket: "/tmp/s.sock" }],
+      ["a number", { herdrBin: 7, herdrSocket: "/tmp/s.sock" }],
+    ] as const) {
+      it(`T-6.8: malformed pins (${label}) exit 1 with the pin message and no spawn`, async () => {
+        mockSessionManager.get.mockResolvedValue(herdrSession({ id: "w2:p1", data: { ...data } }));
+        mockRuntime.getAttachInfo.mockResolvedValue({ type: "process", target: "w2:p1" });
+
+        await expect(
+          program.parseAsync(["node", "test", "session", "attach", "app-2"]),
+        ).rejects.toThrow("process.exit(1)");
+
+        expect(errors()).toContain(
+          "Cannot attach to session 'app-2': the herdr pins of this record are malformed:",
+        );
+        expect(mockSpawn).not.toHaveBeenCalled();
+      });
+    }
+
+    it("F-2: a target outside herdr's pane ID grammar exits 1 with no spawn", async () => {
+      mockSessionManager.get.mockResolvedValue(herdrSession({ id: "app-2", data: {} }));
+      mockRuntime.getAttachInfo.mockResolvedValue({ type: "process", target: "app-2" });
+
+      await expect(
+        program.parseAsync(["node", "test", "session", "attach", "app-2"]),
+      ).rejects.toThrow("process.exit(1)");
+
+      expect(errors()).toContain(`Session 'app-2' has no herdr pane ID to attach ("app-2")`);
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
   });
 

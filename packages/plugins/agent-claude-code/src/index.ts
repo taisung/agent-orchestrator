@@ -393,8 +393,7 @@ async function parseJsonlFileTail(filePath: string, maxBytes = 131_072): Promise
   // Skip potentially truncated first line only when we started mid-file.
   // If offset === 0 we read from the start so the first line is complete.
   const firstNewline = content.indexOf("\n");
-  const safeContent =
-    offset > 0 && firstNewline >= 0 ? content.slice(firstNewline + 1) : content;
+  const safeContent = offset > 0 && firstNewline >= 0 ? content.slice(firstNewline + 1) : content;
   const lines: JsonlLine[] = [];
   for (const line of safeContent.split("\n")) {
     const trimmed = line.trim();
@@ -412,9 +411,7 @@ async function parseJsonlFileTail(filePath: string, maxBytes = 131_072): Promise
 }
 
 /** Extract auto-generated summary from JSONL (last "summary" type entry) */
-function extractSummary(
-  lines: JsonlLine[],
-): { summary: string; isFallback: boolean } | null {
+function extractSummary(lines: JsonlLine[]): { summary: string; isFallback: boolean } | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line?.type === "summary" && line.summary) {
@@ -613,8 +610,9 @@ async function isClaudeProcessRunning(handle: RuntimeHandle): Promise<boolean> {
   // a herdr handle falls through to the PID branch, finds none, and reports the
   // session exited. A match is the agent whatever its PID (core gives 0 for a
   // PID that herdr does not report); core rejects when herdr cannot answer.
+  // Herdr fit F-6: the handle carries the pins (binary and socket) of its launch.
   if (handle.runtimeName === HERDR_RUNTIME_NAME && handle.id) {
-    return isHerdrProcessRunning(handle.id, CLAUDE_PROCESS_RE);
+    return isHerdrProcessRunning(handle, CLAUDE_PROCESS_RE);
   }
 
   // For tmux runtime, get the pane TTY and find claude on it

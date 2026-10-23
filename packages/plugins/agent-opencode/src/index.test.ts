@@ -86,8 +86,10 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     appendActivityEntry: mockAppendActivityEntry,
     readLastActivityEntry: mockReadLastActivityEntry,
     recordTerminalActivity: mockRecordTerminalActivity,
-    getOpenCodeSession: (...args: unknown[]) => (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
-    callOpenCodeApi: (...args: unknown[]) => (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
+    getOpenCodeSession: (...args: unknown[]) =>
+      (mockGetOpenCodeSession as (...a: unknown[]) => unknown)(...args),
+    callOpenCodeApi: (...args: unknown[]) =>
+      (mockCallOpenCodeApi as (...a: unknown[]) => unknown)(...args),
     // The I-3 session calls of prepareAgentSession, discard and confirmLaunch.
     createOpenCodeSession: mockCreateOpenCodeSession,
     listOpenCodeModels: mockListOpenCodeModels,
@@ -1020,10 +1022,13 @@ describe("getRestoreCommand", () => {
   });
 
   it("refuses the restore when no session ID is stored, and names remap (no title search)", async () => {
-    const restore = agent.getRestoreCommand!(
-      makeSession({ metadata: {} }),
-      { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
-    );
+    const restore = agent.getRestoreCommand!(makeSession({ metadata: {} }), {
+      name: "proj",
+      repo: "o/r",
+      path: "/p",
+      defaultBranch: "main",
+      sessionPrefix: "p",
+    });
     await expect(restore).rejects.toBeInstanceOf(SessionNotRestorableError);
     await expect(restore).rejects.toThrow(
       "no stored OpenCode session ID for test-1; run `ao session remap test-1`",
@@ -1046,12 +1051,17 @@ describe("getRestoreCommand", () => {
   });
 
   it("does not restore when session.get fails for another reason", async () => {
-    mockGetOpenCodeSession.mockRejectedValue(new Error("opencode api session.get failed: HTTP 500"));
+    mockGetOpenCodeSession.mockRejectedValue(
+      new Error("opencode api session.get failed: HTTP 500"),
+    );
     await expect(
-      agent.getRestoreCommand!(
-        makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }),
-        { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },
-      ),
+      agent.getRestoreCommand!(makeSession({ metadata: { opencodeSessionId: "ses_abc123" } }), {
+        name: "proj",
+        repo: "o/r",
+        path: "/p",
+        defaultBranch: "main",
+        sessionPrefix: "p",
+      }),
     ).rejects.toThrow("HTTP 500");
   });
 });
@@ -1185,9 +1195,7 @@ describe("getActivityState with activity JSONL", () => {
       modifiedAt: new Date(),
     });
 
-    const result = await agent.getActivityState(
-      makeSession({ runtimeHandle: makeTmuxHandle() }),
-    );
+    const result = await agent.getActivityState(makeSession({ runtimeHandle: makeTmuxHandle() }));
     expect(result?.state).toBe("waiting_input");
   });
 
@@ -1198,9 +1206,7 @@ describe("getActivityState with activity JSONL", () => {
       modifiedAt: new Date(),
     });
 
-    const result = await agent.getActivityState(
-      makeSession({ runtimeHandle: makeTmuxHandle() }),
-    );
+    const result = await agent.getActivityState(makeSession({ runtimeHandle: makeTmuxHandle() }));
     expect(result?.state).toBe("blocked");
   });
 
@@ -1213,7 +1219,10 @@ describe("getActivityState with activity JSONL", () => {
     });
 
     const result = await agent.getActivityState(
-      makeSession({ runtimeHandle: makeTmuxHandle(), metadata: { opencodeSessionId: "ses_abc123" } }),
+      makeSession({
+        runtimeHandle: makeTmuxHandle(),
+        metadata: { opencodeSessionId: "ses_abc123" },
+      }),
       60_000,
     );
     expect(result?.state).toBe("active");
@@ -1237,7 +1246,11 @@ describe("getActivityState with activity JSONL", () => {
   it("falls back to JSONL entry with age decay — old entry becomes idle", async () => {
     mockTmuxWithProcess("opencode");
     mockReadLastActivityEntry.mockResolvedValueOnce({
-      entry: { ts: new Date(Date.now() - 120_000).toISOString(), state: "active", source: "terminal" },
+      entry: {
+        ts: new Date(Date.now() - 120_000).toISOString(),
+        state: "active",
+        source: "terminal",
+      },
       modifiedAt: new Date(Date.now() - 120_000),
     });
     mockGetOpenCodeSession.mockResolvedValue(null);
@@ -1312,6 +1325,41 @@ describe("isProcessRunning — herdr runtime", () => {
     expect(bin).toBe("herdr");
     expect(args).toEqual(["pane", "process-info", "--pane", "w8:p1"]);
     expect(mockExecFileAsync.mock.calls.every((c: any[]) => c[0] !== "tmux")).toBe(true);
+  });
+
+  // Herdr fit F-6 (T-6.9): the agent passes the handle, so a pinned launch is
+  // read at its own binary and socket, whatever the caller's environment.
+  it("runs a pinned handle's herdrBin with HERDR_SOCKET_PATH, and a legacy handle's herdr as before", async () => {
+    const saved = process.env["HERDR_SOCKET_PATH"];
+    process.env["HERDR_SOCKET_PATH"] = "/tmp/caller/other.sock";
+    try {
+      mockExecFileAsync.mockResolvedValue(
+        paneProcesses([{ cmdline: "opencode --model sonnet", name: "opencode", pid: 42 }]),
+      );
+      const agent = create();
+
+      const pinned = {
+        ...herdrHandle,
+        data: {
+          ...herdrHandle.data,
+          herdrBin: "/opt/herdr/bin/herdr",
+          herdrSocket: "/tmp/aohd/herdr.sock",
+        },
+      };
+      expect(await agent.isProcessRunning(pinned)).toBe(true);
+      expect(await agent.isProcessRunning(herdrHandle)).toBe(true);
+
+      const [pinnedBin, pinnedArgs, pinnedOptions] = mockExecFileAsync.mock.calls[0];
+      expect(pinnedBin).toBe("/opt/herdr/bin/herdr");
+      expect(pinnedArgs).toEqual(["pane", "process-info", "--pane", "w8:p1"]);
+      expect(pinnedOptions.env.HERDR_SOCKET_PATH).toBe("/tmp/aohd/herdr.sock");
+      const [legacyBin, , legacyOptions] = mockExecFileAsync.mock.calls[1];
+      expect(legacyBin).toBe("herdr");
+      expect(legacyOptions).not.toHaveProperty("env");
+    } finally {
+      if (saved === undefined) delete process.env["HERDR_SOCKET_PATH"];
+      else process.env["HERDR_SOCKET_PATH"] = saved;
+    }
   });
 
   it("is false when only an unrelated process runs in the pane", async () => {
@@ -1660,13 +1708,12 @@ describe("restore commands against the OpenCode 2.x CLI", () => {
       getExit: 1,
     });
 
-      expectSettings(run.store[existingId], { model, agent: existing.agent });
-      expect(run.status).toBe(1);
-      expect(run.tuiCalls).toHaveLength(0);
-      expect(run.stderr).toContain("opencode api session.get exited with status 1");
-      expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
-    },
-  );
+    expectSettings(run.store[existingId], { model, agent: existing.agent });
+    expect(run.status).toBe(1);
+    expect(run.tuiCalls).toHaveLength(0);
+    expect(run.stderr).toContain("opencode api session.get exited with status 1");
+    expect(run.stderr).toContain(`failed to set the OpenCode model or agent for ${existingId}`);
+  });
 
   it("restore stops with status 1 before any API call when the model has no provider", async () => {
     const providerless = "glm-5.3";
@@ -1674,12 +1721,11 @@ describe("restore commands against the OpenCode 2.x CLI", () => {
       list: [existing],
     });
 
-      expect(run.status).toBe(1);
-      expect(run.apiCalls).toHaveLength(0);
-      expect(run.tuiCalls).toHaveLength(0);
-      expect(run.stderr).toContain(providerless);
-    },
-  );
+    expect(run.status).toBe(1);
+    expect(run.apiCalls).toHaveLength(0);
+    expect(run.tuiCalls).toHaveLength(0);
+    expect(run.stderr).toContain(providerless);
+  });
 
   it("restore applies the project model through the API, with no TUI model flag", async () => {
     const run = runAgainstFakeCli(await restoreCommand(model), { list: [existing] });
@@ -2486,8 +2532,30 @@ describe("confirmLaunch (I-3)", () => {
     await expect(
       agent.confirmLaunch!(herdrSession(), await preparedSession(), quick),
     ).resolves.toEqual({});
-    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
+    // Herdr fit F-6: the handle (with its pins), not the bare pane ID.
+    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "w8:p1", runtimeName: "herdr" }),
+    );
     expect(mockExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  // Herdr fit F-6 (T-6.10): the launch check passes the handle with its pins,
+  // which core's getHerdrPaneProcesses runs at herdrBin with HERDR_SOCKET_PATH
+  // (core herdr.test.ts).
+  it("passes a pinned herdr handle, with its pins, to the pane process read", async () => {
+    herdrProcesses([77, ["/home/u/.opencode/bin/opencode", "--session", "ses_made"]]);
+    const pins = { herdrBin: "/opt/herdr/bin/herdr", herdrSocket: "/tmp/aohd/herdr.sock" };
+    const pinned = makeSession({
+      id: "sess-1",
+      runtimeHandle: { id: "w8:p1", runtimeName: "herdr", data: pins },
+    });
+
+    await expect(agent.confirmLaunch!(pinned, await preparedSession(), quick)).resolves.toEqual({});
+    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith({
+      id: "w8:p1",
+      runtimeName: "herdr",
+      data: pins,
+    });
   });
 
   it("accepts the real TUI argv of ao-37 and ao-39 on herdr (M-3)", async () => {
@@ -3299,7 +3367,10 @@ describe("deliverMessage (I-5)", () => {
     await expect(agent.deliverMessage!(herdr, TEXT)).resolves.toEqual(
       expect.objectContaining({ mode: "queue" }),
     );
-    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith("w8:p1");
+    // Herdr fit F-6: the handle (with its pins), not the bare pane ID.
+    expect(mockGetHerdrPaneProcesses).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "w8:p1", runtimeName: "herdr" }),
+    );
   });
 
   it("marks a pending permission and a pending question, and still sends once", async () => {
