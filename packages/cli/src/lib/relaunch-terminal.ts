@@ -11,7 +11,7 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import type { SessionRelaunchChild, SessionRelaunchLaunch } from "@aoagents/ao-core";
 
@@ -34,6 +34,28 @@ export function callerTerminal(readLink: (path: string) => string = readlinkSync
     }
   }
   return null;
+}
+
+/**
+ * Whether this process is in the foreground process group of its terminal:
+ * fields 5 and 8 of /proc/self/stat (pgrp and tpgid). Null when /proc cannot
+ * tell. A background `ao` (`&`) in the session's own pane does not own the
+ * terminal, so core refuses to start the agent there (review r2).
+ */
+export function callerInForeground(
+  readStat: () => string = () => readFileSync("/proc/self/stat", "utf-8"),
+): boolean | null {
+  let stat: string;
+  try {
+    stat = readStat();
+  } catch {
+    return null;
+  }
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const pgrp = Number(fields[2]);
+  const tpgid = Number(fields[5]);
+  if (!Number.isInteger(pgrp) || pgrp <= 0 || !Number.isInteger(tpgid) || tpgid <= 0) return null;
+  return pgrp === tpgid;
 }
 
 /** The terminal signals that reach the whole foreground group: the child handles them. */

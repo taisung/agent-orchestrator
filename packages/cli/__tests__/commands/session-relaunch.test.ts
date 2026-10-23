@@ -92,6 +92,10 @@ describe("session relaunch", () => {
     expect(options.continueConversation).toBe(false);
     expect(typeof options.runInCallerTerminal).toBe("function");
     expect(options.callerTty === null || typeof options.callerTty === "string").toBe(true);
+    // Review r2: core refuses a background ao in the session's own pane.
+    expect(options.callerForeground === null || typeof options.callerForeground === "boolean").toBe(
+      true,
+    );
     expect(logs.join("\n")).toContain(
       "Relaunching app-1 (claude-code, model opus) in its tmux pane.",
     );
@@ -246,11 +250,19 @@ describe("session relaunch", () => {
     relaunch.configureOutput({ writeOut: (s) => (help += s) });
     relaunch.outputHelp();
 
-    expect(help).toContain("--continue");
-    expect(help).toContain("when the agent process still runs");
-    expect(help).toContain("In the session's own pane, the agent runs as a child of this command");
-    expect(help).toContain("exits 0 only when the agent process runs within 15 s");
-    expect(help).toContain("any half-typed text in it is dropped (C-c),");
-    expect(help).toContain("a restore or kill that started before the");
+    // The help wraps its lines; the phrases are checked across the breaks.
+    const text = help.replace(/\s+/g, " ");
+    expect(text).toContain("--continue");
+    expect(text).toContain("when the agent process still runs");
+    expect(text).toContain("or is gone (the pane of the last relaunch was closed)");
+    expect(text).toContain("Linux only: the checks read /proc.");
+    expect(text).toContain(
+      "In the session's own pane (as the foreground job, not with &), the agent runs as a child of this command",
+    );
+    expect(text).toContain("exits 0 only when the agent process runs within 15 s");
+    expect(text).toContain("it types only when a second C-c shows a fresh, empty prompt line");
+    expect(text).toContain("Then any half-typed text in the pane is dropped (C-c), never run.");
+    expect(text).toContain("A shell that ignores or traps SIGINT shows no such line");
+    expect(text).toContain("a restore or kill that started before the relaunch is not excluded");
   });
 });

@@ -8,7 +8,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { callerTerminal, runInCallerTerminal } from "../../src/lib/relaunch-terminal.js";
+import {
+  callerInForeground,
+  callerTerminal,
+  runInCallerTerminal,
+} from "../../src/lib/relaunch-terminal.js";
 
 describe("callerTerminal", () => {
   it("answers the terminal of stdin first", () => {
@@ -34,6 +38,31 @@ describe("callerTerminal", () => {
     };
 
     expect(callerTerminal(readLink)).toBeNull();
+  });
+});
+
+describe("callerInForeground (review r2)", () => {
+  /** A /proc/<pid>/stat line with this pgrp (field 5) and tpgid (field 8). */
+  const stat = (pgrp: number, tpgid: number) =>
+    `4711 (node ao) S 4700 ${pgrp} ${pgrp} 34817 ${tpgid} 4194560 100 0 0 0`;
+
+  it("is true for the foreground process group of the terminal, false for a background job", () => {
+    expect(callerInForeground(() => stat(4711, 4711))).toBe(true);
+    expect(callerInForeground(() => stat(4711, 4800))).toBe(false);
+  });
+
+  it("is null when /proc cannot tell (no file, no terminal, or a malformed line)", () => {
+    expect(
+      callerInForeground(() => {
+        throw new Error("ENOENT");
+      }),
+    ).toBeNull();
+    expect(callerInForeground(() => stat(4711, -1))).toBeNull();
+    expect(callerInForeground(() => "garbage")).toBeNull();
+  });
+
+  it("reads this process's own stat by default", () => {
+    expect([true, false, null]).toContain(callerInForeground());
   });
 });
 

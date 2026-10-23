@@ -16,7 +16,11 @@ import { git, getTmuxActivity } from "../lib/shell.js";
 import { formatAge } from "../lib/format.js";
 import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
 import { isOrchestratorSessionName } from "../lib/session-utils.js";
-import { callerTerminal, runInCallerTerminal } from "../lib/relaunch-terminal.js";
+import {
+  callerInForeground,
+  callerTerminal,
+  runInCallerTerminal,
+} from "../lib/relaunch-terminal.js";
 
 interface SessionListEntry {
   id: string;
@@ -445,16 +449,21 @@ prompt and its permissionless mode).
 
 It refuses (exit 1, nothing changed) when the agent process still runs, when
 its liveness is unknown, when the tmux session does not exist, when the pane of
-the agent is not known (a session with several panes that no relaunch named),
-when another launch of the session runs, when the session is terminal or has no
-active record, and for a runtime other than tmux.
+the agent is not known (a session with several panes that no relaunch named) or
+is gone (the pane of the last relaunch was closed), when another launch of the
+session runs, when the session is terminal or has no active record, and for a
+runtime other than tmux. Linux only: the checks read /proc.
 
 From another shell, it types the launch line into the shell of the agent's pane
 (by its pane ID) and exits 0 only when the agent process runs within 15 s. The
-pane's shell must wait for input; any half-typed text in it is dropped (C-c),
-never run. In the session's own pane, the agent runs as a child of this command
-on the same terminal (the launch script execs it), and the command ends with
-the agent's exit code.
+pane's shell must wait for input. It sends C-c, and it types only when a second
+C-c shows a fresh, empty prompt line. Then any half-typed text in the pane is
+dropped (C-c), never run. A shell that ignores or traps SIGINT shows no such
+line: then nothing is typed and the command fails (clear the line by hand).
+
+In the session's own pane (as the foreground job, not with &), the agent runs
+as a child of this command on the same terminal (the launch script execs it),
+and the command ends with the agent's exit code.
 
 --continue resumes the conversation that the agent of the session's last
 launch recorded (Claude Code: a SessionStart hook, bound to that launch's token
@@ -493,6 +502,7 @@ relaunch is not excluded.`,
         result = await sm.relaunch(sessionName, {
           continueConversation: opts.continue === true,
           callerTty: callerTerminal(),
+          callerForeground: callerInForeground(),
           runInCallerTerminal: (launch) => runInCallerTerminal(launch),
           onStart: describe,
           // At once (review r1 M-3), also while the agent owns the terminal.
