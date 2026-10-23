@@ -127,8 +127,12 @@ export const AMBIGUOUS_NEGATIVE_BOUND_MS = 300_000; // 5 minutes
 export const NO_SERVER_BOUND_MS = 300_000; // 5 minutes
 
 /**
- * `code` of a `Runtime.isAlive` rejection when no runtime server runs at all
- * (tmux: "no server running on ...", or no socket file). See `Runtime.isAlive`.
+ * `code` of a `Runtime.isAlive` rejection when no server answers at the
+ * runtime's endpoint (tmux: "no server running on ...", or no socket file;
+ * herdr 0.9.5: the CLI's `server_not_running` answer). For tmux no session
+ * can exist then. For herdr a server can still run where the endpoint does
+ * not reach it, so the code is no proof that a session ended. See
+ * `Runtime.isAlive`.
  */
 export const RUNTIME_NO_SERVER_ERROR_CODE = "ERR_RUNTIME_NO_SERVER";
 
@@ -327,9 +331,12 @@ export interface Runtime {
    * exist. Rejects when it cannot tell (server unreachable, timeout, unknown
    * failure), with the failure as `cause`; callers treat a rejection as
    * "unknown", never as dead. A rejection whose `code` is
-   * RUNTIME_NO_SERVER_ERROR_CODE means that no runtime server runs at all, so
-   * no session can exist; only a caller that replaces a dead session on a
-   * human command (`spawnOrchestrator`) acts on it.
+   * RUNTIME_NO_SERVER_ERROR_CODE means that no server answers at the
+   * runtime's endpoint. For tmux no session can exist then; only a caller
+   * that replaces a dead session on a human command (`spawnOrchestrator`)
+   * acts on it. For herdr a server can still run where the endpoint does not
+   * reach it, so the code is no proof that a session ended: until RH the
+   * orchestrator start treats it, and a Herdr `false`, as unknown.
    */
   isAlive(handle: RuntimeHandle): Promise<boolean>;
 
