@@ -296,3 +296,42 @@ describe("Herdr fit F-6: the calls of an existing handle", () => {
     });
   }
 });
+
+describe("Herdr fit-2 (design r11 5.3.6): preflight asks the plugin's own binary", () => {
+  it("resolves for a running, compatible server; one status call each time, nothing cached", async () => {
+    mockExecFile.mockResolvedValue(statusRunning());
+    const runtime = create();
+    await expect(runtime.preflight?.()).resolves.toBeUndefined();
+    await expect(runtime.preflight?.()).resolves.toBeUndefined();
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    expect(mockExecFile.mock.calls[0]?.[0]).toBe(standIn.bin);
+    expect(mockExecFile.mock.calls[0]?.[1]).toEqual(["status", "server", "--json"]);
+  });
+
+  it("rejects when no server runs at the endpoint", async () => {
+    const status = JSON.parse(statusRunning().stdout) as Record<string, unknown>;
+    mockExecFile.mockResolvedValue({
+      stdout: JSON.stringify({ ...status, running: false }),
+      stderr: "",
+    });
+    await expect(create().preflight?.()).rejects.toThrow(
+      `no herdr server runs at ${STATUS_SOCKET}; start one: herdr server`,
+    );
+  });
+
+  it("rejects when the server is not compatible", async () => {
+    const status = JSON.parse(statusRunning().stdout) as Record<string, unknown>;
+    mockExecFile.mockResolvedValue({
+      stdout: JSON.stringify({ ...status, compatible: false }),
+      stderr: "",
+    });
+    await expect(create().preflight?.()).rejects.toThrow(
+      `the herdr server at ${STATUS_SOCKET} is not compatible with this herdr client`,
+    );
+  });
+
+  it("rejects with no call when the binary is missing", async () => {
+    await expect(create({ binPath: join(standIn.dir, "absent") }).preflight?.()).rejects.toThrow();
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});

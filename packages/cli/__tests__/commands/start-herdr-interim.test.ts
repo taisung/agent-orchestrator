@@ -1,15 +1,17 @@
 /**
- * Herdr fit-1 interim startup rule (owner decision OQ-F1 (b), 2026-10-22; the
- * fit-2 guard G replaces it), through `ao start` with the real session manager
- * (real `sm.list` and `spawnOrchestrator`) and the real runtime-herdr plugin.
- * Only `herdr` is a stand-in: it answers with the recorded 0.9.5 answers of
- * the live check (exit 1, one stderr line). Before fit F-1 those answers
- * rejected, so `ao start` refused. After F-1 a closed pane is `isAlive` false
- * (and `sm.list` shows the record killed and exited) and no server is
- * RUNTIME_NO_SERVER_ERROR_CODE. For a Herdr record neither may retire the old
- * orchestrator or start a second one, in either workspace mode. Note 2 (review
- * r1 M-1): a held record (persisted `killed`, or activity `exited`) whose pane
- * answers alive may not either.
+ * An old Herdr orchestrator at `ao start` (owner decision OQ-F1 (b),
+ * 2026-10-22), through the real session manager (real `sm.list`,
+ * `findReusableOrchestrators` and `spawnOrchestrator`) and the real
+ * runtime-herdr plugin. Only `herdr` is a stand-in: it answers with the
+ * recorded 0.9.5 answers of the live check (exit 1, one stderr line), and a
+ * healthy `status server --json` for the plugin's preflight. After fit F-1 a
+ * closed pane is `isAlive` false (and `sm.list` shows the record killed and
+ * exited) and no server is RUNTIME_NO_SERVER_ERROR_CODE. For a Herdr record
+ * neither may retire the old orchestrator or start a second one, in either
+ * workspace mode. fit-1 refused in the CLI with interim texts; Herdr fit-2
+ * (design r11 5.3.10, fit-2b commit 6) leaves a Herdr record to core, which
+ * blocks the start with message M, or reuses a live project-mode record
+ * (OQ-F13 (a)).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -31,39 +33,51 @@ import {
 } from "@aoagents/ao-core";
 import { herdrFixture, herdrRejection, type HerdrFixture } from "../herdr-fixtures.js";
 
-const { mockConfigRef, registryRef, mockEnsureLifecycleWorker, herdrStandIn } = vi.hoisted(() => ({
-  mockConfigRef: { current: null as unknown },
-  registryRef: { current: null as unknown },
-  mockEnsureLifecycleWorker: vi.fn(),
-  herdrStandIn: {
-    /**
-     * The recorded answer of `pane get`, and of `pane process-info`: an Error
-     * is thrown (a failure), anything else is the `{ stdout, stderr }` answer.
-     */
-    paneGet: null as unknown,
-    processInfo: null as unknown,
-    calls: [] as string[][],
-  },
-}));
+const { mockConfigRef, registryRef, mockEnsureLifecycleWorker, herdrStandIn, oraLog } = vi.hoisted(
+  () => ({
+    oraLog: [] as Array<[string, string | undefined]>,
+    mockConfigRef: { current: null as unknown },
+    registryRef: { current: null as unknown },
+    mockEnsureLifecycleWorker: vi.fn(),
+    herdrStandIn: {
+      /** The plugin's own binary (a file that never runs). */
+      bin: "",
+      /**
+       * The recorded answer of `pane get`, and of `pane process-info`: an Error
+       * is thrown (a failure), anything else is the `{ stdout, stderr }` answer.
+       */
+      paneGet: null as unknown,
+      processInfo: null as unknown,
+      calls: [] as string[][],
+    },
+  }),
+);
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   const { promisify } = await import("node:util");
   // No real herdr or tmux runs: the callback form refuses them.
   const execFile = ((cmd: string, ...rest: unknown[]) => {
-    if (cmd === "herdr" || cmd === "tmux") throw new Error(`unexpected command: ${cmd}`);
+    if (cmd === "herdr" || cmd === herdrStandIn.bin || cmd === "tmux") {
+      throw new Error(`unexpected command: ${cmd}`);
+    }
     return (actual.execFile as (...args: unknown[]) => unknown)(cmd, ...rest);
   }) as typeof actual.execFile;
   Object.defineProperty(execFile, promisify.custom, {
     value: async (cmd: string, args: string[]) => {
-      if (cmd !== "herdr") throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
+      if (cmd !== "herdr" && cmd !== herdrStandIn.bin) {
+        throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
+      }
       herdrStandIn.calls.push(args);
+      const { herdrFixture: fixture } = await import("../herdr-fixtures.js");
       const answer =
         args[0] === "pane" && args[1] === "get"
           ? herdrStandIn.paneGet
           : args[0] === "pane" && args[1] === "process-info"
             ? herdrStandIn.processInfo
-            : new Error(`unexpected herdr call: ${args.join(" ")}`);
+            : args[0] === "status" && args[1] === "server"
+              ? { stdout: fixture("closedpane_status_server_json").stdout, stderr: "" }
+              : new Error(`unexpected herdr call: ${args.join(" ")}`);
       if (answer instanceof Error) throw answer;
       return answer;
     },
@@ -107,12 +121,17 @@ vi.mock("../../src/lib/shell.js", () => ({
 
 vi.mock("ora", () => ({
   default: () => {
+    // Each call is logged as [method, text], so a test can read the spinner lines.
+    const logged = (method: string) => (text?: string) => {
+      oraLog.push([method, text]);
+      return spinner;
+    };
     const spinner = {
-      start: () => spinner,
-      stop: () => spinner,
-      succeed: () => spinner,
-      fail: () => spinner,
-      info: () => spinner,
+      start: logged("start"),
+      stop: logged("stop"),
+      succeed: logged("succeed"),
+      fail: logged("fail"),
+      info: logged("info"),
       text: "",
     };
     return spinner;
@@ -175,10 +194,13 @@ function setup(mode: "project" | "isolated", opts: { creates?: boolean } = {}): 
   } as OrchestratorConfig;
   mockConfigRef.current = config;
 
-  // The real plugin; its terminal output is a stand-in.
+  // The real plugin with its own binary; its terminal output is a stand-in.
+  herdrStandIn.bin = join(tmpDir, "bin", "herdr");
+  mkdirSync(join(tmpDir, "bin"), { recursive: true });
+  writeFileSync(herdrStandIn.bin, "", { mode: 0o755 });
   runtimeCreate = vi.fn(async () => ({ id: "w4:p1", runtimeName: "herdr", data: {} }));
   const runtime: Runtime = {
-    ...createHerdrRuntime(),
+    ...createHerdrRuntime({ binPath: herdrStandIn.bin }),
     getOutput: vi.fn(async () => ""),
     ...(opts.creates ? { create: runtimeCreate } : {}),
   };
@@ -264,6 +286,7 @@ function errors(): string {
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "ao-start-herdr-interim-"));
   herdrStandIn.calls = [];
+  oraLog.length = 0;
   mockEnsureLifecycleWorker.mockResolvedValue({
     running: true,
     started: false,
@@ -311,7 +334,34 @@ function answers(): Array<[string, HerdrFixture, HerdrFixture]> {
   return ANSWERS;
 }
 
-describe("ao start with an old Herdr orchestrator, through the real session manager (fit-1 interim)", () => {
+/** The herdr calls of the start: the pane calls name only w3:p2; the preflight asks status. */
+function expectOnlyThisPane(): void {
+  expect(
+    herdrStandIn.calls.filter(
+      (args) =>
+        !(args[0] === "pane" && args.includes("w3:p2")) &&
+        !(args[0] === "status" && args[1] === "server"),
+    ),
+  ).toEqual([]);
+}
+
+/** Exit 1 with message M (no prefix): the block of `id` with its `<state>` and answer. */
+function expectMessageM(id: string, state: string, answer: string): void {
+  expect(errors()).toContain(
+    "No new orchestrator was started for project my-app: AO cannot tell that every earlier herdr orchestrator launch of the project ended.",
+  );
+  expect(errors()).toContain(`${id}: ${state}. Herdr pane w3:p2 (terminal term_a), workspace w3`);
+  expect(errors()).toContain(`: ${answer}.`);
+  expect(errors()).toContain(`  If it runs, use it:  ao session attach '${id}'`);
+  expect(errors()).not.toContain("Failed to setup orchestrator:");
+  expect(oraLog).toContainEqual(["fail", "No new orchestrator was started"]);
+}
+
+describe("ao start with an old Herdr orchestrator, through the real session manager (fit-2 G)", () => {
+  const ANSWER_TEXT = [
+    "herdr answered that the pane does not exist or that it has another terminal",
+    "no herdr server answers at the socket",
+  ];
   for (const [mode, id] of [
     ["project", "app-orchestrator"],
     ["isolated", "app-orchestrator-1"],
@@ -321,7 +371,7 @@ describe("ao start with an old Herdr orchestrator, through the real session mana
         ["working", {}],
         ["killed by the lifecycle (runtime)", { status: "killed", killedReason: "runtime" }],
       ] as const) {
-        it(`${mode} mode, answer ${index + 1}, a record ${persisted}: exit 1, record kept, no new orchestrator`, async () => {
+        it(`${mode} mode, answer ${index + 1}, a record ${persisted}: exit 1 with message M, record kept, no new orchestrator`, async () => {
           const [label, paneGet, processInfo] = answers()[index]!;
           herdrStandIn.paneGet = herdrRejection(paneGet);
           herdrStandIn.processInfo = herdrRejection(processInfo);
@@ -333,10 +383,18 @@ describe("ao start with an old Herdr orchestrator, through the real session mana
             "process.exit(1)",
           );
 
-          expect(errors()).toContain(`Cannot tell whether orchestrator session ${id} is alive (`);
-          expect(errors()).toContain(
-            "It is neither reused nor replaced, and no new orchestrator was started. Check the runtime and run `ao start` again.",
-          );
+          // Was (fit-1 interim): "Cannot tell whether orchestrator session ...".
+          // A record persisted working passes R6, and in project mode the probe
+          // does not prove the pane alive (unproven). In isolated mode R8 fails
+          // first (an isolated record). A persisted killed fails R6 before any
+          // probe (core's persisted status does not depend on `sm.list`).
+          const state =
+            "status" in extra
+              ? "status killed, its status is killed"
+              : mode === "project"
+                ? "status working"
+                : "status working, an isolated record";
+          expectMessageM(id, state, ANSWER_TEXT[index]!);
           // `sm.list` adds `prAutoDetect=off` to an orchestrator record (as
           // before the fit); nothing else is written, archived or added (the
           // archive is sessions/archive).
@@ -346,9 +404,7 @@ describe("ao start with an old Herdr orchestrator, through the real session mana
           expect(record?.["runtimeHandle"]).toBe(HANDLE);
           expect(record?.["status"]).toBe(extra.status ?? "working");
           expect(workspace.create).not.toHaveBeenCalled();
-          expect(
-            herdrStandIn.calls.filter((args) => args[0] !== "pane" || !args.includes("w3:p2")),
-          ).toEqual([]);
+          expectOnlyThisPane();
         });
       }
     }
@@ -380,15 +436,18 @@ describe("ao start with a held Herdr orchestrator whose pane runs (note 2, revie
     ["project", "app-orchestrator"],
     ["isolated", "app-orchestrator-1"],
   ] as const) {
-    for (const [persisted, extra, state] of [
+    for (const [persisted, extra] of [
       [
         "killed by the lifecycle after the F1 outage bound",
         { status: "killed", killedReason: "runtime" },
-        "recorded as killed",
       ],
-      ["working, with activity exited", {}, "shown as working with activity exited"],
+      ["working, with activity exited", {}],
     ] as const) {
-      it(`${mode} mode, a record ${persisted}, the pane answers alive: exit 1, the refusal, nothing created`, async () => {
+      // Was (note 2): exit 1 with the still-runs refusal in every case. Now
+      // core decides: a persisted killed fails R6, an isolated record fails
+      // R8, and a project-mode record that runs is reused (OQ-F13 (a)).
+      const reusedHere = mode === "project" && !("status" in extra);
+      it(`${mode} mode, a record ${persisted}, the pane answers alive: ${reusedHere ? "exit 0, reused" : "exit 1 with message M"}, nothing created`, async () => {
         const live = liveAnswers();
         herdrStandIn.paneGet = live.paneGet;
         herdrStandIn.processInfo = live.processInfo;
@@ -397,13 +456,21 @@ describe("ao start with a held Herdr orchestrator whose pane runs (note 2, revie
         const before = sessionsListing();
         const recordBefore = readMetadataRaw(sessionsDir, id);
 
-        await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow(
-          "process.exit(1)",
-        );
-
-        expect(errors()).toContain(
-          `Orchestrator session ${id} is ${state}, but its Herdr pane w3:p2 still runs, so it is not reused and no new orchestrator was started. Attach to it with \`ao session attach ${id}\`, or close that pane in herdr and then retire the record by hand (docs/DEVELOPMENT.md, the Herdr fit-1 startup rule).`,
-        );
+        if (reusedHere) {
+          await program.parseAsync(["node", "test", "start"]);
+          expect(oraLog).toContainEqual(["succeed", "Orchestrator session reused"]);
+          expect(errors()).toBe("");
+        } else {
+          await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow(
+            "process.exit(1)",
+          );
+          const reason = "status" in extra ? "its status is killed" : "an isolated record";
+          expectMessageM(
+            id,
+            `status ${extra.status ?? "working"}, ${reason}`,
+            `the pane runs, but the record is not reusable (${reason})`,
+          );
+        }
         expect(runtimeCreate).not.toHaveBeenCalled();
         expect(workspace.create).not.toHaveBeenCalled();
         const after = sessionsListing();
@@ -418,9 +485,7 @@ describe("ao start with a held Herdr orchestrator whose pane runs (note 2, revie
         expect(keptAfter).toEqual(keptBefore);
         expect(recordAfter?.["status"]).toBe(extra.status ?? "working");
         expect(recordAfter?.["runtimeHandle"]).toBe(HANDLE);
-        expect(
-          herdrStandIn.calls.filter((args) => args[0] !== "pane" || !args.includes("w3:p2")),
-        ).toEqual([]);
+        expectOnlyThisPane();
       });
     }
   }

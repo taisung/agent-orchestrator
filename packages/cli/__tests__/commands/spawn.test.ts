@@ -2,25 +2,40 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { type Session, type SessionManager, getProjectBaseDir } from "@aoagents/ao-core";
+import type * as ChildProcess from "node:child_process";
+import {
+  type PluginRegistry,
+  type Session,
+  type SessionManager,
+  getProjectBaseDir,
+} from "@aoagents/ao-core";
 
-const { mockExec, mockConfigRef, mockSessionManager, mockEnsureLifecycleWorker } = vi.hoisted(
-  () => ({
-    mockExec: vi.fn(),
-    mockConfigRef: { current: null as Record<string, unknown> | null },
-    mockSessionManager: {
-      list: vi.fn(),
-      kill: vi.fn(),
-      cleanup: vi.fn(),
-      get: vi.fn(),
-      spawn: vi.fn(),
-      spawnOrchestrator: vi.fn(),
-      send: vi.fn(),
-      claimPR: vi.fn(),
-    },
-    mockEnsureLifecycleWorker: vi.fn(),
-  }),
-);
+const {
+  mockExec,
+  mockConfigRef,
+  mockSessionManager,
+  mockEnsureLifecycleWorker,
+  registryRef,
+  herdrStandIn,
+} = vi.hoisted(() => ({
+  /** The registry of getPluginRegistry (Herdr fit-2: spawn asks its runtime's preflight). */
+  registryRef: { current: { get: () => null } as unknown },
+  /** A herdr stand-in binary: its path, its `status server --json` answer, its calls. */
+  herdrStandIn: { bin: "", status: "", calls: [] as Array<[string, string[]]> },
+  mockExec: vi.fn(),
+  mockConfigRef: { current: null as Record<string, unknown> | null },
+  mockSessionManager: {
+    list: vi.fn(),
+    kill: vi.fn(),
+    cleanup: vi.fn(),
+    get: vi.fn(),
+    spawn: vi.fn(),
+    spawnOrchestrator: vi.fn(),
+    send: vi.fn(),
+    claimPR: vi.fn(),
+  },
+  mockEnsureLifecycleWorker: vi.fn(),
+}));
 
 vi.mock("../../src/lib/shell.js", () => ({
   tmux: vi.fn(),
@@ -54,7 +69,35 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async (): Promise<SessionManager> => mockSessionManager as SessionManager,
+  getPluginRegistry: async () => registryRef.current,
 }));
+
+// No real herdr runs: the stand-in binary answers `status server --json`, and
+// a bare `herdr` (the ambient check) is refused.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  const { promisify } = await import("node:util");
+  const execFile = ((cmd: string, ...rest: unknown[]) => {
+    if (cmd === "herdr" || (herdrStandIn.bin && cmd === herdrStandIn.bin)) {
+      throw new Error(`unexpected command: ${cmd}`);
+    }
+    return (actual.execFile as (...args: unknown[]) => unknown)(cmd, ...rest);
+  }) as typeof actual.execFile;
+  Object.defineProperty(execFile, promisify.custom, {
+    value: async (cmd: string, args: string[], ...rest: unknown[]) => {
+      if (cmd === "herdr") throw new Error(`unexpected command: herdr ${args.join(" ")}`);
+      if (herdrStandIn.bin && cmd === herdrStandIn.bin) {
+        herdrStandIn.calls.push([cmd, args]);
+        if (args[0] === "status" && args[1] === "server") {
+          return { stdout: herdrStandIn.status, stderr: "" };
+        }
+        throw new Error(`unexpected herdr call: ${args.join(" ")}`);
+      }
+      return promisify(actual.execFile)(cmd, args, ...(rest as [ChildProcess.ExecFileOptions]));
+    },
+  });
+  return { ...actual, execFile, default: { ...actual, execFile } };
+});
 
 vi.mock("../../src/lib/lifecycle-service.js", () => ({
   ensureLifecycleWorker: (...args: unknown[]) => mockEnsureLifecycleWorker(...args),
@@ -768,5 +811,62 @@ describe("spawn pre-flight checks", () => {
       .join("\n");
     expect(errors).toContain("not installed");
     expect(errors).not.toContain("not authenticated");
+  });
+});
+
+describe("spawn pre-flight of the selected runtime (Herdr fit-2, design r11 5.3.6)", () => {
+  afterEach(() => {
+    herdrStandIn.bin = "";
+    herdrStandIn.calls = [];
+    registryRef.current = { get: () => null };
+  });
+
+  it("T-7.14: a Herdr project asks the registered plugin's own binary; exit 1 with its message", async () => {
+    const binDir = join(tmpDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    herdrStandIn.bin = join(binDir, "herdr");
+    writeFileSync(herdrStandIn.bin, "", { mode: 0o755 });
+    herdrStandIn.status = JSON.stringify({
+      running: false,
+      socket: "/tmp/aofit2b-spawn/selected.sock",
+      compatible: true,
+    });
+    const { create } = await import("@aoagents/ao-plugin-runtime-herdr");
+    const runtime = create({ binPath: herdrStandIn.bin });
+    registryRef.current = {
+      get: (slot: string, name: string) =>
+        slot === "runtime" && name === "herdr" ? runtime : null,
+    } as unknown as PluginRegistry;
+    const projects = (mockConfigRef.current as Record<string, unknown>).projects as Record<
+      string,
+      Record<string, unknown>
+    >;
+    projects["my-app"].runtime = "herdr";
+    // The ambient check would pass: `herdr status server` answers running.
+    mockExec.mockImplementation(async (cmd: string) =>
+      cmd === "herdr" ? { stdout: "status: running", stderr: "" } : { stdout: "", stderr: "" },
+    );
+
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.map(String).join(" "))
+      .join("\n");
+    expect(errors).toContain(
+      "no herdr server runs at /tmp/aofit2b-spawn/selected.sock; start one: herdr server",
+    );
+    expect(herdrStandIn.calls).toEqual([[herdrStandIn.bin, ["status", "server", "--json"]]]);
+    expect(mockExec.mock.calls.filter(([cmd]) => cmd === "herdr")).toEqual([]);
+    expect(mockSessionManager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("T-7.15: a tmux project runs checkTmux as before", async () => {
+    mockExec.mockRejectedValue(new Error("ENOENT"));
+
+    await expect(program.parseAsync(["node", "test", "spawn"])).rejects.toThrow("process.exit(1)");
+
+    expect(mockExec).toHaveBeenCalledWith("tmux", ["-V"]);
+    expect(mockSessionManager.spawn).not.toHaveBeenCalled();
   });
 });

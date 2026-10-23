@@ -9,13 +9,13 @@ import {
   getSiblings,
   formatPlanTree,
   TERMINAL_STATUSES,
-  HERDR_RUNTIME_NAME,
   type OrchestratorConfig,
+  type Runtime,
   type DecomposerConfig,
   DEFAULT_DECOMPOSER_CONFIG,
 } from "@aoagents/ao-core";
 import { banner } from "../lib/format.js";
-import { getSessionManager } from "../lib/create-session-manager.js";
+import { getPluginRegistry, getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker } from "../lib/lifecycle-service.js";
 import { preflight } from "../lib/preflight.js";
 import { findProjectForDirectory } from "../lib/project-resolution.js";
@@ -70,12 +70,11 @@ async function runSpawnPreflight(
   options?: SpawnClaimOptions,
 ): Promise<void> {
   const project = config.projects[projectId];
-  const runtime = project?.runtime ?? config.defaults.runtime;
-  if (runtime === "tmux") {
-    await preflight.checkTmux();
-  } else if (runtime === HERDR_RUNTIME_NAME) {
-    await preflight.checkHerdr();
-  }
+  // Herdr fit-2 (design r11 5.3.6): the selected runtime's own readiness,
+  // through the registry's instance (the one that the session manager uses).
+  const runtimeName = project?.runtime ?? config.defaults.runtime;
+  const registry = await getPluginRegistry(config);
+  await preflight.checkSelectedRuntime(registry.get<Runtime>("runtime", runtimeName), runtimeName);
   const needsGitHubAuth =
     project?.tracker?.plugin === "github" ||
     (options?.claimPr && project?.scm?.plugin === "github");

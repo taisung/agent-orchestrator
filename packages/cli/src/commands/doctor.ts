@@ -184,8 +184,11 @@ async function checkPluginResolution(
 // ---------------------------------------------------------------------------
 
 /**
- * External-service probes per runtime, reusing `ao spawn`'s preflight so
- * doctor's verdict cannot drift from what spawn will actually enforce.
+ * External-service probes per runtime. tmux uses the same check as `ao
+ * spawn`. herdr is an ambient check (bare `herdr` on PATH, the caller's
+ * socket); `ao spawn` and `ao start` ask the selected runtime's
+ * `preflight()`, which uses the plugin's own binary, so the two verdicts can
+ * differ.
  *
  * Runtimes absent from this map (e.g. `process`) drive no external service and
  * are healthy as long as the plugin resolved.

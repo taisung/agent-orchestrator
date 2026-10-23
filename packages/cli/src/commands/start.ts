@@ -31,11 +31,10 @@ import {
   isOrchestratorSession,
   isTerminalSession,
   isRuntimeStopUnconfirmedError,
+  isOrchestratorStartBlockedError,
+  isUnprovenLaunchRecord,
   ConfigNotFoundError,
-  HERDR_RUNTIME_NAME,
   RUNTIME_NO_SERVER_ERROR_CODE,
-  TERMINAL_STATUSES,
-  type SessionStatus,
   type OrchestratorConfig,
   type ProjectConfig,
   type ParsedRepoUrl,
@@ -68,6 +67,7 @@ import {
 } from "../lib/project-detection.js";
 import { formatCommandError } from "../lib/cli-errors.js";
 import { findProjectForDirectory } from "../lib/project-resolution.js";
+import { preflight } from "../lib/preflight.js";
 
 const IS_TTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
@@ -903,83 +903,17 @@ function recordRuntimeName(
 }
 
 /**
- * Herdr fit-1 interim (owner decision OQ-F1 (b), 2026-10-22; fit-2 replaces
- * it with the full startup guard G): a Herdr orchestrator record that
- * `sm.list` shows terminal is still checked at startup when that terminal
- * state came from a liveness probe: the enrichment of this `sm.list` (the
- * record's own status is not terminal, for example activity `exited`) or a
- * persisted `killed` (the lifecycle writes it after probe answers). Before RH
- * no Herdr answer proves that a launch ended, so such a "held" record must
- * not be passed over as if it had ended.
- *
- * What the interim guard covers: `ao start`, in both workspace modes, for
- * each Herdr orchestrator record with a stored handle that is not terminal or
- * is held. `isAlive` false and the no-server code are unknown, and a held
- * record that answers alive still runs (note 2, review r1 M-1). Neither is
- * reused (a terminal record never is), and each blocks the start of a new
- * orchestrator: the start exits 1 with the reason or the still-runs refusal
- * only when no other record can be reused. A record that is not terminal and
- * is alive or unchecked is still reused next to them, with no refusal (note
- * 3, review r2 m-2). Core `spawnOrchestrator` in project mode refuses on
- * false and no-server for the fixed ID as well.
- *
- * Its limits until fit-2 G (docs/DEVELOPMENT.md names them for the owner):
- * - a record whose persisted status, after core's read repair, is terminal
- *   and not `killed` (`done`, `errored`, `terminated`, `cleanup`) is not
- *   probed, so isolated `ao start` can start a new orchestrator next to a
- *   live pane of such a record (the repair writes `working` over a stored
- *   `merged` of an orchestrator record, so the guard checks that one: note 3,
- *   review r2 m-3);
- * - direct isolated core `sm.spawnOrchestrator` reads no old record (`ao
- *   start` is today's only product caller);
- * - a record with no stored handle (a reservation or an in-flight create)
- *   counts as `unchecked` and is reused without a probe, as today.
- */
-function isHerdrProbeTerminal(
-  config: OrchestratorConfig,
-  project: ProjectConfig,
-  session: Session,
-): boolean {
-  if (!isTerminalSession(session) || !hasStoredHandle(session)) return false;
-  if (recordRuntimeName(config, project, session) !== HERDR_RUNTIME_NAME) return false;
-  const persisted = session.metadata?.["status"];
-  return !persisted || persisted === "killed" || !TERMINAL_STATUSES.has(persisted as SessionStatus);
-}
-
-/** How a held Herdr record came to be terminal, for the refusal text. */
-function heldStateOf(session: Session): string {
-  if (session.metadata?.["status"] === "killed") return "recorded as killed";
-  return `shown as ${session.status}${session.activity ? ` with activity ${session.activity}` : ""}`;
-}
-
-/**
- * Herdr fit-1 note 2 (review r1 M-1): the refusal for a held Herdr record that
- * answers alive. The recoveries are the ones that work on fit-1 code: attach
- * works on a live pane whatever the record's status; `ao session kill` cannot
- * retire a Herdr record before RH (the Herdr stop answers unknown), so the
- * record is retired by hand after the pane is closed.
- */
-function runningHeldRefusal(session: Session): string {
-  return (
-    `Orchestrator session ${session.id} is ${heldStateOf(session)}, but its Herdr pane ` +
-    `${session.runtimeHandle?.id ?? ""} still runs, so it is not reused and no new orchestrator ` +
-    `was started. Attach to it with \`ao session attach ${session.id}\`, or close that pane in ` +
-    "herdr and then retire the record by hand (docs/DEVELOPMENT.md, the Herdr fit-1 startup rule)."
-  );
-}
-
-/**
  * Defect A (2026-10-22): `sm.list` keeps the stored status when
  * `Runtime.isAlive` rejects, so the record of an orchestrator whose tmux
  * server ended still reads `working`, and `ao start` reused it. `ao start`
- * now asks the runtime itself, with the rule of `isOrchestratorRuntimeAlive`
- * in core: true is alive; false, or a rejection with
+ * now asks the runtime itself, with the rule of core's
+ * `classifyOrchestratorLiveness` for a runtime outside
+ * LAUNCH_END_UNPROVEN_RUNTIMES: true is alive; false, or a rejection with
  * RUNTIME_NO_SERVER_ERROR_CODE (no server runs at all, so no session can
  * exist), is gone; any other rejection, or an answer that is not a boolean,
  * is unknown. Only a record with a stored handle is probed (the records whose
- * liveness `sm.list` trusts).
- * Herdr fit-1 interim (as in core): for a record whose runtime is Herdr,
- * false and the no-server code are unknown, never gone.
+ * liveness `sm.list` trusts). Herdr fit-2 (design r11 5.3.5): a record that
+ * `isUnprovenLaunchRecord` accepts never comes here; core decides it.
  */
 async function checkOrchestratorLiveness(
   registry: PluginRegistry,
@@ -995,16 +929,9 @@ async function checkOrchestratorLiveness(
   if (!runtime) {
     return { state: "unknown", reason: `no runtime plugin "${runtimeName}" is loaded` };
   }
-  const herdrRecord = runtimeName === HERDR_RUNTIME_NAME;
   try {
     const alive: unknown = await runtime.isAlive(handle);
     if (alive === true) return { state: "alive" };
-    if (alive === false && herdrRecord) {
-      return {
-        state: "unknown",
-        reason: `herdr answered that pane ${handle.id} does not exist or has another terminal; before RH no herdr answer proves that a launch ended`,
-      };
-    }
     if (alive === false) {
       return { state: "gone", reason: `${runtimeName} answered that ${handle.id} does not exist` };
     }
@@ -1014,7 +941,7 @@ async function checkOrchestratorLiveness(
     };
   } catch (err: unknown) {
     const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-    if (code === RUNTIME_NO_SERVER_ERROR_CODE && !herdrRecord) {
+    if (code === RUNTIME_NO_SERVER_ERROR_CODE) {
       return { state: "gone", reason: `no ${runtimeName} server runs (${errorMessage(err)})` };
     }
     return { state: "unknown", reason: errorMessage(err) };
@@ -1032,9 +959,11 @@ async function runStartup(
   opts?: { orchestrator?: boolean },
 ): Promise<void> {
   // Ensure tmux is available before doing anything — covers all entry paths
-  // (normal start, URL start, retry with existing config)
-  const runtime = config.defaults?.runtime ?? "tmux";
-  if (runtime === "tmux") {
+  // (normal start, URL start, retry with existing config). Herdr fit-2
+  // (design r11 5.3.5): the project's selected runtime decides, not only
+  // the default.
+  const selectedRuntime = project.runtime ?? config.defaults?.runtime ?? "tmux";
+  if (selectedRuntime === "tmux") {
     await ensureTmux();
   }
 
@@ -1091,36 +1020,57 @@ async function runStartup(
     const candidates = allSessions.filter(
       (s) =>
         isOrchestratorSession(s, project.sessionPrefix ?? projectId, allSessionPrefixes) &&
-        (!isTerminalSession(s) || isHerdrProbeTerminal(config, project, s)),
+        !isTerminalSession(s),
     );
 
-    // Defect A: a candidate is reused only when it is alive (or unchecked, as
-    // before); a gone one is left to `spawnOrchestrator`, which archives or
-    // replaces its record (project mode) or starts the next ID (isolated
-    // mode). An unknown one blocks a new orchestrator: it may still run.
-    // Herdr fit-1 interim: a held Herdr record (terminal only by a probe or a
-    // persisted `killed`, see isHerdrProbeTerminal) is checked too. Unknown,
-    // it blocks a new orchestrator. Alive, it still runs: it is not reused (a
-    // terminal record never is) and, since note 2 (review r1 M-1), not passed
-    // over either, so it blocks a new orchestrator too. A blocking candidate
-    // stops the start only when no other candidate is reused (note 3, review
-    // r2 m-2: a live candidate that is not terminal is still reused).
-    const registry = candidates.length > 0 ? await getPluginRegistry(config) : null;
+    // Herdr fit-2 (design r11 5.3.5): the candidates are split by G1's
+    // predicate. (a) A record that `isUnprovenLaunchRecord` accepts (a Herdr
+    // handle, or a damaged one that G1 selects) is left to core: the CLI
+    // makes no probe of it, and core's reuse decision (under the admission
+    // lock, with R1 to R7 for the identity token that it probed) answers the
+    // ones that may be reused. (b) Another candidate with a stored handle:
+    // Defect A, the CLI's own probe. (c) No stored handle: unchecked, reused
+    // as before (OQ-F10).
+    const coreDecides = candidates.filter((s) =>
+      isUnprovenLaunchRecord(s.metadata, selectedRuntime),
+    );
+    const probed = candidates.filter((s) => !coreDecides.includes(s) && hasStoredHandle(s));
+    const unchecked = candidates.filter((s) => !coreDecides.includes(s) && !hasStoredHandle(s));
+    const registry = probed.length > 0 ? await getPluginRegistry(config) : null;
     const checked = registry
       ? await Promise.all(
-          candidates.map(async (session) => ({
+          probed.map(async (session) => ({
             session,
             liveness: await checkOrchestratorLiveness(registry, config, project, session),
           })),
         )
       : [];
-    const existingOrchestrators = checked
-      .filter(
-        (c) =>
-          !isTerminalSession(c.session) &&
-          (c.liveness.state === "alive" || c.liveness.state === "unchecked"),
-      )
-      .map((c) => c.session);
+    let reusable: Session[] = [];
+    if (coreDecides.length > 0) {
+      try {
+        reusable = (await sm.findReusableOrchestrators?.(projectId)) ?? [];
+      } catch (err) {
+        if (isOrchestratorStartBlockedError(err)) {
+          spinner.fail("No new orchestrator was started");
+          throw err;
+        }
+        spinner.fail("Orchestrator setup failed");
+        throw new Error(
+          `Failed to setup orchestrator: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+      }
+    }
+    // A live (b) candidate, an unchecked (c) one, or one that core would
+    // reuse is the existing orchestrator. A gone one is left to
+    // `spawnOrchestrator`, which archives or replaces its record (project
+    // mode) or starts the next ID (isolated mode). An unknown one blocks a
+    // new orchestrator when nothing can be reused: it may still run.
+    const existingOrchestrators = [
+      ...checked.filter((c) => c.liveness.state === "alive").map((c) => c.session),
+      ...unchecked,
+      ...reusable,
+    ];
     const unknownOrchestrators = checked.flatMap((c) =>
       c.liveness.state === "unknown"
         ? [
@@ -1128,31 +1078,14 @@ async function runStartup(
           ]
         : [],
     );
-    const runningHeldOrchestrators = checked.flatMap((c) =>
-      isTerminalSession(c.session) && c.liveness.state === "alive"
-        ? [runningHeldRefusal(c.session)]
-        : [],
-    );
 
-    if (
-      existingOrchestrators.length === 0 &&
-      (unknownOrchestrators.length > 0 || runningHeldOrchestrators.length > 0)
-    ) {
-      spinner.fail(
-        unknownOrchestrators.length > 0
-          ? "Orchestrator liveness unknown"
-          : "An old Herdr orchestrator still runs",
-      );
+    if (existingOrchestrators.length === 0 && unknownOrchestrators.length > 0) {
+      spinner.fail("Orchestrator liveness unknown");
       throw new Error(
         [
           ...unknownOrchestrators,
-          ...(unknownOrchestrators.length > 0
-            ? [
-                `${unknownOrchestrators.length === 1 ? "It is" : "They are"} neither reused nor replaced, ` +
-                  "and no new orchestrator was started. Check the runtime and run `ao start` again.",
-              ]
-            : []),
-          ...runningHeldOrchestrators,
+          `${unknownOrchestrators.length === 1 ? "It is" : "They are"} neither reused nor replaced, ` +
+            "and no new orchestrator was started. Check the runtime and run `ao start` again.",
         ].join(" "),
       );
     }
@@ -1167,9 +1100,13 @@ async function runStartup(
     }
 
     if (existingOrchestrators.length > 0) {
-      // Existing orchestrators found — use the most recently active one.
+      // Existing orchestrators found — use the most recently active one, by
+      // the snapshot of `sm.list` (a session from core's reuse decision that
+      // is not in the snapshot sorts last).
+      const activity = (session: Session): number =>
+        allSessions.find((s) => s.id === session.id)?.lastActivityAt?.getTime() ?? -1;
       const sortedOrchestrators = [...existingOrchestrators].sort(
-        (a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0),
+        (a, b) => activity(b) - activity(a),
       );
       const selected = sortedOrchestrators[0];
       selectedOrchestratorId = selected.id;
@@ -1183,6 +1120,13 @@ async function runStartup(
       // No existing orchestrators — spawn a new one
       try {
         spinner.start("Creating orchestrator session");
+        // Herdr fit-2 (design r11 5.3.6): the readiness of the selected
+        // runtime (tmux: checkTmux; herdr: the plugin's own preflight).
+        const runtimes = await getPluginRegistry(config);
+        await preflight.checkSelectedRuntime(
+          runtimes.get<Runtime>("runtime", selectedRuntime),
+          selectedRuntime,
+        );
         const systemPrompt = generateOrchestratorPrompt({ config, projectId, project });
         const session = await sm.spawnOrchestrator({ projectId, systemPrompt });
         selectedOrchestratorId = session.id;
@@ -1191,6 +1135,12 @@ async function runStartup(
           session.metadata?.["orchestratorSessionReused"] === "true";
         spinner.succeed(reused ? "Orchestrator session reused" : "Orchestrator session created");
       } catch (err) {
+        // Herdr fit-2 (design r11 5.3.5 step 8): the same error object, so
+        // the top-level handler prints exactly message M.
+        if (isOrchestratorStartBlockedError(err)) {
+          spinner.fail("No new orchestrator was started");
+          throw err;
+        }
         spinner.fail("Orchestrator setup failed");
         throw new Error(
           `Failed to setup orchestrator: ${err instanceof Error ? err.message : String(err)}`,

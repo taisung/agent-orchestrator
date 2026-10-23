@@ -7,6 +7,7 @@
  * All checks throw on failure so callers can catch and handle uniformly.
  */
 
+import type { Runtime } from "@aoagents/ao-core";
 import { exec } from "./shell.js";
 
 /**
@@ -75,8 +76,26 @@ async function checkGhAuth(): Promise<void> {
   }
 }
 
+/**
+ * Herdr fit-2 (design r11 5.3.6): the readiness of the project's selected
+ * runtime, before `ao start` creates an orchestrator and before `ao spawn`.
+ * tmux: `checkTmux()`. Another runtime answers through its own
+ * `preflight()` when it has one: the herdr plugin asks its own binary and
+ * endpoint, not the ambient `herdr` on PATH that `checkHerdr()` asks.
+ * `runtime` is the registry's instance, the one that the session manager
+ * uses.
+ */
+async function checkSelectedRuntime(runtime: Runtime | null, name: string): Promise<void> {
+  if (name === "tmux") {
+    await checkTmux();
+    return;
+  }
+  await runtime?.preflight?.();
+}
+
 export const preflight = {
   checkTmux,
   checkHerdr,
+  checkSelectedRuntime,
   checkGhAuth,
 };

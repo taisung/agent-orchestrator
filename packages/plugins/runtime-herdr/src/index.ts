@@ -45,6 +45,7 @@ import {
   readHerdrCliFailure,
   resolveHerdrEndpoint,
   type HerdrCliFailure,
+  type HerdrEndpoint,
   type HerdrInvocation,
   type PluginModule,
   type Runtime,
@@ -497,8 +498,37 @@ export function create(config?: Record<string, unknown>): Runtime {
     }
   }
 
+  /**
+   * The endpoint of this plugin's own binary (`binPath`) and the caller's
+   * environment, when a compatible server runs there; else it rejects. The
+   * binary is missing, or the status call fails: the rejection of
+   * resolveHerdrEndpoint.
+   */
+  async function usableEndpoint(): Promise<HerdrEndpoint> {
+    const endpoint = await resolveHerdrEndpoint({ binPath: bin, env: process.env });
+    if (endpoint.running !== true) {
+      throw new Error(`no herdr server runs at ${endpoint.socket}; start one: herdr server`);
+    }
+    if (endpoint.compatible !== true) {
+      throw new Error(
+        `the herdr server at ${endpoint.socket} is not compatible with this herdr client ` +
+          `(version ${endpoint.version ?? "unknown"}, protocol ${endpoint.protocol ?? "unknown"}); restart it with this herdr`,
+      );
+    }
+    return endpoint;
+  }
+
   return {
     name: "herdr",
+
+    /**
+     * Herdr fit-2 (design r11 5.3.6): the readiness of this plugin's binary
+     * and endpoint, for `ao start` and `ao spawn` (create step 1 without the
+     * create). It caches nothing.
+     */
+    async preflight(): Promise<void> {
+      await usableEndpoint();
+    },
 
     async create(createConfig: RuntimeCreateConfig): Promise<RuntimeHandle> {
       assertValidSessionId(createConfig.sessionId);
@@ -514,16 +544,7 @@ export function create(config?: Record<string, unknown>): Runtime {
       // Step 1 (Q0). Herdr fit F-6: pin the binary and the server endpoint
       // first, and make every call of this launch with them; the handle
       // stores them for every later call (herdrInvocationFor).
-      const endpoint = await resolveHerdrEndpoint({ binPath: bin, env: process.env });
-      if (endpoint.running !== true) {
-        throw new Error(`no herdr server runs at ${endpoint.socket}; start one: herdr server`);
-      }
-      if (endpoint.compatible !== true) {
-        throw new Error(
-          `the herdr server at ${endpoint.socket} is not compatible with this herdr client ` +
-            `(version ${endpoint.version ?? "unknown"}, protocol ${endpoint.protocol ?? "unknown"}); restart it with this herdr`,
-        );
-      }
+      const endpoint = await usableEndpoint();
       const pinned: HerdrInvocation = {
         bin: endpoint.bin,
         env: { ...process.env, HERDR_SOCKET_PATH: endpoint.socket },
