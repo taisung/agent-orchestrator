@@ -179,6 +179,26 @@
   Owner question (21:30): why no OpenCode workers today: the routing gives HIGH work Opus authors and a
   sol reviewer; OpenCode Muse is the L0/LOW author (ao-70) and a cheap extra lens, not a HIGH reviewer.
 
+**Update 2026-10-22 22:35 EDT.**
+- CI: still no run on `main` after `541becfb` (pushes `389b8dfe` 21:08 and `b789579f` 21:24); GitHub
+  incident "Project updates delayed" (monitoring) lists Actions. Owner decision on CI open.
+- fit-2 r8 reviews on main (`4766e6b7`): ao-74 sol NOT-SOUND 0 B 3 M 5 m (lock A name changes across the
+  first mkdir under a symlinked parent; CLI reuse skips the live-launch rule; a successful restore never
+  releases its claim); ao-75 Muse 1.3 SOUND-WITH-CHANGES 0 M 6 m (2 shared minors; missed all 3 majors;
+  $0.05, about 6 min). Owner decision on r9 open; ao-74 and ao-75 idle (close on the owner's word).
+- Herdr fit-1 by ao-73 done at `e322e338` (`389b8dfe..e322e338`, 4 commits, 31 files): F-1, F-2 with the
+  interim startup guard (also probes Herdr records that `sm.list` shows killed/exited), F-6 pins without
+  preflight, F-5, docs; core 1695+1, runtime-herdr 143, cli 409; red 22 -> 21 (N-1 left). Commit 1 ran
+  without the pre-commit hook (no `.husky/_` in the new worktree); gitleaks on the range is clean.
+  Format-only hunks in 5 agent files (owner decision open: revert commit or keep). Code review not
+  started yet (owner decision open: sol plus Muse, or sol only).
+- Relaunch round 4 by ao-63 done at `7a20242f` (`9e501603..7a20242f`, 5 commits, 15 files; 3825/1/29;
+  red 0/16/6/0): bound-pane ownership in getOutput, sendMessage and `ao send`, the unusable mark for a
+  failed hook, the three accepted limits in help and DEVELOPMENT.md. ao-76 (Codex `gpt-6.1-sol` xhigh)
+  does the landing review r4 (branch `review/session-relaunch-r4` at `7a20242f`, brief
+  `brief-review-session-relaunch-r4-sol61.md`, review file `development/reviews/session_relaunch_review_r4_sol61.md`,
+  watcher 3574080 state `aofork-2026-10-22l`).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
