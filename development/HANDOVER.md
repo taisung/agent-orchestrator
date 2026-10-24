@@ -499,6 +499,20 @@ delete land/session-relaunch".
 - Next: the owner decides a tests-only round r3 for the 3 sites, or landing as is. Decision 32 (the Zod
   review) is still open.
 
+**Update 2026-10-24 08:20 EDT: owner decisions 32 (1) and 33 (1); fit-2b r3 (ao-73) and the Zod review (ao-87) run.**
+- 33 (1): a tests-only round r3 by ao-73 for the 3 unguarded `checkSubject()` sites (`session-manager.ts`
+  `:3397`, `:4119`, `:4123` at `66dff58c`), with an 8 x 8 mutant matrix; then ao-84 checks it alone; then the
+  landing of fit-2b by cherry-pick. Note `note-ao-73-fit2b-r3.md` as `.agent_note_fit2b_r3.md`; scratch
+  `/tmp/aofit2b3`; line 1 `running|66dff58c|fit-2b r3 subject-site tests 2026-10-24`. ao-73 compacted while
+  idle before the note (the note is self-contained). Router row open.
+- 32 (1): one new Codex gpt-6.1-sol review of the Zod upgrade `486ddb0d`, then the orchestrator lands it by
+  cherry-pick and pushes; the build and restart (with `pnpm install` first) come with fit-2b. ao-87 spawned
+  2026-10-24 08:1x EDT, fast-forwarded to `486ddb0d`; brief `brief-review-zod-466-code-sol61.md`; review file
+  `development/reviews/zod_466_upgrade_code_review_r1_sol61.md`; scratch `/tmp/aozr`; no network (no audit).
+  Router row open. Watcher `aofork-2026-10-24a` (loop PID 3909460) watches ao-87.
+- Watchers: `aofork-2026-10-22j` (ao-73), `aofork-2026-10-23b` (ao-84), `aofork-2026-10-23c` (ao-86, idle until
+  the Zod landing), `aofork-2026-10-24a` (ao-87).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
