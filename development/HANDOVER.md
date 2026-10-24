@@ -488,6 +488,17 @@ delete land/session-relaunch".
   file `development/reviews/herdr_fit2b_code_review_r2_sol61.md`; scratch `/tmp/aof2bs2`. Router row open.
 - Open for the owner: decision 32 (the review of the Zod upgrade `486ddb0d`, ao-86 idle).
 
+**Update 2026-10-24 00:32 EDT: ao-84's r2 check: LAND-WITH-CHANGES, 0 B 1 M 0 m (on main).**
+- `development/reviews/herdr_fit2b_code_review_r2_sol61.md`: every r1 finding of both reviews closed except
+  sol M-4 / Argon M-1, partly open: 3 of the 8 subject-check use sites in `session-manager.ts` are unguarded
+  (`:3397` the existing-directory check of restore and reuse-only; `:4119` and `:4123` the two project-mode
+  reservation retries). Removing any one passes all 510 tests; ao-84's three added probes catch each one. The
+  product code is correct at all three. sol M-1 closed (strict lookup; extra probes for a second project, a
+  missing and an unreadable record pass). Gates, counts (core 1878+1, runtime-herdr 341, cli 491), red 21,
+  relaunch 15, gitleaks and merge-tree (with main `fc6cea97`) all pass.
+- Next: the owner decides a tests-only round r3 for the 3 sites, or landing as is. Decision 32 (the Zod
+  review) is still open.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
