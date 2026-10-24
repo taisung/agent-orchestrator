@@ -449,6 +449,21 @@ delete land/session-relaunch".
 - ao-84 and ao-85 idle; watcher `aofork-2026-10-23b` (loop 2900330) still runs. Next: the owner decides the
   fix round (ao-73) and the check.
 
+**Update 2026-10-23 23:52 EDT: owner 29 (1), 30 (1), 31 (1): fit-2b r2 and the Zod upgrade run; ao-85 closed.**
+- 31 (1): ao-85 closed (`ao session kill`, its OpenCode session not purged); brief in
+  `backup-closed-sessions/ao-85-.agent_task.md`, report `reports/ao-85_herdr_fit2b_code_review_argon4.report.md`.
+  Its watcher `aofork-2026-10-23b` (loop 2900330) keeps watching ao-84 for the check.
+- 30 (1): ao-73 r2 on `13f982c2` (note `note-ao-73-fit2b-r2.md` as `.agent_note_fit2b_r2.md`; scratch
+  `/tmp/aofit2b2`): sol M-1 code fix (a strict, non-repairing F-9 lookup), tests for sol M-2 to M-5 and Argon
+  M-1 to M-4, Argon m-2 (`records-unreadable` wrap), m-1 comment. Then ao-84 checks alone. Router row open.
+- 29 (1): **ao-86** (claude-code, Opus 5.5) upgrades core to `zod ^4.6.6` on main `d9794f3e` (brief
+  `brief-aofork-zod-466-upgrade.md`; scratch `/tmp/aozod`). zod 4.6.6 is not in the local store (cached
+  metadata ends at 4.4.3), so the brief allows `pnpm` registry access for that one `pnpm add` and for
+  `pnpm audit` on base and tip only. C1 compares the parsed values of copies of the 3 live configs (this one,
+  `~/agent-skills/agent-orchestrator.yaml`, `/Data1/NgFEP/Nexus/agent-orchestrator.yaml`) before and after.
+  Watcher `aofork-2026-10-23c` (loop **3597840**, pgid 3597837). Its landing changes the lockfile: the build
+  after it needs `pnpm install` in the primary checkout before `pnpm build`.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
