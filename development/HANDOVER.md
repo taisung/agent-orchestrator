@@ -415,6 +415,23 @@ delete land/session-relaunch".
   landing). Report saved as `reports/ao-73_herdr_fit2b_impl.report.md`. Router row closed (in-review).
 - Next: the owner decides the code reviews.
 
+**Update 2026-10-23 22:43 EDT: docs pushed; fit-2b code reviews dispatched; Security CI red on a Zod advisory.**
+- Owner 28 (yes): pushed `b2064068..1fb3e5ad` (4 docs commits, only `development/`). CI, Integration Tests and
+  Onboarding: success. **Security: failure** in the job NPM Audit (`pnpm audit --prod --audit-level=high`, run
+  `40055085781`): GHSA-mrhx-c7xc-m3w5 "Zod can exhaust memory while validating oversized constrained
+  collections", high, range `< 4.6.6`, first patched 4.6.6 (advisory published 2026-10-01, updated 2026-10-23
+  18:26 UTC); the repo pins `zod ^3.24.0` in core (lock `3.25.76`). No 3.x fix exists, so the fix is a major
+  upgrade (code work for a worker) or an audit exception; the owner decides. The docs commits did not cause it.
+- Owner 27: two blind reviews of `c6d80383..13f982c2`: **ao-84** (codex, gpt-6.1-sol, xhigh; file
+  `development/reviews/herdr_fit2b_code_review_r1_sol61.md`, scratch `/tmp/aof2bs`) and **ao-85** (opencode,
+  `opencode-go/gemini-4-argon-contributor`; file `herdr_fit2b_code_review_r1_argon4.md`, scratch `/tmp/aof2ba`).
+  Argon by its pin on the owner's word, outside the agent-skills D-42 rule (CRITICAL only); its plan allowance
+  is per model and refuses past the limit. Briefs `brief-review-herdr-fit2b-code-{sol61,argon4}.md` from
+  `brief-review-herdr-fit2b-code.tmpl` (adds a receipts rule after the Nexus 1787 Argon trial). Both branches
+  moved to `13f982c2` by `reset --keep`. Watcher `aofork-2026-10-23b` (loop **2900330**, pgid 2900325).
+- Blind protocol: hold the first finished review in `held/`, keep its closed router row uncommitted until the
+  second finishes, then commit both before any pointer to ao-73.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
