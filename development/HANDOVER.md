@@ -524,6 +524,21 @@ delete land/session-relaunch".
   `.agent_note_fit2b_r3_check.md`; file `development/reviews/herdr_fit2b_code_review_r3_sol61.md`; scratch
   `/tmp/aof2bs3`. Row open. ao-87 (the Zod review) still runs.
 
+**Update 2026-10-24 08:50 EDT: the Zod review (ao-87) says NOT-LAND-SAFE, 4 B 1 M 1 m; `486ddb0d` not landed.**
+- `development/reviews/zod_466_upgrade_code_review_r1_sol61.md`, under the brief's rule "no change to what AO
+  accepts". Own harness: 12,507 configs, 1,051 mismatches, all in these groups; the 3 live configs equal;
+  feedback tools 0 mismatches; gates, red 21 and merge-tree (main, fit-2b) pass.
+  - B-1: a record key `__proto__` with an invalid value (YAML `projects: {__proto__: null}`): base rejects,
+    tip accepts and drops it (Zod 4 skips the key before it validates). The only finding that a config file
+    can reach.
+  - B-2: loose objects (tracker, SCM, notifier, agentConfig) keep an unknown key whose value is `undefined`.
+  - B-3: records drop inherited keys and reject symbol keys. B-4: records reject class instances.
+  - B-2 to B-4 need raw JS objects; the only product callers of `validateConfig` pass YAML parse output
+    (`config.ts:728`, `:749`) or a plain literal (`getDefaultConfig`).
+  - M-1: resident processes keep zod 3 in memory until they restart (the lifecycle restart is already planned
+    with the fit-2b build). m-1: three wrong fixes pass the new pins.
+- Next: owner decision 34 (exception or fix round by ao-86). Security CI stays red until the commit lands.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
