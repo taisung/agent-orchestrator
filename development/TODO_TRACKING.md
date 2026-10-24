@@ -499,6 +499,21 @@ Durable progress record for this fork. Dated events only; the current state live
   failures, health `ok`. Pushed `d5b6a180..9846cf6a` 17:55:04 EDT; CI of `9846cf6a`: 4 of 4 passed (the last
   at 17:57:09 EDT). ao-66 killed 17:55 (archive `ao-66_2026-10-22T21-55-26-926Z`; branch kept, both commits
   `-` in `git cherry main`).
+- `ed01a7ce..652e5988` (2026-10-24, ao-73 Claude Opus 5.5, rounds 1 to 3; reviews by ao-84 Codex gpt-6.1-sol
+  and ao-85 OpenCode Gemini 4 Argon) - **Herdr fit-2b** (design r11 section 8.2, commits 5 to 8; owner OQ-F12
+  (b), decisions 27, 30 (1), 33 (1)). Core admits at most one Herdr orchestrator launch per project (lock A
+  and its subject checks, the admission rounds, G1 and G2, the reuse predicate R, `findReusableOrchestrators`,
+  message M); `ao start` and `ao spawn` follow the core decision; F-9 `ao session kill <id>
+  --confirm-runtime-closed <identity-token>` retires a Herdr record on the owner's word; the final docs replace
+  the interim notes of fit-1 and fit-2a. Reviews r1 sol LAND-WITH-CHANGES (0 B 5 M 1 m) and Argon
+  LAND-WITH-CHANGES (0 B 4 M 2 m); r2 check LAND-WITH-CHANGES (0 B 1 M 0 m); r3 check LAND-SAFE (0 B 0 M 0 m)
+  (`herdr_fit2b_code_review_r1_sol61.md`, `..._r1_argon4.md`, `..._r2_sol61.md`, `..._r3_sol61.md`). Clean
+  cherry-pick 2026-10-24 09:00 EDT of `c6d80383..747e7388` (10 commits); `main` equals `747e7388` outside
+  `development/`. Gates of `747e7388` (ao-73 and ao-84): core 1882 + 1 expected fail, runtime-herdr 341, cli
+  491; red 21 (R2 15, R3 6); relaunch 15 green; gitleaks clean. Not built and not pushed at the landing.
+  Follow-up (optional, no owner decision): ao-84's stronger `:4123` schedule (the r3 check review, section
+  "Schedule review and the :4123 question"), a test with a real effect in place of the refusal reason.
+
 ## Decisions
 
 **D-1 — `main` is the canonical integration branch** (2026-09-23): the fork's work had lived on

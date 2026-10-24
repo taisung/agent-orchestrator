@@ -539,6 +539,16 @@ delete land/session-relaunch".
     with the fit-2b build). m-1: three wrong fixes pass the new pins.
 - Next: owner decision 34 (exception or fix round by ao-86). Security CI stays red until the commit lands.
 
+**Update 2026-10-24 09:01 EDT: fit-2b landed on local `main` (`ed01a7ce..652e5988`); not built, not pushed.**
+- ao-84 r3 check LAND-SAFE, 0 B 0 M 0 m (`development/reviews/herdr_fit2b_code_review_r3_sol61.md`, on main as
+  `6af73ba8`): r2 M-1 closed; its own 8-site matrix agrees with ao-73's; the `:4123` test is sufficient, and a
+  stronger optional schedule exists (TODO, What Landed).
+- Clean cherry-pick of `c6d80383..747e7388` (10 commits) under owner decision 33 (1); `git diff 747e7388 main`
+  outside `development/` is empty. The live `ao` is still the build of 2026-10-23 16:09 EDT (fit-2a).
+- Open for the owner: 34 (the Zod findings), 35 (the fit-2b build, restart and push), 36 (close ao-73 and ao-84
+  and their watchers `aofork-2026-10-22j` and `aofork-2026-10-23b`). After the build: doc 0004 (section 1, the
+  R4 notes, section 8) and doc 0013.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
