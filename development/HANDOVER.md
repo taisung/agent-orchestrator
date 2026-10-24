@@ -464,6 +464,19 @@ delete land/session-relaunch".
   Watcher `aofork-2026-10-23c` (loop **3597840**, pgid 3597837). Its landing changes the lockfile: the build
   after it needs `pnpm install` in the primary checkout before `pnpm build`.
 
+**Update 2026-10-24 00:12 EDT: the Zod upgrade is done (ao-86, not reviewed, not landed); fit-2b r2 in its checks.**
+- ao-86 `done|486ddb0d`: one commit on `d9794f3e`; core `zod ^4.6.6`, lock 4.6.7 (registry latest, published
+  2026-10-12 by GitHub Actions, maintainer colinhacks, no deps or install scripts, integrity equals the
+  registry); only the zod lock entries change. Six Zod 4 parse changes handled (object `.prefault({})`, inner
+  defaults under `.optional()`/`.partial()`, Infinity, safe integers, the feedback `createdAt` pattern, API
+  renames). Differential harness: 8234 configs, 0 mismatches; the 3 live configs parse equal. Core 1869+1
+  (+22 tests), others = base; red 21; audit base exit 1, tip exit 0. Zod-written error texts change (report §4).
+- `merge-tree` clean against main and against the fit-2b r2 tip. The landing changes the lockfile: run
+  `pnpm install` in the primary checkout before `pnpm build`.
+- New known issue (TODO): the claude-code hook wrote `branch=packages/core/package.json` into ao-86's record
+  after `git checkout <file>`; ao-86 restored it. Report saved as `reports/ao-86_zod_466_upgrade.report.md`.
+- ao-73 r2: 4 commits (`4549c559`, `e92e2a35`, `8bb1afea`, `66dff58c`), now running D2 to D4.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").

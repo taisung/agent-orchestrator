@@ -598,6 +598,15 @@ answer false); the decision stands, and the design text needs that correction.
 
 ## Known Issues
 
+- **The claude-code hook reads `git checkout <path>` as a branch switch** (found 2026-10-23 by ao-86).
+  `.claude/metadata-updater.sh` (written by the agent-claude-code plugin), rule "git checkout <branch>"
+  (line 212 in ao-86's worktree): the pattern `^git checkout ([^[:space:]-]+[/-][^[:space:]]+)` also matches a
+  file path with `/` or `-`. At 2026-10-23 23:49:37 EDT `git checkout packages/core/package.json` wrote
+  `branch=packages/core/package.json` into ao-86's real record; ao-86 restored it at 00:07:03 with a no-op
+  `git checkout <its branch>`. Workaround in briefs: `git restore <file>`, never `git checkout <file>`. A fix
+  (for example, skip a name that is an existing path or follows `--`, and add the test case) is code work for
+  a worker; no owner decision yet.
+
 - **`ao start` reuses a dead orchestrator when no tmux server runs, and `ao stop` in the orchestrator's own
   pane stops only half** (found 2026-10-22 by the owner). Incident (EDT): in the orchestrator pane the owner
   quit Claude Code, ran `ao stop` (it returned with an error that is lost: no kill, no archive, the lifecycle
