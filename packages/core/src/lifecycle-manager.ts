@@ -215,15 +215,16 @@ interface ProbeResult {
  * The runtimes and agents whose negative answer is authoritative: they answer
  * false only when the check ran and found nothing, and reject when it could
  * not run (CLAUDE.md, the `isProcessRunning` rule). An agent's answer counts
- * as authoritative only on an authoritative runtime: claude-code reads Herdr
- * panes through core `herdr.ts`, which answers "no process" on an error.
- * codex, gemini and opencode `isProcessRunning` still answer false on an
- * error, so their negatives are "ambiguous". runtime-herdr `isAlive` answers
- * false only for `pane_not_found` or a pane with another terminal, and
- * rejects when it cannot answer (Herdr fit-1). Herdr stays non-authoritative
- * all the same: a herdr server can run where the selected endpoint does not
- * reach it, so its negative does not prove that the session ended (Herdr
- * fit-2, design r11 5.6).
+ * as authoritative only on an authoritative runtime. claude-code, codex,
+ * gemini and opencode `isProcessRunning` reject when the process check
+ * cannot run, also on a Herdr pane: core `herdr.ts` rejects when herdr
+ * cannot answer or answers a malformed entry. The agent set still names
+ * claude-code only. runtime-herdr `isAlive` answers false only for
+ * `pane_not_found` or a pane with another terminal, and rejects when it
+ * cannot answer (Herdr fit-1). Herdr stays non-authoritative all the same: a
+ * herdr server can run where the selected endpoint does not reach it, so its
+ * negative does not prove that the session ended (Herdr fit-2, design r11
+ * 5.6).
  */
 const AUTHORITATIVE_RUNTIMES: ReadonlySet<string> = new Set(["tmux"]);
 const AUTHORITATIVE_AGENTS: ReadonlySet<string> = new Set(["claude-code"]);
