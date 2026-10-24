@@ -8,7 +8,9 @@
  * Review r1 sol M-4 and argon M-1 (fit-2b r2): the subject check at each of
  * its use sites, with `node:fs` `mkdirSync` wrapped so that a test can act
  * right after the mkdir of the sessions directory. Argon m-2: a read error
- * in today's project-mode branch.
+ * in today's project-mode branch. Review r2 sol61 M-1 (fit-2b r3): the
+ * last three use sites (the existing-directory check of restore and
+ * reuse-only, and the two retries of the project-mode reservation).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -410,6 +412,153 @@ describe("r2 sol M-4 and argon M-1: the subject check at each use site (design r
     expect(record).not.toHaveProperty("launchPid");
     expect(record).not.toHaveProperty("restoredAt");
     expect(runtime.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("r3: the subject check at the last three use sites (review r2 sol61 M-1; design r11 4.9, 5.3.1)", () => {
+  /** A live-looking orchestrator record of the project's own checkout. */
+  function workingOrchestrator(handle: RuntimeHandle | null): Record<string, string> {
+    const project = config.projects["my-app"]!;
+    mkdirSync(project.path, { recursive: true });
+    const record: Record<string, string> = {
+      worktree: project.path,
+      branch: "main",
+      status: "working",
+      role: "orchestrator",
+      project: "my-app",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      ...(handle ? { runtimeHandle: JSON.stringify(handle) } : {}),
+    };
+    writeMetadata(sessionsDir, "app-orchestrator", record);
+    return record;
+  }
+
+  it("reuse-only checks the subject of an existing sessions directory: admission-path; no probe, no reuse answer", async () => {
+    config.projects["my-app"]!.runtime = "herdr";
+    const { registry, runtime } = herdrRegistry();
+    // Without the check, G1 selects this record, the probe answers alive and
+    // round 2 answers it as reusable under a lock of the earlier subject.
+    workingOrchestrator(HERDR_HANDLE);
+    let moved = "";
+    const sm = createSessionManager({
+      config,
+      registry,
+      admission: {
+        onStage: async (stage) => {
+          if (stage === "lock-held" && !moved) moved = moveSessionsDir();
+        },
+      },
+    });
+    const err = await sm.findReusableOrchestrators?.("my-app").catch((e: unknown) => e);
+    expect(moved).not.toBe("");
+    expectSubjectMoved(err, moved);
+    expect(runtime.isAlive).not.toHaveBeenCalled();
+    expect(runtime.create).not.toHaveBeenCalled();
+  });
+
+  it("restore checks the subject of an existing sessions directory: admission-path; no runtime created", async () => {
+    // A mock project runtime: no transition write, and an active record: no
+    // copy-back. The check of the existing directory is the only one.
+    killedOrchestrator();
+    let moved = "";
+    const sm = createSessionManager({
+      config,
+      registry: mockRegistry,
+      admission: {
+        onStage: async (stage) => {
+          if (stage === "lock-held" && !moved) moved = moveSessionsDir();
+        },
+      },
+    });
+    const err = await sm.restore("app-orchestrator").catch((e: unknown) => e);
+    expect(moved).not.toBe("");
+    expectSubjectMoved(err, moved);
+    const record = readMetadataRaw(moved, "app-orchestrator");
+    expect(record).toMatchObject({ status: "killed" });
+    expect(record).not.toHaveProperty("runtimeHandle");
+    expect(record).not.toHaveProperty("restoredAt");
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+  });
+
+  it("project mode: the retry after a concurrent record outside the set answers dead checks the subject before it reserves", async () => {
+    const project = config.projects["my-app"]!;
+    project.runtime = "herdr";
+    project.orchestratorWorkspaceMode = "project";
+    const { registry, runtime } = herdrRegistry();
+    const concurrent = makeHandle("rt-concurrent");
+    let moved = "";
+    // The concurrent record appears after the old-record branch, so the
+    // first reservation fails; its probe moves the directory and answers dead.
+    vi.mocked(mockRuntime.isAlive).mockImplementation(async (handle: RuntimeHandle) => {
+      if (handle.id === concurrent.id && !moved) moved = moveSessionsDir();
+      return false;
+    });
+    let written = false;
+    const sm = createSessionManager({
+      config,
+      registry,
+      admission: {
+        onStage: async (stage) => {
+          if (stage === "before-reservation" && !written) {
+            written = true;
+            workingOrchestrator(concurrent);
+          }
+        },
+      },
+    });
+    const err = await sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+    expect(moved).not.toBe("");
+    expectSubjectMoved(err, moved);
+    expect(vi.mocked(mockRuntime.isAlive).mock.calls.map(([handle]) => handle.id)).toEqual([
+      concurrent.id,
+    ]);
+    // The dead record is gone; no reservation took its place.
+    expect(readMetadataRaw(moved, "app-orchestrator")).toBeNull();
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
+  });
+
+  it("project mode: the retry after a concurrent record with no handle checks the subject before it reserves", async () => {
+    const project = config.projects["my-app"]!;
+    project.runtime = "herdr";
+    project.orchestratorWorkspaceMode = "project";
+    const { registry, runtime } = herdrRegistry();
+    let moved = "";
+    let concurrent: Record<string, string> | undefined;
+    // The first reservation makes the sessions directory before it links the
+    // record: right after that mkdir, a record with no handle appears (so the
+    // link fails) and the directory moves. The check before the first
+    // reservation has passed.
+    const sm = createSessionManager({
+      config,
+      registry,
+      admission: {
+        onStage: async (stage) => {
+          if (stage === "before-reservation" && !concurrent && !fsHooks.afterMkdir) {
+            fsHooks.afterMkdir = {
+              path: sessionsDir,
+              run: () => {
+                concurrent = workingOrchestrator(null);
+                moved = moveSessionsDir();
+              },
+            };
+          }
+        },
+      },
+    });
+    const err = await sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+    expect(moved).not.toBe("");
+    expectSubjectMoved(err, moved);
+    const record = readMetadataRaw(moved, "app-orchestrator");
+    expect(record).not.toBeNull();
+    const { generation: _generation, ...kept } = record!;
+    expect(kept).toEqual(concurrent);
+    expect(readdirSync(moved).filter((name) => !name.startsWith("."))).toEqual([
+      "app-orchestrator",
+    ]);
+    expect(runtime.isAlive).not.toHaveBeenCalled();
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
   });
 });
 
