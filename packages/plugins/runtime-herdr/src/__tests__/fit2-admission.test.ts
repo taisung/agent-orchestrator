@@ -8,6 +8,9 @@
  * the HERDR_SOCKET_PATH of that call (a pinned handle sets it), and the
  * caller's own endpoint answers a healthy, compatible `status server --json`.
  * The workspace and agent plugins are stand-ins that record their calls.
+ * Review r1 (fit-2b r2): sol M-2 and argon M-2 (the reuse re-read after the
+ * hooks, G1 row 4) and argon M-3 (the reuse-only decision under A, its
+ * answer after round 3).
  * "Nothing written" means: every file under the test root byte-equal before
  * and after, and no workspace, hooks or runtime create call.
  */
@@ -230,6 +233,8 @@ interface Harness {
   agentRuns: { value: boolean };
   /** Runs inside the agent's postLaunchSetup. */
   onPostLaunch: { run?: () => Promise<void> };
+  /** Runs inside the agent's setupWorkspaceHooks, after the call is recorded. */
+  onHooks: { run?: () => Promise<void> };
 }
 
 function setup(options: { mode?: Mode; strategy?: "reuse" | "delete" } = {}): Harness {
@@ -269,6 +274,7 @@ function setup(options: { mode?: Mode; strategy?: "reuse" | "delete" } = {}): Ha
   const onWorkspace: Harness["onWorkspace"] = {};
   const agentRuns = { value: true };
   const onPostLaunch: Harness["onPostLaunch"] = {};
+  const onHooks: Harness["onHooks"] = {};
   const info = (cfg: { sessionId: string; projectId: string; branch: string }, path: string) =>
     ({
       path,
@@ -313,6 +319,7 @@ function setup(options: { mode?: Mode; strategy?: "reuse" | "delete" } = {}): Ha
     getSessionInfo: async () => null,
     setupWorkspaceHooks: async (path: string) => {
       hookCalls.push(path);
+      await onHooks.run?.();
     },
     postLaunchSetup: async () => {
       await onPostLaunch.run?.();
@@ -340,6 +347,7 @@ function setup(options: { mode?: Mode; strategy?: "reuse" | "delete" } = {}): Ha
     onWorkspace,
     agentRuns,
     onPostLaunch,
+    onHooks,
   };
 }
 
@@ -485,6 +493,13 @@ async function expectBlocked(
   expect(h.hookCalls).toEqual([]);
   expect(createCommands()).toEqual([]);
   return err as Error;
+}
+
+/** The launch claim of this process in the record's form (a live launcher). */
+function thisProcessClaim(): Record<string, string> {
+  const stat = readFileSync("/proc/self/stat", "utf-8");
+  const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  return { launchPid: String(process.pid), launchPidStart: `stat:${start}` };
 }
 
 /** A gate that a stand-in awaits until the test opens it. */
@@ -902,6 +917,141 @@ describe("T-7.23: the revalidation of a probed record", () => {
     expect(launchIdentityToken(written)).toBe(launchIdentityToken(record));
     expect(readMetadataRaw(h.sessionsDir, FIXED)).toEqual(written);
     expect(h.hookCalls).toEqual([]);
+  });
+});
+
+describe("r2 sol M-2 and argon M-2: the reuse re-read after the awaited hooks (design r11 5.3.2)", () => {
+  it("the hooks write launchFailed: not reused; the next round blocks it (R4)", async () => {
+    const h = setup();
+    paneRuns("w3:p2", "term_a");
+    const record = orchestrator(h, FIXED, pinned("w3:p2", "term_a"));
+    let written = record;
+    h.onHooks.run = async () => {
+      h.onHooks.run = undefined;
+      written = writeRecord(h, FIXED, { ...record, launchFailed: "a failure during the hooks" });
+    };
+    const err = await startError(h.sm());
+    expect(rows(err)).toEqual([[FIXED, "not-reused", "its launch failed"]]);
+    expect(launchIdentityToken(written)).toBe(launchIdentityToken(record));
+    expect(readMetadataRaw(h.sessionsDir, FIXED)).toEqual(written);
+    expect(h.hookCalls).toEqual([h.projectPath]);
+    expect(createCommands()).toEqual([]);
+    expect(h.workspaceCalls).toEqual([]);
+  });
+
+  it("the hooks write only another restoredAt: not reused; records-changed after round 3", async () => {
+    const h = setup();
+    paneRuns("w3:p2", "term_a");
+    const record = orchestrator(h, FIXED, pinned("w3:p2", "term_a"));
+    let written = record;
+    h.onHooks.run = async () => {
+      h.onHooks.run = undefined;
+      written = writeRecord(h, FIXED, { ...record, restoredAt: "2026-10-05T00:00:00.000Z" });
+    };
+    const err = await startError(h.sm());
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect(err).toMatchObject({ reason: "records-changed" });
+    expect(launchIdentityToken(written)).not.toBe(launchIdentityToken(record));
+    expect(readMetadataRaw(h.sessionsDir, FIXED)).toEqual(written);
+    // Round 1 probed the old identity; round 3 reads the new one, and no
+    // probe after round 3 decides anything.
+    expect(commands()).toEqual(["pane get"]);
+    expect(h.hookCalls).toEqual([h.projectPath]);
+    expect(h.workspaceCalls).toEqual([]);
+  });
+
+  it("the hooks write a live launch claim: not reused; the next round blocks it in-progress (R1)", async () => {
+    const h = setup();
+    paneRuns("w3:p2", "term_a");
+    const record = orchestrator(h, FIXED, pinned("w3:p2", "term_a"));
+    let written = record;
+    h.onHooks.run = async () => {
+      h.onHooks.run = undefined;
+      written = writeRecord(h, FIXED, { ...record, ...thisProcessClaim() });
+    };
+    const err = await startError(h.sm());
+    expect(rows(err)).toEqual([
+      [FIXED, "in-progress", `launch in progress by ao process ${process.pid}`],
+    ]);
+    expect(launchIdentityToken(written)).toBe(launchIdentityToken(record));
+    expect(readMetadataRaw(h.sessionsDir, FIXED)).toEqual(written);
+    expect(h.hookCalls).toEqual([h.projectPath]);
+    expect(createCommands()).toEqual([]);
+    expect(h.workspaceCalls).toEqual([]);
+  });
+});
+
+describe("r2 argon M-2: G1 row 4, no handle and a live launch owner (design r11 5.3.3)", () => {
+  for (const mode of ["isolated", "project"] as const) {
+    const id = mode === "project" ? FIXED : `${FIXED}-1`;
+    it(`${mode} mode: blocked in-progress; no second launch`, async () => {
+      const h = setup({ mode });
+      orchestrator(h, id, null, { status: "spawning", ...thisProcessClaim() });
+      await expectBlocked(h, [
+        [id, "in-progress", `launch in progress by ao process ${process.pid}`],
+      ]);
+      expect(readdirSync(h.sessionsDir)).toEqual([id]);
+    });
+  }
+});
+
+describe("r2 argon M-3: findReusableOrchestrators (design r11 5.3.1, 5.3.2)", () => {
+  it("it waits for lock A: while a start holds A, it refuses admission-busy", async () => {
+    const h = setup({ mode: "isolated" });
+    paneRuns("w3:p2", "term_a");
+    orchestrator(h, `${FIXED}-1`, pinned("w3:p2", "term_a"));
+    const paused = gate();
+    const holder = startError(
+      h.sm({
+        onStage: async (stage) => {
+          if (stage === "lock-held") {
+            paused.reach();
+            await paused.wait;
+          }
+        },
+      }),
+    );
+    await paused.reached;
+    try {
+      const err = await h
+        .sm({ waitMs: 50 })
+        .findReusableOrchestrators?.("my-app")
+        .catch((e: unknown) => e);
+      expect(isOrchestratorStartBlockedError(err)).toBe(true);
+      expect(err).toMatchObject({ reason: "admission-busy" });
+      expect(commands()).toEqual([]);
+    } finally {
+      paused.open();
+    }
+    expect(rows(await holder)).toEqual([[`${FIXED}-1`, "not-reused", "an isolated record"]]);
+    // A is free again: the same call answers the live record.
+    const reusable = await h.sm({ waitMs: 50 }).findReusableOrchestrators?.("my-app");
+    expect(reusable?.map((s) => s.id)).toEqual([`${FIXED}-1`]);
+  });
+
+  it("after round 3 it answers the reusable records and drops the one that changes in every round", async () => {
+    const h = setup({ mode: "isolated" });
+    paneRuns("w3:p2", "term_a");
+    paneRuns("w4:p1", "term_b");
+    orchestrator(h, `${FIXED}-1`, pinned("w3:p2", "term_a"));
+    let changing = orchestrator(h, `${FIXED}-2`, pinned("w4:p1", "term_b"));
+    let n = 0;
+    herdr.on["pane get"] = async (args, _socket, answer) => {
+      if (args[2] === "w4:p1") {
+        n += 1;
+        changing = writeRecord(h, `${FIXED}-2`, {
+          ...changing,
+          restoredAt: `2026-10-0${n}T00:00:00.000Z`,
+        });
+      }
+      return answer();
+    };
+    const reusable = await h.sm().findReusableOrchestrators?.("my-app");
+    expect(reusable?.map((s) => s.id)).toEqual([`${FIXED}-1`]);
+    // Rounds 1 and 2 probe the changing record; no probe after round 3.
+    expect(n).toBe(2);
+    expect(readMetadataRaw(h.sessionsDir, `${FIXED}-2`)).toEqual(changing);
+    expect(createCommands()).toEqual([]);
   });
 });
 

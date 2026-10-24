@@ -2310,6 +2310,50 @@ describe("Herdr fit-2 F-9: the owner retires a Herdr record (T-9.1 to T-9.12)", 
     expectUnchanged(h, "app-1", replaced, worktree);
   });
 
+  describe("r2 sol M-3: the retire write compares each launch identity key (5.4.2 step 8)", () => {
+    // LAUNCH_IDENTITY_KEYS of core metadata.ts, each with the value of another launch.
+    const replacements: Array<[string, () => string]> = [
+      ["reservationId", () => "a-new-reservation"],
+      [
+        "runtimeHandle",
+        () =>
+          JSON.stringify({
+            id: "w8:p1",
+            runtimeName: "herdr",
+            data: { ...pinnedData(), workspaceId: "w8", paneId: "w8:p1", terminalId: "term_w8" },
+          }),
+      ],
+      ["tmuxName", () => "app-1-other"],
+      ["createdAt", () => "2026-10-02T00:00:00.000Z"],
+      ["restoredAt", () => "2026-10-03T00:00:00.000Z"],
+    ];
+    for (const [key, value] of replacements) {
+      it(`only ${key} replaced during step 7: refused at the retire write; no retire key, the replacement byte-equal`, async () => {
+        const h = await setup();
+        const worktree = keptRecord(
+          h,
+          "app-1",
+          { data: pinnedData("launch-unconfirmed") },
+          { tmuxName: "app-1", restoredAt: OLD_RESTORED_AT },
+        );
+        const token = launchIdentityToken(h.record("app-1") ?? {});
+        let replaced = "";
+        herdr.on["pane get"] = async (_args, answer) => {
+          replaced = writeRecord(h, "app-1", { ...(h.record("app-1") ?? {}), [key]: value() });
+          return answer();
+        };
+        const err = await retire(h, "app-1", token);
+        expect((err as Error).message).toMatch(
+          /^Session app-1 changed while it was retired.*it was not retired: nothing was written or removed/,
+        );
+        expect(h.record("app-1")?.[key]).toBe(value());
+        expect(h.record("app-1")).not.toHaveProperty("retiredBy");
+        expect(h.record("app-1")).not.toHaveProperty("retiredIdentityToken");
+        expectUnchanged(h, "app-1", replaced, worktree);
+      });
+    }
+  });
+
   it("T-9.8b: a replacement in the workspace removal after the retire write; no removal, no archive", async () => {
     const late: { h?: Harness } = {};
     let replaced = "";

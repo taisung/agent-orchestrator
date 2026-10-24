@@ -8,7 +8,8 @@
  * Through the built core with the real runtime-herdr plugin (or none) and a
  * tmux stand-in that records each call with its handle. At startup core G
  * (fit-2b commit 5) blocks a Herdr record of a project that now selects tmux
- * (R5, T-7.8), so no runtime but herdr probes it.
+ * (R5, T-7.8), so no runtime but herdr probes it. Review r1 argon M-4
+ * (fit-2b r2): F-9 refuses a Herdr handle when no herdr plugin is loaded.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
@@ -73,6 +74,7 @@ import {
   deleteMetadata,
   isOrchestratorStartBlockedError,
   getSessionsDir,
+  launchIdentityToken,
   readMetadataRaw,
   writeMetadata,
   type Agent,
@@ -465,6 +467,25 @@ describe("T-7.8d: kill and list with a Herdr handle while no herdr plugin is loa
     await h.sm.kill("app-1");
     expect(readMetadataRaw(h.sessionsDir, "app-1")).toBeNull();
     expect(h.tmuxCalls).toHaveLength(1);
+  });
+});
+
+describe("r2 argon M-4: F-9 while no herdr plugin is loaded (design r11 5.4.2 step 5)", () => {
+  it("kill with confirmRuntimeClosed refuses; the record, the worktree and the directory stay", async () => {
+    const h = setup({ selects: "tmux", herdrLoaded: false });
+    const worktree = writeRecord(h, "app-1", JSON.stringify(HERDR_HANDLE));
+    const before = h.file("app-1");
+    const token = launchIdentityToken(readMetadataRaw(h.sessionsDir, "app-1") ?? {});
+    const err = await h.sm.kill("app-1", { confirmRuntimeClosed: token }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RuntimeStopUnconfirmedError);
+    expect((err as Error).message).toBe(
+      "runtime stop unconfirmed (unknown): no runtime plugin herdr is loaded; record and worktree kept",
+    );
+    expect(h.file("app-1")).toBe(before);
+    expect(readMetadataRaw(h.sessionsDir, "app-1")).not.toHaveProperty("retiredBy");
+    expect(existsSync(worktree)).toBe(true);
+    expect(h.dir()).toEqual(["app-1"]);
+    expect(h.tmuxCalls).toEqual([]);
   });
 });
 

@@ -9,7 +9,8 @@
  * `node:child_process` answers each call by the HERDR_SOCKET_PATH of that
  * call (a pinned handle sets it), and the caller's own endpoint answers
  * `status server --json`. The workspace and agent plugins are stand-ins
- * that record their calls.
+ * that record their calls. Review r1 sol M-5 (fit-2b r2): a handle text that
+ * does not parse goes to core by the same predicate.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -691,31 +692,36 @@ describe("T-7.8 (CLI): the project now selects tmux", () => {
   });
 });
 
+/** The marks of sm.list and the calls of the recording stand-in, in one order. */
+function orderedLog(calls: Array<{ method: string; handle?: RuntimeHandle }>): string[] {
+  const log: string[] = [];
+  const record = calls.push.bind(calls);
+  calls.push = (...items) => {
+    for (const item of items) log.push(`${item.method} ${item.handle?.id ?? ""}`);
+    return record(...items);
+  };
+  const marks = smHooks.marks;
+  smHooks.marks = new Proxy(marks, {
+    get(target, key, receiver) {
+      if (key === "push") {
+        return (...items: string[]) => {
+          log.push(...items);
+          return target.push(...items);
+        };
+      }
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  });
+  return log;
+}
+
 describe("T-7.9b: CLI routing of a handle without runtimeName on a Herdr project", () => {
   it("only sm.list probes it; after the last list no call; core blocks it, damaged", async () => {
     const calls: Array<{ method: string; handle?: RuntimeHandle }> = [];
     await setup({ recordingHerdr: calls });
     const handle = { id: "w3:p2", data: {} };
     orchestrator(FIXED, JSON.stringify(handle));
-    const log: string[] = [];
-    // The marks of sm.list and the stand-in's calls in one order.
-    const record = calls.push.bind(calls);
-    calls.push = (...items) => {
-      for (const item of items) log.push(`${item.method} ${item.handle?.id ?? ""}`);
-      return record(...items);
-    };
-    const marks = smHooks.marks;
-    smHooks.marks = new Proxy(marks, {
-      get(target, key, receiver) {
-        if (key === "push") {
-          return (...items: string[]) => {
-            log.push(...items);
-            return target.push(...items);
-          };
-        }
-        return Reflect.get(target, key, receiver) as unknown;
-      },
-    });
+    const log = orderedLog(calls);
     const before = sessionsListing();
 
     expect(await start()).toBe("exit 1");
@@ -737,6 +743,32 @@ describe("T-7.9b: CLI routing of a handle without runtimeName on a Herdr project
     expect(errors()).toContain("Its runtime handle cannot be read (");
     expect(sessionsListing()).toEqual(before);
   });
+});
+
+describe("r2 sol M-5: CLI routing of a handle text that does not parse (design r11 5.3.5)", () => {
+  for (const [label, text] of [
+    ["a text that names herdr", '{"runtimeName":"herdr", BROKEN'],
+    ["a text that only the project's runtime selects", '{"id":"w3:p2", BROKEN'],
+  ] as const) {
+    it(`${label}: core blocks it, damaged; no runtime call after the last sm.list`, async () => {
+      const calls: Array<{ method: string; handle?: RuntimeHandle }> = [];
+      await setup({ recordingHerdr: calls });
+      orchestrator(FIXED, text);
+      const log = orderedLog(calls);
+      const before = sessionsListing();
+
+      expect(await start()).toBe("exit 1");
+
+      const lastList = log.lastIndexOf("list:end");
+      expect(lastList).toBeGreaterThan(-1);
+      expect(log.slice(lastList + 1).filter((entry) => !entry.startsWith("list:"))).toEqual([]);
+      expectM(FIXED, "status working.");
+      expect(errors()).toContain(`Its runtime handle cannot be read (${text}`);
+      expect(sessionsListing()).toEqual(before);
+      expect(workspaceCalls).toEqual([]);
+      expect(smHooks.spawnOrchestratorCalls).toBe(1);
+    });
+  }
 });
 
 describe("T-7.11 and T-7.11b: the selected endpoint cannot take a launch", () => {
