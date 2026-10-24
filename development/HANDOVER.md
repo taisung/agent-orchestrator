@@ -432,6 +432,23 @@ delete land/session-relaunch".
 - Blind protocol: hold the first finished review in `held/`, keep its closed router row uncommitted until the
   second finishes, then commit both before any pointer to ao-73.
 
+**Update 2026-10-23 23:35 EDT: both fit-2b code reviews done, LAND-WITH-CHANGES; on main.**
+- ao-84 (sol, `herdr_fit2b_code_review_r1_sol61.md`): 0 B 5 M 1 m. **M-1 a defect on the tip:** an F-9 refusal
+  (wrong token, live pane) reads an orchestrator record through the repairing `findSessionRecord` path, which
+  sets role and `prAutoDetect=off`, drops the PR and turns `merged` into `working`, then says "Nothing was
+  changed"; reproduced. M-2 post-hook reuse re-read, M-3 retire-write identity per key (runtimeHandle), M-4
+  lock-subject equality at the use sites, M-5 CLI routing of an unparseable handle text: correct code, no
+  guarding test (each mutant passes 485 tests, fails an added probe). m-1 the lifecycle comment. Gates,
+  counts, red 21, relaunch 15 and merge-tree all reproduced.
+- ao-85 (Argon, `herdr_fit2b_code_review_r1_argon4.md`): 0 B 4 M 2 m. M-1 = sol M-4; M-2 = sol M-2 plus G1
+  row 4 (a handleless record with a live launcher); new: M-3 reuse-only lock A and the round-3 `exhausted`
+  fallback, M-4 F-9 with an unloaded runtime plugin; m-1 = sol m-1; new m-2 the bare `readRecordStrict` of the
+  reuse re-read (not `records-unreadable`). Missed sol M-1 (accepted deviation 23), M-3 and M-5. Code content
+  matches the tip; several line numbers are off (`:4088` for `:4139`, `:3075` for `:3082`). Pane 407.8K, $8.02.
+- Both answer ao-73's open questions alike: fix the comment now, keep R8 before R7, no quoting change.
+- ao-84 and ao-85 idle; watcher `aofork-2026-10-23b` (loop 2900330) still runs. Next: the owner decides the
+  fix round (ao-73) and the check.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
