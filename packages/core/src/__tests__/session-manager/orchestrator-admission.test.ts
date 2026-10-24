@@ -7,7 +7,8 @@
  * G run through the built core in runtime-herdr `fit2-admission.test.ts`.
  * Review r1 sol M-4 and argon M-1 (fit-2b r2): the subject check at each of
  * its use sites, with `node:fs` `mkdirSync` wrapped so that a test can act
- * right after the mkdir of the sessions directory.
+ * right after the mkdir of the sessions directory. Argon m-2: a read error
+ * in today's project-mode branch.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -409,5 +410,42 @@ describe("r2 sol M-4 and argon M-1: the subject check at each use site (design r
     expect(record).not.toHaveProperty("launchPid");
     expect(record).not.toHaveProperty("restoredAt");
     expect(runtime.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("r2 argon m-2: a read error in today's project-mode branch refuses as G1 does", () => {
+  it("a live mock record that cannot be read after its probe: records-unreadable; nothing created", async () => {
+    const project = config.projects["my-app"]!;
+    project.orchestratorWorkspaceMode = "project";
+    project.orchestratorSessionStrategy = "reuse";
+    mkdirSync(project.path, { recursive: true });
+    const file = join(sessionsDir, "app-orchestrator");
+    writeMetadata(sessionsDir, "app-orchestrator", {
+      worktree: project.path,
+      branch: "main",
+      status: "working",
+      role: "orchestrator",
+      project: "my-app",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+    // The probe answers alive; then a directory is at the record's path, so
+    // the strict read after it throws EISDIR.
+    vi.mocked(mockRuntime.isAlive).mockImplementation(async () => {
+      rmSync(file);
+      mkdirSync(file);
+      return true;
+    });
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const err = await sm.spawnOrchestrator({ projectId: "my-app" }).catch((e: unknown) => e);
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect(err).toMatchObject({ reason: "records-unreadable", projectId: "my-app" });
+    expect((err as Error).message).toMatch(
+      /^The session records of project my-app could not be read \(EISDIR: .*\); no orchestrator was started\.$/,
+    );
+    expect(mockRuntime.isAlive).toHaveBeenCalledTimes(1);
+    expect(mockRuntime.destroy).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+    expect(ctx.mockWorkspace.create).not.toHaveBeenCalled();
   });
 });

@@ -9,8 +9,8 @@
  * caller's own endpoint answers a healthy, compatible `status server --json`.
  * The workspace and agent plugins are stand-ins that record their calls.
  * Review r1 (fit-2b r2): sol M-2 and argon M-2 (the reuse re-read after the
- * hooks, G1 row 4) and argon M-3 (the reuse-only decision under A, its
- * answer after round 3).
+ * hooks, G1 row 4), argon M-3 (the reuse-only decision under A, its answer
+ * after round 3) and argon m-2 (a read error at the reuse re-read).
  * "Nothing written" means: every file under the test root byte-equal before
  * and after, and no workspace, hooks or runtime create call.
  */
@@ -975,6 +975,29 @@ describe("r2 sol M-2 and argon M-2: the reuse re-read after the awaited hooks (d
     ]);
     expect(launchIdentityToken(written)).toBe(launchIdentityToken(record));
     expect(readMetadataRaw(h.sessionsDir, FIXED)).toEqual(written);
+    expect(h.hookCalls).toEqual([h.projectPath]);
+    expect(createCommands()).toEqual([]);
+    expect(h.workspaceCalls).toEqual([]);
+  });
+});
+
+describe("r2 argon m-2: a read error at the reuse re-read refuses as G1 does", () => {
+  it("the record cannot be read after the hooks: records-unreadable; no reuse, no create", async () => {
+    const h = setup();
+    paneRuns("w3:p2", "term_a");
+    orchestrator(h, FIXED, pinned("w3:p2", "term_a"));
+    h.onHooks.run = async () => {
+      h.onHooks.run = undefined;
+      // A directory at the record's path: the strict read throws EISDIR.
+      rmSync(join(h.sessionsDir, FIXED));
+      mkdirSync(join(h.sessionsDir, FIXED));
+    };
+    const err = await startError(h.sm());
+    expect(isOrchestratorStartBlockedError(err)).toBe(true);
+    expect(err).toMatchObject({ reason: "records-unreadable", projectId: "my-app" });
+    expect((err as Error).message).toMatch(
+      /^The session records of project my-app could not be read \(EISDIR: .*\); no orchestrator was started\.$/,
+    );
     expect(h.hookCalls).toEqual([h.projectPath]);
     expect(createCommands()).toEqual([]);
     expect(h.workspaceCalls).toEqual([]);

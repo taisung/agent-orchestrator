@@ -4013,6 +4013,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
      * and the reservation with P. A record of the set that appears here is
      * decided by the next round.
      */
+    /**
+     * A strict read of an orchestrator record in the admitted step. A read
+     * error refuses the start as G1 does (`records-unreadable`; review r1
+     * argon m-2).
+     */
+    const readAdmittedRecord = (id: string): Record<string, string> | null => {
+      try {
+        return readRecordStrict(sessionsDir, id);
+      } catch (err) {
+        throw startBlocked(orchestratorConfig.projectId, "records-unreadable", err);
+      }
+    };
+
     const reserveProjectMode = async (
       checkSubject: () => void,
       selected: number,
@@ -4045,8 +4058,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         );
         if (existingAlive && reusesLiveRecord) {
           // Round 8 (M-1): null only for a missing record; a record that
-          // cannot be read throws and keeps the runtime.
-          const persistedRaw = readRecordStrict(sessionsDir, id);
+          // cannot be read refuses and keeps the runtime.
+          const persistedRaw = readAdmittedRecord(id);
           if (persistedRaw?.["runtimeHandle"]) {
             if (await selectedByG1(persistedRaw)) return { kind: "next" };
             const persisted = metadataToSession(id, persistedRaw, orchestratorConfig.projectId);
@@ -4150,7 +4163,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           // r10: the hooks awaited, so the record must still hold the
           // identity token of the deciding round and pass R1 to R6; else the
           // next round decides.
-          const current = readRecordStrict(sessionsDir, candidate.record.id);
+          const current = readAdmittedRecord(candidate.record.id);
           if (!current || launchIdentityToken(current) !== candidate.record.token) {
             return { kind: "next" };
           }
