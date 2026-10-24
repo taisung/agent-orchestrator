@@ -477,6 +477,17 @@ delete land/session-relaunch".
   after `git checkout <file>`; ao-86 restored it. Report saved as `reports/ao-86_zod_466_upgrade.report.md`.
 - ao-73 r2: 4 commits (`4549c559`, `e92e2a35`, `8bb1afea`, `66dff58c`), now running D2 to D4.
 
+**Update 2026-10-24 00:16 EDT: fit-2b r2 done (ao-73); ao-84 checks it alone (owner 30 (1)).**
+- ao-73 `done|66dff58c`: 4 commits on `13f982c2`: `4549c559` F-9 with a token reads strictly
+  (`requireSessionRecordStrict`, no read repair; ordinary kill unchanged), `e92e2a35` 20 guard tests (sol M-2 to
+  M-5, Argon M-1 to M-4), `8bb1afea` `readAdmittedRecord` gives `records-unreadable` (Argon m-2; also the
+  project-mode strict read of a tmux project), `66dff58c` the lifecycle comment. 8 files, +617 -41. Core 1878+1,
+  runtime-herdr 341, cli 491; red 21; relaunch 15 green; 19 mutants each fail their tests. Report
+  `reports/ao-73_herdr_fit2b_r2.report.md`. Router row closed.
+- ao-84 fast-forwarded to `66dff58c`; note `note-ao-84-fit2b-r2-check.md` as `.agent_note_fit2b_r2_check.md`;
+  file `development/reviews/herdr_fit2b_code_review_r2_sol61.md`; scratch `/tmp/aof2bs2`. Router row open.
+- Open for the owner: decision 32 (the review of the Zod upgrade `486ddb0d`, ao-86 idle).
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
