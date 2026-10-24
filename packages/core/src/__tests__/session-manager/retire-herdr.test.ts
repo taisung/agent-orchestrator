@@ -5,9 +5,11 @@
  * runtime is a stand-in with the plugin's answers (a stop that cannot
  * confirm, an `isAlive` false); the OpenCode API is mocked. The cases with
  * the real herdr plugin are in runtime-herdr `fit2-create-rollback.test.ts`.
+ * Review r1 sol M-1 (fit-2b r2): a refusal of an orchestrator record that
+ * today's read repair would change leaves the record byte-equal.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import {
@@ -65,6 +67,8 @@ let registry: PluginRegistry;
 /** A PID that no process has: the launcher check reads its stat file and finds none. */
 const DEAD_PID = "2147483646";
 const OPENCODE_SESSION = "ses_retire";
+/** An identity token that names no launch of the records here. */
+const OTHER_LAUNCH = "0".repeat(16);
 const HANDLE: RuntimeHandle = {
   id: "w7:p1",
   runtimeName: "herdr",
@@ -195,6 +199,76 @@ describe("Herdr fit-2 F-9 with an OpenCode session (T-9.8c, T-9.10)", () => {
     // The managed worktree was removed before the purge (the mock workspace).
     expect(ctx.mockWorkspace.destroy).toHaveBeenCalledWith(worktree, expect.any(Function));
     expect(existsSync(worktree)).toBe(true);
+  });
+
+  describe("r2 sol M-1: a refusal of an orchestrator record changes nothing (5.4.2 step 1)", () => {
+    /**
+     * A kept Herdr orchestrator launch that today's read repair would change:
+     * no role, a terminal status that a PR set, a PR, no prAutoDetect.
+     */
+    function unrepairedOrchestrator(): { file: string; bytes: string; worktree: string } {
+      const worktree = keptOpenCodeRecord("app-orchestrator");
+      updateMetadata(sessionsDir, "app-orchestrator", {
+        status: "merged",
+        pr: "https://github.com/org/my-app/pull/1",
+      });
+      const file = join(sessionsDir, "app-orchestrator");
+      return { file, bytes: readFileSync(file, "utf-8"), worktree };
+    }
+
+    function expectNothingChanged(record: { file: string; bytes: string; worktree: string }): void {
+      expect(readFileSync(record.file, "utf-8")).toBe(record.bytes);
+      expect(readArchivedMetadataRaw(sessionsDir, "app-orchestrator")).toBeNull();
+      expect(existsSync(record.worktree)).toBe(true);
+      expect(ctx.mockWorkspace.destroy).not.toHaveBeenCalled();
+      expect(herdrRuntime.destroy).not.toHaveBeenCalled();
+      expect(interruptOpenCodeSession).not.toHaveBeenCalled();
+      expect(removeOpenCodeSession).not.toHaveBeenCalled();
+    }
+
+    it("a token of another launch: refused; the record byte-equal, no stop, nothing archived or removed", async () => {
+      const record = unrepairedOrchestrator();
+      const sm = createSessionManager({ config: ctx.config, registry });
+      await expect(
+        sm.kill("app-orchestrator", { confirmRuntimeClosed: OTHER_LAUNCH }),
+      ).rejects.toThrow(
+        `Session app-orchestrator: the record now names another launch (identity token ${tokenOf("app-orchestrator")}); check it again before you retire it. Nothing was changed.`,
+      );
+      expect(herdrRuntime.stop).not.toHaveBeenCalled();
+      expect(herdrRuntime.isAlive).not.toHaveBeenCalled();
+      expectNothingChanged(record);
+    });
+
+    it("its pane runs: refused at step 7; the record byte-equal, nothing archived or removed", async () => {
+      const record = unrepairedOrchestrator();
+      vi.mocked(herdrRuntime.isAlive).mockResolvedValue(true);
+      const sm = createSessionManager({ config: ctx.config, registry });
+      await expect(
+        sm.kill("app-orchestrator", { confirmRuntimeClosed: tokenOf("app-orchestrator") }),
+      ).rejects.toThrow(
+        "Session app-orchestrator was not retired: herdr shows pane w7:p1 with its terminal: the session runs; close it first. Nothing was changed.",
+      );
+      expect(herdrRuntime.stop).toHaveBeenCalledTimes(1);
+      expect(herdrRuntime.isAlive).toHaveBeenCalledTimes(1);
+      expectNothingChanged(record);
+    });
+
+    it("control: a kill without the option reads the record as today (the read repair runs)", async () => {
+      const record = unrepairedOrchestrator();
+      const sm = createSessionManager({ config: ctx.config, registry });
+      await expect(sm.kill("app-orchestrator")).rejects.toThrow(
+        "runtime stop unconfirmed (unknown)",
+      );
+      const repaired = readMetadataRaw(sessionsDir, "app-orchestrator");
+      expect(repaired).toMatchObject({
+        role: "orchestrator",
+        status: "working",
+        prAutoDetect: "off",
+      });
+      expect(repaired).not.toHaveProperty("pr");
+      expect(readArchivedMetadataRaw(sessionsDir, "app-orchestrator")).toBeNull();
+      expect(existsSync(record.worktree)).toBe(true);
+    });
   });
 
   it("control: the retirement makes one isAlive with the handle and no other runtime call", async () => {

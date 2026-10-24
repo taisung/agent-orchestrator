@@ -2258,6 +2258,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   /**
+   * Herdr fit-2 F-9 (design r11 5.4.2 step 1, review r1 sol M-1): the record
+   * as stored, read strictly and with no read repair, so that a refusal
+   * changes nothing. A record that cannot be read or checked throws.
+   */
+  function requireSessionRecordStrict(sessionId: SessionId): LocatedSession {
+    for (const [projectId, project] of Object.entries(config.projects)) {
+      const sessionsDir = getProjectSessionsDir(project);
+      const raw = readRecordStrict(sessionsDir, sessionId);
+      if (raw) return { raw, sessionsDir, project, projectId };
+    }
+    throw new SessionNotFoundError(sessionId);
+  }
+
+  /**
    * Ensure session has a runtime handle (fabricate one if missing) and enrich
    * with live runtime state + activity detection. Used by both list() and get().
    */
@@ -4764,7 +4778,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     options?: SessionKillOptions,
     decidedFrom?: Readonly<Record<string, string>>,
   ): Promise<void> {
-    const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
+    // Herdr fit-2 F-9 (design r11 5.4.2): the owner's word that the runtime
+    // is closed, for the launch that the identity token names. A direct
+    // kill only; each refusal changes nothing, so F-9 reads the record
+    // strictly and without the read repair (review r1 sol M-1).
+    const retireToken = decidedFrom ? undefined : options?.confirmRuntimeClosed;
+    const { raw, sessionsDir, project, projectId } =
+      retireToken !== undefined
+        ? requireSessionRecordStrict(sessionId)
+        : requireSessionRecord(sessionId);
     const expected = decidedFrom ? cleanupDecisionOf(decidedFrom) : launchIdentity(raw);
     if (decidedFrom && !holdsExpected(raw, expected)) {
       throw recordChangedError(
@@ -4774,10 +4796,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         "it was not killed",
       );
     }
-    // Herdr fit-2 F-9 (design r11 5.4.2): the owner's word that the runtime
-    // is closed, for the launch that the identity token names. A direct
-    // kill only; each refusal changes nothing.
-    const retireToken = decidedFrom ? undefined : options?.confirmRuntimeClosed;
     if (retireToken !== undefined) retirableHandle(sessionId, raw, retireToken);
     // B-2: the launcher does not watch for a kill; it would go on and write
     // the record again, maybe with an agent session that this kill removed.
