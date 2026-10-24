@@ -449,7 +449,7 @@ delete land/session-relaunch".
 - ao-84 and ao-85 idle; watcher `aofork-2026-10-23b` (loop 2900330) still runs. Next: the owner decides the
   fix round (ao-73) and the check.
 
-**Update 2026-10-23 23:52 EDT: owner 29 (1), 30 (1), 31 (1): fit-2b r2 and the Zod upgrade run; ao-85 closed.**
+**Update 2026-10-23 23:41 EDT: owner 29 (1), 30 (1), 31 (1): fit-2b r2 and the Zod upgrade run; ao-85 closed.**
 - 31 (1): ao-85 closed (`ao session kill`, its OpenCode session not purged); brief in
   `backup-closed-sessions/ao-85-.agent_task.md`, report `reports/ao-85_herdr_fit2b_code_review_argon4.report.md`.
   Its watcher `aofork-2026-10-23b` (loop 2900330) keeps watching ao-84 for the check.
