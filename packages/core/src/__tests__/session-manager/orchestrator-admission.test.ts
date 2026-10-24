@@ -420,14 +420,15 @@ describe("r3: the subject check at the last three use sites (review r2 sol61 M-1
   function workingOrchestrator(handle: RuntimeHandle | null): Record<string, string> {
     const project = config.projects["my-app"]!;
     mkdirSync(project.path, { recursive: true });
-    const record: Record<string, string> = {
+    const extra: Record<string, string> = handle ? { runtimeHandle: JSON.stringify(handle) } : {};
+    const record = {
       worktree: project.path,
       branch: "main",
       status: "working",
       role: "orchestrator",
       project: "my-app",
       createdAt: "2026-10-01T00:00:00.000Z",
-      ...(handle ? { runtimeHandle: JSON.stringify(handle) } : {}),
+      ...extra,
     };
     writeMetadata(sessionsDir, "app-orchestrator", record);
     return record;
