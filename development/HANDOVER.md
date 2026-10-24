@@ -513,6 +513,17 @@ delete land/session-relaunch".
 - Watchers: `aofork-2026-10-22j` (ao-73), `aofork-2026-10-23b` (ao-84), `aofork-2026-10-23c` (ao-86, idle until
   the Zod landing), `aofork-2026-10-24a` (ao-87).
 
+**Update 2026-10-24 08:44 EDT: fit-2b r3 done (ao-73); ao-84 checks it alone.**
+- ao-73 `done|747e7388`: 2 test commits on `66dff58c`, one file (`orchestrator-admission.test.ts`, +151 -1):
+  `a10e6e7a` 4 cases (`:3397` reuse-only and restore, `:4119`, `:4123`), `747e7388` a type fix of the new
+  helper (the root typecheck failed on `a10e6e7a`; no amend allowed). Land both as they are. 8 x 9 mutant
+  matrix: each one-site mutant fails only the tests of its site, the no-op fails all 9. The `:4123` case
+  finds its mutant by the refusal reason only (that mutant creates nothing either). Core 1882+1, others =
+  `66dff58c`; red 21; relaunch 15; gitleaks clean. Report `reports/ao-73_herdr_fit2b_r3.report.md`. Row closed.
+- ao-84 (74% context) fast-forwarded to `747e7388`; note `note-ao-84-fit2b-r3-check.md` as
+  `.agent_note_fit2b_r3_check.md`; file `development/reviews/herdr_fit2b_code_review_r3_sol61.md`; scratch
+  `/tmp/aof2bs3`. Row open. ao-87 (the Zod review) still runs.
+
 Four rounds landed on 2026-10-22. Each is built, live in both lifecycle workers and pushed (TODO What
 Landed): the claude-code `detectActivity` round, same-ID R4, the claude-code F-6 and m-1 round, and the
 `ao start` / `ao stop` round (`d1efcb94..de7c1bfc`, owner "1", "2").
